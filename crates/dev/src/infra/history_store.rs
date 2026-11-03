@@ -15,7 +15,7 @@ pub use cleanup::{
 };
 
 pub const HISTORY_DATABASE: &str = "history.sqlite3";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const OUTPUT_BATCH_LINES: usize = 128;
 const OUTPUT_BATCH_BYTES: usize = 64 * 1024;
 const OUTPUT_READ_LIMIT: usize = 64 * 1024 * 1024;
@@ -174,7 +174,7 @@ pub fn inspect_history_store(
             && overview.free_pages <= overview.page_count,
         "invalid history storage overview"
     );
-    if version == 2 && check_integrity {
+    if version >= 2 && check_integrity {
         overview.output_rows = Some(backup_row_count(
             &snapshot,
             "SELECT COUNT(*) FROM history_output",
@@ -222,7 +222,7 @@ pub fn inspect_history_store(
         for query in [
             "SELECT COUNT(*) FROM history_sessions WHERE typeof(session_id) != 'text' OR session_id = '' OR typeof(updated_at) != 'text' OR updated_at = ''",
             "SELECT COUNT(*) FROM history_events WHERE typeof(sequence) != 'integer' OR sequence <= 0 OR typeof(session_id) != 'text' OR session_id = '' OR typeof(ts) != 'text' OR ts = '' OR typeof(event) != 'text'",
-        ].into_iter().chain((version == 2).then_some(
+        ].into_iter().chain((version >= 2).then_some(
             "SELECT COUNT(*) FROM history_output WHERE typeof(sequence) != 'integer' OR sequence <= 0 OR typeof(session_id) != 'text' OR session_id = '' OR typeof(ts) != 'text' OR ts = '' OR typeof(pipeline) != 'text' OR pipeline = '' OR typeof(line) != 'text'")) {
             let invalid = backup_row_count(&snapshot, query)?;
             if invalid > 0 {
@@ -359,7 +359,7 @@ fn backup_row_count(snapshot: &Transaction<'_>, query: &str) -> Result<u64> {
 fn validate_backup_schema(snapshot: &Transaction<'_>, version: i64) -> Result<()> {
     for table in ["history_sessions", "history_events"]
         .into_iter()
-        .chain((version == 2).then_some("history_output"))
+        .chain((version >= 2).then_some("history_output"))
     {
         let kind: String = snapshot.query_row(
             "SELECT type FROM sqlite_schema WHERE name=?1",
@@ -706,7 +706,13 @@ fn open_history_write(log_dir: &Path) -> Result<Connection> {
     )
     .with_context(|| format!("open processing history {}", path.display()))?;
     connection.busy_timeout(Duration::from_secs(5))?;
-    connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;")?;
+    connection.execute_batch(
+        "PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;",
+    )?;
+    ensure!(
+        connection.pragma_query_value(None, "secure_delete", |row| row.get::<_, i64>(0))? == 1,
+        "History secure writes are unavailable"
+    );
     ensure_schema(&mut connection)?;
     foundation::mfb_sqlite_store::enable_wal(&connection)
         .context("processing history schema retained; failed to enable WAL")?;
@@ -776,7 +782,7 @@ fn ensure_schema(connection: &mut Connection) -> Result<()> {
     {
         let snapshot = connection.transaction()?;
         let version: i64 = snapshot.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version == SCHEMA_VERSION {
+        if (2..=SCHEMA_VERSION).contains(&version) {
             return validate_schema(&snapshot, version);
         }
     }
@@ -809,9 +815,10 @@ fn ensure_schema(connection: &mut Connection) -> Result<()> {
                 PRAGMA user_version=1;",
             )?;
             migrate_history_v1(&transaction)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         1 => migrate_history_v1(&transaction)?,
-        SCHEMA_VERSION => validate_schema(&transaction, SCHEMA_VERSION)?,
+        2..=SCHEMA_VERSION => validate_schema(&transaction, version)?,
         _ => bail!("unsupported history database version {version}; original retained"),
     }
     transaction

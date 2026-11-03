@@ -1670,7 +1670,7 @@ fn main() -> Result<()> {
                 println!(
                     "Storage rows are not processed media counts or completed runs. Schema 1 has no captured output storage."
                 );
-                if overview.history_schema_version == 2 && overview.output_rows.is_none() {
+                if overview.history_schema_version >= 2 && overview.output_rows.is_none() {
                     println!(
                         "Captured-output details were not scanned; --check-integrity computes their exact row and byte totals."
                     );

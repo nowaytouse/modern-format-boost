@@ -576,7 +576,7 @@
 "helpguide.history.2.title" = "Which files and folders are eligible?";
 "helpguide.history.2.body" = "Only MFB-registered session logs and the accompanying archive manifest are eligible. MFB checks that each file still matches the recorded identity and the preview. Logs shared with unselected records and files whose ownership is unclear are kept. MFB removes the archive folder only if it is verified to belong to the session and is empty after cleanup.";
 "helpguide.history.3.title" = "What happens to the database?";
-"helpguide.history.3.body" = "MFB securely deletes the selected SQLite records and saved log lines, compacts the database, and checks that SQLite has truncated its write-ahead log (WAL). If the records were removed but part of the cleanup could not be completed, the result lists what remains.";
+"helpguide.history.3.body" = "MFB securely deletes the selected SQLite records and saved log lines and checks that SQLite has truncated its write-ahead log (WAL). Older history databases may need a full compaction before later deletions can reuse the cleared space. That first cleanup can take longer. If the records were removed but part of the cleanup could not be completed, the result lists what remains.";
 "helpguide.history.4.title" = "Backups and exported copies";
 "helpguide.history.4.body" = "This action applies to MFB’s current history store. Exported copies, backups, and system snapshots can still contain these records.";
 "history.title" = "Processing History";

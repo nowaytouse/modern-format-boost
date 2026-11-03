@@ -27,7 +27,9 @@ areas of change are:
 
 - Stream history cleanup previews for large batches, validate the read snapshot
   before taking SQLite's write lock, and report contention before deleting
-  anything. Keep secure deletion, database compaction and checked WAL truncation.
+  anything. After an exclusive one-time scrub of older databases, securely clear
+  selected records and verify WAL truncation without rewriting the whole library.
+  Reuse cleared pages for future history. Use an updated app to open schema 3.
 - Explain history removal and its media safety boundaries in the native guide.
 - Show elapsed time in localized units from seconds through years. Enlarge the
   main window logo and expose processor recovery as a keyboard-accessible action.

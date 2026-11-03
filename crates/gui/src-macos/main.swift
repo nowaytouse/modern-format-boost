@@ -1192,7 +1192,7 @@ private struct HistoryDatabaseBackup: Decodable {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let receipt = try decoder.decode(Self.self, from: data)
-        guard receipt.schemaVersion == 1, receipt.kind == "history_sqlite", [1, 2].contains(receipt.historySchemaVersion),
+        guard receipt.schemaVersion == 1, receipt.kind == "history_sqlite", (1...3).contains(receipt.historySchemaVersion),
               receipt.historySchemaVersion != 1 || receipt.outputRows == 0,
               receipt.source.hasPrefix("/"), receipt.destination.hasPrefix("/"), receipt.bytes > 0,
               [receipt.bytes, receipt.sessions, receipt.events, receipt.outputRows].allSatisfy({ $0 <= UInt64(Int64.max) }),
@@ -1239,7 +1239,7 @@ private struct HistoryDatabaseInspection: Decodable {
 
         func validate(checked: Bool) throws {
             let bytes = pageSize.multipliedReportingOverflow(by: pageCount)
-            guard [1, 2].contains(historySchemaVersion), !sqliteVersion.isEmpty,
+            guard (1...3).contains(historySchemaVersion), !sqliteVersion.isEmpty,
                   ["delete", "truncate", "persist", "memory", "wal", "off"].contains(journalMode),
                   pageSize >= 512, pageSize <= 65536, pageSize.nonzeroBitCount == 1,
                   pageCount > 0, freePages <= pageCount, !bytes.overflow,
@@ -2537,7 +2537,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
         let outputs = overview.outputRows.map { String($0) } ?? localized("settings.history.unsupported")
-        if overview.historySchemaVersion == 2 && overview.outputRows == nil {
+        if overview.historySchemaVersion >= 2 && overview.outputRows == nil {
             historyOverview.stringValue = localized("settings.history.overview_quick_value", String(overview.sessions),
                 String(overview.events), size(overview.eventBytes)) + "\n" + localized("settings.history.overview_not_scanned")
         } else {
@@ -4318,7 +4318,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             changed[key] = value
             try refuse(changed)
         }
-        for (key, value) in [("history_schema_version", 3 as Any), ("page_size", 513), ("free_pages", 13),
+        for (key, value) in [("history_schema_version", 4 as Any), ("page_size", 513), ("free_pages", 13),
             ("events", UInt64.max), ("output_bytes", NSNull())] {
             var invalid = overview
             invalid[key] = value

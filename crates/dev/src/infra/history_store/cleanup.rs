@@ -580,8 +580,8 @@ fn cleanup_locks(
 
 fn validate_cleanup_schema(snapshot: &Transaction<'_>) -> Result<()> {
     ensure!(
-        schema_version(snapshot)? == 2,
-        "History cleanup requires the current schema 2; original retained"
+        schema_version(snapshot)? >= 2,
+        "History cleanup requires schema 2 or newer; original retained"
     );
     validate_backup_schema(snapshot, 2)?;
     let mut objects = snapshot
@@ -1184,6 +1184,59 @@ fn failure_with_recovery(error: anyhow::Error, staged: &[(PathBuf, PathBuf)]) ->
     }
 }
 
+fn truncate_history_wal(connection: &Connection) -> Result<()> {
+    let state: (i64, i64, i64) =
+        connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+    ensure!(
+        matches!(state, (0, 0, 0) | (0, -1, -1)),
+        "History WAL could not be truncated, possibly because another reader is active"
+    );
+    Ok(())
+}
+
+fn compact_legacy_history(connection: &mut Connection) -> Result<()> {
+    let version =
+        |db: &Connection| db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0));
+    if version(connection)? == SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    let journal: String = connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+    if journal.eq_ignore_ascii_case("wal") {
+        // An exclusive WAL connection rules out an already-open legacy writer before certification.
+        connection.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+        connection.busy_timeout(Duration::ZERO)?;
+        let acquired = connection
+            .transaction_with_behavior(TransactionBehavior::Exclusive)
+            .and_then(rusqlite::Transaction::commit);
+        connection.busy_timeout(Duration::from_secs(5))?;
+        match acquired {
+            Ok(()) => {
+                if version(connection)? < SCHEMA_VERSION {
+                    connection.execute_batch("VACUUM")?;
+                    truncate_history_wal(connection)?;
+                    connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                }
+                return Ok(());
+            }
+            Err(error)
+                if matches!(
+                    error.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) =>
+            {
+                connection.pragma_update(None, "locking_mode", "NORMAL")?;
+            }
+            Err(error) => return Err(error).context("acquire exclusive History privacy migration"),
+        }
+    }
+    // Existing readers keep legacy storage readable. Scrub now, and certify on a later exclusive pass.
+    connection.execute_batch("VACUUM")?;
+    Ok(())
+}
+
 /// Delete only a revalidated selection and its proven, exclusively owned log files.
 pub fn execute_history_cleanup(
     directory: &Path,
@@ -1462,24 +1515,14 @@ pub fn execute_history_cleanup(
             ),
         });
     }
-    let compact = connection.execute_batch("VACUUM");
-    let checkpoint = (|| -> Result<()> {
-        let state: (i64, i64, i64) =
-            connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?;
-        ensure!(
-            matches!(state, (0, 0, 0) | (0, -1, -1)),
-            "History WAL could not be truncated, possibly because another reader is active"
-        );
-        Ok(())
-    })();
+    let compact = compact_legacy_history(&mut connection);
+    let checkpoint = truncate_history_wal(&connection);
     if compact.is_err() || checkpoint.is_err() {
         receipt.failed_artifacts.push(HistoryArtifactDecision {
             path: root.join(HISTORY_DATABASE).display().to_string(),
             scope: "database_privacy",
             status: "failed",
-            reason: [compact.err().map(anyhow::Error::from), checkpoint.err()]
+            reason: [compact.err(), checkpoint.err()]
                 .into_iter()
                 .flatten()
                 .map(|error| format!("{error:#}"))
@@ -1759,6 +1802,77 @@ mod tests {
         assert!(!contains(&database, "run-private")?);
         assert!(contains(&database, "untouched run output")?);
         assert!(acquire_history_session_lease(&logs, session).is_err());
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn legacy_history_certifies_once_then_secure_deletion_reclaims_pages_without_rewriting()
+    -> Result<()> {
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
+        run(&logs, "legacy", "run-legacy", "legacy output")?;
+        run(&logs, "legacy-peer", "run-peer", "other legacy output")?;
+        let connection = open_history_write(&logs)?;
+        connection.pragma_update(None, "user_version", 2)?;
+
+        let mut peer = request("legacy-peer", "run-peer");
+        peer.snapshot_token = Some(preview_history_cleanup(&logs, &peer)?.snapshot_token);
+        let receipt = execute_history_cleanup(&logs, &peer)?;
+        assert_eq!(
+            receipt.status, "completed",
+            "{:?}",
+            receipt.failed_artifacts
+        );
+        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        assert_eq!(version, 2, "an open peer must prevent migration");
+        drop(connection);
+
+        let mut first = request("legacy", "run-legacy");
+        first.snapshot_token = Some(preview_history_cleanup(&logs, &first)?.snapshot_token);
+        let receipt = execute_history_cleanup(&logs, &first)?;
+        assert_eq!(
+            receipt.status, "completed",
+            "{:?}",
+            receipt.failed_artifacts
+        );
+
+        let connection = open_history_write(&logs)?;
+        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        assert_eq!(version, SCHEMA_VERSION);
+        let secure: i64 = connection.pragma_query_value(None, "secure_delete", |row| row.get(0))?;
+        assert_eq!(secure, 1);
+        drop(connection);
+
+        let payload = "private-selected-output-synthetic".repeat(32_768);
+        run(&logs, "fast-delete", "run-fast", &payload)?;
+        run(&logs, "keep", "run-keep", "untouched output")?;
+        let database = logs.join(HISTORY_DATABASE);
+        let mut second = request("fast-delete", "run-fast");
+        second.snapshot_token = Some(preview_history_cleanup(&logs, &second)?.snapshot_token);
+        truncate_history_wal(&open_history_write(&logs)?)?;
+        let size_before = fs::metadata(&database)?.len();
+        let receipt = execute_history_cleanup(&logs, &second)?;
+        assert_eq!(
+            receipt.status, "completed",
+            "{:?}",
+            receipt.failed_artifacts
+        );
+        assert_eq!(fs::metadata(&database)?.len(), size_before);
+        assert_eq!(
+            fs::metadata(logs.join(format!("{HISTORY_DATABASE}-wal")))?.len(),
+            0
+        );
+        let bytes = fs::read(database)?;
+        for marker in ["private-selected-output-synthetic", "run-fast"] {
+            assert!(
+                !bytes
+                    .windows(marker.len())
+                    .any(|chunk| chunk == marker.as_bytes())
+            );
+        }
+        assert!(bytes.windows(16).any(|chunk| chunk == b"untouched output"));
         Ok(())
     }
 
@@ -2217,7 +2331,7 @@ mod tests {
         }
         let receipt = prepare_history_read_only_access(&logs)?;
         assert_eq!(receipt.kind, "history_readonly_access");
-        assert_eq!(receipt.history_schema_version, 2);
+        assert_eq!(receipt.history_schema_version, SCHEMA_VERSION);
         assert_eq!(fs::read(&source)?, before);
         assert!(logs.join(format!("{HISTORY_DATABASE}-wal")).is_file());
         assert!(logs.join(format!("{HISTORY_DATABASE}-shm")).is_file());
@@ -2236,7 +2350,7 @@ mod tests {
         );
         assert_eq!(
             reader.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?,
-            2
+            SCHEMA_VERSION
         );
         assert!(reader.execute("DELETE FROM history_events", []).is_err());
         drop(reader);
@@ -2252,7 +2366,7 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(&native.stderr)
             );
-            assert_eq!(native.stdout, b"2\n2\n");
+            assert_eq!(native.stdout, format!("{SCHEMA_VERSION}\n2\n").as_bytes());
         }
         assert_eq!(fs::read(&source)?, before);
         Ok(())

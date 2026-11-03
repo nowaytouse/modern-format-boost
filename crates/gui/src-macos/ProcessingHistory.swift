@@ -1679,7 +1679,7 @@ private enum HistoryStore {
               sqlite3_exec(database, "PRAGMA query_only=ON; BEGIN", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
         let version = try statement(database, "PRAGMA user_version")
         defer { sqlite3_finalize(version) }
-        guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else {
+        guard sqlite3_step(version) == SQLITE_ROW, (2...3).contains(sqlite3_column_int(version, 0)) else {
             throw databaseError(database, "unsupported output schema")
         }
         if let upperSnapshot { end = min(end, upperSnapshot) }
@@ -1785,7 +1785,7 @@ private enum HistoryStore {
         }
         let version = try statement(database, "PRAGMA user_version")
         defer { sqlite3_finalize(version) }
-        guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else {
+        guard sqlite3_step(version) == SQLITE_ROW, (2...3).contains(sqlite3_column_int(version, 0)) else {
             try control.check()
             throw databaseError(database, "unsupported output schema")
         }
@@ -1928,7 +1928,7 @@ private enum HistoryStore {
               sqlite3_exec(database, "PRAGMA query_only=ON; BEGIN", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
         let version = try statement(database, "PRAGMA user_version")
         defer { sqlite3_finalize(version) }
-        guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else { throw databaseError(database, "unsupported output schema") }
+        guard sqlite3_step(version) == SQLITE_ROW, (2...3).contains(sqlite3_column_int(version, 0)) else { throw databaseError(database, "unsupported output schema") }
         var bytes = 0
         var limited = false
         let audit = try databaseAudit(database, stamp: selected.stamp, url: selected.audit, readBytes: &bytes, limited: &limited)
@@ -2236,8 +2236,8 @@ private enum HistoryStore {
             defer { sqlite3_finalize(version) }
             guard sqlite3_step(version) == SQLITE_ROW else { throw databaseError(database) }
             let schema = sqlite3_column_int(version, 0)
-            guard schema == 1 || schema == 2 else { throw databaseError(database, "unsupported schema \(schema)") }
-            if schema == 2 {
+            guard (1...3).contains(schema) else { throw databaseError(database, "unsupported schema \(schema)") }
+            if schema >= 2 {
                 let outputSchema = try statement(database, "SELECT sequence, session_id, ts, pipeline, line FROM history_output LIMIT 0")
                 sqlite3_finalize(outputSchema)
             }
@@ -2715,7 +2715,7 @@ private struct HistoryReadOnlyAccessReceipt: Decodable {
         let value = try JSONDecoder().decode(Self.self, from: data)
         guard value.schema_version == 1, value.kind == "history_readonly_access",
               value.source == (try HistoryStore.databasePath(directory.appendingPathComponent("history.sqlite3"))),
-              value.history_schema_version == 1 || value.history_schema_version == 2 else {
+              (1...3).contains(value.history_schema_version) else {
             throw HostError(message: localized("history.issue.read"))
         }
     }
@@ -6785,7 +6785,7 @@ func runProcessingHistorySelfTests() throws {
         CREATE TABLE history_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES history_sessions(session_id), ts TEXT NOT NULL, event TEXT NOT NULL);
         CREATE INDEX history_events_session_sequence ON history_events(session_id, sequence);
         CREATE INDEX history_sessions_updated_at ON history_sessions(updated_at);
-        \(schema == 2 ? "CREATE TABLE history_output(sequence INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES history_sessions(session_id), ts TEXT NOT NULL, pipeline TEXT NOT NULL, line TEXT NOT NULL); CREATE INDEX history_output_session_sequence ON history_output(session_id, sequence);" : "")
+        \((2...3).contains(schema) ? "CREATE TABLE history_output(sequence INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES history_sessions(session_id), ts TEXT NOT NULL, pipeline TEXT NOT NULL, line TEXT NOT NULL); CREATE INDEX history_output_session_sequence ON history_output(session_id, sequence);" : "")
         PRAGMA user_version = \(schema);
         BEGIN;
         """
@@ -7139,7 +7139,7 @@ func runProcessingHistorySelfTests() throws {
     let unknownSummary = try payload("MFB_HISTORY_SUMMARY", unknownSummaryValue)
     let exportFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed",
         "error": "synthetic terminal failure", "output_sequence": 6])
-    try writeDatabase([("export", [exportContext, launch, spawn, exportConfig, exited, storage, unknownSummary, exportFinished, adjacentContext, secondLaunch])], schema: 2)
+    try writeDatabase([("export", [exportContext, launch, spawn, exportConfig, exited, storage, unknownSummary, exportFinished, adjacentContext, secondLaunch])], schema: 3)
     var exportDB: OpaquePointer?
     guard sqlite3_open_v2(databaseURL.path, &exportDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let exportDB else {
         throw HostError(message: "Synthetic export database open failed")
