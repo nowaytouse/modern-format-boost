@@ -770,8 +770,12 @@ impl LaunchCommand {
                             let observation = invocation_id
                                 .filter(|_| expected_pipeline == "img")
                                 .filter(|_| self.args.first().is_some_and(|arg| arg == "fast-img"))
-                                .and_then(|id| {
-                                    HistorySourceSet::parse_observation(payload, id).ok()
+                                .and_then(|id| match HistorySourceSet::parse_observation(payload, id) {
+                                    Ok(observation) => Some(observation),
+                                    Err(error) => {
+                                        eprintln!("[WARN] Invalid worker source-set evidence: {error:#}");
+                                        None
+                                    }
                                 });
                             source_set_rejected = observation.is_none();
                             source_set = observation;
@@ -791,10 +795,14 @@ impl LaunchCommand {
                             if let Err(error) =
                                 ChildConfigMarker::parse(payload, expected_config_pipeline)
                                     .and_then(|marker| {
-                                        session.tool_snapshots().observe_config(
-                                            expected_config_pipeline,
-                                            &marker.config.tools.paths,
-                                        )?;
+                                        if expected_config_pipeline != "img"
+                                            || marker.config.execution.external_tool_snapshot
+                                        {
+                                            session.tool_snapshots().observe_config(
+                                                expected_config_pipeline,
+                                                &marker.config.tools.paths,
+                                            )?;
+                                        }
                                         let mut marker = serde_json::to_value(marker)?;
                                         marker["invocation_id"] =
                                             serde_json::to_value(invocation_id)?;

@@ -217,6 +217,9 @@ pub(super) struct RuntimeArgs {
     performance: runtime_config::PerformanceArgs,
     #[command(flatten)]
     execution: runtime_config::ExecutionArgs,
+    /// Pin and verify external IMG tools for this task (off by default).
+    #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    external_tool_snapshot: Option<bool>,
     #[command(flatten)]
     cache: runtime_config::cache_args::CacheArgs,
     #[command(flatten)]
@@ -485,6 +488,13 @@ impl RuntimeArgs {
             sources,
             source_chain,
             "img.quality_search",
+        );
+        apply(
+            self.external_tool_snapshot,
+            &mut config.execution.external_tool_snapshot,
+            sources,
+            source_chain,
+            "execution.external_tool_snapshot",
         );
         self.photos.apply_to(&mut loaded);
         self.performance.apply_to(&mut loaded);

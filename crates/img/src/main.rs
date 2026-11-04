@@ -744,7 +744,13 @@ fn select_img_startup_tools(command: &Commands) -> anyhow::Result<Option<ImgTool
         } => Ok(Some(ImgToolRuntimeRequest {
             required: &["cjxl", "djxl", "jxlinfo", "exiftool", "ffmpeg"],
             recorded: if *resume && !*no_resume {
-                foundation::checkpoint::Manager::saved_tool_snapshot(input, output.as_deref())?
+                let recorded =
+                    foundation::checkpoint::Manager::saved_tool_snapshot(input, output.as_deref())?;
+                anyhow::ensure!(
+                    recorded.is_none() || !img_tool_snapshot_disabled(),
+                    "Saved IMG task uses pinned tools. Enable external tool pinning to resume it, or start a new task."
+                );
+                recorded
             } else {
                 None
             },
@@ -799,10 +805,12 @@ fn select_img_startup_tools(command: &Commands) -> anyhow::Result<Option<ImgTool
                 if child.as_ref().is_some_and(WorkingCopyMarker::is_terminal) {
                     return Ok(None);
                 }
-                child.as_ref().map(|marker| {
-                    marker.tool_snapshot_manifest.clone().zip(marker.tool_snapshot_identity.clone())
-                        .context("Saved failed-only retry has no fixed tool runtime authority; recovery evidence was retained")
-                }).transpose()?
+                child
+                    .as_ref()
+                    .map(fast_img_saved_tool_snapshot)
+                    .transpose()?
+                    .flatten()
+                    .map(|(path, identity)| (path.to_owned(), identity.to_owned()))
             } else {
                 // Selection only: output recovery belongs after tool preflight.
                 let working = if let Some(output) = output {
@@ -823,10 +831,12 @@ fn select_img_startup_tools(command: &Commands) -> anyhow::Result<Option<ImgTool
                                 *allow_expert_options,
                             )?;
                             fast_img_validate_processing_contract(&marker, &contract)?;
-                            marker.tool_snapshot_manifest.zip(marker.tool_snapshot_identity)
-                                .context("Saved fast-img task has no fixed tool runtime authority; start a new task and reverify instead of reusing historical proofs")
+                            fast_img_saved_tool_snapshot(&marker).map(|saved| {
+                                saved.map(|(path, identity)| (path.to_owned(), identity.to_owned()))
+                            })
                         })
                         .transpose()?
+                        .flatten()
                 }
             };
             Ok(Some(ImgToolRuntimeRequest {
@@ -947,7 +957,18 @@ fn main_inner() -> anyhow::Result<()> {
     )?;
     prepare_img_startup_with(
         &cli.command,
-        runtime_cli::prepare_tool_runtime,
+        |required, recorded| {
+            if img_tool_snapshot_disabled() {
+                // The launcher clears ambient manifests and only forwards its active authority.
+                anyhow::ensure!(
+                    std::env::var_os("MFB_INVOCATION_ID").is_none()
+                        || std::env::var_os(foundation::tool_snapshot::MANIFEST_ENV).is_none(),
+                    "This IMG batch already selected pinned tools. Start a new batch to use unpinned tools."
+                );
+                return Ok(());
+            }
+            runtime_cli::prepare_tool_runtime(required, recorded)
+        },
         resume_admission::emit,
     )?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
@@ -3386,7 +3407,7 @@ fn auto_convert_directory(
 
     // Initialize checkpoint manager for resume/progress tracking
     let checkpoint = if resume {
-        let cp = foundation::checkpoint::Manager::new_resuming_with_context(
+        let cp = foundation::checkpoint::Manager::new_resuming_img_with_context(
             input,
             config.output_dir.as_deref(),
         )
@@ -4193,13 +4214,17 @@ fn run_fast_img_failed_retry(options: FastImgRunOptions<'_>) -> anyhow::Result<(
                 );
                 return Ok(());
             }
-            let active = foundation::common_utils::active_tool_snapshot()
-                .context("new failed-only attempt requires a fixed current tool runtime")?;
-            let tools = foundation::fast_img_store::FailedRetryToolAuthority {
-                manifest_path: active.manifest_path.clone(),
-                identity: active.identity.clone(),
+            let tools = if img_tool_snapshot_disabled() {
+                None
+            } else {
+                let active = foundation::common_utils::active_tool_snapshot()
+                    .context("new failed-only attempt requires a fixed current tool runtime")?;
+                Some(foundation::fast_img_store::FailedRetryToolAuthority {
+                    manifest_path: active.manifest_path.clone(),
+                    identity: active.identity.clone(),
+                })
             };
-            fast_img_prepare_failed_retry_child(&parent, &delivery, Some(&tools))?
+            fast_img_prepare_failed_retry_child(&parent, &delivery, tools.as_ref())?
         }
     };
     let mut continued = options;
@@ -4382,18 +4407,28 @@ impl FastImgSourceInventory {
             &[]
         };
         let count = self.source_files.len().checked_add(tier2.len())?;
-        let encoded = self.source_files.iter().filter_map(|path| {
-            let relative = path.strip_prefix(root).ok()?;
-            let digest = self.source_hashes.get(relative.to_str()?)?;
-            Some((relative, digest.as_str()))
+        let sources = self
+            .source_files
+            .iter()
+            .map(|path| (path.as_path(), None))
+            .chain(
+                tier2
+                    .iter()
+                    .map(|candidate| (candidate.path.as_path(), Some(candidate.blake3.as_str()))),
+            );
+        let files = sources.filter_map(|(path, observed_hash)| {
+            let relative = match path.strip_prefix(root) {
+                Ok(relative) => relative,
+                Err(error) => {
+                    tracing::warn!(%error, "history source could not be scoped to its inventory root");
+                    return None;
+                }
+            };
+            let digest = observed_hash
+                .or_else(|| self.source_hashes.get(relative.to_str()?).map(String::as_str))?;
+            Some((relative, digest))
         });
-        let passthrough = tier2.iter().filter_map(|candidate| {
-            Some((
-                candidate.path.strip_prefix(root).ok()?,
-                candidate.blake3.as_str(),
-            ))
-        });
-        HistorySourceSet::from_observed(root, count, encoded.chain(passthrough))
+        HistorySourceSet::from_observed(root, count, files)
     }
 }
 
@@ -5011,7 +5046,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             // Recheck under the output lock: the checkpoint may have changed
             // since tool preparation. This precedes all prompts and media scans.
             fast_img_validate_processing_contract(marker, &processing_contract)?;
-            if foundation::common_utils::tool_runtime_is_bound()
+            if (foundation::common_utils::tool_runtime_is_bound() || img_tool_snapshot_disabled())
                 && let Err(error) = fast_img_validate_tool_authority(
                     marker,
                     foundation::common_utils::active_tool_snapshot().map(|snapshot| {
@@ -5074,18 +5109,24 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         && existing_marker.is_none()
         && input.is_dir()
         && std::env::var_os("MFB_RUN_ID").is_some()
-        && let Ok(invocation_id) = std::env::var("MFB_INVOCATION_ID")
         && let Some(source_set) = inventory.history_source_set(&src_dir, shortest_path.0)
     {
         use std::io::Write as _;
 
-        let marker =
-            serde_json::json!({ "invocation_id": invocation_id, "source_set": source_set });
-        writeln!(
-            std::io::stdout().lock(),
-            "{HISTORY_SOURCE_SET_PREFIX}{marker}"
-        )
-        .context("write Fast IMG history source set")?;
+        match std::env::var("MFB_INVOCATION_ID") {
+            Ok(invocation_id) => {
+                let marker =
+                    serde_json::json!({ "invocation_id": invocation_id, "source_set": source_set });
+                writeln!(
+                    std::io::stdout().lock(),
+                    "{HISTORY_SOURCE_SET_PREFIX}{marker}"
+                )
+                .context("write Fast IMG history source set")?;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "history source set has no worker invocation identity")
+            }
+        }
     }
     let FastImgSourceInventory {
         source_files: source_jpegs,
@@ -7818,15 +7859,46 @@ fn fast_img_checked_rel_path(rel: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
+fn img_tool_snapshot_disabled() -> bool {
+    foundation::runtime_config::active()
+        .is_some_and(|config| !config.execution.external_tool_snapshot)
+}
+
+fn fast_img_saved_tool_snapshot(
+    marker: &WorkingCopyMarker,
+) -> anyhow::Result<Option<(&Path, &str)>> {
+    match (
+        marker.tool_snapshot_disabled,
+        marker.tool_snapshot_manifest.as_deref(),
+        marker.tool_snapshot_identity.as_deref(),
+    ) {
+        (false, Some(path), Some(identity)) => {
+            anyhow::ensure!(
+                !img_tool_snapshot_disabled(),
+                "Saved Fast IMG task uses pinned tools. Enable external tool pinning to resume it, or start a new task."
+            );
+            Ok(Some((path, identity)))
+        }
+        (true, None, None) => {
+            anyhow::ensure!(
+                img_tool_snapshot_disabled(),
+                "Saved Fast IMG task used system tools without pinning. Turn off external tool pinning to resume it, or start a new task."
+            );
+            Ok(None)
+        }
+        _ => anyhow::bail!(
+            "Saved Fast IMG task has no valid tool runtime record. Start a new task and reverify; saved results were retained."
+        ),
+    }
+}
+
 fn fast_img_validate_tool_authority(
     marker: &WorkingCopyMarker,
     active: Option<(&Path, &str)>,
 ) -> anyhow::Result<()> {
-    let (manifest, identity) = active
-        .context("cannot resume a checkpoint without a persisted active tool runtime authority")?;
+    let saved = fast_img_saved_tool_snapshot(marker)?;
     anyhow::ensure!(
-        marker.tool_snapshot_manifest.as_deref() == Some(manifest)
-            && marker.tool_snapshot_identity.as_deref() == Some(identity),
+        saved == active,
         "fast-img checkpoint tool runtime changed before the output lock; saved proofs and outputs were retained"
     );
     Ok(())

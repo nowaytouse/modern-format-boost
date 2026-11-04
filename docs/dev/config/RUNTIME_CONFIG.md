@@ -1309,12 +1309,19 @@ presentation guard remains authoritative for activity between external samples.
 
 ## IMG Tool Runtime Lifetime
 
-After effective configuration and explicit tool overrides resolve, IMG binds
-its tool selection before media inventory or output preparation. On macOS the
-required JPEG tools use a verified private executable/dependency snapshot;
-standard IMG additionally captures its required FFmpeg, and AVIF Fast IMG binds
-its AVIF tools instead of requiring unrelated JXL tools. Snapshots are recovery
-state, not disposable cache. A subsequent run can select newly installed tools.
+External tool pinning is off by default. Standard IMG, Fast IMG and Restore
+JPEG use the configured or installed executables with their normal tool
+availability and media checks. This mode does not create or verify private tool
+copies, and a Homebrew or system update can change the tools available to a run.
+
+Enable **Settings → Performance → Pin and verify external tools**, set
+`execution.external_tool_snapshot` to `true`, or pass
+`--external-tool-snapshot=true` to IMG or the launcher to opt in.
+`--external-tool-snapshot=false` overrides a saved opt-in. On macOS, pinning
+captures the required executable and dependency files before media inventory or
+output preparation. Standard IMG includes FFmpeg, and Fast IMG AVIF captures
+its AVIF tools instead of JXL tools. Private snapshots are recovery state.
+A fresh task can select newly installed tools.
 
 `MFB_TOOL_SNAPSHOT=` is a flushed schema-1 control event with `pipeline: "img"`,
 `state` (`preparing`, `ready`, `blocked`), `boundary`, exact `tool_names`, optional
@@ -1342,17 +1349,17 @@ Asking whether an optional media tool exists does not count as executing it;
 missing optional capabilities return unavailable without a shared-failure latch.
 Actual execution still cannot substitute an unbound PATH encoder or verifier.
 
-Fast IMG markers and standard IMG checkpoint headers retain the original private
-manifest and identity. Resume loads that authority, checks its private material,
-and refuses a conflicting supplied manifest or explicit tool override. Removing
-or upgrading the original installation does not invalidate a complete private
-snapshot. Historical completed-file proofs without a recorded tool authority
-require a new task and fresh verification; they are not silently relabelled as
-proofs from the new toolchain. Non-macOS has no persisted snapshot authority for
-that reuse guarantee.
+Fast IMG markers and standard IMG checkpoints record whether the task used
+unpinned tools or a private manifest and identity. Resume uses the saved mode.
+If the setting changed, restore the original setting to resume, or start a new
+task to use the current setting. Pinned resume checks the original private
+material and refuses a conflicting manifest or explicit tool override. A complete
+private snapshot survives upgrades or removal of the original installation.
+Historical completed-file proofs without recorded tool authority require fresh
+verification. Non-macOS has no persisted snapshot authority for pinned resume.
 
-Before each encoding wave and critical delivery/deletion boundary, private
-snapshot hashes are checked. Executable filesystem identity is an additional
+With pinning enabled, IMG checks private snapshot hashes before each encoding
+wave and critical delivery or deletion boundary. Executable filesystem identity is an additional
 early change detector, not content proof. After a failed operation, full private
 snapshot hashes and bounded executable probes distinguish shared tool failure
 from media failure. Shared failure stops

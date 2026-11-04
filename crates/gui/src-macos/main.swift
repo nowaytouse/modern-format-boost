@@ -317,7 +317,7 @@ private enum MediaSetting: String, CaseIterable {
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
-    case performance
+    case performance, externalToolSnapshot
     case cacheMaxBytes, cacheTtlSeconds
 
     var isImage: Bool { rawValue.hasPrefix("img") }
@@ -355,7 +355,7 @@ private enum MediaSetting: String, CaseIterable {
     var isShared: Bool { self == .performance || isCache }
     var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode].contains(self) }
     var section: String {
-        if self == .performance { return "performance" }
+        if self == .performance || self == .externalToolSnapshot { return "performance" }
         if isCache { return "cache" }
         if isDeveloper { return "developer" }
         if isPhotos { return "photos" }
@@ -365,6 +365,7 @@ private enum MediaSetting: String, CaseIterable {
     var flag: String {
         switch self {
         case .performance: "--performance"
+        case .externalToolSnapshot: "--external-tool-snapshot"
         case .cacheMaxBytes: "--cache-max-bytes"
         case .cacheTtlSeconds: "--cache-ttl-seconds"
         case .imgConfig, .fastConfig: "--img-config"
@@ -405,7 +406,7 @@ private enum MediaSetting: String, CaseIterable {
         case .performance: ["adaptive", "relaxed", "balanced", "tight"]
         case .imgFallback, .fastFallback: ["strict", "same-semantics", "repair"]
         case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
-             .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong: ["true", "false"]
+             .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong, .externalToolSnapshot: ["true", "false"]
         case .imgErrorMode, .vidErrorMode, .fastErrorMode: ["log-and-continue", "fail-fast"]
         case .imgJxlEffort, .fastJxlEffort, .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
         case .imgJxlSearch, .fastJxlSearch: ["fixed", "adaptive"]
@@ -432,6 +433,7 @@ private enum MediaSetting: String, CaseIterable {
     var runtimeKey: String? {
         switch self {
         case .performance: "performance.mode"
+        case .externalToolSnapshot: "execution.external_tool_snapshot"
         case .cacheMaxBytes: "cache.path_tree_max_bytes"
         case .cacheTtlSeconds: "cache.path_tree_ttl_seconds"
         case .imgFallback, .fastFallback: "img.fallback_policy"
@@ -548,6 +550,7 @@ private struct MediaSettings {
     var videoForceMsSsimLong: Bool?
     var videoConfigurationFile: String?
     var performance: String?
+    var externalToolSnapshot: Bool?
     var cacheMaxBytes: Int?
     var cacheTtlSeconds: Int?
     var toolPaths: [ToolPipeline: [String: String]] = [:]
@@ -563,7 +566,7 @@ private struct MediaSettings {
     var values: [MediaSetting: String] {
         get {
             let stored: [MediaSetting: String?] = [
-                .performance: performance,
+                .performance: performance, .externalToolSnapshot: externalToolSnapshot.map(String.init),
                 .cacheMaxBytes: cacheMaxBytes.map(String.init), .cacheTtlSeconds: cacheTtlSeconds.map(String.init),
                 .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
@@ -616,6 +619,7 @@ private struct MediaSettings {
                 }
                 switch field {
                 case .performance: performance = value
+                case .externalToolSnapshot: externalToolSnapshot = Bool(value)
                 case .cacheMaxBytes: cacheMaxBytes = Int(value)
                 case .cacheTtlSeconds: cacheTtlSeconds = Int(value)
                 case .imgConfig: image.configurationFile = value
@@ -762,6 +766,7 @@ private struct MediaSettings {
         let videos = operation == .adjacent && processing != .imagesOnly
         let fields = MediaSetting.allCases.filter {
             if $0.isFastImage && !$0.appliesToFast(avif: operation == .fastImgAvif) { return false }
+            if $0 == .externalToolSnapshot { return images || fastImages || operation == .restoreJpeg }
             if $0.isShared { return images || videos || fastImages || ($0.isCache && operation == .fastVid) }
             return $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
         }
@@ -777,7 +782,7 @@ private struct MediaSettings {
 
     func runtimeArguments(fast: Bool, inheritedOnly: Bool, avif: Bool = false) -> [String] {
         var arguments = MediaSetting.allCases.filter {
-            ($0.isShared || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
+            ($0.isShared || $0 == .externalToolSnapshot || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
                 && (!fast || !$0.isFastImage || $0.appliesToFast(avif: avif))
                 && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
@@ -1869,8 +1874,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         tabs.delegate = self
         installTab("general", grid: generalSettingsGrid())
         let mediaSections = ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"]
-        for section in interfaceOnly ? [] : mediaSections {
+        for section in interfaceOnly ? ["performance"] : mediaSections {
             let fields = MediaSetting.allCases.filter { field in
+                if interfaceOnly { return field == .externalToolSnapshot }
+                if field == .externalToolSnapshot { return section == "performance" && !videos }
                 if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
                 if field == .performance { return section == "performance" }
                 if field.isCache { return section == "cache" }
@@ -1939,9 +1946,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 }
                 control.setAccessibilityLabel(field.title)
                 control.toolTip = localized("settings.\(field.labelKey).help")
+                if field == .externalToolSnapshot { control.setAccessibilityHelp(control.toolTip) }
                 control.setContentHuggingPriority(.defaultLow, for: .horizontal)
                 let fieldView: NSView
-                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode].contains(field) {
+                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode, .externalToolSnapshot].contains(field) {
                     let note = NSTextField(wrappingLabelWithString: localized("settings.\(field.labelKey).note"))
                     note.font = .systemFont(ofSize: 11)
                     note.textColor = .secondaryLabelColor
@@ -2916,13 +2924,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: true)
         let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: true)
         let videoArgs = settings.videoRuntimeArguments(inheritedOnly: true)
-        let needsStandard = !fast && !videos
-        let needsVideo = !fast
+        let needsStandard = interfaceOnly || (!fast && !videos)
+        let needsFast = !interfaceOnly
+        let needsVideo = !fast && !interfaceOnly
         displayAvifMetadataMessage("settings.avif_metadata.loading")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result {
                 (try needsStandard ? queryRuntimeSettings(arguments: standardArgs) : nil,
-                 try queryRuntimeSettings(arguments: fastArgs),
+                 try needsFast ? queryRuntimeSettings(arguments: fastArgs) : nil,
                  try needsVideo ? queryRuntimeSettings(arguments: videoArgs, tool: "vid") : nil)
             }
             DispatchQueue.main.async { [weak self] in
@@ -2947,14 +2956,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
     }
 
-    private func setInheritedValues(standard: EffectiveRuntimeSettings?, fast: EffectiveRuntimeSettings,
+    private func setInheritedValues(standard: EffectiveRuntimeSettings?, fast: EffectiveRuntimeSettings?,
                                     video: EffectiveRuntimeSettings?) {
         inherited.removeAll()
         inheritedSources.removeAll()
         inheritedMixed.removeAll()
         for field in MediaSetting.allCases {
             guard let key = field.runtimeKey else { continue }
-            let effective = field.isShared ? (self.fast ? fast : (videos ? video : standard))
+            let effective = field == .externalToolSnapshot ? (self.fast ? fast : standard)
+                : field.isShared ? (self.fast ? fast : (videos ? video : standard))
                 : (field.isFastImage || field.isPhotos ? fast : (field.isVideo ? video : standard))
             inherited[field] = effective?[key]
             inheritedSources[field] = effective?.sourceChain[key]?.joined(separator: " → ")
@@ -2966,7 +2976,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             inherited[field] = nil
             inheritedSources[field] = "IMG: \(imageValue) (\(standard?.sources[key] ?? localized("result.unknown")))\nVID: \(videoValue) (\(video?.sources[key] ?? localized("result.unknown")))"
         }
-        displayAvifMetadataPolicy(fast)
+        if let fast { displayAvifMetadataPolicy(fast) }
     }
 
     private func displayAvifMetadataMessage(_ key: String, policy: String? = nil) {
@@ -2988,6 +2998,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private func restore(_ settings: MediaSettings) {
         restored = settings
         displayed = inherited.merging(settings.values) { _, explicit in explicit }
+        if popups[.externalToolSnapshot] != nil, displayed[.externalToolSnapshot] == nil {
+            displayed[.externalToolSnapshot] = "false"
+        }
         for (field, text) in textFields {
             text.stringValue = displayed[field] ?? ""
             if field.isCache {
@@ -3192,7 +3205,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             } else if field.isVideo || (field.isShared && videos) {
                 requests = [("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
             } else {
-                let useFast = field.isFastImage || field.isPhotos || (field.isShared && fast)
+                let useFast = field.isFastImage || field.isPhotos || ((field.isShared || field == .externalToolSnapshot) && fast)
                 requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false, avif: avif))]
             }
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -3286,7 +3299,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         sourceGeneration = UUID()
         do {
             let settings = draft()
-            if interfaceOnly || settings.hasSameOverrides(as: MediaSettings(preferences: preferences)) {
+            if settings.hasSameOverrides(as: MediaSettings(preferences: preferences)) {
                 applyInterfacePreferences()
                 return
             }
@@ -3297,12 +3310,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: false)
             let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif)
             let videoArgs = settings.videoRuntimeArguments(inheritedOnly: false)
-            let needsStandard = !fast && !videos
-            let needsVideo = !fast
+            let needsStandard = interfaceOnly || (!fast && !videos)
+            let needsFast = !interfaceOnly
+            let needsVideo = !fast && !interfaceOnly
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let result = Result {
                     if needsStandard { _ = try queryRuntimeSettings(arguments: standardArgs) }
-                    _ = try queryRuntimeSettings(arguments: fastArgs)
+                    if needsFast { _ = try queryRuntimeSettings(arguments: fastArgs) }
                     if needsVideo { _ = try queryRuntimeSettings(arguments: videoArgs, tool: "vid") }
                 }
                 DispatchQueue.main.async { [weak self] in
@@ -3375,10 +3389,58 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         } catch { guard error.localizedDescription != "Tool path with no source accepted" else { throw error } }
     }
 
+    private func validateExternalToolSnapshotForSelfTest() throws {
+        let field = MediaSetting.externalToolSnapshot
+        guard let popup = popups[field], fieldSections[field] == "performance",
+              popup.accessibilityLabel() == field.title,
+              matchingSettings(field.title).contains(.setting(field)) else {
+            throw HostError(message: "External tool pinning is missing from searchable Settings")
+        }
+
+        let original = restored
+        let originalInherited = inherited[field]
+        defer {
+            inherited[field] = originalInherited
+            restore(original)
+        }
+        inherited[field] = nil
+        restore(MediaSettings())
+        guard popup.selectedItem?.representedObject as? String == "false", draft().values[field] == nil else {
+            throw HostError(message: "External tool pinning did not default to disabled without an override")
+        }
+
+        let suite = "MFBToolSnapshotSelfTest_\(UUID().uuidString)"
+        guard let temporary = UserDefaults(suiteName: suite) else {
+            throw HostError(message: "External tool pinning preferences unavailable")
+        }
+        defer { temporary.removePersistentDomain(forName: suite) }
+        for value in ["true", "false"] {
+            inherited[field] = value == "true" ? nil : "true"
+            restore(MediaSettings())
+            popup.select(popup.itemArray.first { ($0.representedObject as? String) == value })
+            try draft().save(to: temporary)
+            let saved = MediaSettings(preferences: temporary)
+            let flag = "--external-tool-snapshot=\(value)"
+            guard saved.values[field] == value,
+                  try saved.arguments(operation: .adjacent, processing: .both) == [flag],
+                  try saved.arguments(operation: .fastImgJxl, processing: .imagesOnly) == [flag],
+                  try saved.arguments(operation: .fastImgAvif, processing: .imagesOnly) == [flag],
+                  try saved.arguments(operation: .restoreJpeg, processing: .imagesOnly) == [flag],
+                  try saved.arguments(operation: .adjacent, processing: .videosOnly).isEmpty,
+                  try saved.arguments(operation: .fastVid, processing: .videosOnly).isEmpty,
+                  saved.runtimeArguments(fast: fast, inheritedOnly: false) == [flag],
+                  saved.runtimeArguments(fast: fast, inheritedOnly: true).isEmpty,
+                  saved.videoRuntimeArguments(inheritedOnly: false).isEmpty else {
+                throw HostError(message: "External tool pinning preference did not reach the correct image modes")
+            }
+        }
+    }
+
     func validateForSelfTest() throws {
         validatingLayout = true
         defer { validatingLayout = false }
         try validateEncodingScopesForSelfTest()
+        try validateExternalToolSnapshotForSelfTest()
         for field in [MediaSetting.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode] {
             guard let row = rows[field] else { continue }
             guard let stack = row.cell(at: 1).contentView as? NSStackView,
@@ -3531,8 +3593,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             if tabs.selectedTabViewItem?.identifier as? String == "performance",
                let surface = panel.contentView {
                 let privacyHeight = privacyCheck.frame.height + privacyNote.frame.height + root.spacing * 2
-                guard surface.bounds.height - privacyHeight <= 230 else {
-                    throw HostError(message: "Single-row settings tab retained oversized empty space")
+                let snapshotRowHeight = rows[.externalToolSnapshot]?.cell(at: 1).contentView?.fittingSize.height ?? 0
+                guard surface.bounds.height - privacyHeight <= 230 + snapshotRowHeight + grid.rowSpacing else {
+                    throw HostError(message: "Performance settings retained oversized empty space")
                 }
                 let checkbox = privacyCheck.convert(privacyCheck.bounds, to: surface)
                 let note = privacyNote.convert(privacyNote.bounds, to: surface)
@@ -3647,6 +3710,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     func validateInterfaceSettingsForSelfTest() throws {
+        try validateExternalToolSnapshotForSelfTest()
         let keys = [zoomPreferenceKey, languagePreferenceKey, appearancePreferenceKey, developerPreferenceKey]
         let original = keys.map { preferences.object(forKey: $0) }
         defer {

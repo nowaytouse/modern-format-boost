@@ -427,8 +427,14 @@ fn manifest_hash(
         &child.tool_snapshot_manifest,
         &child.tool_snapshot_identity,
     );
+    // Keep historical manifests byte-identical while binding the explicit unpinned mode.
+    let version = if child.tool_snapshot_disabled {
+        2u8
+    } else {
+        1u8
+    };
     Ok(blake3::hash(&canonical_bytes(&(
-        1u8,
+        version,
         key,
         &row.parent,
         row.revision,
@@ -800,6 +806,8 @@ pub fn create_or_resume_failed_retry(
         recheck_parent(&tx,parent)?;
         validate_delivery(delivery)?;
         if let Some(tools)=tools { validate_locator(text(&tools.manifest_path)?)?; hash_text(&tools.identity)?; }
+        let tool_snapshot_disabled = tools.is_none() && crate::runtime_config::active()
+            .is_some_and(|config| !config.execution.external_tool_snapshot);
         let mut values=BTreeMap::new();
         for value in supplied {ensure!(values.insert(value.source_rel.clone(),value.clone()).is_none(),"Duplicate failed retry source");}
         validate_admissions(&parent.marker,&values)?;
@@ -809,7 +817,8 @@ pub fn create_or_resume_failed_retry(
             ensure!(context.admissions==values,"Existing retry request has different admissions; no second child was created");
             ensure!(context.requested_delivery()==delivery,"Existing failed retry has a different requested delivery target; no task was reused or reset");
             ensure!(marker.tool_snapshot_manifest.as_ref()==tools.map(|tools|&tools.manifest_path)
-                && marker.tool_snapshot_identity.as_ref()==tools.map(|tools|&tools.identity),"Existing retry's fixed tool authority differs from this request");
+                && marker.tool_snapshot_identity.as_ref()==tools.map(|tools|&tools.identity)
+                && marker.tool_snapshot_disabled == tool_snapshot_disabled,"Existing retry's tool authority differs from this request");
             tx.commit()?;
             return Ok(marker);
         }
@@ -824,6 +833,7 @@ pub fn create_or_resume_failed_retry(
         }
         child.tool_snapshot_manifest=tools.map(|tools|tools.manifest_path.clone());
         child.tool_snapshot_identity=tools.map(|tools|tools.identity.clone());
+        child.tool_snapshot_disabled=tool_snapshot_disabled;
         let parent_context=context_for(&tx,&parent.key,&parent.marker)?;
         let logical=parent_context.as_ref().and_then(|context|context.ancestors.last()).map_or_else(||Ok(parent.key.clone()),|root|Ok::<_,anyhow::Error>(key_for_canonical(text(&root.working_copy)?)))?;
         let mut row=Relation{parent:parent.key.clone(),revision:parent.revision,snapshot:blake3::Hash::from_hex(&parent.hash)?.as_bytes().to_vec(),

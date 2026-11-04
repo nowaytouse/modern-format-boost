@@ -23,6 +23,12 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### External Tools (2026-11-04)
+
+- Make IMG external tool pinning and runtime verification optional and off by
+  default. Resume matches the tool mode recorded by the original task, and
+  media verification still applies in either mode.
+
 ### History Cleanup and Long-Running Jobs (2026-11-03)
 
 - Stream history cleanup previews for large batches, validate the read snapshot

@@ -12405,9 +12405,23 @@ fn media_conversion_unified_log_layout_m160() {
         .expect("app/session.rs must be readable");
     let drag_drop = production_scope(&drag_drop_source);
     let app_session = production_scope(&app_session_source);
+    let launcher = drag_drop
+        .split_whitespace()
+        .collect::<String>()
+        .replace(",)", ")");
+    let session_start = app_session
+        .split_once("pub fn start()")
+        .and_then(|(_, rest)| rest.split_once("pub fn start_in"))
+        .map(|(body, _)| body.split_whitespace().collect::<String>());
     assert!(
-        drag_drop.contains("AppSession::start()") && app_session.contains("ensure_unified_log_dir"),
-        "drag-and-drop must start a session in the unified log directory (M160)"
+        launcher.contains(concat!(
+            "start_leased_session(",
+            "foundation::production_lock::acquire_production_lease,AppSession::start)"
+        )) && session_start.is_some_and(|body| {
+            body.contains("letlog_dir=ensure_unified_log_dir()?;")
+                && body.contains("Self::start_with_log_dir(&log_dir,true)")
+        }),
+        "drag-and-drop must start a leased session in the unified log directory (M160)"
     );
     assert!(
         drag_drop.contains("session.archive()")

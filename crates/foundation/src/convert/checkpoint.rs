@@ -214,6 +214,8 @@ struct CheckpointHeader {
     tool_snapshot_manifest: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_snapshot_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    tool_snapshot_disabled: bool,
 }
 
 impl CheckpointHeader {
@@ -229,6 +231,7 @@ impl CheckpointHeader {
                 .map(|snapshot| snapshot.manifest_path.clone()),
             tool_snapshot_identity: crate::common_utils::active_tool_snapshot()
                 .map(|snapshot| snapshot.identity.clone()),
+            tool_snapshot_disabled: false,
         })
     }
 
@@ -247,6 +250,7 @@ impl CheckpointHeader {
     fn has_same_tool_authority(&self, expected: &Self) -> bool {
         self.tool_snapshot_manifest == expected.tool_snapshot_manifest
             && self.tool_snapshot_identity == expected.tool_snapshot_identity
+            && self.tool_snapshot_disabled == expected.tool_snapshot_disabled
     }
 }
 
@@ -607,7 +611,7 @@ impl Manager {
     /// Returns an error if the progress directory cannot be created or if
     /// initialization fails.
     pub fn new_with_context(target_dir: &Path, output_root: Option<&Path>) -> io::Result<Self> {
-        Self::new_with_context_inner(target_dir, output_root, false)
+        Self::new_with_context_inner(target_dir, output_root, false, false)
     }
 
     /// # Errors
@@ -618,7 +622,20 @@ impl Manager {
         target_dir: &Path,
         output_root: Option<&Path>,
     ) -> io::Result<Self> {
-        Self::new_with_context_inner(target_dir, output_root, true)
+        Self::new_with_context_inner(target_dir, output_root, true, false)
+    }
+
+    /// Open an image checkpoint with the effective tool snapshot policy.
+    ///
+    /// # Errors
+    /// Returns an error when the checkpoint cannot be initialized or resumed.
+    pub fn new_resuming_img_with_context(
+        target_dir: &Path,
+        output_root: Option<&Path>,
+    ) -> io::Result<Self> {
+        let tool_snapshot_disabled = crate::runtime_config::active()
+            .is_some_and(|config| !config.execution.external_tool_snapshot);
+        Self::new_with_context_inner(target_dir, output_root, true, tool_snapshot_disabled)
     }
 
     /// Return the number of still-valid saved entries without consuming or
@@ -636,6 +653,7 @@ impl Manager {
             header
                 .tool_snapshot_identity
                 .clone_from(&saved.tool_snapshot_identity);
+            header.tool_snapshot_disabled = saved.tool_snapshot_disabled;
         }
         let (valid, _, _) = Self::validate_loaded_state(&loaded, &header, output_root);
         Ok(valid.len())
@@ -644,7 +662,8 @@ impl Manager {
     /// Read the original tool authority without consuming progress or writing media.
     ///
     /// # Errors
-    /// Rejects unreadable state and completed-file proofs without a recorded runtime.
+    /// Rejects unreadable state, unknown tool authority, and disabled checkpoints
+    /// when tool snapshots are currently enabled.
     pub fn saved_tool_snapshot(
         target_dir: &Path,
         output_root: Option<&Path>,
@@ -658,7 +677,26 @@ impl Manager {
         {
             return Ok(None);
         }
-        header.tool_snapshot_manifest.zip(header.tool_snapshot_identity).map(Some).ok_or_else(|| io::Error::other("saved IMG checkpoint has no fixed tool runtime authority; use a new task and reverify, rather than reuse historical completed-file proofs"))
+        match (
+            header.tool_snapshot_disabled,
+            header.tool_snapshot_manifest,
+            header.tool_snapshot_identity,
+        ) {
+            (false, Some(manifest), Some(identity)) => Ok(Some((manifest, identity))),
+            (true, None, None) => {
+                if crate::runtime_config::active()
+                    .is_some_and(|config| config.execution.external_tool_snapshot)
+                {
+                    return Err(io::Error::other(
+                        "saved IMG checkpoint ran with tool pinning off; turn off external tool pinning to resume, or start a new task",
+                    ));
+                }
+                Ok(None)
+            }
+            _ => Err(io::Error::other(
+                "saved IMG checkpoint has unknown or inconsistent tool authority; start a new task and reverify",
+            )),
+        }
     }
 
     /// Explicitly discard the saved checkpoint for a user-requested fresh run.
@@ -686,11 +724,13 @@ impl Manager {
         target_dir: &Path,
         output_root: Option<&Path>,
         resume_enabled: bool,
+        tool_snapshot_disabled: bool,
     ) -> io::Result<Self> {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
         let dir_hash = Self::hash_path(&canonical_target);
         let legacy_key = Self::legacy_hash_path(&canonical_target);
-        let header = CheckpointHeader::new(&canonical_target, output_root)?;
+        let mut header = CheckpointHeader::new(&canonical_target, output_root)?;
+        header.tool_snapshot_disabled = tool_snapshot_disabled;
 
         let central_dir = get_central_progress_dir()?;
         fs::create_dir_all(&central_dir)?;
@@ -1554,9 +1594,11 @@ mod tests {
             .as_object_mut()
             .ok_or_else(|| anyhow::anyhow!("header object"))?
             .remove("tool_snapshot_identity");
+        assert!(historical.get("tool_snapshot_disabled").is_none());
         let historical: CheckpointHeader = serde_json::from_value(historical)?;
         assert!(historical.tool_snapshot_manifest.is_none());
         assert!(historical.tool_snapshot_identity.is_none());
+        assert!(!historical.tool_snapshot_disabled);
         Ok(())
     }
 
@@ -1646,6 +1688,31 @@ mod tests {
         assert_eq!(after.entries, before.entries);
         assert_eq!(Manager::saved_entry_count(target.path(), None)?, 1);
         assert_eq!(fs::read(input)?, b"checkpoint-test");
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_distinguishes_explicit_unpinned_runtime_from_legacy() -> anyhow::Result<()> {
+        let (target, _progress, guard) = setup_test_env()?;
+        let input = target.path().join("unpinned.jpg");
+        create_test_file(&input)?;
+        let mut manager = Manager::new(target.path())?;
+        manager.header.tool_snapshot_disabled = true;
+        manager.mark_completed(&input)?;
+        let key = manager.checkpoint_key.clone();
+        let unpinned = manager.header.clone();
+        drop(manager);
+
+        assert_eq!(Manager::saved_entry_count(target.path(), None)?, 1);
+        assert!(Manager::saved_tool_snapshot(target.path(), None)?.is_none());
+        let loaded =
+            load_progress_from_sqlite(&key)?.ok_or_else(|| anyhow::anyhow!("saved checkpoint"))?;
+        Manager::validate_resume_tool_authority(&loaded, &unpinned)?;
+        let mut legacy = unpinned;
+        legacy.tool_snapshot_disabled = false;
+        assert!(Manager::validate_resume_tool_authority(&loaded, &legacy).is_err());
+
         teardown_test_env(guard);
         Ok(())
     }
@@ -2394,7 +2461,7 @@ mod tests {
             .unwrap()
             .entries;
         for resume in [false, true] {
-            let error = Manager::new_with_context_inner(target.path(), None, resume)
+            let error = Manager::new_with_context_inner(target.path(), None, resume, false)
                 .err()
                 .expect("another manager must not touch an owned checkpoint");
             assert_eq!(error.kind(), io::ErrorKind::WouldBlock);

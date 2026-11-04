@@ -3886,6 +3886,9 @@ pub struct WorkingCopyMarker {
     pub tool_snapshot_manifest: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_snapshot_identity: Option<String>,
+    /// Explicitly distinguishes an unpinned run from a legacy marker with missing authority.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tool_snapshot_disabled: bool,
 }
 
 fn deserialize_unique_marker_map<'de, D, V>(
@@ -4006,6 +4009,8 @@ impl WorkingCopyMarker {
                 .map(|snapshot| snapshot.manifest_path.clone()),
             tool_snapshot_identity: crate::common_utils::active_tool_snapshot()
                 .map(|snapshot| snapshot.identity.clone()),
+            tool_snapshot_disabled: crate::runtime_config::active()
+                .is_some_and(|config| !config.execution.external_tool_snapshot),
         }
     }
 

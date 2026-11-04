@@ -227,6 +227,10 @@ struct Args {
     #[command(flatten)]
     photos: foundation::infra::runtime_config::photos_args::PhotosArgs,
 
+    /// Pin and verify the external tools used by image processing.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    external_tool_snapshot: Option<bool>,
+
     /// Standard image batch policy; FastImg retains its checkpointed handling.
     #[arg(long, value_enum)]
     img_error_mode: Option<BatchErrorMode>,
@@ -672,6 +676,13 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
     )
 }
 
+const fn mode_uses_external_tool_snapshot(mode: &LaunchMode) -> bool {
+    matches!(
+        mode,
+        LaunchMode::Auto | LaunchMode::Images | LaunchMode::FastImg | LaunchMode::RestoreJpeg
+    )
+}
+
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
         !args.retry_failed || (args.mode == LaunchMode::FastImg && args.inputs.len() == 1),
@@ -748,6 +759,10 @@ fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
         args.photos.cli_arguments().is_empty() || args.mode == LaunchMode::FastImg,
         "Photos import settings require --mode fast-img"
+    );
+    anyhow::ensure!(
+        args.external_tool_snapshot.is_none() || mode_uses_external_tool_snapshot(&args.mode),
+        "external tool pinning applies to IMG, Fast IMG, and JPEG restoration"
     );
     let image_options = args.img_config.is_some()
         || args.img_fallback_policy.is_some()
@@ -1758,7 +1773,14 @@ fn fast_img_launch_command(
     Ok((command, output))
 }
 
+fn push_external_tool_snapshot_arg(command: &mut Vec<String>, args: &Args) {
+    if let Some(enabled) = args.external_tool_snapshot {
+        command.push(format!("--external-tool-snapshot={enabled}"));
+    }
+}
+
 fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
+    push_external_tool_snapshot_arg(command, args);
     command.extend(
         foundation::runtime_config::ToolsArgs {
             tools: args.img_tools.clone(),
@@ -1955,6 +1977,23 @@ fn resolve_restore_jpeg_launch_output(
     Ok((output, is_photos_audit))
 }
 
+fn restore_jpeg_launch_command(
+    img_bin: &Path,
+    input: &Path,
+    output: Option<&Path>,
+    args: &Args,
+) -> Result<LaunchCommand> {
+    let mut command = LaunchCommand::from_argv(build_fast_img_restore_command(
+        img_bin,
+        input,
+        output,
+        args.photos_album_id.as_deref(),
+        args.photos_folder_id.as_deref(),
+    ))?;
+    push_external_tool_snapshot_arg(&mut command.args, args);
+    Ok(command)
+}
+
 fn is_photos_library_package_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -2020,13 +2059,12 @@ fn plan_cli_invocations(
             LaunchMode::RestoreJpeg => {
                 let (output, _) =
                     resolve_restore_jpeg_launch_output(input, args.output.as_deref())?;
-                commands.push(LaunchCommand::from_argv(build_fast_img_restore_command(
+                commands.push(restore_jpeg_launch_command(
                     &img_bin,
                     input,
                     output.as_deref(),
-                    args.photos_album_id.as_deref(),
-                    args.photos_folder_id.as_deref(),
-                ))?);
+                    args,
+                )?);
             }
             LaunchMode::FastVid => {
                 let output = args
@@ -2469,13 +2507,12 @@ fn run_drag_drop_inner(
             let input = args.inputs.first().expect("input");
             let (output, is_photos_audit) =
                 resolve_restore_jpeg_launch_output(input, args.output.as_deref())?;
-            let command = LaunchCommand::from_argv(build_fast_img_restore_command(
+            let command = restore_jpeg_launch_command(
                 &cli_binary(&root, "img"),
                 input,
                 output.as_deref(),
-                args.photos_album_id.as_deref(),
-                args.photos_folder_id.as_deref(),
-            ))?;
+                args,
+            )?;
             draw_separator("Processing (restore-jpeg)");
             match command.run_collecting(false, session.map(|s| s as &dyn WorkerSession), false) {
                 Ok(stats) => {
@@ -3063,7 +3100,7 @@ fn execute_menu_quick_pick(
     dir_lock: &mut Option<DirLock>,
     target: &Path,
     strategy: &str,
-    cache: &foundation::runtime_config::cache_args::CacheArgs,
+    settings: &Args,
 ) -> Result<()> {
     let (cat, sub) = match choice {
         1 => (0, 0),
@@ -3087,7 +3124,7 @@ fn execute_menu_quick_pick(
         target,
         ProcessingFilter::Both,
         strategy,
-        cache,
+        settings,
     )?;
     Ok(())
 }
@@ -3102,10 +3139,10 @@ fn execute_menu_selection(
     target: &Path,
     filter: ProcessingFilter,
     strategy: &str,
-    cache: &foundation::runtime_config::cache_args::CacheArgs,
+    settings: &Args,
 ) -> Result<bool> {
     anyhow::ensure!(
-        selected == 0 || cache.is_empty(),
+        selected == 0 || settings.cache.is_empty(),
         "cache policy settings require media processing mode"
     );
     let root = resolve_runtime_root()?;
@@ -3134,7 +3171,7 @@ fn execute_menu_selection(
                     false,
                     filter,
                     None,
-                    cache,
+                    settings,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if actual == 1 {
@@ -3151,7 +3188,7 @@ fn execute_menu_selection(
                     false,
                     filter,
                     None,
-                    cache,
+                    settings,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if matches!(filter, ProcessingFilter::VideosOnly) {
@@ -3166,7 +3203,7 @@ fn execute_menu_selection(
                     shortest,
                     filter,
                     Some(strategy.to_string()),
-                    cache,
+                    settings,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else {
@@ -3190,7 +3227,7 @@ fn execute_menu_selection(
                     shortest,
                     filter,
                     Some(strategy.to_string()),
-                    cache,
+                    settings,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
@@ -3211,7 +3248,7 @@ fn execute_menu_selection(
                 false,
                 ProcessingFilter::Both,
                 None,
-                cache,
+                settings,
             );
             if collecting_recovery_originals {
                 let Some(backup) = prompt_for_input()? else {
@@ -3232,7 +3269,7 @@ fn execute_menu_selection(
                     false,
                     ProcessingFilter::Both,
                     None,
-                    cache,
+                    settings,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
@@ -3280,8 +3317,13 @@ fn build_run_args(
     shortest_path: bool,
     filter: ProcessingFilter,
     strategy: Option<String>,
-    cache: &foundation::runtime_config::cache_args::CacheArgs,
+    settings: &Args,
 ) -> Args {
+    let external_tool_snapshot = if mode_uses_external_tool_snapshot(&mode) {
+        settings.external_tool_snapshot
+    } else {
+        None
+    };
     Args {
         inputs: vec![target.to_path_buf()],
         mode,
@@ -3313,7 +3355,8 @@ fn build_run_args(
         img_tools: Vec::new(),
         vid_tools: Vec::new(),
         performance: Default::default(),
-        cache: cache.clone(),
+        cache: settings.cache.clone(),
+        external_tool_snapshot,
         img_fallback_policy: None,
         img_tool_policy: None,
         img_jpeg_effort: None,
@@ -3470,14 +3513,7 @@ fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
                     Some(v) => v as usize,
                     None => 0,
                 };
-                execute_menu_quick_pick(
-                    n,
-                    session,
-                    &mut dir_lock,
-                    &target,
-                    &strategy,
-                    &args.cache,
-                )?;
+                execute_menu_quick_pick(n, session, &mut dir_lock, &target, &strategy, args)?;
                 wait_enter();
             }
             NavKey::Enter => {
@@ -3491,7 +3527,7 @@ fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
                     &target,
                     filter,
                     &strategy,
-                    &args.cache,
+                    args,
                 )?;
                 wait_enter();
             }
@@ -5807,7 +5843,7 @@ mod tests {
             false,
             ProcessingFilter::Both,
             None,
-            &args.cache,
+            &args,
         );
         assert_eq!(
             interactive.cache.cli_arguments(),
@@ -6436,6 +6472,43 @@ mod tests {
     }
 
     #[test]
+    fn external_tool_snapshot_override_reaches_image_workers_only() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("input");
+        fs::create_dir(&input)?;
+        for mode in ["auto", "images", "fast-img", "restore-jpeg"] {
+            let mut args = Args::try_parse_from(["mfb", "--mode", mode, "--no-resume"])?;
+            args.inputs = vec![input.clone()];
+            for value in [None, Some(false), Some(true)] {
+                args.external_tool_snapshot = value;
+                let commands = plan_cli_invocations(&args, temp.path(), None)?;
+                assert!(
+                    commands
+                        .iter()
+                        .any(|command| command.pipeline_label() == "IMG")
+                );
+                for command in commands {
+                    let actual = command
+                        .args
+                        .iter()
+                        .find(|argument| argument.starts_with("--external-tool-snapshot="));
+                    let expected = value
+                        .filter(|_| command.pipeline_label() == "IMG")
+                        .map(|enabled| format!("--external-tool-snapshot={enabled}"));
+                    assert_eq!(actual, expected.as_ref(), "{mode}");
+                }
+            }
+        }
+        let args =
+            Args::try_parse_from(["mfb", "--mode", "videos", "--external-tool-snapshot=true"])?;
+        assert!(validate_media_options(&args).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn restore_jpeg_dashboard_uses_restore_semantics() {
         let args = Args::try_parse_from([
             "drag_and_drop_processor",
@@ -6943,6 +7016,7 @@ mod tests {
             vid_tools: Vec::new(),
             performance: Default::default(),
             cache: Default::default(),
+            external_tool_snapshot: None,
             img_fallback_policy: None,
             img_tool_policy: None,
             img_jpeg_effort: None,
@@ -7063,6 +7137,7 @@ mod tests {
                 vid_tools: Vec::new(),
                 performance: Default::default(),
                 cache: Default::default(),
+                external_tool_snapshot: None,
                 img_fallback_policy: None,
                 img_tool_policy: None,
                 img_jpeg_effort: None,
@@ -7124,6 +7199,7 @@ mod tests {
             vid_tools: Vec::new(),
             performance: Default::default(),
             cache: Default::default(),
+            external_tool_snapshot: None,
             img_fallback_policy: None,
             img_tool_policy: None,
             img_jpeg_effort: None,
@@ -7207,6 +7283,7 @@ mod tests {
                 vid_tools: Vec::new(),
                 performance: Default::default(),
                 cache: Default::default(),
+                external_tool_snapshot: None,
                 img_fallback_policy: None,
                 img_tool_policy: None,
                 img_jpeg_effort: None,

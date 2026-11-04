@@ -1641,8 +1641,11 @@ fn forced_legacy_audits(root: &Path, session: &str) -> Result<Vec<PathBuf>> {
     Ok(audits)
 }
 
-fn completed_legacy_event(event: &str) -> bool {
-    event == "SESSION_COMPLETED" || event.starts_with("SESSION_COMPLETED ")
+fn completed_legacy_event(event: &[u8]) -> bool {
+    event == b"SESSION_COMPLETED"
+        || event
+            .strip_prefix(b"SESSION_COMPLETED ")
+            .is_some_and(|details| std::str::from_utf8(details).is_ok())
 }
 
 fn completed_legacy_audit(path: &Path) -> Result<bool> {
@@ -1665,7 +1668,9 @@ fn completed_legacy_audit(path: &Path) -> Result<bool> {
         Ok(value) => value,
         Err(_) => return Ok(false),
     };
-    Ok(value["event"].as_str().is_some_and(completed_legacy_event)
+    Ok(value["event"]
+        .as_str()
+        .is_some_and(|event| completed_legacy_event(event.as_bytes()))
         && value["ts"]
             .as_str()
             .is_some_and(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).is_ok()))
@@ -1676,10 +1681,13 @@ fn build_force_plan(
     snapshot: Option<&Transaction<'_>>,
     sessions: &BTreeSet<&str>,
 ) -> Result<HistoryForceCleanupPreview> {
-    let version = snapshot.map(schema_version).transpose()?.unwrap_or(0);
-    if let Some(snapshot) = snapshot {
+    let version = if let Some(snapshot) = snapshot {
+        let version = schema_version(snapshot)?;
         validate_cleanup_objects(snapshot, version)?;
-    }
+        Some(version)
+    } else {
+        None
+    };
     let source = root.join(HISTORY_DATABASE).display().to_string();
     let mut digest = blake3::Hasher::new();
     hash_snapshot_field(&mut digest, b"MFB History force cleanup v1")?;
@@ -1729,10 +1737,10 @@ fn build_force_plan(
                     hash_snapshot_field(&mut digest, row.get_ref(1)?.as_blob()?)?;
                     let event = row.get_ref(2)?.as_blob()?;
                     hash_snapshot_field(&mut digest, event)?;
-                    terminal = std::str::from_utf8(event).is_ok_and(completed_legacy_event);
+                    terminal = completed_legacy_event(event);
                     checked_add(&mut result.event_rows, 1)?;
                 }
-                if version >= 2 {
+                if version.is_some_and(|version| version >= 2) {
                     let mut outputs = db.prepare(
                         "SELECT sequence,CAST(ts AS BLOB),CAST(pipeline AS BLOB),CAST(line AS BLOB) FROM history_output WHERE session_id=?1 ORDER BY sequence",
                     )?;
@@ -1784,9 +1792,11 @@ fn build_force_plan(
         } else {
             let mut parts = session.rsplitn(3, '_');
             let nonce = parts.next().unwrap_or_default();
-            let pid = parts.next().and_then(|value| value.parse::<i32>().ok());
+            let pid_is_decimal = parts.next().is_some_and(|pid| {
+                !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit())
+            });
             if parts.next().is_some()
-                && pid.is_some()
+                && pid_is_decimal
                 && !nonce.is_empty()
                 && nonce.bytes().all(|byte| byte.is_ascii_digit())
             {

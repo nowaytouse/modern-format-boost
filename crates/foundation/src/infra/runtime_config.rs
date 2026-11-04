@@ -101,6 +101,8 @@ impl PerformanceArgs {
 #[serde(default, deny_unknown_fields)]
 pub struct ExecutionPolicy {
     pub error_mode: BatchErrorMode,
+    /// Pin and verify the external IMG tool runtime for the task.
+    pub external_tool_snapshot: bool,
 }
 
 #[derive(Debug, Clone, Default, clap::Args)]

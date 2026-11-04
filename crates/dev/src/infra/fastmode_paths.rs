@@ -149,38 +149,35 @@ pub fn build_fast_vid_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
 
     #[test]
-    #[serial]
-    fn test_fastmode_state_root_defaults_to_user_home_for_app_launch() {
-        struct RestoreEnvironment([(&'static str, Option<std::ffi::OsString>); 3]);
-        impl Drop for RestoreEnvironment {
-            fn drop(&mut self) {
-                for (key, previous) in &self.0 {
-                    // SAFETY: This test holds the shared serial environment lock.
-                    unsafe {
-                        if let Some(previous) = previous {
-                            std::env::set_var(key, previous);
-                        } else {
-                            std::env::remove_var(key);
-                        }
-                    }
-                }
-            }
+    fn test_fastmode_state_root_defaults_to_user_home_for_app_launch() -> Result<()> {
+        const TEST: &str = "infra::fastmode_paths::tests::test_fastmode_state_root_defaults_to_user_home_for_app_launch";
+        const FIXTURE_HOME: &str = "MFB_TEST_FASTMODE_FIXTURE_HOME";
+        if let Some(home) = std::env::var_os(FIXTURE_HOME) {
+            assert_eq!(
+                default_mfb_state_root()?,
+                PathBuf::from(home).join(".modern_format_boost")
+            );
+            return Ok(());
         }
-        let tmp = tempfile::tempdir().unwrap();
-        let _restore = RestoreEnvironment(
-            ["HOME", "FROM_APP", "MFB_HOME_ROOT"].map(|key| (key, std::env::var_os(key))),
+
+        // The formal root is fixed after the first lookup in a process.
+        let tmp = tempfile::tempdir()?;
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(FIXTURE_HOME, tmp.path())
+            .env("HOME", tmp.path())
+            .env("FROM_APP", "1")
+            .env_remove("MFB_HOME_ROOT")
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::ensure!(
+            output.status.success() && stdout.contains("running 1 test"),
+            "isolated FastMode state root test failed: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
-        // SAFETY: This test holds the shared serial environment lock.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-            std::env::set_var("FROM_APP", "1");
-            std::env::remove_var("MFB_HOME_ROOT");
-        }
-        let root = default_mfb_state_root().unwrap();
-        assert_eq!(root, tmp.path().join(".modern_format_boost"));
+        Ok(())
     }
 
     #[test]

@@ -44,7 +44,13 @@ impl HistorySourceSet {
             if relative.is_empty() || relative.contains('\0') {
                 return None;
             }
-            let digest = parse_hash(digest.as_ref())?;
+            let digest = match parse_hash(digest.as_ref()) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    tracing::debug!(%error, "invalid source digest prevents history grouping");
+                    return None;
+                }
+            };
             if entries.insert(relative, digest).is_some() {
                 return None;
             }
@@ -52,12 +58,19 @@ impl HistorySourceSet {
         if entries.len() != expected_count {
             return None;
         }
-        let file_count = u64::try_from(expected_count).ok()?;
+        let Ok(file_count) = u64::try_from(expected_count) else {
+            tracing::warn!("source file count exceeds history grouping limits");
+            return None;
+        };
         let mut hasher =
             blake3::Hasher::new_derive_key("Modern Format Boost history source set v1");
         hasher.update(&file_count.to_le_bytes());
         for (relative, digest) in entries {
-            hasher.update(&u64::try_from(relative.len()).ok()?.to_le_bytes());
+            let Ok(relative_len) = u64::try_from(relative.len()) else {
+                tracing::warn!("relative path length exceeds history grouping limits");
+                return None;
+            };
+            hasher.update(&relative_len.to_le_bytes());
             hasher.update(relative.as_bytes());
             hasher.update(digest.as_bytes());
         }
@@ -94,10 +107,10 @@ impl HistorySourceSet {
                 && invocation_id == expected_invocation
                 && source_set.schema_version == 1
                 && valid_source_root(&source_set.source_root)
-                && source_set.file_count > 0
-                && parse_hash(&source_set.content_blake3).is_some(),
+                && source_set.file_count > 0,
             "invalid source set evidence"
         );
+        parse_hash(&source_set.content_blake3)?;
         Ok(source_set)
     }
 }
@@ -112,15 +125,15 @@ fn valid_source_root(root: &str) -> bool {
         && path.components().collect::<PathBuf>().as_os_str() == path.as_os_str()
 }
 
-fn parse_hash(value: &str) -> Option<blake3::Hash> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    {
-        return None;
-    }
-    blake3::Hash::from_hex(value).ok()
+fn parse_hash(value: &str) -> Result<blake3::Hash> {
+    ensure!(
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
+        "history source digest must contain 64 lowercase hexadecimal characters"
+    );
+    blake3::Hash::from_hex(value).context("parse history source digest")
 }
 
 #[cfg(test)]
