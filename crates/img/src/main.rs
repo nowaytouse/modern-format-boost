@@ -5124,7 +5124,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 .context("write Fast IMG history source set")?;
             }
             Err(error) => {
-                tracing::warn!(%error, "history source set has no worker invocation identity")
+                tracing::warn!(%error, "history source set has no worker invocation identity");
             }
         }
     }

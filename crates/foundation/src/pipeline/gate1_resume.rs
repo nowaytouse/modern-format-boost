@@ -69,10 +69,16 @@ fn executing_worker_identity() -> io::Result<Option<String>> {
         .lines()
         .filter_map(|line| line.strip_prefix("CDHash="))
         .collect::<Vec<_>>();
-    let loaded = loaded_cdhash
+    let loaded: String = loaded_cdhash
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+        .flat_map(|byte| {
+            let digits = b"0123456789abcdef";
+            [
+                char::from(digits[usize::from(byte >> 4)]),
+                char::from(digits[usize::from(byte & 15)]),
+            ]
+        })
+        .collect();
     let at_path = std::fs::symlink_metadata(&path)?;
     if hashes.as_slice() != [loaded.as_str()]
         || at_path.file_type().is_symlink()
