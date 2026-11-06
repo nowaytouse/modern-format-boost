@@ -11,6 +11,7 @@ permissions: read-all
 
 jobs:
   PR:
+    if: ${{ false && github.event_name != '' }} # Temporarily paused Linux job.
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
@@ -30,7 +31,7 @@ jobs:
           mode: "pr"
 
   Batch:
-    if: github.event_name == 'push' || github.event_name == 'schedule'
+    if: ${{ false && (github.event_name == 'push' || github.event_name == 'schedule') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

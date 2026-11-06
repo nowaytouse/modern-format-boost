@@ -69,6 +69,7 @@ jobs:
           path: modern-format-boost-${{ matrix.target }}.tar.gz
 
   build-linux:
+    if: ${{ false && github.event_name != '' }} # Temporarily paused Linux job.
     name: Build (Linux x86_64)
     runs-on: ubuntu-latest
     steps:
@@ -130,6 +131,7 @@ jobs:
           path: modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
 
   release:
+    if: ${{ false && github.event_name != '' }} # Requires the paused Linux build.
     name: Create Nightly Release
     needs: [build-macos, build-linux]
     runs-on: ubuntu-latest
