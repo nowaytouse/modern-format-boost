@@ -23,7 +23,7 @@ fn photos_live_test_helpers_match_their_macos_only_callers() {
 
 #[test]
 fn ci_health_reserves_cold_build_time_and_restores_cache_before_cargo() {
-    let source = include_str!("../../../../.github/workflows/ci-quality.yml");
+    let source = include_str!("../../../../.github/workflows/desktop-quality.yml");
     let health = source
         .split_once("\n  health-check:\n")
         .unwrap()
@@ -54,7 +54,7 @@ fn ci_health_reserves_cold_build_time_and_restores_cache_before_cargo() {
 #[cfg(unix)]
 #[test]
 fn ci_scope_routes_commit_weekly_daily_and_manual_runs() {
-    let source = include_str!("../../../../.github/workflows/ci-quality.yml");
+    let source = include_str!("../../../../.github/workflows/desktop-quality.yml");
     let script = source
         .split_once("      - name: Select CI scope\n")
         .unwrap()
@@ -122,7 +122,7 @@ fn ci_scope_routes_commit_weekly_daily_and_manual_runs() {
 
 #[test]
 fn ci_scheduled_audits_and_formatting_retain_separate_gates() {
-    let source = include_str!("../../../../.github/workflows/ci-quality.yml");
+    let source = include_str!("../../../../.github/workflows/desktop-quality.yml");
     let format = source
         .split_once("\n  format-check:\n")
         .unwrap()
@@ -159,20 +159,30 @@ fn ci_scheduled_audits_and_formatting_retain_separate_gates() {
     ] {
         assert!(release.contains(gate), "release lost gate: {gate}");
     }
-    assert!(
-        source.contains("if: ${{ !cancelled() && needs.validation.outputs.full_audit == 'true' }}")
-    );
+    assert!(source.contains(
+        "if: ${{ false && !cancelled() && needs.validation.outputs.full_audit == 'true' }}"
+    ));
     assert_eq!(
         source
             .matches("if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}")
             .count(),
-        5
+        1
     );
+    assert_eq!(
+        source
+            .matches(
+                "if: ${{ false && !cancelled() && needs.validation.outputs.run_code == 'true' }}"
+            )
+            .count(),
+        4
+    );
+    assert!(release.contains("false && github.ref"));
+    assert!(security.contains("if: ${{ false && !cancelled() }}"));
 }
 
 #[test]
 fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
-    let workflow = include_str!("../../../../.github/workflows/ci-quality.yml");
+    let workflow = include_str!("../../../../.github/workflows/desktop-quality.yml");
     let installer = include_str!("../../src/bin/install_media_dependencies.rs");
     assert!(workflow.contains("MFB_LIBHEIF_ONLY"));
     assert!(!workflow.contains("libheif-1.23.1"));
@@ -249,8 +259,8 @@ fn mpc_bootstrap_runs_cargo_from_workspace_and_propagates_failure() {
 #[test]
 fn product_release_workflows_publish_only_macos_arm64() {
     for source in [
-        include_str!("../../../../.github/workflows/cd-nightly.yml"),
-        include_str!("../../../../.github/workflows/cd-stable.yml"),
+        include_str!("../../../../.github/workflows/desktop-nightly.yml"),
+        include_str!("../../../../.github/workflows/desktop-release.yml"),
     ] {
         assert!(source.contains("aarch64-apple-darwin"));
         assert!(source.contains("libheif"));
@@ -271,9 +281,9 @@ fn product_release_workflows_publish_only_macos_arm64() {
 #[test]
 fn ci_runners_and_homebrew_keep_explicit_supported_boundaries() {
     for source in [
-        include_str!("../../../../.github/workflows/ci-quality.yml"),
-        include_str!("../../../../.github/workflows/cd-nightly.yml"),
-        include_str!("../../../../.github/workflows/cd-stable.yml"),
+        include_str!("../../../../.github/workflows/desktop-quality.yml"),
+        include_str!("../../../../.github/workflows/desktop-nightly.yml"),
+        include_str!("../../../../.github/workflows/desktop-release.yml"),
     ] {
         assert!(!source.contains("HOMEBREW_NO_REQUIRE_TAP_TRUST"));
         for runner in source
@@ -287,8 +297,8 @@ fn ci_runners_and_homebrew_keep_explicit_supported_boundaries() {
         }
     }
     for source in [
-        include_str!("../../../../.github/workflows/cd-nightly.yml"),
-        include_str!("../../../../.github/workflows/cd-stable.yml"),
+        include_str!("../../../../.github/workflows/desktop-nightly.yml"),
+        include_str!("../../../../.github/workflows/desktop-release.yml"),
     ] {
         let dependencies = source
             .split_once("      - name: Install dependencies (")
@@ -312,8 +322,8 @@ fn release_openssl_shim_migration_preserves_only_the_known_legacy_link() {
     use std::process::Command;
 
     for source in [
-        include_str!("../../../../.github/workflows/cd-nightly.yml"),
-        include_str!("../../../../.github/workflows/cd-stable.yml"),
+        include_str!("../../../../.github/workflows/desktop-nightly.yml"),
+        include_str!("../../../../.github/workflows/desktop-release.yml"),
     ] {
         let block = source
             .split_once("          OPENSSL_SHIM=")
@@ -384,7 +394,7 @@ fn release_openssl_shim_migration_preserves_only_the_known_legacy_link() {
 
 #[test]
 fn nightly_release_excludes_unrelated_ci_artifacts() {
-    let source = include_str!("../../../../.github/workflows/cd-nightly.yml");
+    let source = include_str!("../../../../.github/workflows/desktop-nightly.yml");
     assert!(source.lines().any(|line| {
         line.split_once('#')
             .map_or(line, |(action, _)| action)

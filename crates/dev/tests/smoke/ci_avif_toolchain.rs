@@ -1,4 +1,4 @@
-const WORKFLOW: &str = include_str!("../../../../.github/workflows/ci-quality.yml");
+const WORKFLOW: &str = include_str!("../../../../.github/workflows/desktop-quality.yml");
 const ACTION: &str = include_str!("../../../../.github/actions/setup-avif/action.yml");
 
 #[test]

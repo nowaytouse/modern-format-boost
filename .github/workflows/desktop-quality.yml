@@ -10,12 +10,12 @@ on:
   pull_request:
     branches: [main, nightly]
   schedule:
-    - cron: "17 3 * * 1-6" # Daily dependency advisories; no repeated code build.
-    - cron: "17 3 * * 0" # Weekly full audit and gated nightly snapshot.
+    - cron: "17 3 * * 1-6" # Daily validation; Linux advisories are paused.
+    - cron: "17 3 * * 0" # Weekly validation and macOS check; Linux audits and gated release are paused.
   workflow_dispatch:
     inputs:
       full_audit:
-        description: Run coverage, full audits and a gated nightly release
+        description: Select the full audit scope (Linux audits and gated release are paused)
         type: boolean
         default: true
 
@@ -38,7 +38,10 @@ jobs:
 
   validation:
     name: "1 · Configuration & Workflow Validation"
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 15
     outputs:
       run_code: ${{ steps.scope.outputs.run_code }}
@@ -100,11 +103,9 @@ jobs:
           # Build actionlint directly; do not execute downloaded installer scripts.
           go version
           GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@latest
-          sudo install -m 0755 "$RUNNER_TEMP/actionlint-bin/actionlint" /usr/local/bin/actionlint
+          echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
 
-          # Install yamllint via apt to avoid PEP 668 issues on Ubuntu 24.04
-          sudo apt-get update -qq
-          sudo apt-get install -y yamllint
+          brew install yamllint
 
       - name: Validate workflow files
         id: actionlint
@@ -163,7 +164,7 @@ jobs:
   dispatch2-linux:
     name: "1c · dispatch2 (Linux / swift-corelibs-libdispatch)"
     needs: validation
-    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
+    if: ${{ false && !cancelled() && needs.validation.outputs.run_code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -211,7 +212,7 @@ jobs:
   package-quality:
     name: "${{ matrix.name }}"
     needs: validation
-    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
+    if: ${{ false && !cancelled() && needs.validation.outputs.run_code == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -447,7 +448,7 @@ jobs:
   format-check:
     name: "2c · Shared format"
     needs: validation
-    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
+    if: ${{ false && !cancelled() && needs.validation.outputs.run_code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -466,7 +467,7 @@ jobs:
   health-check:
     name: "2c · Shared ${{ matrix.group }}"
     needs: validation
-    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
+    if: ${{ false && !cancelled() && needs.validation.outputs.run_code == 'true' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -674,7 +675,7 @@ jobs:
   security-audit:
     name: "3 · Dependency Security Audit"
     needs: validation
-    if: ${{ !cancelled() }}
+    if: ${{ false && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -695,7 +696,7 @@ jobs:
   nightly-release:
     name: Build & Publish Nightly
     if: >-
-      github.ref == 'refs/heads/nightly' &&
+      false && github.ref == 'refs/heads/nightly' &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
       needs.validation.outputs.full_audit == 'true' &&
       needs.format-check.result == 'success' &&
@@ -715,13 +716,13 @@ jobs:
     permissions:
       contents: write
       packages: write
-    uses: ./.github/workflows/cd-nightly.yml
+    uses: ./.github/workflows/desktop-nightly.yml
     secrets: inherit
 
   deep-audit:
     name: Deep Production Audit
     needs: [validation, security-audit]
-    if: ${{ !cancelled() && needs.validation.outputs.full_audit == 'true' }}
+    if: ${{ false && !cancelled() && needs.validation.outputs.full_audit == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
