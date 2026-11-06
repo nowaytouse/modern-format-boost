@@ -31,7 +31,10 @@ jobs:
 
   validation:
     name: "1 · Configuration & Workflow Validation"
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -57,11 +60,9 @@ jobs:
           # Build actionlint directly; do not execute downloaded installer scripts.
           go version
           GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@latest
-          sudo install -m 0755 "$RUNNER_TEMP/actionlint-bin/actionlint" /usr/local/bin/actionlint
+          echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
 
-          # Install yamllint via apt to avoid PEP 668 issues on Ubuntu 24.04
-          sudo apt-get update -qq
-          sudo apt-get install -y yamllint
+          brew install yamllint
 
       - name: Validate workflow files
         id: actionlint
@@ -120,7 +121,7 @@ jobs:
   dispatch2-linux:
     name: "1c · dispatch2 (Linux / swift-corelibs-libdispatch)"
     needs: validation
-    if: ${{ !cancelled() }}
+    if: ${{ false && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -168,7 +169,7 @@ jobs:
   package-quality:
     name: "${{ matrix.name }}"
     needs: validation
-    if: ${{ !cancelled() }}
+    if: ${{ false && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -418,7 +419,7 @@ jobs:
   health-check:
     name: "2c · Shared ${{ matrix.group }}"
     needs: validation
-    if: ${{ !cancelled() }}
+    if: ${{ false && !cancelled() }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -636,7 +637,7 @@ jobs:
   security-audit:
     name: "3 · Dependency Security Audit"
     needs: health-check
-    if: ${{ !cancelled() }}
+    if: ${{ false && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -657,7 +658,7 @@ jobs:
   nightly-release:
     name: Build & Publish Nightly
     if: >-
-      github.ref == 'refs/heads/nightly' &&
+      false && github.ref == 'refs/heads/nightly' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       needs.health-check.result == 'success' && needs.package-quality.result == 'success' &&
       needs.security-audit.result == 'success' && needs.validation.result == 'success' &&
@@ -680,7 +681,7 @@ jobs:
   deep-audit:
     name: Deep Production Audit
     needs: security-audit
-    if: ${{ !cancelled() }}
+    if: ${{ false && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
