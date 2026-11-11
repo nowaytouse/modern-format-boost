@@ -193,8 +193,8 @@ fn prune_empty_directory_candidates_within(
     remove_finder_metadata: bool,
 ) -> std::io::Result<usize> {
     let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
-    crate::safety::check_safe_for_destructive(root, "remove empty directories")
-        .map_err(&invalid)?;
+    // Bounded post-delivery pruning still enforces the protected-root checks.
+    crate::safety::check_dangerous_directory(root).map_err(&invalid)?;
     crate::safety::check_apple_photos_library(root).map_err(&invalid)?;
 
     let root_metadata = match fs::symlink_metadata(root) {
@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn empty_directory_pruning_is_scoped_and_non_recursive() -> std::io::Result<()> {
         let parent = tempfile::tempdir()?;
-        let root = parent.path().join("selected");
+        let root = parent.path().join("Downloads/selected");
         let empty_leaf = root.join("a/b");
         let occupied = root.join("kept");
         fs::create_dir_all(&empty_leaf)?;

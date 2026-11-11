@@ -2,7 +2,10 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use dev::infra::drag_drop::{INTEGRITY_SUMMARY_JSON_PREFIX, INTEGRITY_UNAVAILABLE_JSON_PREFIX, IntegritySummaryMachine};
+use dev::infra::drag_drop::{
+    INTEGRITY_SUMMARY_JSON_PREFIX, INTEGRITY_UNAVAILABLE_JSON_PREFIX, IntegritySummaryMachine,
+    IntegrityUnavailableMachine, IntegrityUnavailableReason,
+};
 use dev::infra::ui_tokens::pick_symbol;
 use dev::media::scope::{
     SKIP_EXTS, classify_missing_entry, detect_true_format, integrity_stem_key,
@@ -419,20 +422,24 @@ fn run_fast_img_delivery_check_with(
     strategy: &str,
     verify_photos: impl FnOnce(&foundation::pipeline::verification::WorkingCopyMarker) -> Result<()>,
 ) -> Result<IntegrityStats> {
-    let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
-    let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_dir)?;
+    let _uncached = foundation::common_utils::UncachedVerificationScope::new()
+        .context(IntegrityUnavailableReason::UncachedVerification)?;
+    let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_dir)
+        .context(IntegrityUnavailableReason::DirectoryPair)?;
     let optimized_dir = if optimized_dir.exists() {
         optimized_dir
             .canonicalize()
-            .context("canonicalize optimized_dir")?
+            .context(IntegrityUnavailableReason::DirectoryPair)?
     } else {
         optimized_dir.to_path_buf()
     };
 
     let (marker_opt, _path_opt, marker_error) = load_fast_img_marker_for_optimized(&optimized_dir);
-    let failed_retry = foundation::fast_img_store::failed_retry_context(&optimized_dir)?;
+    let failed_retry = foundation::fast_img_store::failed_retry_context(&optimized_dir)
+        .context(IntegrityUnavailableReason::Checkpoint)?;
     if let Some(context) = &failed_retry {
-        let typed = foundation::pipeline::verification::read_marker(&optimized_dir)?;
+        let typed = foundation::pipeline::verification::read_marker(&optimized_dir)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
         anyhow::ensure!(
             typed.working_copy == optimized_dir
                 && typed.src_dir == source_dir
@@ -440,11 +447,13 @@ fn run_fast_img_delivery_check_with(
                 && context.parent().src_dir == source_dir
                 && typed.failed_retry_manifest_blake3.is_some()
                 && context.admissions().len() == typed.src_jpeg_count,
-            "failed-only verifier source/output/strategy does not match its immutable child manifest"
+            IntegrityUnavailableReason::Checkpoint
         );
+        let marker_value = serde_json::to_value(&typed)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
         anyhow::ensure!(
-            marker_error.is_none() && marker_opt.as_ref() == Some(&serde_json::to_value(&typed)?),
-            "failed-only verifier task changed while binding its selected-source scope"
+            marker_error.is_none() && marker_opt.as_ref() == Some(&marker_value),
+            IntegrityUnavailableReason::Checkpoint
         );
     }
 
@@ -920,12 +929,17 @@ fn run_fast_img_delivery_check_with(
             }
         }
     } else {
-        let typed = foundation::pipeline::verification::read_marker(&optimized_dir)?;
-        anyhow::ensure!(typed.working_copy == optimized_dir && typed.src_dir == source_dir
-            && typed.strategy == strategy && marker_opt.as_ref() == Some(&serde_json::to_value(&typed)?),
-            "delivery verification source/output/strategy changed during its fresh checks");
+        let typed = foundation::pipeline::verification::read_marker(&optimized_dir)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
+        let marker_value = serde_json::to_value(&typed)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
+        anyhow::ensure!(
+            typed.working_copy == optimized_dir && typed.src_dir == source_dir
+                && typed.strategy == strategy && marker_opt.as_ref() == Some(&marker_value),
+            IntegrityUnavailableReason::Checkpoint
+        );
         if !typed.photos_imported_assets.is_empty() || !typed.tier2_imported_assets.is_empty() {
-            verify_photos(&typed).context("fresh current Photos original-resource custody failed")?;
+            verify_photos(&typed).context(IntegrityUnavailableReason::PhotosCustody)?;
             report.push_str("  - Current Photos UUIDs and complete original-resource bytes were freshly verified\n");
         }
         report.push_str(&format!(
@@ -2204,16 +2218,30 @@ fn parse_logs(
 }
 
 fn report_integrity_unavailable<T>(result: Result<T>, requested: bool) -> Result<T> {
-    result.inspect_err(|_| {
-        if requested {
-            println!("{INTEGRITY_UNAVAILABLE_JSON_PREFIX}{{\"status\":\"unavailable\"}}");
-        }
-    })
+    if let Err(error) = &result
+        && requested
+    {
+        let reason = error
+            .downcast_ref::<IntegrityUnavailableReason>()
+            .copied()
+            .unwrap_or(IntegrityUnavailableReason::Verification);
+        let unavailable = IntegrityUnavailableMachine::Unavailable {
+            reason: Some(reason),
+        };
+        println!(
+            "{INTEGRITY_UNAVAILABLE_JSON_PREFIX}{}",
+            serde_json::to_string(&unavailable).context("serialize unavailable integrity result")?
+        );
+    }
+    result
 }
 
 fn main() -> Result<()> {
-    foundation::init_ghost_mode().context("initialize ghost mode")?;
     let args = Args::parse();
+    report_integrity_unavailable(
+        foundation::init_ghost_mode().context(IntegrityUnavailableReason::Startup),
+        args.print_integrity_json,
+    )?;
 
     if let Some(ref optimized_dir) = args.fast_img_marker_json {
         return print_fast_img_marker_json(optimized_dir);
@@ -2221,7 +2249,11 @@ fn main() -> Result<()> {
 
     let _production_lease =
         if args.verify.is_some() || args.fast_img_delivery || args.fast_img_restore {
-            Some(foundation::infra::production_lock::acquire_production_lease()?)
+            Some(report_integrity_unavailable(
+                foundation::infra::production_lock::acquire_production_lease()
+                    .context(IntegrityUnavailableReason::Startup),
+                args.print_integrity_json,
+            )?)
         } else {
             None
         };
@@ -2231,11 +2263,13 @@ fn main() -> Result<()> {
         p.clone()
     } else {
         let log_dir = dev::infra::log_paths::unified_log_dir();
-        fs::create_dir_all(&log_dir)?;
         log_dir.join(format!("diagnostic_report_{timestamp}.txt"))
     };
     if let Some(parent) = output_report.parent() {
-        fs::create_dir_all(parent)?;
+        report_integrity_unavailable(
+            fs::create_dir_all(parent).context(IntegrityUnavailableReason::Report),
+            args.print_integrity_json,
+        )?;
     }
 
     let mut report = String::new();
@@ -2338,8 +2372,10 @@ fn main() -> Result<()> {
 
     if !log_inputs.is_empty() {
         let log_paths_buf = log_inputs.iter().map(PathBuf::from).collect::<Vec<_>>();
-        let (conv_count, unc_count) =
-            parse_logs(&log_paths_buf, &mut report, source_dir_context.as_deref())?;
+        let (conv_count, unc_count) = report_integrity_unavailable(
+            parse_logs(&log_paths_buf, &mut report, source_dir_context.as_deref()),
+            args.print_integrity_json,
+        )?;
         println!(
             "{} Total conversion events: {}",
             pick_symbol("📈", "[CHART]"),
@@ -2444,10 +2480,15 @@ fn main() -> Result<()> {
         }
     }
 
+    report_integrity_unavailable(
+        fs::write(&output_report, &report).context(IntegrityUnavailableReason::Report),
+        args.print_integrity_json,
+    )?;
     if args.print_integrity_json {
-        let stats = integrity_stats
-            .as_ref()
-            .context("machine integrity summary requested without a completed integrity check")?;
+        let stats = report_integrity_unavailable(
+            integrity_stats.as_ref().context(IntegrityUnavailableReason::DirectoryPair),
+            true,
+        )?;
         let summary = IntegritySummaryMachine {
             has_warnings: stats.has_warnings,
             issue_count: stats.integrity_failures,
@@ -2470,7 +2511,6 @@ fn main() -> Result<()> {
         pick_symbol("📊", "[STATS]"),
         output_report.display()
     );
-    fs::write(&output_report, &report)?;
     if let Some(stats) = integrity_stats
         && stats.has_warnings
     {
@@ -2873,7 +2913,11 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 calls += 1;
                 anyhow::bail!("current Photos original no longer matches the recorded UUID")
             });
-        assert!(result.is_err());
+        let error = result.err().expect("stale Photos custody must fail");
+        assert_eq!(
+            error.downcast_ref::<IntegrityUnavailableReason>(),
+            Some(&IntegrityUnavailableReason::PhotosCustody)
+        );
         assert_eq!(calls, 1);
         assert!(!report.contains("DELIVERY INVARIANTS PASS"));
         assert!(output.join("a.JXL").exists());

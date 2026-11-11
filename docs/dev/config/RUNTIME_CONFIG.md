@@ -387,6 +387,19 @@ Neither receipt state changes independently established media counts or delivery
 proof. Storage or receipt-write failure remains an explicit launcher error after
 the child is drained, without discarding the child's reported counts or exit.
 
+Fast IMG keeps the worker's measured counts and exit code in the history summary
+when independent delivery verification or output cleanup fails afterward. The
+terminal run event carries the later failure. An unavailable verification leaves
+its integrity state and issue count unknown, and blocked cleanup remains an
+unmeasured cleanup receipt.
+
+An unavailable verifier can report its failure stage in the terminal run
+event. Raw verifier stderr is kept out of that event. Once a verification
+result is measured, a later cleanup error does not rewrite its issue count
+or status. In checkpoint-owned output directories, cleanup can remove a
+recognized Finder `.DS_Store` when it is the only remaining entry. This
+requires the same fresh Photos custody checks as other output cleanup.
+
 History's file-failure details and their complete-detail copy include the
 associated worker launch and execution evidence. The recorded run, invocation
 and pipeline must match exactly, with one unique launch record; missing,

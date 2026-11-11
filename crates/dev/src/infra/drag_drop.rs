@@ -135,6 +135,43 @@ pub struct VerifyOutcome {
 pub const INTEGRITY_SUMMARY_JSON_PREFIX: &str = "MFB_INTEGRITY_SUMMARY_JSON ";
 pub const INTEGRITY_UNAVAILABLE_JSON_PREFIX: &str = "MFB_INTEGRITY_UNAVAILABLE_JSON ";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrityUnavailableReason {
+    Startup,
+    DirectoryPair,
+    UncachedVerification,
+    Checkpoint,
+    PhotosCustody,
+    Report,
+    Verification,
+}
+
+impl std::fmt::Display for IntegrityUnavailableReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Startup => "could not initialize the verifier or acquire the task lease",
+            Self::DirectoryPair => "could not resolve or inspect the source and output directories",
+            Self::UncachedVerification => "could not establish uncached verification",
+            Self::Checkpoint => "could not read or bind the delivery checkpoint to this task",
+            Self::PhotosCustody => "could not verify current Photos original-resource custody",
+            Self::Report => "could not prepare or save the verification report",
+            Self::Verification => "could not complete the integrity check",
+        })
+    }
+}
+
+impl std::error::Error for IntegrityUnavailableReason {}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum IntegrityUnavailableMachine {
+    Unavailable {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<IntegrityUnavailableReason>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IntegritySummaryMachine {
     pub has_warnings: bool,
@@ -891,22 +928,32 @@ pub fn run_unified_verification(
 fn parse_machine_integrity_summary(stdout: &str) -> Result<(String, IntegritySummaryMachine)> {
     let mut display_lines = Vec::new();
     let mut summary = None;
+    let mut unavailable = None;
     for line in stdout.lines() {
         if let Some(json) = line.strip_prefix(INTEGRITY_UNAVAILABLE_JSON_PREFIX) {
-            let value: serde_json::Value = serde_json::from_str(json)
-                .context("parse verify unavailable integrity result")?;
-            anyhow::ensure!(value == serde_json::json!({"status": "unavailable"}),
-                "invalid verify unavailable integrity result");
-            bail!("verify could not complete the integrity check; see verifier error above");
+            anyhow::ensure!(
+                summary.is_none() && unavailable.is_none(),
+                "verify emitted more than one machine integrity result"
+            );
+            anyhow::ensure!(json.len() <= 256, "invalid verify unavailable integrity result");
+            unavailable = Some(
+                serde_json::from_str::<IntegrityUnavailableMachine>(json)
+                    .map_err(|_| anyhow::anyhow!("invalid verify unavailable integrity result"))?,
+            );
         } else if let Some(json) = line.strip_prefix(INTEGRITY_SUMMARY_JSON_PREFIX) {
-            if summary.is_some() {
-                bail!("verify emitted more than one machine integrity summary");
-            }
+            anyhow::ensure!(
+                summary.is_none() && unavailable.is_none(),
+                "verify emitted more than one machine integrity result"
+            );
             summary =
                 Some(serde_json::from_str(json).context("parse verify machine integrity summary")?);
         } else {
             display_lines.push(line);
         }
+    }
+    if let Some(IntegrityUnavailableMachine::Unavailable { reason }) = unavailable {
+        let reason = reason.unwrap_or(IntegrityUnavailableReason::Verification);
+        bail!("verify {reason}");
     }
     let summary = summary.context("verify omitted its machine integrity summary")?;
     let mut display = display_lines.join("\n");
@@ -1531,14 +1578,13 @@ fn fast_img_prune_empty_dirs(
         }
     }
     let candidates = candidate_dirs.iter().cloned().collect::<Vec<_>>();
-    foundation::io_utils::prune_empty_directories_within(output_root, &candidates).with_context(
-        || {
+    foundation::io_utils::prune_delivered_directories_within(output_root, &candidates)
+        .with_context(|| {
             format!(
                 "fast-img refused unsafe empty-directory cleanup under {}",
                 output_root.display()
             )
-        },
-    )
+        })
 }
 
 pub fn prune_completed_fast_img_empty_outputs(source: &Path, strategy: &str) -> Result<usize> {
@@ -1974,6 +2020,9 @@ cat "$MFB_TEST_VERIFY_REPLY"
         fs::create_dir(&output).unwrap();
         let unknown = output.join("user.txt");
         fs::write(&unknown, b"preserve user data").unwrap();
+        let finder_metadata = output.join(".DS_Store");
+        let finder_bytes = b"\x00\x00\x00\x01Bud1";
+        fs::write(&finder_metadata, finder_bytes).unwrap();
         let source = source.canonicalize().unwrap();
         let output = output.canonicalize().unwrap();
         let mut marker = WorkingCopyMarker::new(source, output.clone(), 0);
@@ -2008,8 +2057,14 @@ cat "$MFB_TEST_VERIFY_REPLY"
         assert_eq!(residual.already_absent_files, Some(0));
         assert_eq!(residual.pruned_directories, Some(0));
         assert_eq!(fs::read(&unknown).unwrap(), b"preserve user data");
+        assert_eq!(fs::read(&finder_metadata).unwrap(), finder_bytes);
 
         fs::remove_file(unknown).unwrap();
+        fs::write(&finder_metadata, b"unrecognized contents").unwrap();
+        let residual = delete_fast_img_outputs_with(&output, |_| Ok(|_: &Path| Ok(())));
+        assert_eq!(residual.outcome, OutputCleanupOutcome::Residual);
+        assert_eq!(fs::read(&finder_metadata).unwrap(), b"unrecognized contents");
+        fs::write(&finder_metadata, finder_bytes).unwrap();
         let first_bytes = [0xFF, 0x0A];
         let second_actual_bytes = [0xFF, 0x0A, 0x02];
         let second_expected_bytes = [0xFF, 0x0A, 0x01];
@@ -2037,6 +2092,7 @@ cat "$MFB_TEST_VERIFY_REPLY"
         let no_live_custody = delete_fast_img_shortest_path_output_dir(&output);
         assert_eq!(no_live_custody.outcome, OutputCleanupOutcome::Failed);
         assert!(first_output.exists() && second_output.exists());
+        assert_eq!(fs::read(&finder_metadata).unwrap(), finder_bytes);
         let rejected_before_unlink = delete_fast_img_outputs_with(&output, |_| {
             Ok(|_: &Path| anyhow::bail!("fresh Photos UUID has no original resource"))
         });
@@ -2067,7 +2123,7 @@ cat "$MFB_TEST_VERIFY_REPLY"
         assert_eq!(removed.outcome, OutputCleanupOutcome::Removed);
         assert_eq!(removed.removed_files, Some(1));
         assert_eq!(removed.already_absent_files, Some(1));
-        assert!(removed.pruned_directories.is_some());
+        assert_eq!(removed.pruned_directories, Some(1));
         assert!(!output.exists());
     }
 
@@ -2478,6 +2534,34 @@ cat "$MFB_TEST_VERIFY_REPLY"
         assert!(error.contains("could not complete"));
         assert!(parse_machine_integrity_summary(&format!("{stdout}{unavailable}")).is_err());
         assert!(parse_machine_integrity_summary("MFB_INTEGRITY_UNAVAILABLE_JSON {\"status\":\"clean\"}\n").is_err());
+    }
+
+    #[test]
+    fn unavailable_integrity_result_reports_only_a_controlled_reason() {
+        let record = |body| format!("{INTEGRITY_UNAVAILABLE_JSON_PREFIX}{body}\n");
+        let valid = record(r#"{"status":"unavailable","reason":"photos_custody"}"#);
+        assert_eq!(
+            parse_machine_integrity_summary(&valid).unwrap_err().to_string(),
+            "verify could not verify current Photos original-resource custody"
+        );
+        let invalid = [
+            record(r#"{"status":"unavailable","reason":"private fixture path"}"#),
+            record(r#"{"status":"unavailable","reason":"photos_custody","detail":"private fixture path"}"#),
+            record(r#"{"status":"unavailable","reason":"checkpoint","reason":"photos_custody"}"#),
+            record(&" ".repeat(257)),
+        ];
+        for output in invalid {
+            assert_eq!(
+                parse_machine_integrity_summary(&output).unwrap_err().to_string(),
+                "invalid verify unavailable integrity result"
+            );
+        }
+        assert_eq!(
+            parse_machine_integrity_summary(&format!("{valid}{valid}"))
+                .unwrap_err()
+                .to_string(),
+            "verify emitted more than one machine integrity result"
+        );
     }
 
     #[test]

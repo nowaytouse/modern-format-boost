@@ -1333,6 +1333,7 @@ fn run_fast_img_post_success(
     summary: &mut PipelineSummary,
     output_dir: &Path,
     failed_sources_verified: Option<usize>,
+    source_root: Option<&Path>,
 ) -> Result<()> {
     let verify_bin = cli_binary(project_root, "verify");
     let failed_only = foundation::fast_img_store::failed_retry_context(output_dir)?.is_some();
@@ -1379,7 +1380,7 @@ fn run_fast_img_post_success(
             strategy: args.strategy.clone(),
         },
     );
-    let mut verify = match verification {
+    let verify = match verification {
         Ok(verify) => verify,
         Err(error) => {
             let receipt = if args.shortest_path {
@@ -1441,40 +1442,35 @@ fn run_fast_img_post_success(
         }
         receipt
     };
-    let cleanup_error = (receipt.outcome == OutputCleanupOutcome::Failed)
-        .then(|| receipt.error.clone().unwrap_or_else(|| "output cleanup failed without a diagnostic".into()));
+    let cleanup_error = (receipt.outcome == OutputCleanupOutcome::Failed).then(|| {
+        receipt
+            .error
+            .clone()
+            .unwrap_or_else(|| "output cleanup failed without a diagnostic".into())
+    });
     session.record_output_cleanup(receipt)?;
-    if let Some(error) = cleanup_error {
-        summary.integrity_state = Some("WARNINGS");
-        summary.integrity_issue_count = summary.integrity_issue_count.max(1);
-        bail!("fresh Photos/output cleanup verification failed; remaining outputs retained: {error}");
-    }
-    if args.shortest_path
-        && verify.warnings == Some(false)
-        && !failed_only
-        && let Err(error) = prune_completed_fast_img_empty_outputs(
-            &fast_img_source_root_for_run(target)?,
-            args.strategy.as_deref().unwrap_or("jxl"),
-        )
-    {
-        summary.integrity_state = Some("WARNINGS");
-        summary.integrity_issue_count = summary.integrity_issue_count.max(1);
-        eprintln!("[WARN] checkpoint-owned empty output cleanup failed: {error:#}");
-    }
-    if summary.integrity_state == Some("WARNINGS") {
-        verify.warnings = Some(true);
-        verify.issue_count = summary.integrity_issue_count;
-        if let Some(counts) = verify.integrity_summary.as_mut() {
-            counts.has_warnings = true;
-            counts.issue_count = summary.integrity_issue_count;
-        }
-    }
     session.record_history_verification(
         &verify,
         target,
         output_dir,
         failed_sources_verified.filter(|_| verify.warnings == Some(false)),
     )?;
+    if let Some(error) = cleanup_error {
+        bail!("fresh Photos/output cleanup verification failed; remaining outputs retained: {error}");
+    }
+    if verify.warnings == Some(false)
+        && !failed_only
+        && let Some(source_root) = source_root
+        && source_root
+            .try_exists()
+            .context("check source root for historical output cleanup")?
+    {
+        prune_completed_fast_img_empty_outputs(
+            source_root,
+            args.strategy.as_deref().unwrap_or("jxl"),
+        )
+        .context("checkpoint-owned empty output cleanup failed")?;
+    }
     Ok(())
 }
 
@@ -2602,6 +2598,13 @@ fn run_drag_drop_inner(
             }
         } else {
             draw_separator("Processing (fast-img)");
+            // The worker can delete the input before historical output cleanup.
+            let source_root = args
+                .shortest_path
+                .then(|| {
+                    fast_img_source_root_for_run(args.inputs.first().context("input required")?)
+                })
+                .transpose()?;
             match run_fast_img_task(args, &root, session.expect("session")) {
                 Ok(FastImgTaskOutcome {
                     stats,
@@ -2679,28 +2682,31 @@ fn run_drag_drop_inner(
                             &mut summary,
                             &output,
                             failed_sources_verified,
+                            source_root.as_deref(),
                         )
                     } else {
-                        let path = std::path::absolute(&output)
-                            .context("resolve blocked output cleanup path")?;
-                        session
-                            .expect("session")
-                            .record_output_cleanup(if args.shortest_path {
-                                OutputCleanupReceipt::verification_blocked(&path)
-                            } else {
-                                OutputCleanupReceipt::not_requested(&path)
-                            })?;
-                        Ok(())
+                        std::path::absolute(&output)
+                            .context("resolve blocked output cleanup path")
+                            .and_then(|path| {
+                                session.expect("session").record_output_cleanup(
+                                    if args.shortest_path {
+                                        OutputCleanupReceipt::verification_blocked(&path)
+                                    } else {
+                                        OutputCleanupReceipt::not_requested(&path)
+                                    },
+                                )
+                            })
                     };
-                    if verified.is_err() {
-                        summary.img.exit_code = 1;
-                    }
                     println!("{}", batch_result_line("img", &summary.img));
-                    verified?;
-                    if let Some(completed) = fast_img_file_only_completion(
-                        only_worker_exit, failed_sources_verified, &stats, &summary,
-                    ) {
-                        first_error = Some(completed.into());
+                    match verified {
+                        Err(error) => first_error = Some(error),
+                        Ok(()) => {
+                            if let Some(completed) = fast_img_file_only_completion(
+                                only_worker_exit, failed_sources_verified, &stats, &summary,
+                            ) {
+                                first_error = Some(completed.into());
+                            }
+                        }
                     }
                 }
                 Err(err) if err.downcast_ref::<CollectedChildError>().is_some() => {
@@ -6074,6 +6080,93 @@ mod tests {
         let audit = fs::read_to_string(session.session_audit()).unwrap();
         assert!(audit.contains("images_ignore=4 images_fail=1 images_unprocessed=5"));
         assert!(audit.contains("integrity_issues=56"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fast_img_history_survives_post_verification_failure() -> Result<()> {
+        const FIXTURE_ROOT: &str = "MFB_TEST_POST_VERIFICATION_ROOT";
+        if let Some(root) = std::env::var_os(FIXTURE_ROOT) {
+            let root = PathBuf::from(root);
+            let source = root.join("synthetic-source");
+            fs::create_dir(&source)?;
+            let args = Args::try_parse_from([
+                "drag_and_drop_processor",
+                "--mode",
+                "fast-img",
+                "--shortest-path",
+                source.to_str().context("UTF-8 fixture source")?,
+            ])?;
+            let session = AppSession::start_in(&root.join("logs"))?;
+            let error = run_drag_drop(&args, Some(&session), None).unwrap_err();
+            assert!(format!("{error:#}").contains("current Photos original-resource custody"));
+
+            let summaries = history_payloads(&session, "MFB_HISTORY_SUMMARY");
+            let [summary] = summaries.as_slice() else {
+                bail!("expected one persisted summary, found {}", summaries.len());
+            };
+            assert_eq!(summary["img"]["succeeded"], 1);
+            assert_eq!(summary["img"]["failed"], 0);
+            assert_eq!(summary["img"]["unprocessed"], 0);
+            assert_eq!(summary["img"]["exit_code"], 0);
+            assert!(summary["integrity"]["state"].is_null());
+            assert!(summary["integrity"]["issue_count"].is_null());
+
+            let cleanups = history_payloads(&session, "MFB_HISTORY_OUTPUT_CLEANUP");
+            let [cleanup] = cleanups.as_slice() else {
+                bail!("expected one blocked cleanup receipt");
+            };
+            assert_eq!(cleanup["outcome"], "verification_blocked");
+            assert!(cleanup["removed_files"].is_null());
+
+            let finished_events = history_payloads(&session, "MFB_HISTORY_FINISHED");
+            let [finished] = finished_events.as_slice() else {
+                bail!("expected one terminal result");
+            };
+            assert_eq!(finished["outcome"], "failed");
+            let terminal_error = finished["error"].as_str().context("terminal verifier error")?;
+            assert!(terminal_error.contains("current Photos original-resource custody"));
+            assert!(!terminal_error.contains("synthetic private verifier stderr"));
+            assert_eq!(summary["run_id"], finished["run_id"]);
+            assert_eq!(cleanup["run_id"], finished["run_id"]);
+            assert!(source.is_dir());
+            return Ok(());
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = tempfile::tempdir()?;
+        let resources = fixture.path().join("Synthetic.app/Contents/Resources");
+        fs::create_dir_all(&resources)?;
+        let launcher = resources.join("drag_and_drop_processor");
+        fs::copy(std::env::current_exe()?, &launcher)?;
+        for (name, script) in [
+            ("img", "#!/bin/sh\nprintf 'Succeeded: 1\nFailed: 0\nSkipped: 0\nIgnored: 0\nUnprocessed: 0\n'\n"),
+            ("verify", "#!/bin/sh\nprintf 'MFB_INTEGRITY_UNAVAILABLE_JSON {\"status\":\"unavailable\",\"reason\":\"photos_custody\"}\n'\nprintf 'synthetic private verifier stderr\n' >&2\nexit 1\n"),
+        ] {
+            let path = resources.join(name);
+            fs::write(&path, script)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+        }
+        let name = std::thread::current().name().context("test name")?.to_owned();
+        let mut child = std::process::Command::new(launcher);
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("MFB_") {
+                child.env_remove(key);
+            }
+        }
+        let result = child
+            .args([name.as_str(), "--exact", "--nocapture", "--test-threads=1"])
+            .env(FIXTURE_ROOT, fixture.path())
+            .env("MFB_HOME_ROOT", fixture.path().join("state"))
+            .env("MFB_LOG_DIR", fixture.path().join("logs"))
+            .output()?;
+        anyhow::ensure!(
+            result.status.success() && String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+            "synthetic launcher test failed:\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        Ok(())
     }
 
     #[test]
