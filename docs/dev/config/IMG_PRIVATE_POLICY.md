@@ -51,8 +51,20 @@ codestream fields reported by `jxlinfo -v`. The independently decoded display
 dimensions must also match that source orientation. Equal dimensions are only
 one required geometry fact, never an orientation oracle. Missing, conflicting,
 invalid or failed probes reject the proof; an incomplete source metadata read
-cannot silently become orientation 1. A failed PNG rendering decode cannot be
-replaced with JPEG reconstruction and called a successful rendering proof.
+cannot silently become orientation 1. The orientation probe collects every
+ExifTool diagnostic, including duplicate warnings. Precisely recognized warnings
+about ICC length, IPTC digest consistency, UserComment text or an unrecognized
+MakerNotes payload do not describe the IFD0 orientation, so they remain recorded
+and are assessed by the separate
+metadata gate. Structural EXIF warnings and invalid values, including 0, still
+reject orientation proof. After a successful, quiet metadata request with complete
+and exact source/output identities, an ExifTool file Warning that lacks independent
+preservation proof fails that file, including previously unknown warning text.
+Process errors, stderr diagnostics, Error records and malformed responses remain
+shared failures. In record-and-continue mode, failed files can be isolated only
+after every required local check completes, followed by full verification of the
+remaining outputs. A failed PNG rendering decode cannot be replaced with JPEG
+reconstruction and called a successful rendering proof.
 
 Pixel-encoded JXL uses exact samples in the source display domain, preserving
 integer precision, alpha and floating-point bit patterns through orientation
@@ -225,6 +237,51 @@ filesystem/checkpoint journaling or complete failed-only retry.
 
 ## Inspection Progress And Process Interruption
 
+Photos delivery has two major verification gates. Gate 1 checks the local
+inventory, nonempty sizes, complete BLAKE3 identities, metadata, orientation and
+independent rendering decode. A filtered retry within the same running task can
+reuse successful per-file work only after rehashing the source, output and both
+XMP companions. Failed, interrupted or changed-input results are never reused.
+This bounded memory memo is advisory; it is not persistent tool authority or
+permission to remove a source.
+
+Final Gate 2 bypasses both memory proofs and stored verification receipts. It
+repeats the applicable local checks, reads current Photos original resources,
+and requires all former import/custody and deep-delivery checks together before
+cleanup. Phase-local source/output maps and directory-name indexes remain in use;
+they avoid repeated directory traversal without substituting cached content for
+fresh verification. Pending source deletion still requires the current attempt's
+typed integrity proof and the last content-drift guard at removal. Legacy saved
+Gate 2/deep-scan/Gate 3 stage names remain readable for recovery, but cannot bypass
+this final gate or authorize a new cleanup attempt from an old success flag.
+
+The final phase explicitly disables reusable proof reads and writes process-wide,
+including worker threads, tool-health observations and decoder-version audit
+memoization. Nested verification factories obey that policy; an unbound output
+mapping or inactive final policy cannot become an alternative successful path.
+Current-attempt observations contain full media/XMP hashes and native file
+identity, rather than a reusable success verdict. They are compared during
+checks, after the Photos query and immediately before consuming a deletion
+proof. A changed or newly appeared input blocks the remaining cleanup.
+
+Deleting the last local output requires a separate live Photos custody
+capability. Every unlink re-queries the bound UUID and rereads its current
+original bytes; historical Gate fields or pixel-only equivalence cannot grant
+permission. Referenced Photos resources that point at pending source, sidecar
+or output deletion targets are rejected. Cleanup failures remain errors in the
+persisted result and cannot be reported as CLEAN.
+
+For the recognized managed-original Photos layout, UUID custody lookup uses a
+single read-only database transaction and indexed asset/resource queries. It
+checks unique identity, original-resource availability, cloud state and a safe
+regular-file path inside the selected library, then leaves the existing fresh
+file-hash and custody checks in place. It does not load album association tables
+or assume their numbered names. Recognized older, shared, syndicated or referenced
+layouts explicitly use the existing verifier. Missing core fields, conflicting
+records and unsafe paths fail closed. Permanent schema errors are not retried as
+temporary Photos visibility failures; error summaries retain the primary cause
+without expanding a crash reporter's traceback into the GUI result record.
+
 Modern-source inspection reports actual completed probes against that stage's
 known inventory. Eligible, ineligible and failed probes all count as inspected;
 none is thereby a successful conversion or Photos delivery. Stage completion is
@@ -238,6 +295,15 @@ The failed process result remains recorded. This does not identify the sender of
 the signal, certify retained originals or invent missing file counts. Other
 signals, mismatched observations and integrity conflicts keep their serious or
 unconfirmed presentation.
+
+A fully reconciled batch with verified delivery, retained failed originals and
+zero unfinished work can complete with file errors while preserving a nonzero
+exit. Its result notification uses that validated outcome. Unread badges count
+task results, not failed files, and clear through explicit result review. Native
+notifications and Dock badges respect system authorization; the in-app count and
+accessibility description remain available without it. Final outcome and Gate
+changes have concise accessibility announcements without per-file speech or
+focus changes.
 
 ## Search Semantics
 

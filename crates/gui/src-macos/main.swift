@@ -2,6 +2,7 @@ import AppKit
 import CoreServices
 import Darwin
 import Foundation
+import UserNotifications
 
 let isBackgroundSelfTest = CommandLine.arguments.contains("--self-test")
 
@@ -26,6 +27,168 @@ private func savedInterfaceZoom(_ preferences: UserDefaults) -> Int {
     return interfaceZoomSteps.contains(value) ? value : defaultInterfaceZoom
 }
 private let historyPreferenceKey = "MFBGuiHistoryDirectory"
+
+@MainActor
+private final class ProcessingResultNotifier: NSObject, UNUserNotificationCenterDelegate {
+    private let preferences: UserDefaults
+    private let runtimeEnabled: Bool
+    private let center: UNUserNotificationCenter?
+    private let unreadKey = "MFBGuiUnreadResultNotifications"
+    private(set) var unreadIDs: [String]
+    private var taskID: String?
+    private var badgeRefreshID = UUID()
+    var onUnreadChanged: (() -> Void)?
+    var onOpenResult: (() -> Void)?
+    var onDiagnostic: ((String) -> Void)?
+    var unreadCount: Int { unreadIDs.count }
+    var hasPendingTask: Bool { taskID != nil }
+    var badgeLabel: String? { unreadIDs.isEmpty ? nil : unreadIDs.count > 99 ? "99+" : String(unreadIDs.count) }
+
+    init(preferences: UserDefaults, runtimeEnabled: Bool) {
+        self.preferences = preferences
+        self.runtimeEnabled = runtimeEnabled
+        unreadIDs = Array(Set(preferences.stringArray(forKey: unreadKey) ?? [])).sorted()
+        center = runtimeEnabled ? UNUserNotificationCenter.current() : nil
+        super.init()
+        center?.delegate = self
+        refreshBadge()
+    }
+
+    func beginTask() {
+        taskID = UUID().uuidString
+        if runtimeEnabled { configurePermission(openSettings: false) }
+    }
+
+    @discardableResult
+    func complete(resultVisible: Bool, title: String, body: String) -> Bool {
+        guard let id = taskID else { return false }
+        taskID = nil
+        guard !resultVisible else { return false }
+        unreadIDs.append(id)
+        persistUnread()
+        guard let center else { return true }
+        center.getNotificationSettings { [weak self] settings in
+            let authorized = settings.authorizationStatus == .authorized
+            DispatchQueue.main.async {
+                guard let self, self.unreadIDs.contains(id), authorized else { return }
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                content.badge = NSNumber(value: self.unreadCount)
+                self.center?.add(UNNotificationRequest(identifier: "mfb.result." + id, content: content, trigger: nil)) { [weak self] error in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if let error { self.onDiagnostic?(error.localizedDescription) }
+                        if !self.unreadIDs.contains(id) {
+                            self.center?.removeDeliveredNotifications(withIdentifiers: ["mfb.result." + id])
+                            self.center?.removePendingNotificationRequests(withIdentifiers: ["mfb.result." + id])
+                        }
+                        self.refreshBadge()
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    func reviewAll() {
+        let identifiers = unreadIDs.map { "mfb.result." + $0 }
+        unreadIDs.removeAll()
+        center?.removeDeliveredNotifications(withIdentifiers: identifiers)
+        center?.removePendingNotificationRequests(withIdentifiers: identifiers)
+        persistUnread()
+    }
+
+    private func persistUnread() {
+        preferences.set(unreadIDs, forKey: unreadKey)
+        refreshBadge()
+        onUnreadChanged?()
+    }
+
+    private func refreshBadge() {
+        guard runtimeEnabled, let center else { return }
+        let generation = UUID()
+        badgeRefreshID = generation
+        center.getNotificationSettings { [weak self] settings in
+            let badgesAllowed = settings.authorizationStatus == .authorized && settings.badgeSetting == .enabled
+            DispatchQueue.main.async {
+                guard let self, self.badgeRefreshID == generation else { return }
+                NSApp.dockTile.badgeLabel = badgesAllowed ? self.badgeLabel : nil
+            }
+        }
+    }
+
+    func configurePermission(openSettings: Bool) {
+        guard let center else { return }
+        center.getNotificationSettings { [weak self] settings in
+            let needsAuthorization = settings.authorizationStatus == .notDetermined
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if needsAuthorization {
+                    self.center?.requestAuthorization(options: [.alert, .badge, .sound]) { [weak self] _, error in
+                        DispatchQueue.main.async {
+                            if let error { self?.onDiagnostic?(error.localizedDescription) }
+                            self?.refreshBadge()
+                        }
+                    }
+                } else if openSettings,
+                          let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"),
+                          !NSWorkspace.shared.open(url) {
+                    self.onDiagnostic?(localized("notification.settings_unavailable"))
+                }
+            }
+        }
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([])
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let opensResult = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+        DispatchQueue.main.async { [weak self] in
+            if opensResult { self?.onOpenResult?() }
+            completionHandler()
+        }
+    }
+
+    static func selfTest() throws {
+        let suite = "MFBResultNotifications.\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let originalBadge = NSApp.dockTile.badgeLabel
+        let notifier = ProcessingResultNotifier(preferences: preferences, runtimeEnabled: false)
+        var badges: [String?] = []
+        notifier.onUnreadChanged = { [weak notifier] in badges.append(notifier?.badgeLabel) }
+        notifier.configurePermission(openSettings: true)
+        guard notifier.center == nil, !notifier.hasPendingTask, notifier.badgeLabel == nil else {
+            throw HostError(message: "Notification validation accessed the production notification center")
+        }
+        notifier.beginTask()
+        guard !notifier.complete(resultVisible: true, title: "visible", body: "counts"), notifier.unreadCount == 0,
+              !notifier.hasPendingTask else { throw HostError(message: "A visible result became an unread notification") }
+        notifier.beginTask()
+        guard notifier.complete(resultVisible: false, title: "with file issues", body: "validated counts"),
+              !notifier.complete(resultVisible: false, title: "duplicate", body: "ignored"), notifier.unreadCount == 1 else {
+            throw HostError(message: "A task sent duplicate result notifications")
+        }
+        notifier.beginTask()
+        _ = notifier.complete(resultVisible: false, title: "cancelled", body: "retained work")
+        let restored = ProcessingResultNotifier(preferences: preferences, runtimeEnabled: false)
+        guard restored.unreadCount == 2, restored.badgeLabel == "2" else {
+            throw HostError(message: "Unread task results did not survive application restart")
+        }
+        notifier.reviewAll()
+        guard badges == ["1", "2", nil], notifier.badgeLabel == nil,
+              (preferences.stringArray(forKey: notifier.unreadKey) ?? []).isEmpty,
+              NSApp.dockTile.badgeLabel == originalBadge else {
+            throw HostError(message: "Review failed to clear unread results or validation changed the real Dock badge")
+        }
+    }
+}
 private let mainWindowContentSize = NSSize(width: 980, height: 720)
 private let compactWindowWidth: CGFloat = 760
 private let mainLogoSize: CGFloat = 80
@@ -4873,6 +5036,7 @@ private struct ImgStartupAdmission {
         enum Cause: String, Decodable {
             case resumeConfigUnknown = "resume_config_unknown"
             case resumeConfigChanged = "resume_config_changed"
+            case resumeToolModeChanged = "resume_tool_mode_changed"
             case admissionFailed = "admission_failed"
         }
         let schema_version: Int
@@ -4916,13 +5080,18 @@ private struct ImgStartupAdmission {
 
     var isBlocked: Bool { invalid || event != nil }
     var allowsIndependentTask: Bool {
-        !invalid && (event?.cause_code == .resumeConfigUnknown || event?.cause_code == .resumeConfigChanged)
+        guard !invalid else { return false }
+        switch event?.cause_code {
+        case .resumeConfigUnknown, .resumeConfigChanged, .resumeToolModeChanged: return true
+        default: return false
+        }
     }
     var status: String {
         if invalid { return localized("admission.invalid") }
         switch event?.cause_code {
         case .resumeConfigUnknown: return localized("admission.resume_unknown")
         case .resumeConfigChanged: return localized("admission.resume_changed")
+        case .resumeToolModeChanged: return localized("admission.resume_tool_mode_changed")
         default: return localized("admission.stopped")
         }
     }
@@ -5373,8 +5542,7 @@ struct GateCheckActivity {
 
         var valid: Bool {
             guard schema_version == 1, !stage_id.isEmpty, stage_id.utf8.count <= 64 else { return false }
-            if gate == "photos_custody" {
-                guard total == 1 else { return false }
+            if gate == "photos_custody", total == 1 {
                 if check == "inventory" {
                     return completed == 0 && file_progress == nil && ["running", "failed"].contains(state)
                 }
@@ -5386,7 +5554,14 @@ struct GateCheckActivity {
                 return state == "running" ? completed == 0
                     : ["passed", "failed"].contains(state) && completed == 1
             }
-            guard gate == "local", total == 6 else { return false }
+            let checks: [String]
+            if ["local", "photos_custody"].contains(gate), total == 6 {
+                checks = ["count", "size", "blake3", "metadata", "orient", "decode"]
+            } else if gate == "photos_custody", total == 3 {
+                checks = ["count", "size", "decode"]
+            } else {
+                return false
+            }
             if let files = file_progress {
                 guard ["blake3", "metadata", "orient", "decode"].contains(check),
                       files.total > 0, files.total <= UInt64(Int64.max),
@@ -5394,11 +5569,11 @@ struct GateCheckActivity {
                       ["running", "failed"].contains(state) || files.processed == files.total else { return false }
             }
             if check == "inventory" { return completed == 0 && ["running", "failed"].contains(state) }
-            guard let index = ["count", "size", "blake3", "metadata", "orient", "decode"].firstIndex(of: check) else { return false }
+            guard let index = checks.firstIndex(of: check) else { return false }
             switch state {
             case "running": return completed == UInt64(index)
             case "failed": return completed == UInt64(index + 1)
-            case "file_failures": return index >= 3 && completed == UInt64(index + 1)
+            case "file_failures": return ["metadata", "orient", "decode"].contains(check) && completed == UInt64(index + 1)
             case "passed": return check == "decode" && completed == total
             default: return false
             }
@@ -5435,7 +5610,7 @@ struct GateCheckActivity {
                     || (next.gate == "photos_custody" && next.state == "running"
                         && (previous.check == "inventory" || previous.check == "original_bytes")
                         && next.check == "original_bytes")
-                    || (next.gate == "local" && previous.check == next.check
+                    || (next.total != 1 && previous.check == next.check
                         && next.state == "running" && next.file_progress != nil) else {
                 invalidate()
                 return true
@@ -5456,19 +5631,20 @@ struct GateCheckActivity {
     func label(now: TimeInterval) -> String {
         guard let event else { return invalid ? localized("gate.activity.invalid") : "" }
         var text: String
-        if event.gate == "photos_custody" {
+        if event.gate == "photos_custody", event.total == 1 {
             let state = event.state == "running" && event.check == "inventory" ? "preparing" : event.state
             text = localized("gate.custody.\(state)")
             if let files = event.file_progress {
                 text += " · " + localized("gate.custody.files", String(files.processed), String(files.total))
             }
         } else {
+            let prefix = event.gate == "photos_custody" ? "gate.activity.final" : "gate.activity"
             switch event.state {
-            case "passed": text = localized("gate.activity.passed", String(event.completed), String(event.total))
-            case "file_failures": text = localized("gate.activity.file_failures", String(event.completed), String(event.total))
-            case "failed": text = localized("gate.activity.failed", localized("gate.check.\(event.check)"),
+            case "passed": text = localized("\(prefix).passed", String(event.completed), String(event.total))
+            case "file_failures": text = localized("\(prefix).file_failures", String(event.completed), String(event.total))
+            case "failed": text = localized("\(prefix).failed", localized("gate.check.\(event.check)"),
                                             String(event.completed), String(event.total), String(event.total - event.completed))
-            default: text = localized("gate.activity.running", localized("gate.check.\(event.check)"),
+            default: text = localized("\(prefix).running", localized("gate.check.\(event.check)"),
                                       String(event.completed), String(event.total))
             }
             if let files = event.file_progress {
@@ -7176,6 +7352,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let copyButton = NSButton(title: "", target: nil, action: nil)
     private let runButton = NSButton(title: "", target: nil, action: nil)
     private let historyButton = NSButton(title: "", target: nil, action: nil)
+    private lazy var resultNotifier = ProcessingResultNotifier(preferences: preferences,
+        runtimeEnabled: !isBackgroundSelfTest && !isDebugWindow)
+    private var announcedGate: String?
+    private var resultNotificationError: String?
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
     private let helpButton = NSButton(title: "", target: nil, action: nil)
     private var settingsPanel: MediaSettingsPanel?
@@ -7558,6 +7738,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         runButton.keyEquivalent = "\r"
         historyButton.target = self
         historyButton.action = #selector(openHistory)
+        historyButton.keyEquivalent = "r"
+        historyButton.keyEquivalentModifierMask = [.command, .shift]
         historyButton.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
         historyButton.imagePosition = .imageLeading
         settingsButton.target = self
@@ -7745,6 +7927,13 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func configureHost() {
         host.onLog = { [weak self] text in self?.appendLog(text) }
         host.onCompletion = { [weak self] result in self?.processingCompleted(result) }
+        resultNotifier.onUnreadChanged = { [weak self] in self?.refreshUnreadResults() }
+        resultNotifier.onOpenResult = { [weak self] in self?.activate(); self?.openHistory() }
+        resultNotifier.onDiagnostic = { [weak self] message in
+            self?.resultNotificationError = localized("notification.failed", message)
+            self?.refreshUnreadResults()
+        }
+        refreshUnreadResults()
     }
 
     private func collectMainFonts(in view: NSView) {
@@ -8023,6 +8212,44 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         historyPanel?.refresh(directory: resolvedHistoryDirectory)
         historyPanel?.show()
+        resultNotificationError = nil
+        resultNotifier.reviewAll()
+    }
+
+    func configureResultNotifications() { resultNotifier.configurePermission(openSettings: true) }
+
+    func reviewResultNotifications() { openHistory() }
+
+    private func refreshUnreadResults() {
+        historyButton.title = resultNotifier.unreadCount == 0 ? localized("button.history")
+            : localized("button.history_unread", String(resultNotifier.unreadCount))
+        if resultNotificationError != nil { historyButton.title += " · " + localized("notification.needs_attention") }
+        historyButton.setAccessibilityLabel(historyButton.title)
+        historyButton.setAccessibilityHelp([localized("notification.history_help"), resultNotificationError]
+            .compactMap { $0 }.joined(separator: " "))
+        historyButton.toolTip = resultNotificationError
+            ?? (privacyEnabled ? localized("button.history") : resolvedHistoryDirectory.path)
+        historyButton.setAccessibilityValue(resultNotifier.unreadCount == 0 ? localized("notification.no_new_results")
+            : localized("notification.unread_results", String(resultNotifier.unreadCount)))
+        if arrangeActions(for: window.contentView?.bounds.width ?? mainWindowContentSize.width) { updateWindowSize() }
+    }
+
+    private func announce(_ message: String, priority: NSAccessibilityPriorityLevel = .medium) {
+        guard !isBackgroundSelfTest, !isDebugWindow, NSApp.isActive, window.isKeyWindow else { return }
+        NSAccessibility.post(element: window, notification: .announcementRequested, userInfo: [
+            .announcement: message, .priority: priority.rawValue,
+        ])
+    }
+
+    private func publishResultNotification() {
+        guard resultNotifier.hasPendingTask, host.lastExitStatus != nil, !host.isRunning else { return }
+        let title = batchOverview.isHidden ? localized("notification.result_ended") : batchOverviewTitle.stringValue
+        let body = batchResults.summary ?? localized("notification.result_info")
+        announce(title + ". " + body, priority: .high)
+        resultNotifier.complete(resultVisible: NSApp.isActive && window.isKeyWindow && !window.isMiniaturized
+            && window.occlusionState.contains(.visible) && window.attachedSheet == nil,
+            title: title, body: body)
+        refreshUnreadResults()
     }
 
     private func runSelectedFailures(_ selection: FastImgFailedRetrySelection) {
@@ -8555,6 +8782,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                     displayLines.append(warning)
                     privateLines.append(warning)
                     if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                } else if let event = gateActivity.event, [3, 6].contains(event.total), announcedGate != event.gate {
+                    announcedGate = event.gate
+                    announce(localized(event.gate == "local" ? "notification.gate1" : "notification.gate2"))
                 }
                 continue
             }
@@ -8888,12 +9118,13 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func applyResumeDecision(fresh: Bool, to request: inout ProcessorRequest) {
+    private func applyResumeDecision(fresh: Bool, to request: inout ProcessorRequest, updateOptions: Bool = true) {
         request.retryFailed = false
         request.retryFailedParent = nil
         request.resume = !fresh
         request.fresh = fresh
         request.retry = !fresh && (request.retry || request.operationMode.backendMode == "fast-img")
+        guard updateOptions else { return }
         resumeCheck.state = request.resume ? .on : .off
         freshCheck.state = request.fresh ? .on : .off
         retryCheck.state = request.retry ? .on : .off
@@ -8937,12 +9168,12 @@ private final class AppController: NSObject, NSWindowDelegate {
             ImgStartupAdmission.prefix
                 + String(decoding: try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]), as: UTF8.self)
         }
-        let fields: [String: Any] = ["schema_version": 1, "pipeline": "img", "cause_code": "resume_config_unknown",
-            "input_path": input, "requested_output": "/synthetic/admission-output", "message": "Saved settings are not available."]
+        let fields: [String: Any] = ["schema_version": 1, "pipeline": "img", "cause_code": "resume_tool_mode_changed",
+            "input_path": input, "requested_output": "/synthetic/admission-output", "message": "Saved task uses pinned tools."]
         for language in ["en", "zh-Hans", "ja"] {
             guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path)
             else { throw HostError(message: "Missing startup admission locale") }
-            for suffix in ["invalid", "resume_unknown", "resume_changed", "stopped", "fresh_info", "photos_warning", "start_fresh", "cancelled"] {
+            for suffix in ["invalid", "resume_unknown", "resume_changed", "resume_tool_mode_changed", "tool_mode_info", "stopped", "fresh_info", "photos_warning", "start_fresh", "cancelled"] {
                 let key = "admission." + suffix
                 guard bundle.localizedString(forKey: key, value: nil, table: nil) != key
                 else { throw HostError(message: "Missing startup admission translation: \(key)") }
@@ -8964,7 +9195,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let exited = spawned.replacingOccurrences(of: #""state":"spawned""#, with: #""state":"exited""#)
         appendLog(spawned)
         appendLog(try encoded(fields))
-        appendLog("ERR: Error: MFB_RESUME_CONFIG_UNKNOWN: saved task has no processing-settings identity; existing evidence was retained")
+        appendLog("ERR: Error: Saved Fast IMG task uses pinned tools. Enable external tool pinning to resume it, or start a new task.")
         appendLog(exited.replacingOccurrences(of: #""exit_code":null"#, with: #""exit_code":1"#))
         appendLog(OutputCleanupReceipt.prefix + #"{"already_absent_files":null,"error":null,"outcome":"not_requested","output_path":"/synthetic/admission-output","pruned_directories":null,"removed_files":null,"run_id":"admission-run","schema_version":1}"#)
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":null,"skipped":null,"failed":null,"ignored":null,"unprocessed":null,"exit_code":1}"#)
@@ -8981,7 +9212,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             throw HostError(message: "Startup choice was not reached: admissionInvalid=\(startupAdmission.invalid), mediaEvidence=\(hasStartedMediaEvidence), resultInvalid=\(batchResults.invalid), toolInvalid=\(toolSnapshot.invalid), workerInvalid=\(workerExecution.invalid)")
         }
         let cancelledChecks: [(String, Bool)] = [
-            ("title", inspected.messageText == localized("admission.resume_unknown")),
+            ("title", inspected.messageText == localized("admission.resume_tool_mode_changed")),
+            ("resume explanation", inspected.informativeText.contains(localized("admission.tool_mode_info"))),
             ("buttons", inspected.buttons.map(\.title) == [localized("alert.cancel"), localized("admission.start_fresh")]),
             ("fresh explanation", inspected.informativeText.contains(localized("admission.fresh_info"))),
             ("Photos warning", inspected.informativeText.contains(localized("admission.photos_warning"))),
@@ -9004,18 +9236,18 @@ private final class AppController: NSObject, NSWindowDelegate {
         }, admissionStart: { started.append($0) })
         guard started.count == 1, let fresh = started.first,
               fresh.targetPath == input, fresh.fresh, !fresh.resume, !fresh.retry, !fresh.retryFailed,
-              fresh.shortestPath, freshCheck.state == .on, resumeCheck.state == .off, retryCheck.state == .off,
+              fresh.shortestPath, beforeOptions == [resumeCheck.state, retryCheck.state, freshCheck.state],
               try ProcessorCommand.arguments(from: fresh).contains("--no-resume"),
               !startupAdmission.isBlocked else {
             throw HostError(message: "Explicit independent task did not use the existing fresh-request transition")
         }
         setProcessing(false)
 
-        for cause in ["resume_config_changed", "admission_failed"] {
+        for cause in ["resume_config_unknown", "resume_config_changed", "admission_failed"] {
             var changed = fields; changed["cause_code"] = cause
             var state = ImgStartupAdmission()
             guard state.ingest(try encoded(changed), request: initial, hasMediaEvidence: false),
-                  !state.invalid, state.allowsIndependentTask == (cause == "resume_config_changed") else {
+                  !state.invalid, state.allowsIndependentTask == (cause != "admission_failed") else {
                 throw HostError(message: "Generic admission failure offered an unsafe recovery choice")
             }
         }
@@ -9341,13 +9573,15 @@ private final class AppController: NSObject, NSWindowDelegate {
         setProcessing(false)
         setStatus(startupAdmission.status)
         guard !isDebugWindow, startupAdmission.allowsIndependentTask,
-              var retry = lastRequest,
+              var retry = lastRequest, !retry.fresh,
               FastImgDeliveryReceipt.samePath(startupAdmission.event?.input_path, retry.targetPath)
         else { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = startupAdmission.status
-        alert.informativeText = localized("admission.fresh_info")
+        let toolModeInfo = startupAdmission.event?.cause_code == .resumeToolModeChanged
+            ? localized("admission.tool_mode_info") + "\n\n" : ""
+        alert.informativeText = toolModeInfo + localized("admission.fresh_info")
             + (retry.shortestPath ? "\n\n" + localized("admission.photos_warning") : "")
         // Return and Escape both cancel. Starting another task always requires
         // an explicit choice; there is deliberately no continue-old-task action.
@@ -9357,7 +9591,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             setLocalizedStatus("admission.cancelled")
             return true
         }
-        applyResumeDecision(fresh: true, to: &retry)
+        applyResumeDecision(fresh: true, to: &retry, updateOptions: false)
         lastRequest = retry
         sawResumeDecision = false; sawFailedRetryDecision = false
         failedRetryAvailable = nil; failedRetryAvailabilityInvalid = false
@@ -9390,7 +9624,12 @@ private final class AppController: NSObject, NSWindowDelegate {
            sawResumeDecision || sawFailedRetryDecision, let request = lastRequest {
             resumeChoicePending = !request.resume && !request.fresh && !request.retryFailed
         } else { resumeChoicePending = false }
-        defer { if !resumeChoicePending { refreshBatchOverview() } }
+        defer {
+            if !resumeChoicePending {
+                refreshBatchOverview()
+                publishResultNotification()
+            }
+        }
         let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
         if host.controlState == "cancelled", host.lastExitStatus == 130 {
             if !batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
@@ -9778,7 +10017,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         runButton.title = localized("button.run")
         updateHistoryRemovalNotice()
         historyPanel?.refreshRemovalAvailability()
-        historyButton.title = localized("button.history")
+        refreshUnreadResults()
         settingsButton.title = localized("settings.title")
         settingsButton.toolTip = localized("settings.title")
         settingsButton.setAccessibilityLabel(localized("settings.title"))
@@ -9890,6 +10129,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         pauseButton.title = localized("button.pause")
         if processing {
             if processingStartedAt == nil {
+                resultNotifier.beginTask()
+                announcedGate = nil
                 processingStartedAt = ProcessingStart()
                 processingActivity = ProcessInfo.processInfo.beginActivity(
                     options: .userInitiatedAllowingIdleSystemSleep,
@@ -10555,6 +10796,17 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    func showResultNotificationsFixture() throws {
+        restoreFixture = true
+        try showCountReceiptFixture(missing: false)
+        resolvedHistoryDirectory = URL(fileURLWithPath: "/synthetic/notification-history", isDirectory: true)
+        resultNotifier.beginTask()
+        resultNotifier.complete(resultVisible: false, title: batchOverviewTitle.stringValue,
+            body: batchResults.summary ?? localized("notification.result_info"))
+        refreshUnreadResults()
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+
     func showToolRuntimeFixture() {
         deliveryFixture = true
         restoreFixture = true
@@ -10780,6 +11032,50 @@ private final class AppController: NSObject, NSWindowDelegate {
         _ = changedGate.ingest(running, now: 1)
         _ = changedGate.ingest(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}"#, now: 2)
         guard changedGate.invalid else { throw HostError(message: "One stage identity changed its Gate scope") }
+
+        func finalActivity(_ check: String, completed: Int, total: Int, state: String = "running",
+                           processed: Int? = nil) throws -> String {
+            var record: [String: Any] = [
+                "schema_version": 1, "stage_id": "final-custody-\(total)", "gate": "photos_custody",
+                "check": check, "completed": completed, "total": total, "state": state,
+            ]
+            if let processed { record["file_progress"] = ["processed": processed, "total": 2] }
+            let data = try JSONSerialization.data(withJSONObject: record, options: .sortedKeys)
+            return "MFB_GATE_ACTIVITY=" + String(decoding: data, as: UTF8.self)
+        }
+        for checks in [["count", "size", "blake3", "metadata", "orient", "decode"], ["count", "size", "decode"]] {
+            gateActivity = GateCheckActivity()
+            appendLog(try finalActivity("inventory", completed: 0, total: checks.count))
+            for (index, check) in checks.enumerated() {
+                appendLog(try finalActivity(check, completed: index, total: checks.count))
+                if ["blake3", "metadata", "orient", "decode"].contains(check) {
+                    appendLog(try finalActivity(check, completed: index, total: checks.count, processed: 0))
+                    appendLog(try finalActivity(check, completed: index, total: checks.count, processed: 2))
+                    let label = localized("gate.activity.final.running", localized("gate.check.\(check)"),
+                                          String(index), String(checks.count))
+                    guard !gateActivity.invalid, fileProgressLabel.stringValue.contains(label),
+                          fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+                          !fileProgressIndicator.isHidden, fileProgressIndicator.doubleValue < 100 else {
+                        throw HostError(message: "Final Gate 2 activity lost its scope, file progress or accessibility label")
+                    }
+                }
+            }
+            appendLog(try finalActivity("decode", completed: checks.count, total: checks.count,
+                                        state: "passed", processed: 2))
+            guard !gateActivity.invalid, gateActivity.event?.state == "passed",
+                  fileProgressLabel.stringValue.contains(localized("gate.activity.final.passed", String(checks.count), String(checks.count))),
+                  fileProgressIndicator.doubleValue == 100, batchResults.totals.isEmpty else {
+                throw HostError(message: "Final Gate 2 completion was rejected or became a batch result")
+            }
+        }
+        for total in [0, 1, 2, 3, 5, 7] {
+            var malformed = GateCheckActivity()
+            _ = malformed.ingest(try finalActivity("metadata", completed: 3, total: total), now: 1)
+            guard malformed.invalid else { throw HostError(message: "Final Gate 2 accepted an invalid check total") }
+        }
+        var wrongFinalCheck = GateCheckActivity()
+        _ = wrongFinalCheck.ingest(try finalActivity("original_bytes", completed: 0, total: 6), now: 1)
+        guard wrongFinalCheck.invalid else { throw HostError(message: "Final Gate 2 confused its local checks with original-byte custody") }
     }
 
     private func configurePhotosProgressFixture(handoff: Bool = false) throws {
@@ -11228,6 +11524,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     func validateInterfaceForSelfTest() throws {
+        guard historyButton.keyEquivalent == "r", historyButton.keyEquivalentModifierMask == [.command, .shift],
+              historyButton.action == #selector(openHistory), historyButton.target === self,
+              historyButton.accessibilityLabel() == historyButton.title else {
+            throw HostError(message: "History review lost its window keyboard shortcut or accessible name")
+        }
         guard targetField.accessibilityLabel() == localized("field.target"),
               backupField.accessibilityLabel() == localized("field.backup"),
               chooseButton.accessibilityLabel() == localized("button.choose_target"),
@@ -11807,6 +12108,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showAbout() { controller?.showAbout() }
     @objc private func showSettings() { controller?.showSettings() }
+    @objc private func configureNotifications() { controller?.configureResultNotifications() }
+    @objc private func reviewResults() { controller?.reviewResultNotifications() }
 
     func configureMenus() {
         let main = NSMenu()
@@ -11816,6 +12119,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         about.target = self
         let settings = appMenu.addItem(withTitle: localized("settings.title"), action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
+        let notifications = appMenu.addItem(withTitle: localized("notification.settings"),
+            action: #selector(configureNotifications), keyEquivalent: "")
+        notifications.target = self
+        let history = appMenu.addItem(withTitle: localized("button.history"), action: #selector(reviewResults), keyEquivalent: "r")
+        history.keyEquivalentModifierMask = [.command, .shift]
+        history.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: localized("menu.quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -11857,6 +12166,7 @@ private func runSelfTest() -> Int32 {
     do {
         guard let executable = Bundle.main.executableURL else { throw HostError(message: "Native self-test executable is unavailable") }
         try ApplicationSession.selfTest(executable: executable)
+        try ProcessingResultNotifier.selfTest()
         try PhotosImportProgress.selfTest()
         try ProcessingGuideController.selfTest()
         try ToolInspectionPanel.selfTest()
@@ -12816,6 +13126,7 @@ do {
 }
 
 if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
+    || CommandLine.arguments.contains("--notification-ui-fixture")
     || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture")
     || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture")
     || CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
@@ -12843,6 +13154,7 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
             else if CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture") {
                 try controller.showCountReceiptFixture(missing: CommandLine.arguments.contains("--missing-counts-ui-fixture"))
             }
+            else if CommandLine.arguments.contains("--notification-ui-fixture") { try controller.showResultNotificationsFixture() }
             else if CommandLine.arguments.contains("--photos-custody-ui-fixture") { controller.showPhotosCustodyFixture() }
             else if CommandLine.arguments.contains("--photos-progress-ui-fixture")
                 || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") {

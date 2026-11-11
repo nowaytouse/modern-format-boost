@@ -244,6 +244,8 @@
 "admission.invalid" = "启动记录与本次请求无法核对。处理已停止，请查看处理详情。";
 "admission.resume_unknown" = "无法核对旧任务的处理设置，不能继续旧任务";
 "admission.resume_changed" = "当前处理设置与旧任务不同，不能继续旧任务";
+"admission.resume_tool_mode_changed" = "旧批次的工具固定设置不同";
+"admission.tool_mode_info" = "如需续跑旧批次，请取消，并在「设置 → 性能」恢复它原先使用的工具固定模式。";
 "admission.stopped" = "处理在开始前已停止，请到处理详情查看原因";
 "admission.fresh_info" = "本次未改动旧任务记录和已有产物。新任务会使用独立输出目录，仅处理当前仍在源目录中的文件，不会复用旧产物。";
 "admission.photos_warning" = "当前已开启导入照片。若旧交付记录不完整，可能重复导入。";
@@ -735,6 +737,10 @@
 "gate.activity.passed" = "Gate 1 检查通过 · 已执行 %@ / %@ 项检查";
 "gate.activity.file_failures" = "发现个别文件异常 · 已执行 %@ / %@ 项检查，最终结果待确认";
 "gate.activity.failed" = "Gate 1 在%@时停止 · 已执行 %@ / %@ 项检查；%@ 项未执行";
+"gate.activity.final.running" = "最终 Gate 2 核验：%@ · 已执行 %@ / %@ 项检查";
+"gate.activity.final.passed" = "Gate 2 检查通过 · 已执行 %@ / %@ 项检查";
+"gate.activity.final.file_failures" = "Gate 2 发现个别文件异常 · 已执行 %@ / %@ 项检查，最终结果待确认";
+"gate.activity.final.failed" = "Gate 2 在%@时停止 · 已执行 %@ / %@ 项检查；%@ 项未执行";
 "gate.activity.updated" = "%@ 秒前收到更新";
 "gate.activity.invalid" = "核验活动记录无效，请查看保留的处理输出。";
 "gate.custody.preparing" = "正在定位待复核的照片原件";
@@ -1009,3 +1015,15 @@
 "settings.avif_metadata.clear" = "当前私人策略会清理可移除的内嵌元数据，不把旁车 XMP 复制到输出。像素、色彩、HDR 与文件属性仍须通过适用核验。";
 "settings.avif_metadata.unavailable" = "尚无法确认当前元数据政策。请检查配置和处理程序版本，再重新打开设置。";
 "settings.avif_metadata.unsupported" = "此界面尚不支持当前元数据政策。请检查配置和处理程序版本，再重新打开设置。";
+"button.history_unread" = "处理记录 · %@ 条新结果";
+"notification.settings" = "处理结果通知…";
+"notification.settings_unavailable" = "无法打开通知设置。请在系统设置中选择“通知”。";
+"notification.failed" = "无法更新处理结果通知：%@。仍可在应用内查看处理结果。";
+"notification.needs_attention" = "通知需关注";
+"notification.history_help" = "查看处理结果并清除新结果提示。提示数量按处理任务计数，不是文件数量。";
+"notification.no_new_results" = "没有新的处理任务结果";
+"notification.unread_results" = "%@ 条新的处理任务结果";
+"notification.result_ended" = "本次处理已结束";
+"notification.result_info" = "可在应用内查看本次处理结果。";
+"notification.gate1" = "Gate 1：开始本地核验。";
+"notification.gate2" = "Gate 2：开始重新读取内容进行最终核验。";

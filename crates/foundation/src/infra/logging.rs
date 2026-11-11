@@ -803,10 +803,14 @@ impl SizeRotatingAppender {
             );
         }
 
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(&path)?;
 
         let metadata = file.metadata()?;
         self.current_size = metadata.len();
@@ -1197,18 +1201,12 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
         .with(json_layer)
         .init();
 
-    let args: Vec<String> = std::env::args().collect();
-    let current_dir = crate::media_conversion_gate::delivery_cwd_display_or_unknown("logging init");
     let init_msg = format!(
-        "Logging system initialized program=\"{}\" log_dir=\"{}\" max_file_size={} max_files={} \
-         level={:?} args={:?} cwd=\"{}\" os=\"{}\"",
+        "Logging system initialized program=\"{}\" max_file_size={} max_files={} level={:?} os=\"{}\"",
         program_name,
-        config.log_dir.display(),
         config.max_file_size,
         config.max_files,
         config.level,
-        args,
-        current_dir,
         std::env::consts::OS,
     );
     // Note: We don't call append_stats_to_line here to avoid potential circular
@@ -1221,9 +1219,8 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
     // Log directory info for user awareness
     tracing::info!(
         target: "mfb::system",
-        "{} Log directory: {}",
-        crate::media_conversion_gate::ui_icon_pick("📁", "[LOG]"),
-        config.log_dir.display()
+        "{} Log directory ready",
+        crate::media_conversion_gate::ui_icon_pick("📁", "[LOG]")
     );
 
     // A caller may explicitly opt out with usize::MAX; the default is bounded so
@@ -1322,79 +1319,62 @@ pub fn log_external_tool(
     exit_code: Option<i32>,
     duration: std::time::Duration,
 ) {
-    let command = crate::common_utils::format_command_string(tool_name, args);
-
+    let tool = std::path::Path::new(tool_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
     match exit_code {
-        Some(0_i32) => {
-            tracing::info!(
-                tool = tool_name,
-                command = %command,
-                duration_secs = duration.as_secs_f64(),
-                exit_code = 0_i32,
-                "External tool completed successfully"
-            );
-            tracing::debug!(
-                tool = tool_name,
-                output = %output,
-                "External tool output"
-            );
-        }
-        Some(code) => {
-            tracing::error!(
-                tool = tool_name,
-                command = %command,
-                duration_secs = duration.as_secs_f64(),
-                exit_code = code,
-                output = %output,
-                "External tool failed"
-            );
-        }
-        None => {
-            tracing::error!(
-                tool = tool_name,
-                command = %command,
-                duration_secs = duration.as_secs_f64(),
-                output = %output,
-                "{} External tool TERMINATED by signal (OOM kill or Crash). Check system logs (dmesg/Console.app) for details.",
-                crate::media_conversion_gate::ui_icon_pick("☢️", "[RARE]")
-            );
-        }
+        Some(0) => tracing::info!(
+            tool,
+            argument_count = args.len(),
+            output_bytes = output.len(),
+            duration_secs = duration.as_secs_f64(),
+            exit_code = 0,
+            "External tool completed successfully"
+        ),
+        Some(code) => tracing::error!(
+            tool,
+            argument_count = args.len(),
+            output_bytes = output.len(),
+            duration_secs = duration.as_secs_f64(),
+            exit_code = code,
+            "External tool failed; output omitted from logs for privacy"
+        ),
+        None => tracing::error!(
+            tool,
+            argument_count = args.len(),
+            output_bytes = output.len(),
+            duration_secs = duration.as_secs_f64(),
+            "External tool terminated by signal; output omitted from logs for privacy"
+        ),
     }
 }
 
 const CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES: usize = 64 * 1024;
 
-/// Keep captured tool diagnostics in the file/run logs without flooding the
-/// terminal. The capture itself remains bounded by the process runner, and a
-/// truncation marker makes any omitted bytes explicit rather than silent.
+/// Record the outcome and size of captured diagnostics without persisting their contents.
 pub(crate) fn log_captured_process_output(
-    command_line: &str,
+    _command_line: &str,
     status: std::process::ExitStatus,
     stdout: &str,
     stderr: &str,
 ) {
-    let output = combined_tool_output(stdout, stderr);
-    if output.trim().is_empty() {
+    if stdout.trim().is_empty() && stderr.trim().is_empty() {
         return;
     }
-    let output = truncate_captured_tool_output(&output);
+    let stdout_bytes = stdout.len();
+    let stderr_bytes = stderr.len();
+    let truncated = stdout.contains("[captured diagnostic truncated:")
+        || stderr.contains("[captured diagnostic truncated:");
     if status.success() {
         tracing::info!(
-            target: "mfb::tool_output",
-            command = %command_line,
-            success = true,
-            exit_code = ?status.code(),
-            output = %output,
-            "Captured external-tool diagnostics"
+            target: "mfb::tool_output", success = true, exit_code = ?status.code(),
+            stdout_bytes, stderr_bytes, truncated, "Captured external-tool diagnostics (content omitted for privacy)"
         );
     } else {
         tracing::warn!(
-            target: "mfb::tool_output",
-            command = %command_line,
-            success = false,
-            exit_code = ?status.code(),
-            output = %output,
-            "Captured failed external-tool diagnostics"
+            target: "mfb::tool_output", success = false, exit_code = ?status.code(),
+            stdout_bytes, stderr_bytes, truncated, "Captured failed external-tool diagnostics (content omitted for privacy)"
         );
     }
 }
@@ -1451,6 +1431,7 @@ fn format_bounded_diagnostic(head: &str, tail: &str, total: u64) -> String {
     result
 }
 
+#[cfg(test)]
 fn truncate_captured_tool_output(output: &str) -> String {
     if output.len() <= CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES {
         return output.to_owned();
@@ -1514,11 +1495,14 @@ pub struct ExternalCommandResult {
 pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<ExternalCommandResult> {
     use std::process::Command;
 
-    let command_str = crate::common_utils::format_command_string(tool_name, args);
+    let tool = std::path::Path::new(tool_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
 
     tracing::debug!(
-        tool = tool_name,
-        command = %command_str,
+        tool,
+        argument_count = args.len(),
         "Executing external command"
     );
 
@@ -1527,7 +1511,7 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
     let output = Command::new(tool_name)
         .args(args)
         .output()
-        .with_context(|| format!("Failed to execute command: {command_str}"))?;
+        .with_context(|| format!("Failed to execute external tool: {tool}"))?;
 
     let duration = start_time.elapsed();
 
@@ -1808,10 +1792,8 @@ mod tests {
         assert!(visible.contains("metadata failure remains visible"));
         assert!(visible.contains("embedded tags and color profiles require separate checks"));
         assert!(visible.contains("[Metadata Integrity]"));
-        assert!(
-            records.contains("Captured external-tool diagnostics")
-                && records.contains("SourceFile")
-        );
+        assert!(records.contains("Captured external-tool diagnostics"));
+        assert!(!records.contains("SourceFile"));
         assert!(records.contains("background report remains durable only"));
         assert!(!visible.contains("background report remains durable only"));
     }
@@ -2080,15 +2062,60 @@ mod tests {
         assert!(result.duration.as_nanos() > 0);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn test_log_external_tool_captures_all_fields() {
-        log_external_tool(
-            "test_tool",
-            &["arg1", "arg2"],
-            "test output",
-            Some(0_i32),
-            std::time::Duration::from_secs(1),
-        );
+    fn external_tool_logs_omit_private_diagnostics() {
+        use std::os::unix::process::ExitStatusExt;
+        let plain = CaptureWriter::default();
+        let json = CaptureWriter::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                fmt::layer()
+                    .event_format(FileFormatter)
+                    .with_writer(plain.clone()),
+            )
+            .with(fmt::layer().json().with_writer(json.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            log_external_tool(
+                "/private/parent/exiftool",
+                &["/private/secret.jpg"],
+                "GPS_CANARY",
+                Some(7),
+                std::time::Duration::from_secs(1),
+            );
+            log_captured_process_output(
+                "exiftool /private/secret.jpg",
+                std::process::ExitStatus::from_raw(7 << 8),
+                "UUID_CANARY",
+                "GPS_CANARY [captured diagnostic truncated: 123 bytes total]",
+            );
+        });
+        for writer in [plain, json] {
+            let records = String::from_utf8(writer.0.lock().unwrap().clone()).unwrap();
+            for secret in ["/private", "secret.jpg", "UUID_CANARY", "GPS_CANARY"] {
+                assert!(!records.contains(secret), "{records}");
+            }
+            assert!(records.contains("exiftool"));
+            assert!(records.contains("exit_code"));
+            assert!(records.contains("truncated"));
+            assert!(records.contains("omitted for privacy"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_rotating_logs_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let mut appender = SizeRotatingAppender::new(dir.path().to_owned(), "privacy", 100, "log");
+        let mode = appender
+            .open_current_file()
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0);
     }
 
     #[test]

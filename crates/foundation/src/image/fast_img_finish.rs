@@ -30,6 +30,151 @@ impl VerifiedFailedRetryFinish {
     }
 }
 
+/// Live Photos custody held while the remaining local delivery copies are removed.
+pub struct VerifiedOutputPhotosCustody {
+    library: Option<PathBuf>,
+    output_root: PathBuf,
+    outputs: BTreeMap<PathBuf, (String, String)>,
+    _scope: crate::common_utils::UncachedVerificationScope,
+    _photos_lock: Option<super::PhotosImportLock>,
+}
+
+impl VerifiedOutputPhotosCustody {
+    /// Re-query the UUID and read its current original bytes immediately before unlink.
+    pub fn verify_before_removal(&self, output: &Path) -> Result<()> {
+        let (uuid, expected) = self.outputs.get(output)
+            .context("output removal has no fresh Photos custody binding")?;
+        let library = self.library.as_deref().context("output removal has no selected Photos library")?;
+        verify_output_resource_with(
+            uuid, expected, library, &self.output_root,
+            &mut |ids, library| super::query_selected_photos_asset_probes(ids, Some(library)),
+            &mut output_quarantined,
+        )
+    }
+}
+
+fn output_quarantined(path: &Path) -> super::Result<bool> {
+    #[cfg(target_os = "macos")]
+    { super::path_has_quarantine_xattr(path) }
+    #[cfg(not(target_os = "macos"))]
+    { Ok(super::path_has_quarantine_xattr(path)) }
+}
+
+fn verify_output_resource_with(
+    uuid: &str,
+    expected: &str,
+    library: &Path,
+    output_root: &Path,
+    query: &mut impl FnMut(&[String], &Path) -> super::Result<Vec<FastImgLibraryAssetProbe>>,
+    quarantined: &mut impl FnMut(&Path) -> super::Result<bool>,
+) -> Result<()> {
+    crate::batch_control::checkpoint()?;
+    let ids = vec![uuid.to_owned()];
+    let probes = super::index_photos_probes_by_uuid(&ids, query(&ids, library)?)?;
+    let probe = probes.get(uuid).context("output removal Photos UUID is missing")?;
+    ensure!(!probe.ismissing, "output removal Photos original is not locally available");
+    ensure!(!probe.path.canonicalize()?.starts_with(output_root),
+        "Photos original is referenced inside the working copy selected for removal");
+    ensure!(
+        !super::fast_img_require_icloud_upload_proof() || probe.incloud == Some(true),
+        "output removal requested iCloud custody is unavailable"
+    );
+    let mut observations = Vec::new();
+    observe_file(&probe.path, expected, &mut observations)?;
+    ensure!(!quarantined(&probe.path)?, "output removal Photos original is quarantined");
+    for (path, claim) in observations {
+        PlannedSource::verify(&claim, &path)?;
+    }
+    ensure!(!probe.path.canonicalize()?.starts_with(output_root),
+        "Photos original moved into the working copy during removal verification");
+    Ok(())
+}
+
+/// Check current complete original bytes, independently of historical Gate flags.
+pub fn verify_output_photos_custody(marker: &WorkingCopyMarker) -> Result<VerifiedOutputPhotosCustody> {
+    let scope = crate::common_utils::UncachedVerificationScope::new()?;
+    let photos_lock = if marker.blake3_log.is_empty() && marker.tier2_imported_assets.is_empty() {
+        None
+    } else {
+        Some(super::acquire_photos_import_lock()?)
+    };
+    let (library, outputs) = verify_output_photos_custody_with(
+        marker,
+        &mut |ids, library| super::query_selected_photos_asset_probes(ids, Some(library)),
+        &mut |library| super::require_active_photos_library(Some(library)),
+        &mut output_quarantined,
+    )?;
+    Ok(VerifiedOutputPhotosCustody { library, output_root: marker.working_copy.clone(), outputs,
+        _scope: scope, _photos_lock: photos_lock })
+}
+
+fn verify_output_photos_custody_with(
+    marker: &WorkingCopyMarker,
+    query: &mut impl FnMut(&[String], &Path) -> super::Result<Vec<FastImgLibraryAssetProbe>>,
+    active_library: &mut impl FnMut(&Path) -> super::Result<()>,
+    quarantined: &mut impl FnMut(&Path) -> super::Result<bool>,
+) -> Result<(Option<PathBuf>, BTreeMap<PathBuf, (String, String)>)> {
+    use crate::pipeline::verification::FastImgStageName;
+    ensure!(marker.stage == FastImgStageName::CleanupComplete && !marker.tier2_in_progress,
+        "output custody requires completed source cleanup");
+    marker.validate_library_asset_receipts_unique().map_err(anyhow::Error::msg)?;
+    let candidates = super::build_fast_img_output_import_candidates(marker)?;
+    ensure!(candidates.len() == marker.photos_imported_assets.len(),
+        "output custody Photos receipts do not cover the exact output inventory");
+    let assets = marker.photos_imported_assets.iter()
+        .map(|asset| (asset.rel_path.as_str(), asset)).collect::<BTreeMap<_, _>>();
+    let mut outputs = BTreeMap::new();
+    let mut targets = BTreeMap::new();
+    for candidate in candidates {
+        let asset = assets.get(candidate.rel_path.as_str())
+            .context("output custody has no exact Photos receipt")?;
+        ensure!(asset.blake3 == candidate.blake3
+            && asset.library_blake3.as_deref().is_none_or(|hash| hash == candidate.blake3),
+            "output removal requires complete bytes, not historical pixel-equivalence custody");
+        let uuid = uuid(asset)?.to_owned();
+        ensure!(targets.insert(uuid.clone(), candidate.blake3.clone()).is_none(),
+            "output custody contains a duplicate Photos UUID");
+        ensure!(outputs.insert(candidate.path.clone(), (uuid, candidate.blake3.clone())).is_none(),
+            "output custody contains a duplicate output path");
+        match fs::symlink_metadata(&candidate.path) {
+            Ok(_) => observe_file(&candidate.path, &candidate.blake3, &mut Vec::new())?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error).context("inspect output custody local file"),
+        }
+    }
+    for asset in &marker.tier2_imported_assets {
+        ensure!(targets.insert(uuid(asset)?.to_owned(),
+            asset.library_blake3.as_ref().unwrap_or(&asset.blake3).clone()).is_none(),
+            "output custody Photos UUID has conflicting source routes");
+    }
+    if targets.is_empty() {
+        return Ok((None, outputs));
+    }
+    let library = marker.photos_library_path.as_deref()
+        .context("output custody has no checkpoint-bound actual Photos library")?;
+    ensure!(super::selected_photos_library(Some(library))?.as_deref() == Some(library),
+        "output custody selected Photos library changed");
+    active_library(library)?;
+    let ids = targets.keys().cloned().collect::<Vec<_>>();
+    let probes = super::index_photos_probes_by_uuid(&ids, query(&ids, library)?)?;
+    let mut observations = Vec::new();
+    for (uuid, expected) in targets {
+        let probe = probes.get(&uuid).context("output custody Photos query omitted a UUID")?;
+        ensure!(!probe.ismissing, "output custody Photos original is not locally available");
+        ensure!(!probe.path.canonicalize()?.starts_with(&marker.working_copy),
+            "Photos original is referenced inside the working copy selected for removal");
+        ensure!(!super::fast_img_require_icloud_upload_proof() || probe.incloud == Some(true),
+            "output custody requested iCloud proof is unavailable");
+        observe_file(&probe.path, &expected, &mut observations)?;
+        ensure!(!quarantined(&probe.path)?, "output custody Photos original is quarantined");
+    }
+    for (path, claim) in observations {
+        PlannedSource::verify(&claim, &path)?;
+    }
+    active_library(library)?;
+    Ok((Some(library.to_owned()), outputs))
+}
+
 /// Reverify a failed-only attempt without encoding, importing, or creating sources.
 ///
 /// Existing Gate evidence remains historical. Current complete output bytes and,
@@ -41,6 +186,7 @@ impl VerifiedFailedRetryFinish {
 pub fn verify_failed_retry_finish(
     snapshot: &FailedRetryFinishSnapshot,
 ) -> Result<VerifiedFailedRetryFinish> {
+    let _uncached = crate::common_utils::UncachedVerificationScope::new()?;
     let _photos_lock = if matches!(
         snapshot.context().requested_delivery(),
         FailedRetryDeliveryIntent::Photos { .. }
@@ -632,6 +778,52 @@ mod tests {
             incloud: Some(true),
             ismissing: false,
         }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn completed_output_cleanup_requeries_uuid_and_reads_current_original_bytes() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let _state = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", root.path().to_str().unwrap());
+        let mut fixture = fixture(root.path(), "output-custody", true, None)?;
+        fixture.marker.stage = FastImgStageName::CleanupComplete;
+        let calls = std::cell::Cell::new(0);
+        let mut query = |ids: &[String], _: &Path| {
+            calls.set(calls.get() + 1);
+            assert_eq!(ids, &[UUID.to_owned()]);
+            Ok(vec![probe(&fixture)])
+        };
+        let (library, outputs) = verify_output_photos_custody_with(
+            &fixture.marker, &mut query, &mut |_| Ok(()), &mut |_| Ok(false),
+        )?;
+        let (uuid, expected) = outputs.values().next().context("fixture output binding absent")?;
+        verify_output_resource_with(uuid, expected, library.as_deref().unwrap(), &fixture.marker.working_copy,
+            &mut query, &mut |_| Ok(false))?;
+        assert_eq!(calls.get(), 2, "pre-unlink check reused the preflight query");
+        fs::write(&fixture.original, b"changed after the previous success")?;
+        assert!(verify_output_resource_with(uuid, expected, library.as_deref().unwrap(), &fixture.marker.working_copy,
+            &mut query, &mut |_| Ok(false)).is_err());
+        assert_eq!(calls.get(), 3);
+        assert!(fixture.marker.working_copy.join("a.JXL").exists());
+        fs::write(&fixture.original, &fixture.bytes)?;
+        let mut stale_uuid = probe(&fixture);
+        stale_uuid.uuid = "wrong-current-uuid".into();
+        assert!(verify_output_resource_with(uuid, expected, library.as_deref().unwrap(), &fixture.marker.working_copy,
+            &mut |_, _| Ok(vec![stale_uuid.clone()]), &mut |_| Ok(false)).is_err());
+        let mut unavailable = probe(&fixture);
+        unavailable.ismissing = true;
+        assert!(verify_output_resource_with(uuid, expected, library.as_deref().unwrap(), &fixture.marker.working_copy,
+            &mut |_, _| Ok(vec![unavailable.clone()]), &mut |_| Ok(false)).is_err());
+        let mut referenced = probe(&fixture);
+        referenced.path = fixture.marker.working_copy.join("a.JXL");
+        assert!(verify_output_resource_with(uuid, expected, library.as_deref().unwrap(), &fixture.marker.working_copy,
+            &mut |_, _| Ok(vec![referenced.clone()]), &mut |_| Ok(false)).is_err(),
+            "the actual Photos referenced original would be removed with the working copy");
+        fixture.marker.photos_imported_assets[0].library_blake3 = Some("0".repeat(64));
+        assert!(verify_output_photos_custody_with(&fixture.marker,
+            &mut |_, _| panic!("pixel-only receipt must be rejected before querying"),
+            &mut |_| Ok(()), &mut |_| Ok(false)).is_err());
+        Ok(())
     }
 
     #[test]

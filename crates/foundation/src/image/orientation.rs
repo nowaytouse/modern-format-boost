@@ -996,7 +996,8 @@ fn max_rgb_delta(ref_img: &image::DynamicImage, out_img: &image::DynamicImage) -
 }
 
 /// Read the EXIF Orientation value (1–8) from a file.
-/// A missing tag means orientation 1 only after a successful complete read.
+/// A missing tag means orientation 1 only after a complete orientation read.
+/// Known unrelated ICC/IPTC/UserComment/MakerNotes diagnostics remain recorded warnings.
 ///
 /// # Errors
 /// Rejects unreadable, conflicting or invalid orientation evidence.
@@ -1012,9 +1013,13 @@ pub fn read_exif_orientation(path: &Path) -> Result<u8> {
     }
     let out = ExiftoolBuilder::new()
         .arg("-n")
-        .arg("-s3")
+        .arg("-j")
+        // Family 4 preserves every duplicate tag/warning as a distinct member.
+        .arg("-G1:4")
         .arg("-a")
         .arg("-IFD0:Orientation")
+        .arg("-Warning")
+        .arg("-Error")
         .input(path)
         .build()
         .output()
@@ -1035,21 +1040,111 @@ fn parse_exif_orientation_evidence(
 ) -> Result<u8> {
     if !succeeded {
         return Err(ImgQualityError::AnalysisError(format!(
-            "pixel-diff: exiftool exited non-zero reading source orientation for {}: {}",
+            "pixel-diff: exiftool exited non-zero reading source orientation for {}: stderr={} stdout={}",
             path.display(),
-            String::from_utf8_lossy(stderr).trim()
+            String::from_utf8_lossy(stderr).trim(),
+            String::from_utf8_lossy(stdout).trim()
         )));
     }
-    if stdout.iter().all(u8::is_ascii_whitespace)
-        && stderr.iter().any(|byte| !byte.is_ascii_whitespace())
+    let invalid = |detail: &str| {
+        ImgQualityError::AnalysisError(format!(
+            "pixel-diff: source orientation absent or unproven from incomplete metadata read for {}: {detail}",
+            path.display()
+        ))
+    };
+    if stderr.iter().any(|byte| !byte.is_ascii_whitespace()) {
+        return Err(invalid(String::from_utf8_lossy(stderr).trim()));
+    }
+    crate::common_utils::validate_unique_json_members(stdout)
+        .map_err(|error| invalid(&format!("invalid JSON orientation evidence: {error}")))?;
+    let records: Vec<serde_json::Map<String, serde_json::Value>> = serde_json::from_slice(stdout)
+        .map_err(|error| invalid(&format!("invalid JSON orientation record: {error}")))?;
+    let [record] = records.as_slice() else {
+        return Err(invalid("expected exactly one orientation record"));
+    };
+    let expected_source = crate::safe_path_arg(path);
+    if path.to_str().is_none()
+        || record
+            .get("SourceFile")
+            .and_then(serde_json::Value::as_str)
+            .map(Path::new)
+            != Some(Path::new(expected_source.as_ref()))
     {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "pixel-diff: source orientation absent from incomplete metadata read for {}: {}",
-            path.display(),
-            String::from_utf8_lossy(stderr).trim()
-        )));
+        return Err(invalid("SourceFile identity differs from the requested file"));
     }
-    parse_exif_orientation_stdout(path, stdout)
+    let mut orientation = None;
+    let mut warnings = Vec::new();
+    for (key, value) in record {
+        if key == "SourceFile" {
+            continue;
+        }
+        if orientation_evidence_key(key, "IFD0", "Orientation") {
+            if orientation.replace(value).is_some() {
+                return Err(invalid("duplicate or conflicting IFD0 Orientation tags"));
+            }
+        } else if orientation_evidence_key(key, "ExifTool", "Warning") {
+            warnings.push(value);
+        } else {
+            return Err(invalid(&format!("unexpected orientation evidence {key}: {value}")));
+        }
+    }
+    // Report an explicit invalid direction before unrelated metadata diagnostics.
+    // A valid direction still cannot override a structural or unknown warning.
+    let orientation = match orientation {
+        Some(value) if value.is_u64() => {
+            parse_exif_orientation_stdout(path, value.to_string().as_bytes())?
+        }
+        Some(value) => return Err(invalid(&format!("invalid numeric orientation: {value}"))),
+        None => 1,
+    };
+    for value in warnings {
+        let warning = value
+            .as_str()
+            .ok_or_else(|| invalid("non-text metadata warning"))?;
+        if !unrelated_orientation_warning(warning) {
+            return Err(invalid(warning));
+        }
+        tracing::warn!(
+            source = %path.display(),
+            diagnostic = warning,
+            "Source metadata warning does not affect IFD0 orientation evidence"
+        );
+    }
+    Ok(orientation)
+}
+
+fn orientation_evidence_key(key: &str, group: &str, tag: &str) -> bool {
+    let parts: Vec<_> = key.split(':').collect();
+    match parts.as_slice() {
+        [actual_group, actual_tag] => *actual_group == group && *actual_tag == tag,
+        [actual_group, copy, actual_tag] => {
+            *actual_group == group
+                && *actual_tag == tag
+                && copy.strip_prefix("Copy").is_some_and(|number| {
+                    !number.is_empty()
+                        && !number.starts_with('0')
+                        && number.bytes().all(|byte| byte.is_ascii_digit())
+                })
+        }
+        _ => false,
+    }
+}
+
+fn unrelated_orientation_warning(warning: &str) -> bool {
+    // These exact diagnostics concern a separate ICC payload, a stale IPTC
+    // digest, decoding UserComment text, or an opaque MakerNotes payload.
+    // They cannot hide an unread IFD0 entry. Structural/unknown diagnostics reject.
+    matches!(
+        warning,
+        "IPTCDigest is not current. XMP may be out of sync"
+            | "Invalid EXIF text encoding for UserComment"
+            | "[minor] Unrecognized MakerNotes"
+    ) || warning
+        .strip_prefix("Bad length ICC_Profile (length ")
+        .and_then(|length| length.strip_suffix(')'))
+        .is_some_and(|length| {
+            !length.is_empty() && length.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 fn parse_exif_orientation_stdout(path: &Path, stdout: &[u8]) -> Result<u8> {
@@ -1991,13 +2086,163 @@ mod tests {
             );
         }
         assert_eq!(
-            super::parse_exif_orientation_evidence(source, true, b"\n", b"").unwrap(),
+            super::parse_exif_orientation_evidence(
+                source,
+                true,
+                br#"[{"SourceFile":"source.jpg"}]"#,
+                b"",
+            )
+            .unwrap(),
             1
         );
         assert_eq!(
-            super::parse_exif_orientation_evidence(source, true, b"6\n", b"").unwrap(),
+            super::parse_exif_orientation_evidence(
+                source,
+                true,
+                br#"[{"SourceFile":"source.jpg","IFD0:Orientation":6}]"#,
+                b"",
+            )
+            .unwrap(),
             6
         );
+    }
+
+    #[test]
+    fn orientation_json_keeps_non_orientation_warnings_separate_from_read_failures() {
+        let source = std::path::Path::new("source.jpg");
+        let accepted = serde_json::json!([{
+            "SourceFile": "source.jpg",
+            "ExifTool:Warning": "Bad length ICC_Profile (length 548)",
+            "ExifTool:Copy1:Warning": "Invalid EXIF text encoding for UserComment",
+            "ExifTool:Copy2:Warning": "IPTCDigest is not current. XMP may be out of sync",
+            "ExifTool:Copy3:Warning": "[minor] Unrecognized MakerNotes"
+        }]);
+        let parse = |record: &serde_json::Value| {
+            super::parse_exif_orientation_evidence(
+                source,
+                true,
+                &serde_json::to_vec(record).unwrap(),
+                b"",
+            )
+        };
+        assert_eq!(parse(&accepted).unwrap(), 1);
+        let mut explicit = accepted.clone();
+        explicit[0]["IFD0:Orientation"] = serde_json::json!(6);
+        assert_eq!(parse(&explicit).unwrap(), 6);
+        for warning in [
+            "Bad IFD0 directory",
+            "Bad offset for IFD0 Orientation",
+            "First entry for IFD0 has an invalid format. Ignoring possibly corrupted IFD",
+            "Unknown future metadata warning",
+            "Bad length ICC_Profile (length 548) trailing diagnostic",
+            "[minor] Unrecognized MakerNotes trailing diagnostic",
+        ] {
+            for evidence in [&accepted, &explicit] {
+                let mut record = evidence.clone();
+                record[0]["ExifTool:Copy4:Warning"] = serde_json::json!(warning);
+                assert!(parse(&record).is_err(), "{warning}");
+            }
+        }
+        for orientation in [
+            serde_json::json!(0),
+            serde_json::json!(9),
+            serde_json::json!("6"),
+        ] {
+            let mut record = accepted.clone();
+            record[0]["IFD0:Orientation"] = orientation;
+            assert!(parse(&record).is_err());
+        }
+        let mut invalid = accepted.clone();
+        invalid[0]["IFD0:Orientation"] = serde_json::json!(0);
+        invalid[0]["ExifTool:Copy4:Warning"] = serde_json::json!("Bad IFD0 directory");
+        let detail = parse(&invalid).unwrap_err().to_string();
+        assert!(detail.contains("EXIF orientation out of range"), "{detail}");
+        assert!(detail.ends_with(": 0"), "{detail}");
+        let mut duplicate = explicit.clone();
+        duplicate[0]["IFD0:Copy1:Orientation"] = serde_json::json!(6);
+        assert!(parse(&duplicate).is_err());
+        let mut error = accepted.clone();
+        error[0]["ExifTool:Error"] = serde_json::json!("read failed");
+        assert!(parse(&error).is_err());
+    }
+
+    #[test]
+    fn orientation_json_requires_one_identified_complete_record() {
+        let source = std::path::Path::new("source.jpg");
+        for json in [
+            br#"[]"#.as_slice(),
+            br#"[{},{}]"#,
+            br#"[{"IFD0:Orientation":6}]"#,
+            br#"[{"SourceFile":"other.jpg"}]"#,
+            br#"[{"SourceFile":"source.jpg","IFD0:Orientation":6,"IFD0:Orientation":1}]"#,
+            br#"[{"SourceFile":"source.jpg","ExifTool:Warning":"Bad IFD0 directory","ExifTool:Warning":"IPTCDigest is not current. XMP may be out of sync"}]"#,
+            br#"[{"SourceFile":"source.jpg","ExifTool:Copy1:Warning":null}]"#,
+            br#"[{"SourceFile":"source.jpg","Unexpected":6}]"#,
+        ] {
+            assert!(super::parse_exif_orientation_evidence(source, true, json, b"").is_err());
+        }
+        let valid = br#"[{"SourceFile":"source.jpg","IFD0:Orientation":6}]"#;
+        for (succeeded, stderr) in [(false, b"".as_slice()), (true, b"unexpected warning")] {
+            assert!(super::parse_exif_orientation_evidence(source, succeeded, valid, stderr).is_err());
+        }
+    }
+
+    #[test]
+    fn native_orientation_read_reports_but_does_not_confuse_unrelated_metadata_warnings() {
+        crate::tools::require(&["exiftool"]).expect("exiftool fixture requirement");
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("orientation evidence[1].jpg");
+        image::RgbImage::from_pixel(8, 8, Rgb([23, 51, 89]))
+            .save(&source)
+            .unwrap();
+        let jpeg = std::fs::read(&source).unwrap();
+        fn segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+            let mut out = vec![0xff, marker];
+            out.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+            out.extend_from_slice(payload);
+            out
+        }
+        fn photoshop_resource(tag: u16, payload: &[u8]) -> Vec<u8> {
+            let mut out = b"8BIM".to_vec();
+            out.extend_from_slice(&tag.to_be_bytes());
+            out.extend_from_slice(&[0, 0]);
+            out.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+            out.extend_from_slice(payload);
+            if payload.len() % 2 == 1 {
+                out.push(0);
+            }
+            out
+        }
+        // IFD0 contains only an ExifIFD pointer. Its opaque MakerNotes and
+        // invalid UserComment encoding leave all directory offsets readable.
+        let mut exif = b"Exif\0\0II*\0\x08\0\0\0\x01\0\x69\x87\x04\0\x01\0\0\0\x1a\0\0\0\0\0\0\0\x02\0\x7c\x92\x07\0\x4c\0\0\0\x38\0\0\0\x86\x92\x07\0\x08\0\0\0\x84\0\0\0\0\0\0\0".to_vec();
+        exif.extend_from_slice(&[0xff; 76]);
+        exif.extend_from_slice(b"INVALID!");
+        let mut icc = b"ICC_PROFILE\0\x01\x01".to_vec();
+        icc.extend_from_slice(&548u32.to_be_bytes());
+        icc.extend_from_slice(&[0; 128]);
+        let mut iptc = b"Photoshop 3.0\0".to_vec();
+        iptc.extend(photoshop_resource(0x0404, b"\x1c\x02\x78\0\x04test"));
+        iptc.extend(photoshop_resource(0x0425, &[0; 16]));
+        let mut fixture = jpeg[..2].to_vec();
+        fixture.extend(segment(0xe2, &icc));
+        fixture.extend(segment(0xe1, &exif));
+        fixture.extend(segment(0xed, &iptc));
+        fixture.extend_from_slice(&jpeg[2..]);
+        std::fs::write(&source, &fixture).unwrap();
+        assert_eq!(read_exif_orientation(&source).unwrap(), 1);
+        assert_eq!(std::fs::read(&source).unwrap(), fixture);
+        // An unreadable IFD0 must still reject when the same unrelated ICC
+        // warning is present. No warning suppression is part of this proof.
+        let mut broken_exif = exif.to_vec();
+        broken_exif[10..14].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut broken = jpeg[..2].to_vec();
+        broken.extend(segment(0xe2, &icc));
+        broken.extend(segment(0xe1, &broken_exif));
+        broken.extend_from_slice(&jpeg[2..]);
+        std::fs::write(&source, &broken).unwrap();
+        assert!(read_exif_orientation(&source).is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), broken);
     }
 
     #[test]

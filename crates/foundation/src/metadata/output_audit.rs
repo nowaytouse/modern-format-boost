@@ -858,6 +858,8 @@ fn metadata_tag_maps_with_exif_custody<const N: usize>(
     builder
         .arg("-n")
         .arg("-j")
+        // One -q removes the per-file summary, preserving warning/error tags.
+        .arg("-q")
         .arg(groups)
         .arg("-a")
         .arg("-s")
@@ -878,7 +880,7 @@ fn metadata_tag_maps_with_exif_custody<const N: usize>(
         crate::process_runner::image_process_hard_timeout(),
         "paired metadata audit",
     )?;
-    if !output.status.success() {
+    if !output.status.success() || output.stderr.iter().any(|byte| !byte.is_ascii_whitespace()) {
         return Err(io::Error::other(format!(
             "exiftool {label} dump failed: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -1137,7 +1139,9 @@ fn parse_metadata_records_for_requested_paths(
                     tag.eq_ignore_ascii_case("Error") || tag.eq_ignore_ascii_case("Warning")
                 })
         }) {
-            if key.ends_with(":Warning")
+            let file_warning = exiftool_file_warning_key(key)
+                && diagnostic.as_str().is_some_and(|text| !text.trim().is_empty());
+            if file_warning
                 && pair.is_some_and(|pair| pair.contains(&Path::new(path)))
                 && diagnostic.as_str().is_some_and(|message| {
                     allowed_warnings
@@ -1150,7 +1154,7 @@ fn parse_metadata_records_for_requested_paths(
             }
             // A stale digest warns about source consistency, not an unreadable
             // metadata field. Compare the actual IPTC/XMP values independently.
-            if key.ends_with(":Warning")
+            if file_warning
                 && diagnostic.as_str().is_some_and(|message| {
                     const STALE_DIGEST: &str = "IPTCDigest is not current. XMP may be out of sync";
                     message == STALE_DIGEST
@@ -1169,18 +1173,9 @@ fn parse_metadata_records_for_requested_paths(
                 continue;
             }
             let message = format!("exiftool reported {key} for {path}: {diagnostic}");
-            if key.ends_with(":Warning")
-                && diagnostic.as_str().is_some_and(|message| {
-                    message == "Bad IFD1 directory"
-                        || message
-                            .strip_prefix("Bad length ICC_Profile (length ")
-                            .and_then(|length| length.strip_suffix(')'))
-                            .is_some_and(|length| {
-                                !length.is_empty()
-                                    && length.bytes().all(|byte| byte.is_ascii_digit())
-                            })
-                })
-            {
+            // A structured Warning belongs to this bound file. Fail it without
+            // accepting its metadata; process/protocol/Error failures stay shared.
+            if file_warning {
                 let role = match pair {
                     Some([src, _]) if Path::new(path) == src => "source",
                     Some([_, dst]) if Path::new(path) == dst => "output",
@@ -1189,10 +1184,17 @@ fn parse_metadata_records_for_requested_paths(
                 let reason = if diagnostic.as_str() == Some("Bad IFD1 directory") {
                     "embedded EXIF thumbnail directory is malformed. Byte-exact JPEG reconstruction \
                      does not prove EXIF readability; the metadata has not been repaired or discarded"
-                } else {
+                } else if diagnostic.as_str().is_some_and(|message| {
+                    message.strip_prefix("Bad length ICC_Profile (length ")
+                        .and_then(|length| length.strip_suffix(')'))
+                        .is_some_and(|length| !length.is_empty() && length.bytes().all(|byte| byte.is_ascii_digit()))
+                }) {
                     "embedded ICC profile has an invalid declared length. Byte-exact JPEG \
                      reconstruction does not prove color-profile renderability; the profile has not \
                      been repaired or discarded"
+                } else {
+                    "metadata extraction warning prevented complete preservation proof; \
+                     metadata has not been repaired or discarded"
                 };
                 file_failure.get_or_insert_with(|| {
                     io::Error::new(
@@ -1214,6 +1216,20 @@ fn parse_metadata_records_for_requested_paths(
     match file_failure {
         Some(error) => Err(error),
         None => Ok(maps),
+    }
+}
+
+fn exiftool_file_warning_key(key: &str) -> bool {
+    let copy = |value: &str| value.strip_prefix("Copy").is_some_and(|number| {
+        !number.is_empty() && !number.starts_with('0')
+            && number.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    match key.split(':').collect::<Vec<_>>().as_slice() {
+        ["ExifTool", "Warning"] => true,
+        ["ExifTool", instance, "Warning"] => copy(instance),
+        ["ExifTool", "ExifTool", instance, location, "Warning"] =>
+            (instance.is_empty() || copy(instance)) && !location.is_empty(),
+        _ => false,
     }
 }
 
@@ -1289,6 +1305,39 @@ mod tests {
             io::ErrorKind::InvalidData
         );
         assert!(parse(br#"[{"SourceFile":"output"},{"SourceFile":"source"}]"#).is_ok());
+        // Content-bound extraction failures must retain their own sources
+        // without blocking independently verified files in the same batch.
+        for warning in [
+            "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto",
+            "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto [x2]",
+            "[Minor] Extracted only 1000 photoshop:DocumentAncestors items. Ignore minor errors to extract all",
+            "Invalid EXIF text encoding for UserComment",
+            "[minor] Possibly incorrect maker notes offsets (fix by -174?)",
+            "A future ExifTool file extraction warning",
+        ] {
+            for role in ["source", "output"] {
+                let raw = serde_json::to_vec(&serde_json::json!([
+                    {"SourceFile":"source", "ExifTool:Warning":warning},
+                    {"SourceFile":"output"},
+                ])).unwrap();
+                let mut records: Value = serde_json::from_slice(&raw).unwrap();
+                if role == "output" {
+                    records[0].as_object_mut().unwrap().remove("ExifTool:Warning");
+                    records[1]["ExifTool:Warning"] = Value::from(warning);
+                }
+                let error = parse(&serde_json::to_vec(&records).unwrap()).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+                assert!(error.to_string().contains(warning));
+                // Incomplete identity or a separate tool failure remains shared.
+                records.as_array_mut().unwrap().pop();
+                assert_eq!(parse(&serde_json::to_vec(&records).unwrap()).unwrap_err().kind(), io::ErrorKind::Other);
+                records = serde_json::json!([
+                    {"SourceFile":"source", "ExifTool:Warning":warning},
+                    {"SourceFile":"output", "ExifTool:Error":"read failed"},
+                ]);
+                assert_eq!(parse(&serde_json::to_vec(&records).unwrap()).unwrap_err().kind(), io::ErrorKind::Other);
+            }
+        }
         for invalid in [
             br#"[{"SourceFile":"source","ExifTool:Warning":"Bad length ICC_Profile (length 548)"}]"#.as_slice(),
             br#"[{"SourceFile":"unknown","ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"output"}]"#,
@@ -1312,14 +1361,32 @@ mod tests {
                 {"SourceFile":"output"},
             ]))
             .unwrap();
-            assert_eq!(parse(&raw).unwrap_err().kind(), io::ErrorKind::Other);
+            assert_eq!(parse(&raw).unwrap_err().kind(), io::ErrorKind::InvalidData);
         }
-        for diagnostic in ["ExifTool:Warning", "ExifTool:Error"] {
+        for diagnostic in [
+            "ExifTool:Warning",
+            "ExifTool:Copy1:Warning",
+            "ExifTool:ExifTool::JPEG-APP1-IFD0-ExifIFD-MakerNotes:Warning",
+        ] {
+            let mut records = serde_json::json!([
+                {"SourceFile":"source"}, {"SourceFile":"output"},
+            ]);
+            records[0][diagnostic] = Value::from("A future file extraction warning");
+            assert_eq!(parse(&serde_json::to_vec(&records).unwrap()).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
+        for (diagnostic, value) in [
+            ("ExifTool:Error", Value::from("tool or resource failure")),
+            ("Warning", Value::from("ungrouped diagnostic")),
+            ("ExifTool:Copy0:Warning", Value::from("invalid instance")),
+            ("ExifTool:CopyX:Warning", Value::from("invalid instance")),
+            ("ExifTool:Warning", Value::Null),
+            ("ExifTool:Warning", Value::from("")),
+        ] {
             let mut records = serde_json::json!([
                 {"SourceFile":"source", "ExifTool:Warning":"Bad length ICC_Profile (length 548)"},
                 {"SourceFile":"output"},
             ]);
-            records[1][diagnostic] = Value::from("tool or resource failure");
+            records[1][diagnostic] = value;
             for reversed in [false, true] {
                 if reversed {
                     records.as_array_mut().unwrap().reverse();
@@ -1363,10 +1430,6 @@ mod tests {
                 serde_json::json!([
                     {"SourceFile":"source", "ExifTool:Warning":"Bad IFD1 directory"},
                     {"SourceFile":"output", "ExifTool:Error":"read failed"},
-                ]),
-                serde_json::json!([
-                    {"SourceFile":"source", "ExifTool:Warning":"Bad IFD1 directory; read failed"},
-                    {"SourceFile":"output"},
                 ]),
             ] {
                 assert_eq!(
@@ -1471,6 +1534,14 @@ mod tests {
         let raw = serde_json::to_vec(&records).unwrap();
         assert!(parse_metadata_records(&raw).is_err());
         assert!(parse_metadata_records_with_exif_custody(&raw, Some(pair)).is_ok());
+        let mut comment = records.clone();
+        for index in 0..2 {
+            comment[index]["ExifTool:Warning"] = Value::from("Invalid EXIF text encoding for UserComment");
+        }
+        assert!(parse_metadata_records_with_exif_custody(&serde_json::to_vec(&comment).unwrap(), Some(pair)).is_ok());
+        comment[1]["EXIF:EXIF"] = Value::from("base64:YWJk");
+        let error = parse_metadata_records_with_exif_custody(&serde_json::to_vec(&comment).unwrap(), Some(pair)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let mut swapped = records.clone();
         swapped[0]["EXIF:Copy1:EXIF"] = Value::from("base64:YWJk");
         swapped[1]["EXIF:EXIF"] = Value::from("base64:YWJk");

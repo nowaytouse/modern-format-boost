@@ -585,23 +585,40 @@ pub fn print_menu_hint() {
     flush();
 }
 
-/// Summarize a propagated pipeline error without inventing a child exit code.
-pub fn print_pipeline_failure_panel() {
-    println!("\n{}", render_pipeline_failure_panel(colors_enabled()));
+/// File failures remain a nonzero outcome after every deliverable was verified.
+#[derive(Debug)]
+pub struct CompletedWithFileFailures {
+    pub failed: usize,
+}
+
+impl std::fmt::Display for CompletedWithFileFailures {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "batch completed with {} failed source(s); verified deliveries completed and failed originals retained", self.failed)
+    }
+}
+impl std::error::Error for CompletedWithFileFailures {}
+
+/// Summarize the observed outcome without inventing a child crash or success.
+pub fn print_pipeline_failure_panel(completed_failures: Option<usize>) {
+    println!("\n{}", render_pipeline_failure_panel(colors_enabled(), completed_failures));
     flush();
 }
 
-fn render_pipeline_failure_panel(colored: bool) -> String {
-    let detail = "The batch did not complete. Review the error details above.";
+fn render_pipeline_failure_panel(colored: bool, completed_failures: Option<usize>) -> String {
+    let (heading, detail) = match completed_failures {
+        Some(failed) => ("COMPLETED WITH FILE ERRORS", format!(
+            "Processing finished; {failed} file(s) failed and their originals were retained. Review the per-file reasons above.")),
+        None => ("PROCESSING FAILED", "The batch did not complete. Review the error details above.".into()),
+    };
     if colored {
         format!(
             "{RED}{BOLD}╭──────────────────────────────────────────────────────────────╮{RESET}\n\
-             {RED}{BOLD}│  PROCESSING FAILED                                           │{RESET}\n\
+             {RED}{BOLD}│  {heading:<58}│{RESET}\n\
              {RED}{BOLD}╰──────────────────────────────────────────────────────────────╯{RESET}\n\
                {YELLOW}{detail}{RESET}\n"
         )
     } else {
-        format!("[PROCESSING FAILED] {detail}\n")
+        format!("[{heading}] {detail}\n")
     }
 }
 
@@ -677,13 +694,25 @@ mod tests {
     #[test]
     fn pipeline_failure_panel_does_not_invent_a_processor_crash_or_exit_code() {
         for colored in [false, true] {
-            let panel = render_pipeline_failure_panel(colored);
+            let panel = render_pipeline_failure_panel(colored, None);
             assert!(panel.contains("PROCESSING FAILED"));
             assert!(panel.contains("batch did not complete"));
             assert!(panel.contains("error details above"));
             assert!(!panel.contains("unexpectedly"));
             assert!(!panel.contains("exited"));
             assert!(!panel.contains("code 1"));
+        }
+    }
+
+    #[test]
+    fn completed_file_failures_panel_keeps_failures_without_claiming_batch_interruption() {
+        for colored in [false, true] {
+            let panel = render_pipeline_failure_panel(colored, Some(6));
+            assert!(panel.contains("COMPLETED WITH FILE ERRORS"));
+            assert!(panel.contains("6 file(s) failed"));
+            assert!(panel.contains("originals were retained"));
+            assert!(!panel.contains("did not complete"));
+            assert!(!panel.contains("PROCESSING FAILED"));
         }
     }
 

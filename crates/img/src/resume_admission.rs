@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 pub(super) enum SettingsError {
     Unknown,
     Changed(String),
+    ToolModeChanged { saved_pinned: bool },
 }
 
 impl std::fmt::Display for SettingsError {
@@ -24,6 +25,12 @@ impl std::fmt::Display for SettingsError {
                 "MFB_RESUME_CONFIG_UNKNOWN: saved fast-img task has no processing-settings identity; its outputs and recovery evidence were retained. Use --no-resume for an isolated new task instead of assigning current settings to old results",
             ),
             Self::Changed(message) => write!(formatter, "MFB_RESUME_CONFIG_CHANGED: {message}"),
+            Self::ToolModeChanged { saved_pinned: true } => formatter.write_str(
+                "Saved Fast IMG task uses pinned tools. Enable external tool pinning to resume it, or start a new task."
+            ),
+            Self::ToolModeChanged { saved_pinned: false } => formatter.write_str(
+                "Saved Fast IMG task used system tools without pinning. Turn off external tool pinning to resume it, or start a new task."
+            ),
         }
     }
 }
@@ -57,6 +64,7 @@ impl Blocked {
         {
             Some(SettingsError::Unknown) => "resume_config_unknown",
             Some(SettingsError::Changed(_)) => "resume_config_changed",
+            Some(SettingsError::ToolModeChanged { .. }) => "resume_tool_mode_changed",
             None => "admission_failed",
         };
         Ok(Self {

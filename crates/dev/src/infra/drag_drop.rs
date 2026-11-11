@@ -133,6 +133,7 @@ pub struct VerifyOutcome {
 }
 
 pub const INTEGRITY_SUMMARY_JSON_PREFIX: &str = "MFB_INTEGRITY_SUMMARY_JSON ";
+pub const INTEGRITY_UNAVAILABLE_JSON_PREFIX: &str = "MFB_INTEGRITY_UNAVAILABLE_JSON ";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IntegritySummaryMachine {
@@ -891,7 +892,13 @@ fn parse_machine_integrity_summary(stdout: &str) -> Result<(String, IntegritySum
     let mut display_lines = Vec::new();
     let mut summary = None;
     for line in stdout.lines() {
-        if let Some(json) = line.strip_prefix(INTEGRITY_SUMMARY_JSON_PREFIX) {
+        if let Some(json) = line.strip_prefix(INTEGRITY_UNAVAILABLE_JSON_PREFIX) {
+            let value: serde_json::Value = serde_json::from_str(json)
+                .context("parse verify unavailable integrity result")?;
+            anyhow::ensure!(value == serde_json::json!({"status": "unavailable"}),
+                "invalid verify unavailable integrity result");
+            bail!("verify could not complete the integrity check; see verifier error above");
+        } else if let Some(json) = line.strip_prefix(INTEGRITY_SUMMARY_JSON_PREFIX) {
             if summary.is_some() {
                 bail!("verify emitted more than one machine integrity summary");
             }
@@ -1313,11 +1320,13 @@ fn fast_img_safe_output_path(output_root: &Path, rel: &str) -> Result<PathBuf> {
     Ok(target)
 }
 
-fn fast_img_marker_cleanup_targets(output_dir: &Path) -> Result<Vec<(PathBuf, String)>> {
+fn fast_img_marker_cleanup_targets(
+    output_dir: &Path,
+) -> Result<(foundation::pipeline::verification::WorkingCopyMarker, Vec<(PathBuf, String)>)> {
     use foundation::pipeline::verification::{FastImgStageName, read_marker};
     let marker = read_marker(output_dir).context("read fast-img cleanup ownership checkpoint")?;
     anyhow::ensure!(
-        marker.stage == FastImgStageName::CleanupComplete
+        marker.working_copy == output_dir && marker.stage == FastImgStageName::CleanupComplete
             && !marker.tier2_in_progress
             && marker.gate1_checks.count.0
             && marker.gate1_checks.blake3.0
@@ -1355,7 +1364,7 @@ fn fast_img_marker_cleanup_targets(output_dir: &Path) -> Result<Vec<(PathBuf, St
         targets.push((target, entry.out.clone()));
     }
     targets.sort();
-    Ok(targets)
+    Ok((marker, targets))
 }
 
 #[cfg(unix)]
@@ -1579,6 +1588,17 @@ pub fn prune_completed_fast_img_empty_outputs(source: &Path, strategy: &str) -> 
 
 /// Remove only unchanged, marker-recorded outputs after verified local Photos delivery.
 pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> OutputCleanupReceipt {
+    delete_fast_img_outputs_with(output_dir, |marker| {
+        let custody = foundation::fast_img::verify_output_photos_custody(marker)?;
+        Ok(move |target: &Path| custody.verify_before_removal(target))
+    })
+}
+
+fn delete_fast_img_outputs_with<V>(
+    output_dir: &Path,
+    prepare: impl FnOnce(&foundation::pipeline::verification::WorkingCopyMarker) -> Result<V>,
+) -> OutputCleanupReceipt
+where V: FnMut(&Path) -> Result<()> {
     let mut receipt =
         OutputCleanupReceipt::without_operation(output_dir, OutputCleanupOutcome::Failed);
     let mut prune_candidates = std::collections::HashSet::new();
@@ -1602,7 +1622,8 @@ pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> OutputClea
             .context("canonicalize fast-img cleanup output")?;
         let output_dir = canonical_output.as_path();
         let _lock = foundation::process_lock::acquire_output_dir_lock(output_dir)?;
-        let targets = fast_img_marker_cleanup_targets(output_dir)?;
+        let (marker, targets) = fast_img_marker_cleanup_targets(output_dir)?;
+        let mut verify_custody = prepare(&marker)?;
         let mut removed = 0usize;
         let mut already_absent = 0usize;
         receipt.removed_files = Some(removed);
@@ -1634,15 +1655,13 @@ pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> OutputClea
             let true_format = detect_true_format(&target).with_context(|| {
                 format!("fast-img cleanup probe failed for {}", target.display())
             })?;
-            if !matches!(
-                true_format.as_str(),
-                "jxl" | "avif" | "webp" | "jpeg" | "png" | "heic" | "gif" | "bmp" | "tiff"
-            ) {
+            if true_format != marker.strategy {
                 bail!(
-                    "fast-img cleanup refused non-image marker output {} (true_format={true_format})",
-                    target.display()
+                    "fast-img cleanup output format differs from its selected strategy {} (true_format={true_format}, expected={})",
+                    target.display(), marker.strategy
                 );
             }
+            verify_custody(&target).context("fresh Photos custody before output removal")?;
             remove_verified_fast_img_output(output_dir, &target, &expected)
                 .with_context(|| format!("remove fast-img cleanup target {}", target.display()))?;
             removed += 1;
@@ -1978,7 +1997,7 @@ cat "$MFB_TEST_VERIFY_REPLY"
         }
         write_marker_atomic(&marker).unwrap();
 
-        let residual = delete_fast_img_shortest_path_output_dir(&output);
+        let residual = delete_fast_img_outputs_with(&output, |_| Ok(|_: &Path| Ok(())));
         assert_eq!(
             residual.outcome,
             OutputCleanupOutcome::Residual,
@@ -2015,7 +2034,17 @@ cat "$MFB_TEST_VERIFY_REPLY"
         );
         write_marker_atomic(&marker).unwrap();
 
-        let failed = delete_fast_img_shortest_path_output_dir(&output);
+        let no_live_custody = delete_fast_img_shortest_path_output_dir(&output);
+        assert_eq!(no_live_custody.outcome, OutputCleanupOutcome::Failed);
+        assert!(first_output.exists() && second_output.exists());
+        let rejected_before_unlink = delete_fast_img_outputs_with(&output, |_| {
+            Ok(|_: &Path| anyhow::bail!("fresh Photos UUID has no original resource"))
+        });
+        assert_eq!(rejected_before_unlink.outcome, OutputCleanupOutcome::Failed);
+        assert_eq!(rejected_before_unlink.removed_files, Some(0));
+        assert!(first_output.exists() && second_output.exists());
+
+        let failed = delete_fast_img_outputs_with(&output, |_| Ok(|_: &Path| Ok(())));
         assert_eq!(failed.outcome, OutputCleanupOutcome::Failed);
         assert_eq!(failed.removed_files, Some(1));
         assert_eq!(failed.pruned_directories, None);
@@ -2034,7 +2063,7 @@ cat "$MFB_TEST_VERIFY_REPLY"
             entry("b.jpg", "b.JXL", second_actual_hash),
         );
         write_marker_atomic(&marker).unwrap();
-        let removed = delete_fast_img_shortest_path_output_dir(&output);
+        let removed = delete_fast_img_outputs_with(&output, |_| Ok(|_: &Path| Ok(())));
         assert_eq!(removed.outcome, OutputCleanupOutcome::Removed);
         assert_eq!(removed.removed_files, Some(1));
         assert_eq!(removed.already_absent_files, Some(1));
@@ -2444,6 +2473,11 @@ cat "$MFB_TEST_VERIFY_REPLY"
             Some("MATCH (1 expected handoff gap)")
         );
         assert!(parse_machine_integrity_summary("Integrity: CLEAN\n").is_err());
+        let unavailable = "MFB_INTEGRITY_UNAVAILABLE_JSON {\"status\":\"unavailable\"}\n";
+        let error = parse_machine_integrity_summary(unavailable).unwrap_err().to_string();
+        assert!(error.contains("could not complete"));
+        assert!(parse_machine_integrity_summary(&format!("{stdout}{unavailable}")).is_err());
+        assert!(parse_machine_integrity_summary("MFB_INTEGRITY_UNAVAILABLE_JSON {\"status\":\"clean\"}\n").is_err());
     }
 
     #[test]

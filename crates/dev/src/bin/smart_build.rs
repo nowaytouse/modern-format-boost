@@ -1651,6 +1651,8 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
             "AppKit",
             "-framework",
             "CoreServices",
+            "-framework",
+            "UserNotifications",
         ])
         .arg(&swift_src)
         .arg(native_dir.join("ApplicationSession.swift"))

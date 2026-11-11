@@ -1,6 +1,8 @@
 //! Shared verification gate model for fast/full media pipelines.
 
 use super::gate1_resume::Gate1ProofCache;
+pub(crate) use super::gate1_resume::FinalInputObservation;
+pub use super::gate1_resume::{FinalVerificationInputs, Gate1WorkProofs};
 use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
 use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState};
 use serde::{Deserialize, Serialize};
@@ -223,6 +225,8 @@ pub trait VerificationGate {
 pub struct Gate1Local;
 pub struct Gate2Import;
 pub struct Gate3Deep;
+/// Final custody checks, evaluated only after the caller refreshes local and Photos evidence.
+pub struct Gate2Final;
 
 type LocalCheckProbe = fn(&PipelineCtx, &[PathBuf], &mut dyn FnMut(usize, usize)) -> CheckDetail;
 
@@ -266,36 +270,120 @@ impl Gate1Local {
         error_mode: crate::BatchErrorMode,
         marker: &WorkingCopyMarker,
     ) -> GateResult {
-        let resume = match Gate1ProofCache::for_marker(ctx, marker) {
-            Ok(Some(resume)) => resume,
-            Ok(None) => return self.run_with_error_mode(ctx, error_mode),
-            Err(error) => {
-                let activity = GateActivity::new(GateActivityKind::Local);
-                activity.emit(
-                    "inventory",
-                    0,
-                    LOCAL_REQUIRED_CHECKS.len(),
-                    GateActivityState::Failed,
-                    None,
-                );
-                return gate_result(vec![detail(
-                    "metadata",
-                    false,
-                    "stable Gate 1 recovery authority".into(),
-                    error.to_string(),
-                    Vec::new(),
-                )]);
-            }
-        };
-        Self::run_with_proof_cache(ctx, error_mode, &resume)
+        Self::run_selected_cache(
+            ctx,
+            error_mode,
+            Gate1ProofCache::for_marker(ctx, marker),
+            GateActivityKind::Local,
+            false,
+        )
     }
 
+    /// Share content-bound intermediate work across a filtered rerun in this process.
+    #[must_use]
+    pub fn run_with_error_mode_and_work(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        marker: &WorkingCopyMarker,
+        work: &Gate1WorkProofs,
+    ) -> GateResult {
+        Self::run_selected_cache(
+            ctx,
+            error_mode,
+            Gate1ProofCache::for_marker_with_work(ctx, marker, work),
+            GateActivityKind::Local,
+            false,
+        )
+    }
+
+    /// Final Gate 2 local evidence never reads or writes reusable proof receipts.
+    #[must_use]
+    pub fn run_fresh(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        marker: &WorkingCopyMarker,
+    ) -> GateResult {
+        Self::run_selected_cache(
+            ctx,
+            error_mode,
+            Gate1ProofCache::fresh_for_marker(ctx, marker),
+            GateActivityKind::PhotosCustody,
+            false,
+        )
+    }
+
+    /// A cleanup resume verifies remaining source pairs without counting completed outputs twice.
+    #[must_use]
+    pub fn run_fresh_scoped(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        marker: &WorkingCopyMarker,
+    ) -> GateResult {
+        Self::run_selected_cache(
+            ctx,
+            error_mode,
+            Gate1ProofCache::fresh_for_marker(ctx, marker),
+            GateActivityKind::PhotosCustody,
+            true,
+        )
+    }
+
+    fn run_selected_cache(
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        selected: std::io::Result<Option<Gate1ProofCache<'_>>>,
+        kind: GateActivityKind,
+        scoped_inventory: bool,
+    ) -> GateResult {
+        match selected {
+            Ok(Some(cache)) => Self::run_with_proof_cache_for_gate(
+                ctx, error_mode, &cache, kind, scoped_inventory,
+            ),
+            Ok(None) => {
+                let activity = GateActivity::new(kind);
+                run_local_checks(
+                    ctx,
+                    || local_output_inventory(ctx, scoped_inventory),
+                    |check, completed, total, state, files| {
+                        activity.emit(check, completed, total, state, files);
+                    },
+                    error_mode,
+                )
+            }
+            Err(error) => {
+                let activity = GateActivity::new(kind);
+                activity.emit("inventory", 0, LOCAL_REQUIRED_CHECKS.len(), GateActivityState::Failed, None);
+                gate_result(vec![detail(
+                    "metadata",
+                    false,
+                    "stable local verification authority".into(),
+                    error.to_string(),
+                    Vec::new(),
+                )])
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn run_with_proof_cache(
         ctx: &PipelineCtx,
         error_mode: crate::BatchErrorMode,
         shared: &Gate1ProofCache<'_>,
     ) -> GateResult {
-        let activity = GateActivity::new(GateActivityKind::Local);
+        Self::run_with_proof_cache_for_gate(ctx, error_mode, shared, GateActivityKind::Local, false)
+    }
+
+    fn run_with_proof_cache_for_gate(
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        shared: &Gate1ProofCache<'_>,
+        kind: GateActivityKind,
+        scoped_inventory: bool,
+    ) -> GateResult {
+        let activity = GateActivity::new(kind);
         let probes = LOCAL_REQUIRED_CHECKS.map(|(name, probe)| {
             (
                 name,
@@ -322,7 +410,7 @@ impl Gate1Local {
         run_local_checks_with_probes(
             &probes,
             ctx,
-            || collect_delivery_output_files(&ctx.working_copy, None),
+            || local_output_inventory(ctx, scoped_inventory),
             |check, completed, total, state, files| {
                 activity.emit(check, completed, total, state, files);
             },
@@ -347,6 +435,17 @@ impl Gate1Local {
             error_mode,
         )
     }
+}
+
+fn local_output_inventory(ctx: &PipelineCtx, scoped: bool) -> anyhow::Result<Vec<PathBuf>> {
+    if !scoped {
+        return collect_delivery_output_files(&ctx.working_copy, None);
+    }
+    ctx.blake3_log.values().map(|entry| {
+        let rel = entry.out_rel.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("scoped final proof has no explicit output mapping"))?;
+        Ok(ctx.working_copy.join(rel))
+    }).collect()
 }
 
 fn finish_local_proof_phase(checked: CheckDetail, resume: &Gate1ProofCache<'_>) -> CheckDetail {
@@ -769,6 +868,53 @@ impl VerificationGate for Gate3Deep {
             ),
         ])
     }
+}
+
+impl Gate2Final {
+    /// Completed cleanup entries still receive fresh output inventory and full decoding.
+    #[must_use]
+    pub fn run_fresh_output_decodes(&self, ctx: &PipelineCtx) -> GateResult {
+        if !crate::common_utils::verification_cache_disabled() {
+            return final_cache_policy_failure();
+        }
+        let probes = [
+            LOCAL_REQUIRED_CHECKS[0],
+            LOCAL_REQUIRED_CHECKS[1],
+            LOCAL_REQUIRED_CHECKS[5],
+        ];
+        let activity = GateActivity::new(GateActivityKind::PhotosCustody);
+        run_local_checks_with_probes(
+            &probes,
+            ctx,
+            || collect_delivery_output_files(&ctx.working_copy, None),
+            |check, completed, total, state, files| {
+                activity.emit(check, completed, total, state, files);
+            },
+            crate::BatchErrorMode::current(),
+        )
+    }
+}
+
+impl VerificationGate for Gate2Final {
+    fn name(&self) -> &'static str {
+        "Gate 2 — Final local and Photos verification"
+    }
+
+    fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        if !crate::common_utils::verification_cache_disabled() {
+            return final_cache_policy_failure();
+        }
+        let mut checks = Gate2Import.run(ctx).checks;
+        checks.extend(Gate3Deep.run(ctx).checks);
+        gate_result(checks)
+    }
+}
+
+fn final_cache_policy_failure() -> GateResult {
+    gate_result(vec![detail(
+        "no_error", false, "explicit cache-disabled final verification scope".into(),
+        "final verification refused: cache-disabled scope is inactive".into(), Vec::new(),
+    )])
 }
 
 fn gate_result(checks: Vec<CheckDetail>) -> GateResult {
@@ -1847,6 +1993,9 @@ mod tests {
 
     #[test]
     fn gate1_resume_orchestration_reuses_real_media_proofs_but_rechecks_filesystem_metadata() {
+        if !super::super::gate1_resume::isolate_final_verification_test(
+            "pipeline::verification::tests::gate1_resume_orchestration_reuses_real_media_proofs_but_rechecks_filesystem_metadata",
+        ).unwrap() { return; }
         let root = tempfile::tempdir().unwrap();
         let _store = crate::db::mfb_sqlite_store::set_test_store_path_for_tests(
             root.path().join("store.sqlite"),
@@ -1930,6 +2079,36 @@ mod tests {
             "synthetic Gate 1: fresh={fresh_duration:?}, resumed={resumed_duration:?}, complete checks unchanged"
         );
         drop(cache);
+        let mut marker = super::WorkingCopyMarker::new(
+            ctx.src_dir.clone(), ctx.working_copy.clone(), 1,
+        );
+        marker.blake3_log = ctx.blake3_log.clone();
+        let fresh = super::Gate1ProofCache::fresh_for_marker(&ctx, &marker).unwrap().unwrap();
+        let final_result = Gate1Local::run_with_proof_cache(
+            &ctx, crate::BatchErrorMode::LogAndContinue, &fresh,
+        );
+        assert!(final_result.passed, "{final_result:?}");
+        assert_eq!(fresh.counts(), (0, 3, 0), "final metadata, orientation reconstruction and decoder must run again");
+        drop(fresh);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let rejecting_decoder = root.path().join("rejecting-djxl");
+            std::fs::write(&rejecting_decoder,
+                "#!/bin/sh\ncase \"$1\" in -version|--version) echo fixture-decoder; exit 0;; esac\nprintf x >> \"$0.calls\"\nexit 71\n").unwrap();
+            std::fs::set_permissions(&rejecting_decoder, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let _decoder = crate::common_utils::EnvGuard::set("MFB_TOOL_DJXL", &rejecting_decoder.to_string_lossy());
+            let fresh = super::Gate1ProofCache::fresh_for_marker(&ctx, &marker).unwrap().unwrap();
+            let rejected = Gate1Local::run_with_proof_cache(
+                &ctx, crate::BatchErrorMode::LogAndContinue, &fresh,
+            );
+            assert!(!rejected.passed, "warm persisted success cannot hide the current decoder failure");
+            assert_eq!(fresh.counts().0, 0);
+            assert!(!std::fs::read(root.path().join("rejecting-djxl.calls")).unwrap().is_empty(),
+                "the final gate must execute the current decoder");
+            assert_eq!(calculate_blake3_hash(&source).unwrap(), ctx.blake3_log["synthetic.jpg"].src);
+            assert_eq!(calculate_blake3_hash(&output).unwrap(), ctx.blake3_log["synthetic.jpg"].out);
+        }
         filetime::set_file_mtime(
             &output,
             filetime::FileTime::from_unix_time(1_600_000_000, 0),
@@ -2982,12 +3161,30 @@ mod tests {
         let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
         assert!(!result.passed);
         assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
-        assert_eq!(result.affected_files, [out]);
+        assert_eq!(result.affected_files, [out.clone()]);
         assert!(
             result.actual.contains("Bad IFD1 directory"),
             "{}",
             result.actual
         );
+
+        // ExifTool corrects the trailing slash in this namespace when reading.
+        // That is a file-local metadata failure even when JPEG bytes match.
+        let xmp = b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:MicrosoftPhoto=\"http://ns.microsoft.com/photo/1.0/\"><MicrosoftPhoto:Rating>1</MicrosoftPhoto:Rating></rdf:Description></rdf:RDF></x:xmpmeta>";
+        let mut xmp_jpeg = b"\xff\xd8\xff\xe1".to_vec();
+        xmp_jpeg.extend_from_slice(&u16::try_from(xmp.len() + 2).unwrap().to_be_bytes());
+        xmp_jpeg.extend_from_slice(xmp);
+        xmp_jpeg.extend_from_slice(&jpeg[2..]);
+        for path in [&src, &out] {
+            std::fs::write(path, &xmp_jpeg).unwrap();
+            filetime::set_file_mtime(path, mtime).unwrap();
+        }
+        let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
+        assert!(!result.passed);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
+        assert_eq!(result.affected_files, [out]);
+        assert!(result.actual.contains("Fixed incorrect URI for xmlns:MicrosoftPhoto"), "{}", result.actual);
+        assert_eq!(std::fs::read(src).unwrap(), xmp_jpeg);
     }
 
     #[test]
@@ -3292,6 +3489,54 @@ mod tests {
                 .iter()
                 .any(|check| check.name == "blake3_sample" && check.passed)
         );
+    }
+
+    #[test]
+    fn final_gate2_preserves_both_custody_groups_and_legacy_failure_state() {
+        if !super::super::gate1_resume::isolate_final_verification_test(
+            "pipeline::verification::tests::final_gate2_preserves_both_custody_groups_and_legacy_failure_state",
+        ).unwrap() { return; }
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.JXL"), [0xff, 0x0a, 0]).unwrap();
+        let mut ctx = ctx_with_library(1, vec![LibraryAssetRecord {
+            rel_path: "a.JXL".into(),
+            blake3: "out".into(),
+            sync_status: "photos_local".into(),
+            ..Default::default()
+        }]);
+        ctx.working_copy = root.path().to_owned();
+        ctx.output_format = Some(crate::image::format_detect::FormatKind::Jxl);
+        ctx.blake3_log.insert("a.jpg".into(), Blake3Entry {
+            out_rel: Some("a.JXL".into()),
+            src: "source".into(),
+            out: "out".into(),
+            library_asset: Some("out".into()),
+        });
+        assert!(!super::Gate2Final.run(&ctx).passed, "an inactive final policy cannot authorize a pass");
+        let _uncached = crate::common_utils::UncachedVerificationScope::new().unwrap();
+        let passed = super::Gate2Final.run(&ctx);
+        assert!(passed.passed);
+        assert_eq!(passed.checks.len(), 7);
+        let mut marker = super::WorkingCopyMarker::new(
+            ctx.src_dir.clone(), ctx.working_copy.clone(), 1,
+        );
+        marker.apply_final_gate2(&passed);
+        assert_eq!(marker.stage, super::FastImgStageName::Gate3Passed);
+        for deep_failure in [false, true] {
+            let mut changed = ctx.clone();
+            let library = changed.library_handle.as_mut().unwrap();
+            if deep_failure {
+                library.imported_assets[0].quarantined = true;
+            } else {
+                library.import_error_count = 1;
+            }
+            let failed = super::Gate2Final.run(&changed);
+            assert!(!failed.passed);
+            assert_eq!(failed.checks.len(), 7);
+            marker.apply_final_gate2(&failed);
+            assert_eq!(marker.stage, super::FastImgStageName::Gate3Failed);
+            assert!(marker.error.is_some());
+        }
     }
 
     #[test]
@@ -3928,7 +4173,7 @@ fn default_strategy() -> String {
     "jxl".to_string()
 }
 
-fn validate_marker_relative_path(kind: &str, rel: &str) -> Result<(), String> {
+pub(super) fn validate_marker_relative_path(kind: &str, rel: &str) -> Result<(), String> {
     let path = Path::new(rel);
     if rel.is_empty()
         || path
@@ -4267,6 +4512,12 @@ impl WorkingCopyMarker {
             FastImgStageName::Gate2Failed
         };
         self.error = (!result.passed).then(|| summarize_checks(&result.checks));
+    }
+
+    /// Keep legacy marker fields/stages readable while committing one final Gate 2 result.
+    pub fn apply_final_gate2(&mut self, result: &GateResult) {
+        self.apply_gate2(result);
+        self.apply_gate3(result);
     }
 
     pub fn apply_gate3(&mut self, result: &GateResult) {

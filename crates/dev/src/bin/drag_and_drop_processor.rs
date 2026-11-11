@@ -23,7 +23,7 @@ use dev::infra::fastmode_paths::{
 };
 use dev::infra::process_stream::ProcessorStats;
 use dev::infra::rich_panel::{
-    PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
+    CompletedWithFileFailures, PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
     pause_before_gui_exit, print_menu_hint, print_menu_row, print_pipeline_failure_panel,
     print_runtime_panel, print_summary_report,
 };
@@ -868,6 +868,19 @@ fn batch_result_line(media: &str, stats: &ProcessorStats) -> String {
     format!("MFB_BATCH_RESULT={counts}")
 }
 
+fn fast_img_file_only_completion(
+    only_worker_exit: bool,
+    verified_failed_sources: Option<usize>,
+    stats: &ProcessorStats,
+    summary: &PipelineSummary,
+) -> Option<CompletedWithFileFailures> {
+    (only_worker_exit && stats.exit_code == 1 && stats.failed > 0
+        && stats.counts_complete() && stats.unprocessed == Some(0)
+        && verified_failed_sources == Some(stats.failed)
+        && summary.integrity_state == Some("CLEAN") && summary.integrity_issue_count == 0)
+        .then_some(CompletedWithFileFailures { failed: stats.failed })
+}
+
 fn print_batch_result(command: &LaunchCommand, stats: &ProcessorStats, dry_run: bool) {
     if !dry_run && matches!(command.pipeline_label(), "IMG" | "VID") {
         println!(
@@ -1428,7 +1441,14 @@ fn run_fast_img_post_success(
         }
         receipt
     };
+    let cleanup_error = (receipt.outcome == OutputCleanupOutcome::Failed)
+        .then(|| receipt.error.clone().unwrap_or_else(|| "output cleanup failed without a diagnostic".into()));
     session.record_output_cleanup(receipt)?;
+    if let Some(error) = cleanup_error {
+        summary.integrity_state = Some("WARNINGS");
+        summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+        bail!("fresh Photos/output cleanup verification failed; remaining outputs retained: {error}");
+    }
     if args.shortest_path
         && verify.warnings == Some(false)
         && !failed_only
@@ -2642,7 +2662,8 @@ fn run_drag_drop_inner(
                             first_error = Some(err.context("read fast-img finalization evidence"));
                         }
                     }
-                    if stats.exit_code != 0 && first_error.is_none() {
+                    let only_worker_exit = stats.exit_code != 0 && first_error.is_none();
+                    if only_worker_exit {
                         first_error = Some(anyhow::anyhow!(
                             "fast-img exited with code {}",
                             stats.exit_code
@@ -2676,6 +2697,11 @@ fn run_drag_drop_inner(
                     }
                     println!("{}", batch_result_line("img", &summary.img));
                     verified?;
+                    if let Some(completed) = fast_img_file_only_completion(
+                        only_worker_exit, failed_sources_verified, &stats, &summary,
+                    ) {
+                        first_error = Some(completed.into());
+                    }
                 }
                 Err(err) if err.downcast_ref::<CollectedChildError>().is_some() => {
                     summary.img = err
@@ -3787,7 +3813,7 @@ fn main() -> Result<()> {
     let mut dir_lock = None;
 
     // All entry paths share archival, including a failed interactive or watch run.
-    let run_result = if io::stdin().is_terminal() {
+    let mut run_result = if io::stdin().is_terminal() {
         interactive_menu(&args, &mut session)
     } else {
         (|| {
@@ -3828,6 +3854,8 @@ fn main() -> Result<()> {
                 return Err(err);
             }
             eprintln!("drag/drop session archive failed: {err:#}");
+            let processing = format!("{:#}", run_result.as_ref().err().expect("checked"));
+            run_result = Err(err.context(format!("archive session; processing also reported: {processing}")));
         }
     }
     if run_result.is_err() {
@@ -3846,7 +3874,10 @@ fn report_drag_drop_failure(result: &Result<()>) {
             return;
         }
         eprintln!("{err:#}");
-        print_pipeline_failure_panel();
+        let completed_failures = (err.chain().count() == 1)
+            .then(|| err.downcast_ref::<CompletedWithFileFailures>().map(|result| result.failed))
+            .flatten();
+        print_pipeline_failure_panel(completed_failures);
         pause_before_gui_exit();
     }
 }
@@ -3862,6 +3893,29 @@ mod tests {
     use dev::infra::process_stream::ProcessorByteTotals;
     use foundation::infra::runtime_config::RuntimeConfig;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn completed_file_errors_require_full_delivery_and_no_other_failure() {
+        let mut stats = ProcessorStats { succeeded: 2, failed: 6, exit_code: 1,
+            unprocessed: Some(0), reported: [true; 4], ..Default::default() };
+        let mut summary = PipelineSummary { integrity_state: Some("CLEAN"), ..Default::default() };
+        assert_eq!(fast_img_file_only_completion(true, Some(6), &stats, &summary).unwrap().failed, 6);
+        assert!(fast_img_file_only_completion(false, Some(6), &stats, &summary).is_none());
+        assert!(fast_img_file_only_completion(true, Some(5), &stats, &summary).is_none());
+        for exit in [0, 2, 130] {
+            stats.exit_code = exit;
+            assert!(fast_img_file_only_completion(true, Some(6), &stats, &summary).is_none());
+        }
+        stats.exit_code = 1;
+        stats.unprocessed = Some(1);
+        assert!(fast_img_file_only_completion(true, Some(6), &stats, &summary).is_none());
+        stats.unprocessed = Some(0);
+        summary.integrity_issue_count = 1;
+        assert!(fast_img_file_only_completion(true, Some(6), &stats, &summary).is_none());
+        summary.integrity_issue_count = 0;
+        summary.integrity_state = Some("WARNINGS");
+        assert!(fast_img_file_only_completion(true, Some(6), &stats, &summary).is_none());
+    }
 
     #[test]
     fn run_identity_is_distinct_per_attempt_and_binds_every_event() {

@@ -244,6 +244,8 @@
 "admission.invalid" = "The startup record couldn't be matched to this request. Processing stopped; review the details.";
 "admission.resume_unknown" = "The previous task's processing settings can't be verified. It can't continue.";
 "admission.resume_changed" = "The current processing settings differ from the previous task. It can't continue.";
+"admission.resume_tool_mode_changed" = "The previous batch used a different tool setting";
+"admission.tool_mode_info" = "To continue the previous batch, cancel and restore its tool pinning mode in Settings → Performance.";
 "admission.stopped" = "Processing stopped before admission. Review the reason in the processing details.";
 "admission.fresh_info" = "This request hasn't changed the previous task records or any existing outputs. A new task will use a separate output folder and process only files still in the source folder. It won't reuse previous outputs.";
 "admission.photos_warning" = "Photos import is enabled. If previous delivery records are incomplete, files may be imported again.";
@@ -735,6 +737,10 @@
 "gate.activity.passed" = "Gate 1 checks passed · %@ / %@ checks run";
 "gate.activity.file_failures" = "File issues found · %@ / %@ checks run; final result pending";
 "gate.activity.failed" = "Gate 1 stopped at %@ · %@ / %@ checks run; %@ not run";
+"gate.activity.final.running" = "Final Gate 2 check: %@ · Checks run %@ / %@";
+"gate.activity.final.passed" = "Gate 2 checks passed · %@ / %@ checks run";
+"gate.activity.final.file_failures" = "Gate 2 found file issues · %@ / %@ checks run; final result pending";
+"gate.activity.final.failed" = "Gate 2 stopped at %@ · %@ / %@ checks run; %@ not run";
 "gate.activity.updated" = "Received %@ s ago";
 "gate.activity.invalid" = "Verification activity is invalid; check the retained processing output.";
 "gate.custody.preparing" = "Locating Photos originals for re-verification";
@@ -1009,3 +1015,15 @@
 "settings.avif_metadata.clear" = "The current private policy clears removable embedded metadata and leaves adjacent XMP out of the output. Applicable pixel, color, HDR, and file-attribute checks still apply.";
 "settings.avif_metadata.unavailable" = "The current metadata policy could not be confirmed. Check the configuration and processor version, then reopen settings.";
 "settings.avif_metadata.unsupported" = "This metadata policy is not supported by this interface. Check the configuration and processor version, then reopen settings.";
+"button.history_unread" = "History · %@ new results";
+"notification.settings" = "Result Notifications…";
+"notification.settings_unavailable" = "Notification settings could not be opened. Open System Settings and choose Notifications.";
+"notification.failed" = "The result notification could not be updated: %@. The processing result is still available in the app.";
+"notification.needs_attention" = "Notification needs attention";
+"notification.history_help" = "Review processing results and clear the new-result indicator. The count refers to task results, not files.";
+"notification.no_new_results" = "No new task results";
+"notification.unread_results" = "%@ new task results";
+"notification.result_ended" = "Processing ended";
+"notification.result_info" = "The processing result is available in the app.";
+"notification.gate1" = "Gate 1: local verification started.";
+"notification.gate2" = "Gate 2: fresh final verification started.";

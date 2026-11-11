@@ -483,7 +483,7 @@ jobs:
       # Feature, fuzz and coverage builds already use separate graphs. Do not
       # retain incremental copies on an ephemeral runner as well.
       CARGO_INCREMENTAL: "0"
-      # Suppress Node 24 punycode deprecation noise from upload-artifact and other JS actions.
+      # Suppress Node 24 punycode deprecation noise from JS actions.
       NODE_OPTIONS: --no-deprecation
       RUSTDOCFLAGS: "-D warnings"
     steps:
@@ -632,30 +632,11 @@ jobs:
           set -o pipefail
           cargo run --locked -p dev --bin check_all -- --allow-non-nightly --ci --fuzz-smoke --group "${{ matrix.group }}" 2>&1 | tee "$MFB_CHECK_LOG_DIR/runner.log"
 
-      - name: Upload check diagnostics
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: check-all-${{ matrix.group }}-logs
-          path: ${{ runner.temp }}/mfb-check-${{ matrix.group }}
-          if-no-files-found: warn
-          retention-days: 14
-
       - name: Verify LCOV artifact (fail-closed)
         if: always() && matrix.group == 'coverage'
         id: verify_lcov
         continue-on-error: true
         run: test -s lcov.info
-
-      - name: Upload LCOV artifact
-        if: always() && matrix.group == 'coverage'
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage-lcov-shared-utils
-          path: lcov.info
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Check shared health-check outcomes
         if: always()
@@ -835,12 +816,3 @@ jobs:
           mkdir -p "$MFB_CHECK_LOG_DIR"
           set -o pipefail
           cargo run --locked -p dev --bin check_all -- --allow-non-nightly --collect-all --build --fuzz-smoke 2>&1 | tee "$MFB_CHECK_LOG_DIR/runner.log"
-
-      - name: Upload deep audit diagnostics
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: check-all-deep-audit-logs
-          path: ${{ runner.temp }}/mfb-check-deep-audit
-          if-no-files-found: warn
-          retention-days: 14

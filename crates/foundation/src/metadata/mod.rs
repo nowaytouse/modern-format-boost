@@ -1376,10 +1376,9 @@ fn format_overlay_id(hash: &str) -> io::Result<String> {
     ))
 }
 
-fn djxl_version_for_overlay_audit() -> &'static str {
+fn djxl_version_for_overlay_audit() -> String {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    VERSION
-        .get_or_init(|| {
+    let probe = || {
             let path = crate::common_utils::resolve_tool_path_or_audit(crate::constants::TOOL_DJXL);
             let mut command = std::process::Command::new(path);
             command.arg("--version");
@@ -1407,8 +1406,12 @@ fn djxl_version_for_overlay_audit() -> &'static str {
                     || "unavailable".to_string(),
                     |line| line.chars().take(256).collect(),
                 )
-        })
-        .as_str()
+    };
+    if crate::common_utils::verification_cache_disabled() {
+        probe()
+    } else {
+        VERSION.get_or_init(probe).clone()
+    }
 }
 
 fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlContainer> {

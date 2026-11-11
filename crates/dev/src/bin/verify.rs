@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use dev::infra::drag_drop::{INTEGRITY_SUMMARY_JSON_PREFIX, IntegritySummaryMachine};
+use dev::infra::drag_drop::{INTEGRITY_SUMMARY_JSON_PREFIX, INTEGRITY_UNAVAILABLE_JSON_PREFIX, IntegritySummaryMachine};
 use dev::infra::ui_tokens::pick_symbol;
 use dev::media::scope::{
     SKIP_EXTS, classify_missing_entry, detect_true_format, integrity_stem_key,
@@ -404,6 +404,22 @@ fn run_fast_img_delivery_check(
     processing_mode: &str,
     strategy: &str,
 ) -> Result<IntegrityStats> {
+    run_fast_img_delivery_check_with(source_dir, optimized_dir, report, processing_mode, strategy,
+        |marker| {
+            let _custody = foundation::fast_img::verify_output_photos_custody(marker)?;
+            Ok(())
+        })
+}
+
+fn run_fast_img_delivery_check_with(
+    source_dir: &Path,
+    optimized_dir: &Path,
+    report: &mut String,
+    processing_mode: &str,
+    strategy: &str,
+    verify_photos: impl FnOnce(&foundation::pipeline::verification::WorkingCopyMarker) -> Result<()>,
+) -> Result<IntegrityStats> {
+    let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
     let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_dir)?;
     let optimized_dir = if optimized_dir.exists() {
         optimized_dir
@@ -904,6 +920,14 @@ fn run_fast_img_delivery_check(
             }
         }
     } else {
+        let typed = foundation::pipeline::verification::read_marker(&optimized_dir)?;
+        anyhow::ensure!(typed.working_copy == optimized_dir && typed.src_dir == source_dir
+            && typed.strategy == strategy && marker_opt.as_ref() == Some(&serde_json::to_value(&typed)?),
+            "delivery verification source/output/strategy changed during its fresh checks");
+        if !typed.photos_imported_assets.is_empty() || !typed.tier2_imported_assets.is_empty() {
+            verify_photos(&typed).context("fresh current Photos original-resource custody failed")?;
+            report.push_str("  - Current Photos UUIDs and complete original-resource bytes were freshly verified\n");
+        }
         report.push_str(&format!(
             "{} FAST-IMG DELIVERY INVARIANTS PASS\n",
             pick_symbol("✓", "[OK]")
@@ -2179,6 +2203,14 @@ fn parse_logs(
     Ok((unique_results.len(), unique_uncertain.len()))
 }
 
+fn report_integrity_unavailable<T>(result: Result<T>, requested: bool) -> Result<T> {
+    result.inspect_err(|_| {
+        if requested {
+            println!("{INTEGRITY_UNAVAILABLE_JSON_PREFIX}{{\"status\":\"unavailable\"}}");
+        }
+    })
+}
+
 fn main() -> Result<()> {
     foundation::init_ghost_mode().context("initialize ghost mode")?;
     let args = Args::parse();
@@ -2257,22 +2289,22 @@ fn main() -> Result<()> {
         if let Some((src, opt)) = resolved {
             source_dir_context = Some(src.clone());
             if args.fast_img_delivery {
-                integrity_stats = Some(run_fast_img_delivery_check(
+                integrity_stats = Some(report_integrity_unavailable(run_fast_img_delivery_check(
                     &src,
                     &opt,
                     &mut report,
                     &args.mode,
                     &args.strategy,
-                )?);
+                ), args.print_integrity_json)?);
             } else if args.fast_img_restore {
-                integrity_stats = Some(run_fast_img_restore_check(
+                integrity_stats = Some(report_integrity_unavailable(run_fast_img_restore_check(
                     &src,
                     &opt,
                     &mut report,
                     &args.strategy,
-                )?);
+                ), args.print_integrity_json)?);
             } else {
-                integrity_stats = Some(run_integrity_check(
+                integrity_stats = Some(report_integrity_unavailable(run_integrity_check(
                     &src,
                     &opt,
                     &mut report,
@@ -2280,7 +2312,7 @@ fn main() -> Result<()> {
                     &session_audit_paths,
                     bundle_log_dir.as_deref(),
                     explicit_log_paths.as_deref(),
-                )?);
+                ), args.print_integrity_json)?);
             }
         } else {
             report.push_str(&format!(
@@ -2456,6 +2488,13 @@ mod tests {
     use super::*;
     use foundation::ToolBuilder;
     use serial_test::serial;
+
+    // Inventory fixtures model local files; live UUID/resource failures are tested separately.
+    fn delivery_inventory_fixture(
+        source: &Path, output: &Path, report: &mut String, mode: &str, strategy: &str,
+    ) -> Result<IntegrityStats> {
+        run_fast_img_delivery_check_with(source, output, report, mode, strategy, |_| Ok(()))
+    }
 
     fn isolated_marker_test() -> bool {
         let thread = std::thread::current();
@@ -2797,7 +2836,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.source_files, 1);
@@ -2805,6 +2844,41 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.optimized_files, 1);
         assert_eq!(stats.integrity_failures, 0);
         assert!(!stats.has_warnings);
+    }
+
+    #[test]
+    #[serial]
+    fn delivery_check_refuses_stale_photos_receipts_before_claiming_current_integrity() {
+        if isolated_marker_test() { return; }
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let output = root.path().join("output");
+        fs::create_dir(&output).unwrap();
+        let bytes = b"\xff\x0aencoded";
+        fs::write(output.join("a.JXL"), bytes).unwrap();
+        let hash = blake3::hash(bytes).to_hex().to_string();
+        let partial = serde_json::json!({"working_copy":output,"src_jpeg_count":1,
+            "stage":"cleanup_complete", "photos_imported_assets":[{
+                "rel_path":"a.JXL","blake3":hash,"sync_status":"photos_local",
+                "photos_uuid":"old-uuid","quarantined":false,"library_blake3":null,
+                "xmp_sidecar_blake3":null}],
+            "blake3_log":{"a.jpg":{"src":"source-hash","out":hash,
+                "out_rel":"a.JXL","library_asset":hash}}});
+        let _state = write_marker_fixture(&output.join("fixture"), &source, &partial);
+        let mut report = String::new();
+        let mut calls = 0;
+        let result = run_fast_img_delivery_check_with(&source, &output, &mut report,
+            "images_only", "jxl", |_| {
+                assert!(foundation::common_utils::verification_cache_disabled());
+                calls += 1;
+                anyhow::bail!("current Photos original no longer matches the recorded UUID")
+            });
+        assert!(result.is_err());
+        assert_eq!(calls, 1);
+        assert!(!report.contains("DELIVERY INVARIANTS PASS"));
+        assert!(output.join("a.JXL").exists());
+        assert!(run_fast_img_delivery_check(&source, &output, &mut String::new(),
+            "images_only", "jxl").is_err(), "historical receipts without an actual library were accepted");
     }
 
     #[test]
@@ -2848,7 +2922,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "avif")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "avif")
                 .unwrap();
 
         assert_eq!(stats.source_remaining_files, 1);
@@ -2930,7 +3004,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.source_files, 2);
@@ -2971,7 +3045,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.source_files, 1);
@@ -3013,7 +3087,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.source_files, 2);
@@ -3122,7 +3196,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         )
         .unwrap();
         let check = |source: &Path| {
-            run_fast_img_delivery_check(
+            delivery_inventory_fixture(
                 source,
                 &child.working_copy,
                 &mut String::new(),
@@ -3209,7 +3283,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.source_files, 0);
@@ -3243,7 +3317,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.source_files, 1);
@@ -3298,7 +3372,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.optimized_files, 0);
@@ -3751,7 +3825,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         #[cfg(unix)]
@@ -3808,7 +3882,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
@@ -3851,7 +3925,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
@@ -3895,7 +3969,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
         let mut report = String::new();
         let stats =
-            run_fast_img_delivery_check(&source, &optimized, &mut report, "images_only", "jxl")
+            delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);

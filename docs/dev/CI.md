@@ -33,8 +33,10 @@ and verifies the detached checkout before publishing the build source directory.
 Failures discard the owned staging directory and stop installation; they do not
 select a different commit, an older package, or an unverified archive.
 
-Check and deep-audit diagnostics expire after 14 days; coverage artifacts expire
-after 7 days. This does not remove published release assets or local user data.
+Check and deep-audit diagnostic directories and LCOV output are not uploaded as
+artifacts. The runner's console output remains visible in GitHub Actions logs,
+so test inputs and diagnostic messages still must not contain private data.
+Existing artifacts, published release assets and local user data are unaffected.
 Existing branch concurrency continues to cancel superseded push/PR runs.
 
 Validate changes with `actionlint` and the `smoke::structural` tests. Compare

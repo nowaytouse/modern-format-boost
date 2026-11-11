@@ -19,6 +19,9 @@
 //!   completion polling is explicit opt-in to avoid pressuring Photos/cloud
 //!   daemons
 
+#[path = "photos_original_lookup.rs"]
+mod photos_original_lookup;
+
 use crate::infra::runtime_config::AvifMetadataPolicy;
 use crate::pipeline::verification::{
     Blake3Entry, LibraryAssetRecord, LibraryHandle, WorkingCopyMarker, write_marker_atomic,
@@ -699,7 +702,7 @@ pub fn safe_delete_jpeg_source_recorded(
     delete_matching_xmp_sidecar_path(
         source,
         output,
-        matching_xmp_sidecar.as_deref(),
+        matching_xmp_sidecar.as_ref(),
         removed_files,
     )?;
 
@@ -725,7 +728,7 @@ pub fn safe_delete_matching_xmp_sidecar_recorded(
     delete_matching_xmp_sidecar_path(
         source,
         output,
-        matching_xmp_sidecar.as_deref(),
+        matching_xmp_sidecar.as_ref(),
         removed_files,
     )
 }
@@ -733,28 +736,51 @@ pub fn safe_delete_matching_xmp_sidecar_recorded(
 fn xmp_sidecar_for_verified_output_cleanup(
     source: &Path,
     output: &Path,
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<VerifiedXmpCleanup>> {
     let sidecar = crate::metadata::find_xmp_sidecar(source)?;
+    let sidecar = sidecar.map(VerifiedXmpCleanup::capture).transpose()?;
     if let Some(path) = &sidecar
         && crate::image::format_detect::detect_true_format(output)?
             == crate::image::format_detect::FormatKind::Jxl
     {
-        crate::metadata::verify_jxl_xmp_sidecar_custody(path, output).map_err(|error| {
+        crate::metadata::verify_jxl_xmp_sidecar_custody(&path.path, output).map_err(|error| {
             ImgQualityError::AnalysisError(format!("delete-gate XMP custody failed: {error}"))
         })?;
     }
+    if let Some(sidecar) = &sidecar { sidecar.verify_unchanged()?; }
     Ok(sidecar)
+}
+
+struct VerifiedXmpCleanup {
+    path: PathBuf,
+    observation: crate::pipeline::verification::FinalInputObservation,
+}
+
+impl VerifiedXmpCleanup {
+    fn capture(path: PathBuf) -> Result<Self> {
+        let observation = crate::pipeline::verification::FinalInputObservation::capture(&path)
+            .map_err(|error| ImgQualityError::AnalysisError(format!("delete-gate XMP observation failed: {error}")))?;
+        Ok(Self { path, observation })
+    }
+
+    fn verify_unchanged(&self) -> Result<()> {
+        self.observation.verify_unchanged().map_err(|error| {
+            ImgQualityError::AnalysisError(format!("delete-gate XMP changed after custody verification: {error}"))
+        })
+    }
 }
 
 fn delete_matching_xmp_sidecar_path(
     source: &Path,
     output: &Path,
-    matching_xmp_sidecar: Option<&Path>,
+    matching_xmp_sidecar: Option<&VerifiedXmpCleanup>,
     removed_files: &mut Vec<PathBuf>,
 ) -> Result<bool> {
-    let Some(xmp_sidecar) = matching_xmp_sidecar else {
+    let Some(verified) = matching_xmp_sidecar else {
         return Ok(false);
     };
+    verified.verify_unchanged()?;
+    let xmp_sidecar = &verified.path;
     let metadata = std::fs::metadata(xmp_sidecar).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
             "delete-gate sidecar FAIL: cannot stat matching XMP sidecar {} for {}: {err}",
@@ -792,7 +818,7 @@ fn verified_tier2_sidecar_for_cleanup(
     source: &Path,
     expected_hash: Option<&str>,
     allow_proven_absent: bool,
-) -> Result<Option<std::path::PathBuf>> {
+) -> Result<Option<VerifiedXmpCleanup>> {
     let matching = crate::metadata::find_xmp_sidecar(source)?;
     match (expected_hash, matching) {
         (Some(expected), Some(sidecar)) => {
@@ -808,16 +834,12 @@ fn verified_tier2_sidecar_for_cleanup(
                     sidecar.display()
                 )));
             }
-            let actual = crate::common_utils::calculate_blake3_hash(&sidecar).map_err(|error| {
-                ImgQualityError::AnalysisError(format!(
-                    "delete-gate 4 FAIL: XMP sidecar hash failed for {}: {error}",
-                    sidecar.display()
-                ))
-            })?;
+            let sidecar = VerifiedXmpCleanup::capture(sidecar)?;
+            let actual = sidecar.observation.blake3();
             if actual != expected {
                 return Err(ImgQualityError::AnalysisError(format!(
                     "delete-gate 4 FAIL: XMP sidecar changed after Photos delivery: {}",
-                    sidecar.display()
+                    sidecar.path.display()
                 )));
             }
             Ok(Some(sidecar))
@@ -965,7 +987,7 @@ fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
     delete_matching_xmp_sidecar_path(
         source,
         source,
-        matching_xmp_sidecar.as_deref(),
+        matching_xmp_sidecar.as_ref(),
         removed_files,
     )?;
     Ok(())
@@ -977,6 +999,13 @@ fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
 /// never by response position.
 pub fn reverify_modern_lossy_static_photos_custody(
     library_handle: &crate::pipeline::verification::LibraryHandle,
+) -> Result<()> {
+    reverify_modern_lossy_static_photos_custody_excluding(library_handle, &BTreeSet::new())
+}
+
+fn reverify_modern_lossy_static_photos_custody_excluding(
+    library_handle: &LibraryHandle,
+    deletion_targets: &BTreeSet<PathBuf>,
 ) -> Result<()> {
     use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState, LogPhase};
     crate::ui::progress::emit_log_phase(LogPhase::Verification);
@@ -991,9 +1020,68 @@ pub fn reverify_modern_lossy_static_photos_custody(
     };
     reverify_modern_lossy_static_photos_custody_with(
         library_handle,
-        &mut |uuids| query_selected_photos_asset_probes(uuids, selected.as_deref()),
+        &mut |uuids| {
+            let probes = query_selected_photos_asset_probes(uuids, selected.as_deref())?;
+            reject_referenced_cleanup_targets(&probes, deletion_targets)?;
+            Ok(probes)
+        },
         &mut |check, completed, state, files| activity.emit(check, completed, 1, state, files),
     )
+}
+
+fn reject_referenced_cleanup_targets(
+    probes: &[FastImgLibraryAssetProbe],
+    deletion_targets: &BTreeSet<PathBuf>,
+) -> Result<()> {
+    if !deletion_targets.is_empty() {
+        for probe in probes {
+            if deletion_targets.contains(&probe.path.canonicalize()?) {
+                return Err(ImgQualityError::AnalysisError(
+                    "Photos original references a pending source or XMP deletion target; originals retained".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn tier2_cleanup_targets(sources: &[PathBuf]) -> Result<BTreeSet<PathBuf>> {
+    let mut present = Vec::new();
+    for source in sources {
+        let parent = source.parent().ok_or_else(|| ImgQualityError::AnalysisError(
+            "tier-2 cleanup source has no parent".into()))?;
+        match std::fs::metadata(parent) {
+            Ok(_) => present.push(source.clone()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let index = crate::metadata::XmpSidecarIndex::capture(&present)?;
+    let mut targets = BTreeSet::new();
+    for source in &present {
+        match source.canonicalize() {
+            Ok(path) => { targets.insert(path); },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        }
+        if let Some(sidecar) = index.find(source)? {
+            targets.insert(sidecar.canonicalize()?);
+        }
+    }
+    index.verify_unchanged()?;
+    Ok(targets)
+}
+
+fn require_tier2_cleanup_target(source: &Path, targets: &BTreeSet<PathBuf>) -> Result<()> {
+    match std::fs::symlink_metadata(source) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink()
+            && targets.contains(&source.canonicalize()?) => Ok(()),
+        Ok(_) => Err(ImgQualityError::AnalysisError(
+            "tier-2 source appeared or changed location after cleanup preflight; source retained".into(),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn reverify_modern_lossy_static_photos_custody_with(
@@ -1160,12 +1248,16 @@ pub fn safe_delete_modern_lossy_static_source(
     source: &Path,
     import_proof: &crate::pipeline::verification::LibraryAssetRecord,
 ) -> Result<()> {
+    let _uncached = crate::common_utils::UncachedVerificationScope::new()
+        .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
     let library_handle = crate::pipeline::verification::LibraryHandle {
         imported_assets: vec![import_proof.clone()],
         import_error_count: 0,
         photos_library_path: None,
     };
-    reverify_modern_lossy_static_photos_custody(&library_handle)?;
+    let targets = tier2_cleanup_targets(&[source.to_path_buf()])?;
+    require_tier2_cleanup_target(source, &targets)?;
+    reverify_modern_lossy_static_photos_custody_excluding(&library_handle, &targets)?;
     safe_delete_modern_lossy_static_source_after_reverify(source, import_proof)
 }
 
@@ -1251,27 +1343,32 @@ pub fn delete_verified_modern_lossy_static_sources_recorded(
     if library_handle.imported_assets.is_empty() {
         return Ok((0, 0));
     }
+    let _uncached = crate::common_utils::UncachedVerificationScope::new()
+        .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
     preflight_modern_lossy_static_source_deletion(src_dir, library_handle)?;
-    reverify_modern_lossy_static_photos_custody(library_handle)?;
+    let sources = library_handle.imported_assets.iter()
+        .map(|asset| src_dir.join(&asset.rel_path)).collect::<Vec<_>>();
+    let targets = tier2_cleanup_targets(&sources)?;
+    reverify_modern_lossy_static_photos_custody_excluding(library_handle, &targets)?;
 
     let mut deleted = 0usize;
     let mut already_deleted = 0usize;
     for asset in &library_handle.imported_assets {
         let source = src_dir.join(&asset.rel_path);
+        let current = LibraryHandle {
+            imported_assets: vec![asset.clone()],
+            import_error_count: 0,
+            photos_library_path: library_handle.photos_library_path.clone(),
+        };
+        reverify_modern_lossy_static_photos_custody_excluding(&current, &targets)?;
+        require_tier2_cleanup_target(&source, &targets)?;
         if !source.exists() {
             if let Some(sidecar) = verified_tier2_sidecar_for_cleanup(
                 &source,
                 asset.xmp_sidecar_blake3.as_deref(),
                 true,
             )? {
-                std::fs::remove_file(&sidecar).map_err(|error| {
-                    ImgQualityError::AnalysisError(format!(
-                        "tier-2 delete failed to remove proven XMP sidecar {} for already-absent source {}: {error}",
-                        sidecar.display(),
-                        source.display()
-                    ))
-                })?;
-                removed_files.push(sidecar);
+                delete_matching_xmp_sidecar_path(&source, &source, Some(&sidecar), removed_files)?;
             }
             already_deleted += 1;
             tracing::info!(
@@ -1516,7 +1613,7 @@ fn checkpoint_photos_library_with(
     discover: impl FnOnce() -> Result<PathBuf>,
 ) -> Result<Option<PathBuf>> {
     let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
-    if selected.is_none() && marker.failed_retry_manifest_blake3.is_some() {
+    if selected.is_none() {
         return discover().map(Some);
     }
     Ok(selected)
@@ -4980,9 +5077,28 @@ fn get_photos_pid() -> Result<Option<String>> {
     }
 }
 
+fn photos_permanent_database_cause(detail: &str) -> Option<&str> {
+    let lower = detail.to_ascii_lowercase();
+    [
+        "no such table:",
+        "no such column:",
+        "has no column named ",
+        "malformed database schema",
+        "unsupported database schema",
+        "unsupported schema version",
+        "database disk image is malformed",
+        "file is not a database",
+    ]
+    .iter()
+    .filter_map(|needle| lower.find(needle))
+    .min()
+    .map(|index| &detail[index..])
+}
+
 fn photos_import_retry_reason(detail: &str) -> Option<&'static str> {
     let lower = detail.to_ascii_lowercase();
-    if lower.contains("not authorized")
+    if photos_permanent_database_cause(detail).is_some()
+        || lower.contains("not authorized")
         || lower.contains("not permitted")
         || lower.contains("permission denied")
         || lower.contains("(-1743)")
@@ -6125,26 +6241,29 @@ where
             "Photos verifier has no candidate library to query".to_string(),
         ));
     }
-    let mut pending = uuids.to_vec();
+    let mut pending = uuids.iter().cloned().collect::<BTreeSet<_>>();
+    if pending.len() != uuids.len() {
+        return Err(ImgQualityError::AnalysisError("Photos custody query contains duplicate UUIDs".to_string()));
+    }
     let mut probes = Vec::new();
     let mut resolved_library = None;
     for library in libraries {
         if pending.is_empty() {
             break;
         }
-        match query_library(library, &pending) {
+        let ordered_pending = uuids.iter().filter(|uuid| pending.contains(*uuid)).cloned().collect::<Vec<_>>();
+        match query_library(library, &ordered_pending) {
             Ok(library_probes) => {
                 if !library_probes.is_empty() {
                     resolved_library = Some(library.clone());
                 }
                 for probe in library_probes {
-                    let Some(position) = pending.iter().position(|uuid| uuid == &probe.uuid) else {
+                    if !pending.remove(&probe.uuid) {
                         return Err(ImgQualityError::AnalysisError(format!(
                             "Photos verifier library query returned duplicate or unexpected UUID {}",
                             probe.uuid
                         )));
-                    };
-                    pending.remove(position);
+                    }
                     probes.push(probe);
                 }
             }
@@ -6161,8 +6280,17 @@ fn query_osxphotos_asset_probes_from_library(
     if uuids.is_empty() {
         return Ok(Vec::new());
     }
-    let osxphotos = resolve_osxphotos_command()?;
-    query_osxphotos_asset_probes_with_command(uuids, library, &osxphotos)
+    match photos_original_lookup::query(uuids, library).map_err(|error| {
+        ImgQualityError::AnalysisError(format!("Photos original-resource query failed: {error:#}"))
+    })? {
+        photos_original_lookup::Lookup::Probes(probes) => Ok(probes),
+        photos_original_lookup::Lookup::UnsupportedLayout(reason) => {
+            tracing::warn!(target: "photos_import", reason,
+                "Photos original-resource layout requires the existing osxphotos verifier");
+            let osxphotos = resolve_osxphotos_command()?;
+            query_osxphotos_asset_probes_with_command(uuids, library, &osxphotos)
+        }
+    }
 }
 
 fn query_osxphotos_asset_probes_with_command(
@@ -6247,25 +6375,45 @@ fn query_osxphotos_asset_probe_batch(
     Ok(probes)
 }
 
+fn osxphotos_query_failure_diagnostic(stderr: &str) -> String {
+    // A secondary crash-log failure must not replace the SQLite schema cause.
+    // Keep the machine result small; the process log retains the full output.
+    let primary = stderr.lines().find_map(photos_permanent_database_cause);
+    let tail = crate::io_utils::tail_error_lines(stderr, 2);
+    let compact = |text: &str, mut limit: usize| {
+        while text.len() > limit && !text.is_char_boundary(limit - 3) {
+            limit -= 1;
+        }
+        crate::common_utils::truncate_string(text, limit)
+    };
+    match primary {
+        Some(cause) => format!(
+            "primary: {}; last diagnostic: {}",
+            compact(cause, 512),
+            compact(&tail, 256),
+        ),
+        None if tail.is_empty() => "<empty stderr>".to_string(),
+        None => compact(&tail, 768),
+    }
+}
+
 fn complete_osxphotos_asset_query(
     uuids: &[String],
     output: &crate::process_runner::ProcessOutput,
     elapsed: Duration,
 ) -> Result<Vec<FastImgLibraryAssetProbe>> {
-    if !output.status.success() {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "osxphotos query failed for {} UUID(s): {}",
-            uuids.len(),
-            output.stderr.trim()
-        )));
-    }
     let stderr = output.stderr.trim();
-    if stderr.contains("OperationalError")
+    if !output.status.success()
+        || photos_permanent_database_cause(stderr).is_some()
+        || stderr.contains("OperationalError")
         || stderr.contains("unable to open database file")
         || stderr.contains("Operation not permitted")
     {
         return Err(ImgQualityError::AnalysisError(format!(
-            "osxphotos query blocked by system permissions or locked DB: {stderr}"
+            "osxphotos query failed for {} UUID(s) ({}): {}",
+            uuids.len(),
+            output.status,
+            osxphotos_query_failure_diagnostic(stderr)
         )));
     }
     let records: Vec<FastImgQueryRecord> = serde_json::from_str(&output.stdout).map_err(|e| {
@@ -7074,7 +7222,10 @@ mod photos_import_bench;
 
 #[path = "fast_img_finish.rs"]
 mod finish_checkpoint;
-pub use finish_checkpoint::{VerifiedFailedRetryFinish, verify_failed_retry_finish};
+pub use finish_checkpoint::{
+    VerifiedFailedRetryFinish, VerifiedOutputPhotosCustody, verify_failed_retry_finish,
+    verify_output_photos_custody,
+};
 
 #[path = "photos_submission.rs"]
 mod submission_checkpoint;
@@ -8751,6 +8902,47 @@ mod tests {
     }
 
     #[test]
+    fn tier2_cleanup_rejects_referenced_sources_and_xmp_but_keeps_independent_custody() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let a = root.path().join("a.webp");
+        let b = root.path().join("b.webp");
+        let xmp = root.path().join("a.xmp");
+        let original = root.path().join("photos-original.webp");
+        for path in [&a, &b, &original] { std::fs::write(path, b"same complete media bytes")?; }
+        std::fs::write(&xmp, b"<x:xmpmeta/>")?;
+        let targets = tier2_cleanup_targets(&[a.clone(), b.clone()])?;
+        let probe = |path: PathBuf| FastImgLibraryAssetProbe {
+            uuid: "CURRENT-UUID".into(), path, iscloudasset: false,
+            incloud: None, ismissing: false,
+        };
+        for target in [&a, &b, &xmp] {
+            assert!(reject_referenced_cleanup_targets(&[probe(target.clone())], &targets).is_err());
+            assert!(a.exists() && b.exists() && xmp.exists());
+        }
+        reject_referenced_cleanup_targets(&[probe(original.clone())], &targets)?;
+        #[cfg(unix)]
+        {
+            let alias = root.path().join("referenced-alias.webp");
+            std::os::unix::fs::symlink(&b, &alias)?;
+            assert!(reject_referenced_cleanup_targets(&[probe(alias)], &targets).is_err());
+        }
+        let independent_link = root.path().join("photos-hardlink.webp");
+        std::fs::hard_link(&a, &independent_link)?;
+        reject_referenced_cleanup_targets(&[probe(independent_link.clone())], &targets)?;
+        std::fs::remove_file(&a)?;
+        assert_eq!(std::fs::read(independent_link)?, b"same complete media bytes");
+        reject_referenced_cleanup_targets(&[probe(original)], &targets)?;
+        assert!(b.exists() && xmp.exists());
+        let later = root.path().join("missing-parent/later.webp");
+        let absent = tier2_cleanup_targets(&[later.clone()])?;
+        std::fs::create_dir_all(later.parent().unwrap())?;
+        std::fs::write(&later, b"newly appeared input")?;
+        assert!(require_tier2_cleanup_target(&later, &absent).is_err());
+        assert!(later.exists());
+        Ok(())
+    }
+
+    #[test]
     fn photos_custody_progress_counts_only_matching_original_bytes() -> Result<()> {
         use crate::ui::progress::{GateActivityState, GateFileProgress};
         for drift in [false, true] {
@@ -9634,7 +9826,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_retry_default_library_is_proved_and_bound_before_checkpointed_import() -> Result<()> {
+    fn default_library_is_proved_and_bound_before_checkpointed_import() -> Result<()> {
         if crate::common_utils::isolated_test_process() {
             return Ok(());
         }
@@ -9652,11 +9844,6 @@ mod tests {
         let database = library.join("database/Photos.sqlite");
         let mut marker =
             WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
-        assert!(
-            checkpoint_photos_library_with(&marker, || panic!("ordinary behavior is unchanged"))?
-                .is_none()
-        );
-        marker.failed_retry_manifest_blake3 = Some("a".repeat(64));
         let before = marker.clone();
         for databases in [
             BTreeSet::new(),
@@ -9689,9 +9876,9 @@ mod tests {
             &mut marker,
             selected.as_deref(),
             false,
-            &mut |_| panic!("new child has no custody receipt to query"),
+            &mut |_| panic!("new marker has no custody receipt to query"),
             &mut |_| Ok(false),
-            &mut |_| panic!("new child has no parent custody proof"),
+            &mut |_| panic!("new marker has no parent custody proof"),
             |prepared| {
                 assert_eq!(
                     prepared.photos_library_path.as_deref(),
@@ -9711,7 +9898,7 @@ mod tests {
         );
         assert_eq!(
             checkpoint_photos_library_with(&marker, || panic!(
-                "a bound retry must not rediscover another target"
+                "a bound import must not rediscover another target"
             ))?,
             Some(library)
         );
@@ -11226,6 +11413,17 @@ mod tests {
             None,
             "a partial import must not retry already imported files"
         );
+        for diagnostic in [
+            "sqlite3.OperationalError: no such table: missing_relation",
+            "sqlite3.OperationalError: no such column: missing_column",
+            "sqlite3.DatabaseError: malformed database schema",
+            "sqlite3.DatabaseError: file is not a database",
+        ] {
+            assert_eq!(photos_import_retry_reason(diagnostic), None, "{diagnostic}");
+            let crash = format!("{diagnostic}\nOSError: [Errno 30] Read-only file system: 'crash.log'");
+            assert_eq!(photos_import_retry_reason(&crash), None, "{crash}");
+        }
+        assert!(photos_import_retry_reason("osxphotos query failed: database is temporarily busy").is_some());
     }
 
     #[test]
@@ -11619,6 +11817,22 @@ mod tests {
 
         assert_eq!(query_processes.get(), 3);
         assert_eq!(probes.len(), 1);
+        for diagnostic in [
+            "sqlite3.OperationalError: no such table: missing_relation",
+            "sqlite3.OperationalError: no such column: missing_column",
+        ] {
+            query_processes.set(0);
+            let mut query = |_: &[String]| {
+                query_processes.set(query_processes.get() + 1);
+                Err(ImgQualityError::AnalysisError(diagnostic.to_string()))
+            };
+            let error = query_uploaded_asset_probes_batch_with_retry(
+                &targets, 5, 1, Duration::ZERO, false, &mut query,
+                |_| panic!("permanent database failure must not sleep or retry"),
+            ).unwrap_err();
+            assert!(error.to_string().contains(diagnostic));
+            assert_eq!(query_processes.get(), 1);
+        }
         Ok(())
     }
 
@@ -11803,6 +12017,36 @@ mod tests {
             assert_eq!(std::fs::read(&original)?, original_bytes);
             assert_eq!(std::fs::read(&source)?, original_bytes);
             assert_eq!(std::fs::read(&output)?, original_bytes);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn delete_gate_rechecks_bound_xmp_immediately_before_unlink() -> anyhow::Result<()> {
+        for change in ["content", "filesystem", "replacement"] {
+            let root = tempfile::tempdir()?;
+            let source = root.path().join("source.jpg");
+            let output = root.path().join("output.JXL");
+            let sidecar = root.path().join("source.xmp");
+            std::fs::write(&source, b"source retained")?;
+            std::fs::write(&output, b"output retained")?;
+            std::fs::write(&sidecar, b"verified XMP")?;
+            let verified = super::VerifiedXmpCleanup::capture(sidecar.clone())?;
+            match change {
+                "content" => std::fs::write(&sidecar, b"new unverified XMP")?,
+                "filesystem" => filetime::set_file_mtime(&sidecar, filetime::FileTime::from_unix_time(1_600_000_000, 0))?,
+                _ => {
+                    let replacement = root.path().join("replacement");
+                    std::fs::write(&replacement, b"verified XMP")?;
+                    std::fs::rename(replacement, &sidecar)?;
+                }
+            }
+            let mut removed = Vec::new();
+            assert!(super::delete_matching_xmp_sidecar_path(
+                &source, &output, Some(&verified), &mut removed,
+            ).is_err(), "{change} must invalidate the sidecar unlink proof");
+            assert!(removed.is_empty());
+            assert!(source.exists() && output.exists() && sidecar.exists());
         }
         Ok(())
     }
@@ -12160,6 +12404,33 @@ mod tests {
                 120
             );
         }
+
+        for code in [0, 1] {
+            let stderr = format!(
+                "{}\nsqlite3.OperationalError: no such table: missing_relation\n{}\nOSError: [Errno 30] Read-only file system: 'crash.log'\n",
+                "traceback frame\n".repeat(2000),
+                "secondary traceback frame\n".repeat(2000),
+            );
+            let output = crate::process_runner::ProcessOutput {
+                status: std::process::ExitStatus::from_raw(code << 8),
+                stdout: "[]".to_string(),
+                stderr,
+                command_line: "osxphotos query fixture".to_string(),
+            };
+            let error = complete_osxphotos_asset_query(
+                &["expected".to_string()], &output, Duration::from_secs(300),
+            ).unwrap_err();
+            let detail = error.to_string();
+            assert!(detail.contains("no such table: missing_relation"), "{detail}");
+            assert!(detail.contains("Read-only file system"), "{detail}");
+            assert!(detail.len() < 1024, "unbounded query error: {}", detail.len());
+            assert_eq!(photos_import_retry_reason(&detail), None);
+            assert!(!OSXPHOTOS_WARMED_UP.load(Ordering::SeqCst));
+        }
+        let unicode = format!("no such table: {}", "表".repeat(1000));
+        let detail = osxphotos_query_failure_diagnostic(&unicode);
+        assert!(detail.contains("no such table:"), "{detail}");
+        assert!(detail.len() < 1024);
 
         let mut output = crate::process_runner::ProcessOutput {
             status: std::process::ExitStatus::from_raw(0),

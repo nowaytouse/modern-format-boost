@@ -30,11 +30,10 @@ use foundation::fast_img::{safe_delete_jpeg_source, safe_delete_matching_xmp_sid
 use foundation::image::format_detect::FormatKind;
 use foundation::modern_ui::{colors, symbols};
 use foundation::pipeline::verification::{
-    Blake3Entry, FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
-    Gate1Checks, Gate1Local, Gate2Checks, Gate2Import, Gate3Checks, Gate3Deep, LibraryHandle,
+    Blake3Entry, FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName, FinalVerificationInputs,
+    Gate1Checks, Gate1Local, Gate1WorkProofs, Gate2Checks, Gate2Final, Gate3Checks, GateResult, LibraryHandle,
     PipelineCtx, SkippedSourceEntry, VerificationGate, WorkingCopyMarker,
-    deep_scan_complete_or_later, encode_complete_or_later, gate1_complete_or_later,
-    gate2_complete_or_later, gate3_complete_or_later, import_complete_or_later,
+    encode_complete_or_later, gate1_complete_or_later, import_complete_or_later,
     marker_checks_from_result, output_prepared_or_later, prepare_jxl_output_dir, read_marker,
     resolve_working_copy_dir, retry_resume_stage, working_copy_dir, write_marker_atomic,
 };
@@ -231,7 +230,7 @@ enum Commands {
         #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
-        /// Import verified outputs into Photos after Gate 1, then run custody Gates 2/3.
+        /// Import verified outputs after Gate 1, then run fresh final Gate 2 before cleanup.
         #[arg(long = "shortest-path", default_value_t = false)]
         shortest_path: bool,
 
@@ -4911,7 +4910,7 @@ fn fast_img_prepare_retry_plan(
         false
     };
 
-    let resume_local_delivery = if let Some(marker) = existing_marker.as_ref()
+    let resume_local_delivery = if let Some(marker) = existing_marker.as_mut()
         && marker.is_terminal()
     {
         let should_resume =
@@ -4948,6 +4947,15 @@ fn fast_img_prepare_retry_plan(
             );
             true
         } else {
+            if shortest_path.0
+                && marker.photos_library_path.is_none()
+                && (!marker.photos_imported_assets.is_empty()
+                    || !marker.tier2_imported_assets.is_empty())
+            {
+                let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
+                foundation::fast_img::bind_marker_to_selected_photos_library(marker)
+                    .context("reverify and bind the existing Photos delivery to its active library")?;
+            }
             println!(
                 "[DONE    ] existing cleanup_complete marker at {}",
                 context.working_copy.display()
@@ -5363,7 +5371,10 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                     "fast-img marker output proof is not current; downgrading resume stage to output_prepared"
                 );
             }
-            if !resume_local_delivery_for_shortest_path && !retry_failed_sources_from_cleanup {
+            if !resume_local_delivery_for_shortest_path
+                && !retry_failed_sources_from_cleanup
+                && !fast_img_cleanup_resume_source_subset_matches(&marker, &current_source_hashes)?
+            {
                 marker.src_jpeg_count = source_jpegs.len();
             }
             marker.stage = if output_prepared_or_later(&resume_stage) {
@@ -5534,23 +5545,20 @@ const fn fast_img_completed_marker_has_new_tier2_work(
 }
 
 fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool {
+    let by_output = marker.photos_imported_assets.iter()
+        .map(|asset| (asset.rel_path.as_str(), asset))
+        .collect::<BTreeMap<_, _>>();
     marker.blake3_log.len() == marker.expected_output_count()
         && marker.photos_imported_assets.len() == marker.expected_output_count()
-        && marker.blake3_log.iter().all(|(_source_rel, entry)| {
+        && by_output.len() == marker.photos_imported_assets.len()
+        && marker.blake3_log.values().all(|entry| {
             let Some(out_rel) = entry.out_rel.as_deref() else {
                 return false;
             };
-            entry
-                .library_asset
-                .as_ref()
-                .is_some_and(|hash| *hash == entry.out)
-                && marker.photos_imported_assets.iter().any(|asset| {
-                    asset.rel_path == out_rel
-                        && asset.blake3 == entry.out
-                        && asset
-                            .photos_uuid
-                            .as_deref()
-                            .is_some_and(|uuid| !uuid.is_empty())
+            entry.library_asset.as_ref().is_some_and(|hash| *hash == entry.out)
+                && by_output.get(out_rel).is_some_and(|asset| {
+                    asset.blake3 == entry.out
+                        && asset.photos_uuid.as_deref().is_some_and(|uuid| !uuid.is_empty())
                 })
         })
 }
@@ -7531,12 +7539,11 @@ fn fast_img_verified_output_format(output: &Path, strategy: &str) -> anyhow::Res
     Ok(actual)
 }
 
-fn fast_img_delete_verified_source_jpegs(
+fn fast_img_prepare_verified_source_deletion(
     marker: &WorkingCopyMarker,
     src_dir: &Path,
     strategy: &str,
-    removed_files: &mut Vec<PathBuf>,
-) -> anyhow::Result<(usize, usize)> {
+) -> anyhow::Result<FastImgPreparedSourceDeletion> {
     fast_img_preflight_verified_source_deletion(marker, src_dir)?;
     let mut candidates = Vec::new();
     for (rel, entry) in &marker.blake3_log {
@@ -7632,10 +7639,20 @@ fn fast_img_delete_verified_source_jpegs(
             verified.push(result?);
         }
     }
+    Ok(FastImgPreparedSourceDeletion { candidates, verified, final_inputs: None })
+}
 
+fn fast_img_delete_prepared_source_jpegs(
+    prepared: FastImgPreparedSourceDeletion,
+    removed_files: &mut Vec<PathBuf>,
+) -> anyhow::Result<(usize, usize)> {
+    let FastImgPreparedSourceDeletion { candidates, verified, final_inputs } = prepared;
     let mut deleted = 0usize;
     let mut already_deleted = 0usize;
     for candidate in candidates {
+        if let Some(inputs) = &final_inputs {
+            inputs.verify_pair(&candidate.source, &candidate.output)?;
+        }
         if !candidate.source.exists() {
             safe_delete_matching_xmp_sidecar_recorded(&candidate.source, &candidate.output, removed_files).map_err(
                 |err| {
@@ -7655,6 +7672,9 @@ fn fast_img_delete_verified_source_jpegs(
         }
     }
     for candidate in verified {
+        if let Some(inputs) = &final_inputs {
+            inputs.verify_pair(&candidate.source, &candidate.output)?;
+        }
         safe_delete_jpeg_source_recorded(
             &candidate.source,
             &candidate.output,
@@ -7671,6 +7691,23 @@ fn fast_img_delete_verified_source_jpegs(
         deleted += 1;
     }
     Ok((deleted, already_deleted))
+}
+
+fn fast_img_delete_verified_source_jpegs(
+    marker: &WorkingCopyMarker,
+    src_dir: &Path,
+    strategy: &str,
+    removed_files: &mut Vec<PathBuf>,
+) -> anyhow::Result<(usize, usize)> {
+    let prepared = fast_img_prepare_verified_source_deletion(marker, src_dir, strategy)?;
+    fast_img_delete_prepared_source_jpegs(prepared, removed_files)
+}
+
+/// Current-process final evidence, never serialized or restored from a cache.
+struct FastImgPreparedSourceDeletion {
+    candidates: Vec<FastImgSourceDeleteCandidate>,
+    verified: Vec<FastImgVerifiedSourceDelete>,
+    final_inputs: Option<FinalVerificationInputs>,
 }
 
 struct FastImgSourceDeleteCandidate {
@@ -7875,14 +7912,16 @@ fn fast_img_saved_tool_snapshot(
         (false, Some(path), Some(identity)) => {
             anyhow::ensure!(
                 !img_tool_snapshot_disabled(),
-                "Saved Fast IMG task uses pinned tools. Enable external tool pinning to resume it, or start a new task."
+                resume_admission::SettingsError::ToolModeChanged { saved_pinned: true }
             );
             Ok(Some((path, identity)))
         }
         (true, None, None) => {
             anyhow::ensure!(
                 img_tool_snapshot_disabled(),
-                "Saved Fast IMG task used system tools without pinning. Turn off external tool pinning to resume it, or start a new task."
+                resume_admission::SettingsError::ToolModeChanged {
+                    saved_pinned: false
+                }
             );
             Ok(None)
         }
@@ -10769,7 +10808,7 @@ fn print_photos_verifier_proof_summary(library: &LibraryHandle, expected_count: 
     );
     if other_sync > 0 {
         println!(
-            "[PHOTOS ] verifier policy: unrecognized Photos sync state present; Gate 3 must fail unless every asset has accepted custody proof"
+            "[PHOTOS ] verifier policy: unrecognized Photos sync state present; Gate 2 must fail unless every asset has accepted custody proof"
         );
     } else if photos_local > 0 {
         println!(
@@ -11537,6 +11576,7 @@ fn fast_img_finalize_sources(
     remove_selected_root: bool,
     strategy: &str,
     removed_files: &mut Vec<PathBuf>,
+    prepared_sources: Option<FastImgPreparedSourceDeletion>,
 ) -> anyhow::Result<((usize, usize, usize), (usize, usize, usize))> {
     runtime_cli::check_tool_runtime_snapshot()?;
     let removed_files = std::cell::RefCell::new(removed_files);
@@ -11544,12 +11584,21 @@ fn fast_img_finalize_sources(
         marker,
         !modern_lossy_candidates.is_empty(),
         |marker| {
-            let (deleted, absent) = fast_img_delete_verified_source_jpegs(
-                marker,
-                src_dir,
-                strategy,
-                &mut removed_files.borrow_mut(),
-            )?;
+            let (deleted, absent) = if let Some(prepared) = prepared_sources {
+                anyhow::ensure!(
+                    marker.stage == FastImgStageName::Gate3Passed
+                        && fast_img_cleanup_complete_has_shortest_path_proof(marker),
+                    "final Gate 2 proof is required before Photos-delivered source cleanup"
+                );
+                fast_img_delete_prepared_source_jpegs(prepared, &mut removed_files.borrow_mut())?
+            } else {
+                fast_img_delete_verified_source_jpegs(
+                    marker,
+                    src_dir,
+                    strategy,
+                    &mut removed_files.borrow_mut(),
+                )?
+            };
             let pruned = fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root)?;
             Ok((deleted, absent, pruned))
         },
@@ -11659,6 +11708,80 @@ fn fast_img_record_local_gate_failures(
     Ok(count)
 }
 
+struct FastImgCompletedCleanupReceipt {
+    stage: FastImgStageName,
+    gate2: Gate2Checks,
+    gate3: Gate3Checks,
+}
+
+fn fast_img_completed_cleanup_receipt(
+    marker: &WorkingCopyMarker,
+    initial_sources: &BTreeMap<String, String>,
+    resumed_local_delivery: bool,
+) -> Option<FastImgCompletedCleanupReceipt> {
+    let local = &marker.gate1_checks;
+    let complete_local = local.count.0 && local.blake3.0 && local.metadata.0
+        && local.size.0 && local.orient.0 && local.decode.0;
+    let completed = resumed_local_delivery
+        || marker.stage == FastImgStageName::CleanupComplete
+        || (marker.stage == FastImgStageName::Gate3Passed
+            && fast_img_cleanup_complete_has_shortest_path_proof(marker)
+            && fast_img_marker_has_complete_import_proof(marker));
+    (complete_local && completed
+        && marker.blake3_log.keys().any(|rel| !initial_sources.contains_key(rel)))
+        .then(|| FastImgCompletedCleanupReceipt {
+            stage: if resumed_local_delivery { FastImgStageName::CleanupComplete }
+                else { marker.stage.clone() },
+            gate2: marker.gate2_checks.clone(),
+            gate3: marker.gate3_checks.clone(),
+        })
+}
+
+fn fast_img_fresh_final_local_checks(
+    marker: &WorkingCopyMarker,
+    expected_count: usize,
+    output_format: Option<FormatKind>,
+    initial_sources: &BTreeMap<String, String>,
+    completed_cleanup: bool,
+) -> anyhow::Result<(GateResult, FinalVerificationInputs)> {
+    let _uncached_verification = foundation::common_utils::UncachedVerificationScope::new()?;
+    let mut pending = std::collections::BTreeSet::new();
+    let mut absent = std::collections::BTreeSet::new();
+    for rel in marker.blake3_log.keys() {
+        let source = marker.src_dir.join(fast_img_checked_rel_path(rel)?);
+        match std::fs::symlink_metadata(&source) {
+            Ok(metadata) => {
+                anyhow::ensure!(metadata.is_file() && !metadata.file_type().is_symlink(),
+                    "final Gate 2 source is not a regular file: {}", source.display());
+                pending.insert(rel.clone());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                anyhow::ensure!(completed_cleanup && !initial_sources.contains_key(rel),
+                    "final Gate 2 source disappeared without completed cleanup authority: {}",
+                    source.display());
+                absent.insert(rel.clone());
+            }
+            Err(error) => return Err(error).with_context(|| format!(
+                "inspect final Gate 2 source {}", source.display())),
+        }
+    }
+    let mode = foundation::BatchErrorMode::current();
+    let full_ctx = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
+    let inputs = FinalVerificationInputs::capture(&full_ctx, &absent)?;
+    if pending.len() == marker.blake3_log.len() {
+        return Ok((Gate1Local.run_fresh(&full_ctx, mode, marker), inputs));
+    }
+    let mut remaining = marker.clone();
+    remaining.blake3_log.retain(|rel, _| pending.contains(rel));
+    let pending_ctx = fast_img_pipeline_ctx(&remaining, pending.len(), None, output_format);
+    println!("[GATE 2  ] {} remaining source pair(s); all {expected_count} outputs receive fresh hash/decode/custody checks", pending.len());
+    let mut local = Gate1Local.run_fresh_scoped(&pending_ctx, mode, &remaining);
+    let outputs = Gate2Final.run_fresh_output_decodes(&full_ctx);
+    local.passed &= outputs.passed;
+    local.checks.extend(outputs.checks);
+    Ok((local, inputs))
+}
+
 fn fast_img_run_verification_and_delivery_pipeline(
     context: FastImgDeliveryContext<'_>,
 ) -> anyhow::Result<()> {
@@ -11679,6 +11802,9 @@ fn fast_img_run_verification_and_delivery_pipeline(
         strategy,
         removed_files,
     } = context;
+    let completed_cleanup = fast_img_completed_cleanup_receipt(
+        marker, current_source_hashes, resume_local_delivery_for_shortest_path.0,
+    );
     let mode_name = if strategy == "avif" {
         "AVIF-only (Meme Mode)"
     } else {
@@ -11728,7 +11854,8 @@ fn fast_img_run_verification_and_delivery_pipeline(
         println!("[GATE 1  ] verifying local outputs");
         let mode = foundation::BatchErrorMode::current();
         let ctx = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
-        let mut gate1 = Gate1Local.run_with_error_mode_and_resume(&ctx, mode, marker);
+        let work = Gate1WorkProofs::default();
+        let mut gate1 = Gate1Local.run_with_error_mode_and_work(&ctx, mode, marker, &work);
         if gate1.passed {
             runtime_cli::check_tool_runtime_snapshot()?;
         } else {
@@ -11759,7 +11886,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 );
             }
             let remaining = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
-            gate1 = Gate1Local.run_with_error_mode_and_resume(&remaining, mode, marker);
+            gate1 = Gate1Local.run_with_error_mode_and_work(&remaining, mode, marker, &work);
             if gate1.passed {
                 runtime_cli::check_tool_runtime_snapshot()?;
             } else {
@@ -11819,6 +11946,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             remove_selected_root.0,
             strategy,
             removed_files,
+            None,
         )?;
         println!(
             "[DELIVER ] Gate 1 passed; {mode_name} output at {}; source {source_type} deleted={} already_absent={} modern_lossy_deleted={} modern_lossy_already_absent={} empty_dirs_pruned={}",
@@ -11835,32 +11963,17 @@ fn fast_img_run_verification_and_delivery_pipeline(
     let import_candidates = build_fast_img_output_import_candidates(marker)?;
     foundation::batch_control::checkpoint()?;
     let mut library_handle = if import_complete_or_later(&marker.stage) {
-        let library_handle = if fast_img_marker_has_complete_import_proof(marker) {
-            let library_handle = reverify_media_outputs_in_library(
-                &import_candidates,
-                &marker.photos_imported_assets,
-                marker.photos_library_path.as_deref(),
-            )
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "fast-img resume Photos UUID re-verification failed; source files retained: {err}"
-                )
-            })?;
-            tracing::info!(
-                target: "fast_img",
-                imported = library_handle.imported_assets.len(),
-                gate3_retry = reuse_marker_import_proof.0,
-                "fast-img refreshed persisted Photos UUID proof for retry/resume"
-            );
-            library_handle
-        } else {
-            anyhow::bail!(
-                "fast-img resume marker has no complete Photos UUID proof; refusing automatic re-import or source deletion"
-            )
-        };
-        apply_library_assets_to_marker(marker, &library_handle)
-            .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
-        library_handle
+        anyhow::ensure!(
+            fast_img_marker_has_complete_import_proof(marker),
+            "fast-img resume marker has no complete Photos UUID proof; refusing automatic re-import or source deletion"
+        );
+        tracing::info!(
+            target: "fast_img",
+            imported = marker.photos_imported_assets.len(),
+            retry = reuse_marker_import_proof.0,
+            "retained advisory Photos UUID mapping; final Gate 2 will freshly verify every resource"
+        );
+        None
     } else {
         let reconcile_interrupted_import = marker.stage == FastImgStageName::Importing;
         if !reconcile_interrupted_import {
@@ -11879,13 +11992,15 @@ fn fast_img_run_verification_and_delivery_pipeline(
             .map_err(|err| anyhow::anyhow!("fast-img marker/library verifier mismatch: {err}"))?;
         marker.stage = FastImgStageName::ImportComplete;
         marker.error = None;
-        library_handle
+        Some(library_handle)
     };
-    let controlled_import_failures = fast_img_record_controllable_media_import_failures(
-        marker,
-        &import_candidates,
-        &mut library_handle,
-    )?;
+    let controlled_import_failures = if let Some(library_handle) = &mut library_handle {
+        fast_img_record_controllable_media_import_failures(
+            marker, &import_candidates, library_handle,
+        )?
+    } else {
+        0
+    };
     if controlled_import_failures > 0 {
         expected_count = fast_img_effective_expected_count(
             marker,
@@ -11895,73 +12010,102 @@ fn fast_img_run_verification_and_delivery_pipeline(
         marker.stage = FastImgStageName::ImportComplete;
         marker.error = None;
         println!(
-            "[PHOTOS ] normal mode retained {controlled_import_failures} rejected source(s); continuing Gates 2/3 for {expected_count} verified import(s)"
+            "[PHOTOS ] normal mode retained {controlled_import_failures} rejected source(s); continuing final Gate 2 for {expected_count} verified import(s)"
         );
     }
     write_marker_atomic(marker)?;
 
-    if !gate2_complete_or_later(&marker.stage) {
-        foundation::batch_control::checkpoint()?;
-        print_photos_verifier_proof_summary(&library_handle, expected_count);
-        println!("[GATE 2  ] verifying Photos import");
+    // Every cleanup attempt, including legacy Gate2/DeepScan/Gate3 resumes,
+    // establishes new evidence. Persisted receipts never authorize this deletion.
+    let _uncached_verification = foundation::common_utils::UncachedVerificationScope::new()?;
+    let final_gate = (|| -> anyhow::Result<FastImgPreparedSourceDeletion> {
+    foundation::batch_control::checkpoint()?;
+    println!("[GATE 2  ] final verification: fresh local checks, then current Photos resources");
+    runtime_cli::check_tool_runtime_snapshot()?;
+    let (local, final_inputs) = fast_img_fresh_final_local_checks(
+        marker,
+        expected_count,
+        output_format,
+        current_source_hashes,
+        completed_cleanup.is_some(),
+    )?;
+    print_gate_result("GATE 2 local", &local);
+    if !local.passed {
+        runtime_cli::check_tool_runtime_after_failure()?;
+        marker.gate2_checks = Gate2Checks::default();
+        marker.gate3_checks = Gate3Checks::default();
+        marker.apply_final_gate2(&local);
+        anyhow::bail!(
+            "Gate 2 fresh local verification failed: {}; wc preserved at {}",
+            marker_checks_from_result(&local),
+            working_copy.display()
+        );
+    }
+    let mut prepared_sources = fast_img_prepare_verified_source_deletion(marker, src_dir, strategy)?;
+    if marker.photos_library_path.is_none() && !marker.photos_imported_assets.is_empty() {
+        foundation::fast_img::bind_marker_to_selected_photos_library(marker)
+            .context("reverify and bind the resumed Photos delivery to its active library")?;
+    }
+    let final_candidates = build_fast_img_output_import_candidates(marker)?;
+    let fresh_library = reverify_media_outputs_in_library(
+        &final_candidates,
+        &marker.photos_imported_assets,
+        marker.photos_library_path.as_deref(),
+    )
+    .map_err(|error| anyhow::anyhow!(
+        "Gate 2 fresh Photos UUID/resource verification failed; sources retained: {error}"
+    ))?;
+    apply_library_assets_to_marker(marker, &fresh_library)
+        .map_err(|error| anyhow::anyhow!("Gate 2 marker/library verifier mismatch: {error}"))?;
+    print_photos_verifier_proof_summary(&fresh_library, expected_count);
+    let gate2 = Gate2Final.run(&fast_img_pipeline_ctx(
+        marker,
+        expected_count,
+        Some(fresh_library),
+        output_format,
+    ));
+    final_inputs.verify_unchanged()?;
+    if gate2.passed {
         runtime_cli::check_tool_runtime_snapshot()?;
-        let gate2 = Gate2Import.run(&fast_img_pipeline_ctx(
-            marker,
-            expected_count,
-            Some(library_handle.clone()),
-            output_format,
-        ));
-        if gate2.passed {
-            runtime_cli::check_tool_runtime_snapshot()?;
-        } else {
-            runtime_cli::check_tool_runtime_after_failure()?;
-        }
-        print_gate_result("GATE 2", &gate2);
-        marker.apply_gate2(&gate2);
-        write_marker_atomic(marker)?;
-        if !gate2.passed {
-            anyhow::bail!(
-                "Gate 2 failed: {}; wc preserved at {}",
-                marker_checks_from_result(&gate2),
-                working_copy.display()
-            );
-        }
+    } else {
+        runtime_cli::check_tool_runtime_after_failure()?;
     }
-
-    if !deep_scan_complete_or_later(&marker.stage) {
-        println!("[DEEP    ] scanning Photos library consistency");
-        marker.stage = FastImgStageName::DeepScanComplete;
-        write_marker_atomic(marker)?;
+    print_gate_result("GATE 2", &gate2);
+    marker.apply_final_gate2(&gate2);
+    if !gate2.passed {
+        anyhow::bail!(
+            "Gate 2 failed: {}; wc preserved at {}",
+            marker_checks_from_result(&gate2),
+            working_copy.display()
+        );
     }
-
-    if !gate3_complete_or_later(&marker.stage) {
-        println!("[GATE 3  ] verifying before cleanup");
-        runtime_cli::check_tool_runtime_snapshot()?;
-        let gate3 = Gate3Deep.run(&fast_img_pipeline_ctx(
-            marker,
-            expected_count,
-            Some(library_handle),
-            output_format,
-        ));
-        if gate3.passed {
-            runtime_cli::check_tool_runtime_snapshot()?;
-        } else {
-            runtime_cli::check_tool_runtime_after_failure()?;
+    write_marker_atomic(marker)?;
+    prepared_sources.final_inputs = Some(final_inputs);
+    Ok(prepared_sources)
+    })();
+    let prepared_sources = match final_gate {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if let Some(completed) = &completed_cleanup {
+                // This historical receipt explains only sources already absent
+                // at startup. It never authorizes deletion of a pending source.
+                marker.stage = completed.stage.clone();
+                marker.gate2_checks = completed.gate2.clone();
+                marker.gate3_checks = completed.gate3.clone();
+            } else if marker.stage != FastImgStageName::Gate3Failed {
+                marker.stage = FastImgStageName::Gate3Failed;
+                marker.gate2_checks = Gate2Checks::default();
+                marker.gate3_checks = Gate3Checks::default();
+            }
+            marker.error = Some(format!("{error:#}"));
+            write_marker_atomic(marker).with_context(|| format!(
+                "persist final Gate 2 failure; preceding failure: {error:#}"
+            ))?;
+            return Err(error);
         }
-        print_gate_result("GATE 3", &gate3);
-        marker.apply_gate3(&gate3);
-        write_marker_atomic(marker)?;
-        if !gate3.passed {
-            anyhow::bail!(
-                "Gate 3 failed: {}; wc preserved at {}",
-                marker_checks_from_result(&gate3),
-                working_copy.display()
-            );
-        }
-    }
+    };
 
     foundation::batch_control::checkpoint()?;
-    fast_img_strip_non_target_files(working_copy, strategy)?;
     foundation::metadata::apply_delivery_directory_metadata(
         saved_dir_timestamps,
         src_dir,
@@ -11984,6 +12128,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         remove_selected_root.0,
         strategy,
         removed_files,
+        Some(prepared_sources),
     )?;
     tracing::info!(
         target: "fast_img",
@@ -11993,14 +12138,17 @@ fn fast_img_run_verification_and_delivery_pipeline(
         tier2_already_absent = tier2_already_deleted,
         empty_dirs_pruned = source_dirs_pruned + tier2_dirs_pruned,
         src_dir = %src_dir.display(),
-        "fast-img deleted verified source files after Gate 3"
+        "fast-img deleted verified source files after fresh final Gate 2"
     );
+
+    // Keep observed output companions available until every source proof is consumed.
+    fast_img_strip_non_target_files(working_copy, strategy)?;
 
     marker.stage = FastImgStageName::CleanupComplete;
     marker.error = None;
     write_marker_atomic(marker)?;
     println!(
-        "[DONE    ] {} {ext_name} files · {} source {source_type} deleted · {} Tier 2 originals deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①②③ all ✅",
+        "[DONE    ] {} {ext_name} files · {} source {source_type} deleted · {} Tier 2 originals deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①② all ✅",
         expected_count,
         source_deleted,
         tier2_deleted,
@@ -12324,8 +12472,21 @@ mod fast_img_hardening_tests {
         }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
-        for (failed_only, changed) in [(false, false), (false, true), (true, false), (true, true)] {
-            let case = root.path().join(format!("case-{failed_only}-{changed}"));
+        for (failed_only, changed, tool_mode_changed) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, false),
+            (true, true, false),
+            (false, false, true),
+        ] {
+            if tool_mode_changed {
+                foundation::runtime_config::install(
+                    foundation::runtime_config::RuntimeConfig::default(),
+                )?;
+            }
+            let case = root
+                .path()
+                .join(format!("case-{failed_only}-{changed}-{tool_mode_changed}"));
             let input = case.join("source");
             std::fs::create_dir_all(&input)?;
             let input = input.canonicalize()?;
@@ -12352,10 +12513,15 @@ mod fast_img_hardening_tests {
                     reason: "synthetic retained failure".into(),
                 },
             );
-            if changed {
+            if changed || tool_mode_changed {
                 marker.processing_contract = Some(super::fast_img_active_processing_contract(
                     "jxl", false, false,
                 )?);
+            }
+            if tool_mode_changed {
+                marker.tool_snapshot_disabled = false;
+                marker.tool_snapshot_manifest = Some(case.join("saved-tool-manifest.json"));
+                marker.tool_snapshot_identity = Some("a".repeat(64));
             }
             foundation::pipeline::verification::write_marker_atomic(&marker)?;
             let mut arguments = vec![
@@ -12403,7 +12569,9 @@ mod fast_img_hardening_tests {
             let diagnostics = diagnostics.into_inner();
             assert_eq!(diagnostics.len(), 1);
             let diagnostic = &diagnostics[0];
-            let expected_cause = if changed {
+            let expected_cause = if tool_mode_changed {
+                "resume_tool_mode_changed"
+            } else if changed {
                 "resume_config_changed"
             } else if failed_only {
                 // Core refuses an unproven parent before a child may be selected.
@@ -15630,6 +15798,96 @@ mod fast_img_hardening_tests {
         let current_hashes = fast_img_source_hash_set(&src_root, &[first, second])?;
 
         validate_fast_img_marker_source_state(&marker, &src_root, 2, &current_hashes)?;
+        Ok(())
+    }
+
+    #[test]
+    fn final_gate2_fresh_cleanup_subset_rechecks_outputs_and_rejects_new_absence()
+    -> anyhow::Result<()> {
+        const NAME: &str = "fast_img_hardening_tests::final_gate2_fresh_cleanup_subset_rechecks_outputs_and_rejects_new_absence";
+        if std::env::var("MFB_TEST_FINAL_VERIFICATION_CHILD").ok().as_deref() != Some(NAME) {
+            let result = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", NAME, "--nocapture"])
+                .env("MFB_TEST_FINAL_VERIFICATION_CHILD", NAME).output()?;
+            anyhow::ensure!(result.status.success(), "isolated cleanup regression: {}\n{}",
+                String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            return Ok(());
+        }
+        let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
+        let _guard = FAST_IMG_TEST_ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        foundation::tools::require(&["cjxl", "djxl", "exiftool", "jxlinfo"])
+            .map_err(anyhow::Error::msg)?;
+        let root = TempDir::new()?;
+        let sources = root.path().join("source");
+        let outputs = root.path().join("output");
+        std::fs::create_dir(&sources)?;
+        std::fs::create_dir(&outputs)?;
+        let encoder = foundation::common_utils::resolve_tool_path("cjxl")
+            .ok_or_else(|| anyhow::anyhow!("cjxl fixture unavailable"))?;
+        let mut marker = WorkingCopyMarker::new(sources.clone(), outputs.clone(), 2);
+        let mut assets = Vec::new();
+        for index in 0..2 {
+            let source = sources.join(format!("{index}.jpg"));
+            let output = outputs.join(format!("{index}.JXL"));
+            image::RgbImage::from_pixel(4, 3, image::Rgb([20, 40, 60])).save(&source)?;
+            let encoded = std::process::Command::new(&encoder)
+                .args(["--lossless_jpeg=1", "--effort=1"])
+                .arg(&source).arg(&output).output()?;
+            anyhow::ensure!(encoded.status.success(), "{}", String::from_utf8_lossy(&encoded.stderr));
+            foundation::metadata::preserve_filesystem_for_delivery(&source, &output)?;
+            let hash = calculate_blake3_hash(&output)?;
+            marker.blake3_log.insert(format!("{index}.jpg"), Blake3Entry {
+                out_rel: Some(format!("{index}.JXL")),
+                src: calculate_blake3_hash(&source)?,
+                out: hash.clone(),
+                library_asset: Some(hash.clone()),
+            });
+            assets.push(LibraryAssetRecord {
+                rel_path: format!("{index}.JXL"),
+                blake3: hash,
+                sync_status: "photos_local".into(),
+                photos_uuid: Some(format!("fixture-uuid-{index}")),
+                ..Default::default()
+            });
+        }
+        let ctx = fast_img_pipeline_ctx(&marker, 2, None, Some(FormatKind::Jxl));
+        let local = foundation::pipeline::verification::Gate1Local.run_fresh(
+            &ctx, foundation::BatchErrorMode::LogAndContinue, &marker,
+        );
+        anyhow::ensure!(local.passed, "initial synthetic local proof: {local:?}");
+        marker.apply_gate1(&local);
+        marker.photos_imported_assets = assets.clone();
+        let library = foundation::pipeline::verification::LibraryHandle {
+            imported_assets: assets, ..Default::default()
+        };
+        let prior = foundation::pipeline::verification::Gate2Final.run(
+            &fast_img_pipeline_ctx(&marker, 2, Some(library), Some(FormatKind::Jxl)),
+        );
+        anyhow::ensure!(prior.passed, "synthetic provider record contract: {prior:?}");
+        marker.apply_final_gate2(&prior);
+        std::fs::remove_file(sources.join("0.jpg"))?;
+        let initial = BTreeMap::from([("1.jpg".into(), marker.blake3_log["1.jpg"].src.clone())]);
+        assert!(super::fast_img_completed_cleanup_receipt(&marker, &initial, false).is_some());
+        let (fresh, inputs) = super::fast_img_fresh_final_local_checks(
+            &marker, 2, Some(FormatKind::Jxl), &initial, true,
+        )?;
+        anyhow::ensure!(fresh.passed, "fresh subset and full-output proof: {fresh:?}");
+        inputs.verify_unchanged()?;
+        assert_eq!(fresh.checks.iter().filter(|check| check.name == "decode").count(), 2);
+        assert!(sources.join("1.jpg").is_file(), "verification must not delete pending sources");
+        let mut prepared = super::fast_img_prepare_verified_source_deletion(&marker, &sources, "jxl")?;
+        prepared.final_inputs = Some(inputs);
+        std::fs::File::open(sources.join("1.jpg"))?.set_times(std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000)))?;
+        assert!(super::fast_img_delete_prepared_source_jpegs(prepared, &mut Vec::new()).is_err());
+        assert!(sources.join("1.jpg").is_file(), "late filesystem drift must retain the pending original");
+        std::fs::remove_file(sources.join("1.jpg"))?;
+        let error = super::fast_img_fresh_final_local_checks(
+            &marker, 2, Some(FormatKind::Jxl), &initial, true,
+        ).unwrap_err();
+        assert!(error.to_string().contains("disappeared without completed cleanup authority"));
+        marker.stage = FastImgStageName::ImportComplete;
+        assert!(super::fast_img_completed_cleanup_receipt(&marker, &BTreeMap::new(), false).is_none());
         Ok(())
     }
 

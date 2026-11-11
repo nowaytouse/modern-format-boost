@@ -1629,14 +1629,15 @@ fn cjxl_exit_summary(status: ExitStatus) -> String {
 }
 
 fn cjxl_failure_summary(stage: &str, output: &foundation::process_runner::ProcessOutput) -> String {
-    let stderr_tail = output
-        .stderr
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("<empty stderr>");
+    // The last line is often only "EncodeImageJXL() failed."; preserve the
+    // preceding decoder or reconstruction cause within the existing byte limit.
+    let diagnostic = if output.stderr.trim().is_empty() {
+        "<empty stderr>".to_string()
+    } else {
+        truncate_jpeg_ladder_stderr(&output.stderr)
+    };
     format!(
-        "{stage}: {} | stderr: {stderr_tail}",
+        "{stage}: {} | stderr: {diagnostic}",
         cjxl_exit_summary(output.status)
     )
 }
@@ -6935,6 +6936,33 @@ mod tests {
         );
         assert!(summary.contains(&native_status), "{summary}");
         assert!(summary.contains("stderr: <empty stderr>"), "{summary}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cjxl_failure_summary_retains_decode_cause_before_generic_wrapper() {
+        let stderr = concat!(
+            "JPEG XL encoder test version\n",
+            "Encoding [JPEG, lossless transcode, effort: 9]\n",
+            "Error while decoding the JPEG image. It may be corrupt or unsupported.\n",
+            "EncodeImageJXL() failed.\n",
+        );
+        let mut observation = foundation::process_runner::ProcessOutput {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: String::new(),
+            stderr: stderr.to_string(),
+            command_line: "cjxl test fixture".to_string(),
+        };
+        let summary = cjxl_failure_summary("full effort candidate", &observation);
+        assert!(summary.contains("exit_code(1)"), "{summary}");
+        assert!(summary.contains(stderr.trim()), "{summary}");
+
+        observation.stderr = format!("{}{}", stderr, "界".repeat(512));
+        let summary = cjxl_failure_summary("full effort candidate", &observation);
+        let (_, diagnostic) = summary.split_once(" | stderr: ").expect("stderr detail");
+        assert!(diagnostic.starts_with(stderr), "{summary}");
+        assert!(diagnostic.len() <= 512, "diagnostic exceeded byte limit");
+        assert!(diagnostic.len() > 509, "diagnostic truncated too early");
     }
 
     #[cfg(unix)]

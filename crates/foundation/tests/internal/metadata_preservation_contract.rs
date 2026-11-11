@@ -18,6 +18,42 @@ use super::{
 use std::fs;
 use tempfile::TempDir;
 
+#[cfg(unix)]
+#[test]
+fn final_overlay_version_probe_is_uncached() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    const CHILD: &str = "MFB_TEST_FINAL_OVERLAY_VERSION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", "metadata::metadata_preservation_contract::final_overlay_version_probe_is_uncached", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::ensure!(output.status.success() && stdout.contains("1 passed"),
+            "final overlay version child failed: {stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+        return Ok(());
+    }
+    let root = TempDir::new()?;
+    let tool = root.path().join("djxl");
+    let version = root.path().join("djxl.value");
+    fs::write(&tool, "#!/bin/sh\ncat \"$0.value\"\n")?;
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755))?;
+    let _tool = crate::common_utils::EnvGuard::set("MFB_TOOL_DJXL", &tool.to_string_lossy());
+    fs::write(&version, "audit-version-one\n")?;
+    assert_eq!(super::djxl_version_for_overlay_audit(), "audit-version-one");
+    fs::write(&version, "audit-version-two\n")?;
+    assert_eq!(super::djxl_version_for_overlay_audit(), "audit-version-one");
+    {
+        let _fresh = crate::common_utils::UncachedVerificationScope::new()?;
+        assert_eq!(super::djxl_version_for_overlay_audit(), "audit-version-two");
+        fs::write(&version, "audit-version-three\n")?;
+        assert_eq!(super::djxl_version_for_overlay_audit(), "audit-version-three");
+    }
+    assert_eq!(super::djxl_version_for_overlay_audit(), "audit-version-one",
+        "final audit wrote a reusable version result");
+    Ok(())
+}
+
 #[test]
 fn contract_preserve_pro_timestamps_last_locked() {
     let layers = preserve_pro_delivery_layer_order();
