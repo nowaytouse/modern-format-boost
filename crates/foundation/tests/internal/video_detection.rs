@@ -360,7 +360,7 @@ impl RealHevcColorFixture {
 
     fn committed_hdr10plus_fixture_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/real_hevc_hdr10plus.mkv")
+            .join("tests/fixtures/synthetic_hevc_hdr10plus.mkv")
     }
 
     fn materialize_committed_hdr10plus_fixture(output_path: &std::path::Path) -> Result<(), String> {
