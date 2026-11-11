@@ -2084,7 +2084,7 @@ fn production_code_has_no_numeric_forgery_fallbacks() {
 #[test]
 fn release_workflow_does_not_publish_partial_artifacts() {
     let root = workspace_root();
-    let release = fs::read_to_string(root.join(".github/workflows/cd-stable.yml"))
+    let release = fs::read_to_string(root.join(".github/workflows/desktop-release.yml"))
         .expect("stable release workflow must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
 
     for forbidden in [
@@ -2103,8 +2103,8 @@ fn release_workflow_does_not_publish_partial_artifacts() {
 fn dependency_installation_is_not_silenced_in_release_workflows() {
     let root = workspace_root();
     for workflow in [
-        ".github/workflows/cd-stable.yml",
-        ".github/workflows/cd-nightly.yml",
+        ".github/workflows/desktop-release.yml",
+        ".github/workflows/desktop-nightly.yml",
     ] {
         let content = fs::read_to_string(root.join(workflow))
             .unwrap_or_else(|err| panic!("read {workflow}: {err:?}")); // audited: contract test assertion path; panic/expect is test-only failure signal
@@ -4852,7 +4852,7 @@ fn media_conversion_ci_mpc_mirror_download_m241() {
         script.contains("ftpmirror.gnu.org") && script.contains("ftp.gnu.org"),
         "MPC download script must list GNU mirror fallbacks"
     );
-    let workflow = ".github/workflows/ci-quality.yml";
+    let workflow = ".github/workflows/desktop-quality.yml";
     let content =
         fs::read_to_string(root.join(workflow)).unwrap_or_else(|e| panic!("{workflow}: {e}")); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
@@ -18287,7 +18287,7 @@ fn assert_constraint_install_is_precise(schema_text: &str, table: &str, constrai
 #[test]
 fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
     let root = workspace_root();
-    let workflow = fs::read_to_string(root.join(".github/workflows/ci-quality.yml"))
+    let workflow = fs::read_to_string(root.join(".github/workflows/desktop-quality.yml"))
         .expect("ci-quality workflow must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     let clippy_script = fs::read_to_string(root.join("crates/dev/src/bin/clippy_strict.rs"))
         .expect("clippy_strict.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
@@ -18450,8 +18450,9 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
 
 #[test]
 fn nightly_publication_requires_all_production_gates() {
-    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/ci-quality.yml"))
-        .expect("ci-quality workflow must be readable");
+    let workflow =
+        fs::read_to_string(workspace_root().join(".github/workflows/desktop-quality.yml"))
+            .expect("ci-quality workflow must be readable");
     let release = workflow
         .split_once("\n  nightly-release:")
         .and_then(|(_, tail)| tail.split_once("\n  deep-audit:"))
@@ -18501,7 +18502,7 @@ fn libheif_builds_use_the_security_release_not_the_old_embedded_source() {
     let build = fs::read_to_string(root.join("crates/foundation/build.rs"))
         .expect("foundation build script must be readable");
     assert!(build.contains("atleast_version(\"1.23.5\")"));
-    let workflow = fs::read_to_string(root.join(".github/workflows/ci-quality.yml"))
+    let workflow = fs::read_to_string(root.join(".github/workflows/desktop-quality.yml"))
         .expect("CI workflow must be readable");
     assert!(!workflow.contains("libheif-1.23.1"));
     assert!(workflow.contains("MFB_LIBHEIF_ONLY"));
@@ -18515,8 +18516,9 @@ fn libheif_builds_use_the_security_release_not_the_old_embedded_source() {
 
 #[test]
 fn metadata_ci_tests_use_the_pinned_exiftool_parser() {
-    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/ci-quality.yml"))
-        .expect("ci-quality workflow must be readable");
+    let workflow =
+        fs::read_to_string(workspace_root().join(".github/workflows/desktop-quality.yml"))
+            .expect("ci-quality workflow must be readable");
     let health = workflow
         .split_once("\n  health-check:")
         .and_then(|(_, tail)| tail.split_once("\n  security-audit:"))
@@ -18568,8 +18570,9 @@ fn metadata_ci_tests_use_the_pinned_exiftool_parser() {
 
 #[test]
 fn deep_audit_preserves_complete_failure_evidence_and_runs_fuzz() {
-    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/ci-quality.yml"))
-        .expect("ci-quality workflow must be readable");
+    let workflow =
+        fs::read_to_string(workspace_root().join(".github/workflows/desktop-quality.yml"))
+            .expect("ci-quality workflow must be readable");
     let deep = workflow
         .split_once("\n  deep-audit:")
         .map(|(_, deep)| deep)
@@ -18611,8 +18614,9 @@ fn deep_audit_preserves_complete_failure_evidence_and_runs_fuzz() {
 
 #[test]
 fn shared_health_cache_does_not_restore_obsolete_build_graphs() {
-    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/ci-quality.yml"))
-        .expect("ci-quality workflow must be readable");
+    let workflow =
+        fs::read_to_string(workspace_root().join(".github/workflows/desktop-quality.yml"))
+            .expect("ci-quality workflow must be readable");
     let health = workflow
         .split_once("\n  health-check:")
         .and_then(|(_, tail)| tail.split_once("\n  security-audit:"))
@@ -18661,7 +18665,7 @@ fn shared_health_cache_does_not_restore_obsolete_build_graphs() {
 #[test]
 fn release_packaging_does_not_swallow_copy_failures() {
     let root = workspace_root();
-    let release = fs::read_to_string(root.join(".github/workflows/cd-stable.yml"))
+    let release = fs::read_to_string(root.join(".github/workflows/desktop-release.yml"))
         .expect("stable release workflow must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     let offenders: Vec<_> = release
         .lines()
@@ -18669,7 +18673,7 @@ fn release_packaging_does_not_swallow_copy_failures() {
         .filter(|(_, line)| line.contains("cp ") && line.contains("|| true"))
         .map(|(idx, line)| {
             format!(
-                ".github/workflows/cd-stable.yml:{}: {}",
+                ".github/workflows/desktop-release.yml:{}: {}",
                 idx + 1,
                 line.trim()
             )

@@ -1196,9 +1196,9 @@ fn check_tier_c(root: &Path, inventory: &mut Vec<String>) {
     .expect("check_all.rs"); // audited: contract test assertion path; panic/expect is test-only failure signal
     let ci_quality = fs::read_to_string(resolve_workspace_path(
         root,
-        ".github/workflows/ci-quality.yml",
+        ".github/workflows/desktop-quality.yml",
     ))
-    .expect("ci-quality.yml"); // audited: contract test assertion path; panic/expect is test-only failure signal
+    .expect("desktop-quality.yml"); // audited: contract test assertion path; panic/expect is test-only failure signal
     if ci_quality.contains("extractions/setup-just@v2") {
         inventory.push(
             "CI ci-quality must not use extractions/setup-just@v2 (Node 20 deprecated on runners)"

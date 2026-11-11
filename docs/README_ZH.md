@@ -169,7 +169,7 @@ Fast IMG 会先查找匹配的保存状态，再决定是否需要建立新输�
 
 主要模块是 `crates/img`、`crates/vid`、共享的 `crates/foundation`、Rust 开发工具
 `crates/dev`，以及原生 GUI `crates/gui/src-macos`。改动应保留相关行为约定，并补充
-有针对性的回归检查。[CI](../.github/workflows/ci-quality.yml)覆盖的是某个代码版本，
+有针对性的回归检查。[CI](../.github/workflows/desktop-quality.yml)覆盖的是某个代码版本，
 不是任意真实媒体批次或实时照片图库行为的完成证明。
 
 训练、分析开发使用 Rust 入口 `cargo run --locked -p dev --bin run_training --`；

@@ -100,7 +100,7 @@ photos_import_large_batch.rs
 *.mov
 *.avi
 *.mkv
-!crates/foundation/tests/fixtures/real_hevc_hdr10plus.mkv
+!crates/foundation/tests/fixtures/synthetic_hevc_hdr10plus.mkv
 *.flv
 *.wmv
 *.m4v

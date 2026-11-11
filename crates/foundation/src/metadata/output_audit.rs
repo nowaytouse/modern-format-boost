@@ -2603,8 +2603,8 @@ mod tests {
 
     #[test]
     fn metadata_size_probe_falls_back_for_read_only_mkv() {
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/real_hevc_hdr10plus.mkv");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/synthetic_hevc_hdr10plus.mkv");
         removable_payload_bytes(&fixture)
             .expect("read-only MKV size fallback must not block audit");
     }

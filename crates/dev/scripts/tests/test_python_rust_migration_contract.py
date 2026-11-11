@@ -115,7 +115,7 @@ def test_github_workflows_do_not_invoke_script_files() -> None:
 def test_release_packages_rust_tools_and_only_allowlisted_python_workers() -> None:
     workflows = [
         (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
-        for name in ("cd-nightly.yml", "cd-stable.yml")
+        for name in ("desktop-nightly.yml", "desktop-release.yml")
     ]
     allowlisted_workers = {
         "quality_regression_model.py",

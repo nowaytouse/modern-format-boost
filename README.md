@@ -191,7 +191,7 @@ affected by unrelated external changes cannot be promised unchanged.
 The main components are `crates/img`, `crates/vid`, shared `crates/foundation`,
 Rust engineering tools in `crates/dev`, and native GUI code in
 `crates/gui/src-macos`. Changes should preserve the relevant contracts and use
-focused regressions. [CI](.github/workflows/ci-quality.yml) checks a particular
+focused regressions. [CI](.github/workflows/desktop-quality.yml) checks a particular
 revision; it does not certify an arbitrary media batch or live Photos behavior.
 
 Training/analysis development uses the Rust entry point

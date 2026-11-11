@@ -1,23 +1,19 @@
 # CI execution scope
 
-The quality workflow separates feedback on each commit from periodic full audits.
-Every job reports its actual scope; a skipped audit is not evidence that it passed.
+**Temporary desktop-only policy:** Linux quality, security-audit, and deep-audit jobs are paused, as is the gated automatic nightly release. Workflow validation and the macOS dispatch2 check remain active. The stable publishing job is paused pending macOS SBOM validation; its macOS build remains available. The standalone nightly workflow retains its macOS build and publishing path. GitHub-managed Dependabot and Dependency Graph are unaffected. The execution scopes below describe the retained configuration for when paused jobs are restored; skipped jobs do not pass their gates.
 
-| Trigger | Checks |
+The quality workflow currently runs workflow validation and, when code checks are selected, the macOS dispatch2 check. Linux quality, security-audit and deep-audit jobs are paused. Their skipped results do not pass release gates. GitHub-managed Dependabot and Dependency Graph remain unaffected.
+
+| Trigger | Active checks |
 | --- | --- |
-| Code push or pull request to `main` / `nightly` | Workflow validation, standalone Rust formatting, IMG/VID package checks, workspace compilation, strict Clippy, workspace CI tests, both dispatch2 platform checks and dependency advisories. |
-| Monday–Saturday, 03:17 UTC | Workflow validation and current dependency advisories, without repeating code compilation for the same commit. |
-| Sunday, 03:17 UTC | All commit checks plus the existing shared audit, coverage and Deep Production Audit. A nightly snapshot is published only after all release gates pass. |
-| Manual run with `full_audit` enabled (default) | Same full checks and gated nightly publication. Disable this input to run commit checks without publishing. |
+| Code push or pull request to `main` / `nightly` | Workflow validation and macOS dispatch2. |
+| Monday–Saturday, 03:17 UTC | Workflow validation only. |
+| Sunday, 03:17 UTC | Workflow validation and macOS dispatch2; Linux audits and the gated nightly snapshot are paused. |
+| Manual run | Workflow validation and macOS dispatch2; Linux audits and the gated nightly snapshot are paused, including when `full_audit` is enabled. |
 
-In Shanghai time, the scheduled checks start at 11:17, subject to GitHub runner
-availability. The default branch is `nightly`. Docs-only pushes retain the existing
-path exclusion; pull requests still receive their checks.
+In Shanghai time, scheduled checks start at 11:17, subject to runner availability. The default branch is `nightly`. Docs-only pushes retain the existing path exclusion; pull requests still receive their checks. The standalone nightly workflow retains its macOS build and publish path. The stable release workflow retains its macOS build, but publishing is paused pending validation of SBOM generation on macOS.
 
-Automatic nightly snapshots are now weekly rather than one macOS release build
-per push. Use **Continuous Quality & Fuzzing → Run workflow → full_audit** when a
-fresh fully checked snapshot is needed sooner. Dispatching the standalone release
-workflow remains a separate existing entry point.
+The following paragraphs describe retained Linux configuration for a future resumption; those checks are currently paused.
 
 Formatting runs `cargo fmt --all --check` directly. It does not install media
 toolchains or compile the workspace merely to check formatting. Compilation,
