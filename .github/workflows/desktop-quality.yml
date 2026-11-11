@@ -99,13 +99,7 @@ jobs:
         run: python3 crates/dev/scripts/check_version.py
 
       - name: Install actionlint & yamllint
-        run: |
-          # Build actionlint directly; do not execute downloaded installer scripts.
-          go version
-          GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@latest
-          echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
-
-          brew install yamllint
+        run: brew install actionlint yamllint
 
       - name: Validate workflow files
         id: actionlint
