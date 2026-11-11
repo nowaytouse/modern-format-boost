@@ -11775,11 +11775,7 @@ fn fast_img_fresh_final_local_checks(
     remaining.blake3_log.retain(|rel, _| pending.contains(rel));
     let pending_ctx = fast_img_pipeline_ctx(&remaining, pending.len(), None, output_format);
     println!("[GATE 2  ] {} remaining source pair(s); all {expected_count} outputs receive fresh hash/decode/custody checks", pending.len());
-    let mut local = Gate1Local.run_fresh_scoped(&pending_ctx, mode, &remaining);
-    let outputs = Gate2Final.run_fresh_output_decodes(&full_ctx);
-    local.passed &= outputs.passed;
-    local.checks.extend(outputs.checks);
-    Ok((local, inputs))
+    Ok((Gate2Final.run_fresh_cleanup_resume(&full_ctx, &pending_ctx, mode, &remaining), inputs))
 }
 
 fn fast_img_run_verification_and_delivery_pipeline(
@@ -15873,7 +15869,9 @@ mod fast_img_hardening_tests {
         )?;
         anyhow::ensure!(fresh.passed, "fresh subset and full-output proof: {fresh:?}");
         inputs.verify_unchanged()?;
-        assert_eq!(fresh.checks.iter().filter(|check| check.name == "decode").count(), 2);
+        let decodes = fresh.checks.iter().filter(|check| check.name == "decode").collect::<Vec<_>>();
+        assert_eq!(decodes.len(), 2);
+        assert!(decodes.iter().all(|check| check.expected == "1 decode probes pass"));
         assert!(sources.join("1.jpg").is_file(), "verification must not delete pending sources");
         let mut prepared = super::fast_img_prepare_verified_source_deletion(&marker, &sources, "jxl")?;
         prepared.final_inputs = Some(inputs);

@@ -314,9 +314,7 @@ impl Gate1Local {
         )
     }
 
-    /// A cleanup resume verifies remaining source pairs without counting completed outputs twice.
-    #[must_use]
-    pub fn run_fresh_scoped(
+    fn run_fresh_scoped(
         &self,
         ctx: &PipelineCtx,
         error_mode: crate::BatchErrorMode,
@@ -871,27 +869,65 @@ impl VerificationGate for Gate3Deep {
 }
 
 impl Gate2Final {
-    /// Completed cleanup entries still receive fresh output inventory and full decoding.
+    /// Validate the whole inventory and decode each output once in this uncached attempt.
     #[must_use]
-    pub fn run_fresh_output_decodes(&self, ctx: &PipelineCtx) -> GateResult {
+    pub fn run_fresh_cleanup_resume(
+        &self,
+        ctx: &PipelineCtx,
+        pending: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        pending_marker: &WorkingCopyMarker,
+    ) -> GateResult {
         if !crate::common_utils::verification_cache_disabled() {
             return final_cache_policy_failure();
         }
+        let mut local = Gate1Local.run_fresh_scoped(pending, error_mode, pending_marker);
+        let decoded = if local.passed {
+            match local_output_inventory(pending, true) {
+                Ok(paths) => paths.into_iter().collect::<BTreeSet<_>>(),
+                Err(error) => return gate_result(vec![detail(
+                    "decode", false, "complete pending output mapping".into(),
+                    error.to_string(), Vec::new(),
+                )]),
+            }
+        } else {
+            BTreeSet::new()
+        };
+        let decoded = &decoded;
         let probes = [
             LOCAL_REQUIRED_CHECKS[0],
             LOCAL_REQUIRED_CHECKS[1],
             LOCAL_REQUIRED_CHECKS[5],
-        ];
+        ].map(|(name, probe)| {
+            (
+                name,
+                move |ctx: &PipelineCtx, files: &[PathBuf], progress: &mut dyn FnMut(usize, usize)| {
+                    if name != "decode" || decoded.is_empty() {
+                        return probe(ctx, files, progress);
+                    }
+                    let remaining = files.iter().filter(|path| !decoded.contains(*path))
+                        .cloned().collect::<Vec<_>>();
+                    if files.len() != decoded.len() + remaining.len() {
+                        return detail("decode", false, "unchanged output inventory".into(),
+                            "a freshly decoded pending output left the inventory".into(), Vec::new());
+                    }
+                    probe(ctx, &remaining, progress)
+                },
+            )
+        });
         let activity = GateActivity::new(GateActivityKind::PhotosCustody);
-        run_local_checks_with_probes(
+        let outputs = run_local_checks_with_probes(
             &probes,
             ctx,
             || collect_delivery_output_files(&ctx.working_copy, None),
             |check, completed, total, state, files| {
                 activity.emit(check, completed, total, state, files);
             },
-            crate::BatchErrorMode::current(),
-        )
+            error_mode,
+        );
+        local.passed &= outputs.passed;
+        local.checks.extend(outputs.checks);
+        local
     }
 }
 

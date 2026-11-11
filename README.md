@@ -101,16 +101,18 @@ cd modern-format-boost
 cargo build --locked --release -p img -p vid
 ```
 
-On macOS, the native application builder is:
+On macOS, use Smart Build to build or refresh the native application:
 
 ```bash
-cargo run --locked -p dev --bin smart_build -- --all
+cargo run --locked --release -p dev --bin smart_build -- --gui
 ```
 
-It builds the packaged tools, assembles the app under
-`target/release/bundle/macos/`, and replaces the repository-root
-`Modern Format Boost.app`. **Do not run it while that app is processing media.**
-Native builds require Apple's command-line development tools.
+Smart Build checks the packaged tools and native host for changes, signs the
+bundle, verifies its signature, and refreshes the repository-root
+`Modern Format Boost.app`. On replacement, it keeps the previous bundle in
+the application's private backup directory. Use
+`--all` to build the other project targets as well. Native builds require
+Apple's command-line development tools. Quit the App before refreshing it.
 
 For Linux/Windows dependency setup, consult the
 [media dependency installer](crates/dev/src/bin/install_media_dependencies.rs)

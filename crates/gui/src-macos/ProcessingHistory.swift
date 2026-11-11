@@ -481,6 +481,19 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
             + localized("result.delivery_recorded_output", outputDirectory ?? localized("result.unknown")) + "\n"
             + localized("result.delivery_recorded_note")
     }
+
+    var finalPhotosQuarantineCount: Int? {
+        let prefix = "Gate 2 failed: "
+        let check = "quarantine expected=0 quarantined actual="
+        guard !isDeferred, !primaryCleanupComplete,
+              let error = finalizationError, error.hasPrefix(prefix),
+              let suffix = error.range(of: "; wc preserved at ") else { return nil }
+        let checks = error[..<suffix.lowerBound].dropFirst(prefix.count).components(separatedBy: "; ")
+        guard let result = checks.first(where: { $0.hasPrefix(check) }) else { return nil }
+        let value = result.dropFirst(check.count)
+        guard value.utf8.allSatisfy({ (48...57).contains($0) }), let count = Int(value), count > 0 else { return nil }
+        return count
+    }
 }
 
 struct OutputCleanupReceipt: Decodable, Equatable {
@@ -3902,6 +3915,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             for receipt in entry.fastDeliveries where receipt.isDeferred {
                 lines += ["", localized("result.delivery_record_title"), receipt.deferredDetails]
                 if let error = receipt.finalizationError { lines.append(error) }
+            }
+            if !entry.fastDeliveryInvalid {
+                for receipt in entry.fastDeliveries {
+                    guard let quarantined = receipt.finalPhotosQuarantineCount else { continue }
+                    lines += ["", localized("result.delivery_record_title"),
+                              localized("result.final_photos_quarantine", String(quarantined)),
+                              localized("result.independent_delivery_facts", String(receipt.encoded),
+                                        String(receipt.photosVerified), count(receipt.sourceRetained))]
+                }
             }
             lines += ["", localized("cleanup.history_title")]
             if entry.outputCleanupInvalid { lines.append(localized("cleanup.invalid")) }

@@ -9811,7 +9811,12 @@ private final class AppController: NSObject, NSWindowDelegate {
             exitedNormally: normalExit)
         let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(photos: photos,
             source: lastRequest?.targetPath, processExit: terminalExit, exitedNormally: normalExit)
-        batchOverviewDelivery.maximumNumberOfLines = deferred ? 0 : 2
+        let finalPhotosQuarantine = photos && !batchResults.fastDeliveryInvalid
+            ? processingCountTotal(batchResults.fastDeliveries.map { $0.finalPhotosQuarantineCount ?? 0 }) : nil
+        let quarantineReason = finalPhotosQuarantine.flatMap { count in
+            count > 0 ? localized("result.final_photos_quarantine", String(count)) : nil
+        }
+        batchOverviewDelivery.maximumNumberOfLines = deferred || quarantineReason != nil ? 0 : 2
         let verifiedPartialFailure = confirmed && photos && countStatus?.uppercased() == "MATCH"
             && batchResults.hasPartialSuccess
         let previousConfirmation = hasConfirmedFileFailures
@@ -9873,6 +9878,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                 value(usable ? batchResults.fastDeliveryCount(\.photosVerified) : nil),
                 value(usable ? processingCountTotal(batchResults.fastDeliveries.map(\.sourceRetained)) : nil))
                 : localized("result.delivery_invalid")
+            if let quarantineReason {
+                batchOverviewDelivery.stringValue = quarantineReason + "\n" + batchOverviewDelivery.stringValue
+            }
             if !logDetailsExpanded && !uncertain && !countsNeedReview {
                 if failures.map({ $0 > 0 }) == true {
                     let retained = value(processingCountTotal(batchResults.fastDeliveries.map(\.failedSourcesRetained)))
@@ -10659,6 +10667,39 @@ private final class AppController: NSObject, NSWindowDelegate {
         refreshBatchOverview(processExit: 1, exitedNormally: true)
         guard batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
             throw HostError(message: "Malformed delivery receipt was presented as a confirmed partial completion")
+        }
+        clearBatchLog()
+        var quarantinedReceipt = receipt
+        quarantinedReceipt["source_retained"] = 1830
+        quarantinedReceipt["primary_cleanup_complete"] = false
+        quarantinedReceipt["finalization_error"] =
+            "Gate 2 failed: quarantine expected=0 quarantined actual=2; wc preserved at /synthetic/private_output"
+        var blockedCleanup = cleanup
+        blockedCleanup["outcome"] = "verification_blocked"
+        for key in ["removed_files", "already_absent_files", "pruned_directories"] {
+            blockedCleanup[key] = NSNull()
+        }
+        appendLog(try line(quarantinedReceipt))
+        appendLog(batch)
+        appendLog(try cleanupLine(blockedCleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        let quarantineReason = localized("result.final_photos_quarantine", "2")
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+              batchOverviewTitle.textColor == .systemRed,
+              batchOverviewDelivery.stringValue == quarantineReason + "\n"
+                + localized("result.independent_delivery_facts", "1163", "1829", "1830"),
+              batchOverviewDelivery.accessibilityLabel() == batchOverviewDelivery.stringValue,
+              batchOverviewDelivery.maximumNumberOfLines == 0,
+              !batchOverviewDelivery.isHidden,
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.verification_blocked"),
+              batchResults.totals["img"]?[0] == 1829 else {
+            throw HostError(message: "Final Photos quarantine lost its reason, independent facts or blocked cleanup")
+        }
+        quarantinedReceipt["finalization_error"] =
+            "Gate 2 failed: chain expected=1 actual=0; wc preserved at /synthetic/quarantine expected=0 quarantined actual=2"
+        let unrecognized = try FastImgDeliveryReceipt.decode(line(quarantinedReceipt))
+        guard unrecognized != nil, unrecognized?.finalPhotosQuarantineCount == nil else {
+            throw HostError(message: "An unrelated final verification error was labeled quarantine")
         }
         for expanded in [false, true] {
             clearBatchLog()

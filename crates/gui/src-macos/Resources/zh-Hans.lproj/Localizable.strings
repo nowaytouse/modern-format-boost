@@ -553,6 +553,7 @@
 "result.delivery_recorded_note" = "以上为当时记录；继续处理前须重新检查文件和交付状态。展开详情可查看原始错误。";
 "result.delivery_facts" = "已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
 "result.independent_delivery_facts" = "独立回执：已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
+"result.final_photos_quarantine" = "最终核验发现 %@ 项带有系统隔离标记。标记可能在工作副本或照片 App 的原件上。请查看处理记录。";
 "result.cleanup_primary" = "主流程清理已完成；其他残留目录未检查。照片本地核验不代表 iCloud 已同步。";
 "result.cleanup_unknown" = "收尾状态尚待确认；未自动清理其他目录。照片本地核验不代表 iCloud 已同步。";
 "cleanup.history_title" = "输出目录清理（当时记录）";

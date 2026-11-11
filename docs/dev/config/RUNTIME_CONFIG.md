@@ -400,6 +400,16 @@ or status. In checkpoint-owned output directories, cleanup can remove a
 recognized Finder `.DS_Store` when it is the only remaining entry. This
 requires the same fresh Photos custody checks as other output cleanup.
 
+Fast IMG checks the macOS quarantine attribute on both the working copy
+and the current Photos original selected by UUID before deleting sources.
+Either attribute blocks deletion. Existing import receipts remain available
+for a later verification attempt.
+
+On a mixed cleanup resume, final Gate 2 decodes outputs for remaining
+source pairs with per-pair input and tool verification. It checks the whole
+output inventory and decodes the outputs whose sources were already removed.
+All outputs receive a fresh decode in the same cache-disabled attempt.
+
 History's file-failure details and their complete-detail copy include the
 associated worker launch and execution evidence. The recorded run, invocation
 and pipeline must match exactly, with one unique launch record; missing,

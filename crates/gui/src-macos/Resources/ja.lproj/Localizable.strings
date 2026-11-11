@@ -553,6 +553,7 @@
 "result.delivery_recorded_note" = "実行時の記録です。続行する前にファイルと引き渡し状態の再確認が必要です。元のエラーは詳細で確認できます。";
 "result.delivery_facts" = "エンコード済み %@ · ローカル Photos 確認済み %@ · 保持した元ファイル %@";
 "result.independent_delivery_facts" = "独立した記録：エンコード済み %@ · ローカル Photos 確認済み %@ · 保持した元ファイル %@";
+"result.final_photos_quarantine" = "最終検証で隔離フラグが見つかりました（%@ 件）。作業コピーまたは写真アプリのオリジナルにフラグが付いている可能性があります。処理履歴を確認してください。";
 "result.cleanup_primary" = "主処理の整理は完了。その他の残存フォルダは未確認です。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "result.cleanup_unknown" = "終了処理の確認が必要です。その他のフォルダは削除していません。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "cleanup.history_title" = "出力フォルダの整理（実行時の記録）";

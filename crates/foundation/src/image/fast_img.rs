@@ -1025,6 +1025,12 @@ fn reverify_modern_lossy_static_photos_custody_excluding(
             reject_referenced_cleanup_targets(&probes, deletion_targets)?;
             Ok(probes)
         },
+        &mut |path| {
+            #[cfg(target_os = "macos")]
+            { path_has_quarantine_xattr(path) }
+            #[cfg(not(target_os = "macos"))]
+            { Ok(path_has_quarantine_xattr(path)) }
+        },
         &mut |check, completed, state, files| activity.emit(check, completed, 1, state, files),
     )
 }
@@ -1087,6 +1093,7 @@ fn require_tier2_cleanup_target(source: &Path, targets: &BTreeSet<PathBuf>) -> R
 fn reverify_modern_lossy_static_photos_custody_with(
     library_handle: &LibraryHandle,
     query_assets: &mut impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    is_quarantined: &mut impl FnMut(&Path) -> Result<bool>,
     emit: &mut impl FnMut(
         &'static str,
         usize,
@@ -1183,6 +1190,11 @@ fn reverify_modern_lossy_static_photos_custody_with(
                     asset.rel_path,
                     probe.path.display()
                 )));
+            }
+            if is_quarantined(&probe.path)? {
+                return Err(ImgQualityError::AnalysisError(
+                    "tier-2 delete gate Photos original is quarantined; sources retained".into(),
+                ));
             }
             let library_blake3 =
                 crate::common_utils::calculate_blake3_hash(&probe.path).map_err(|err| {
@@ -3840,7 +3852,7 @@ where
             )));
         }
         let mut persisted = (*persisted).clone();
-        persisted.quarantined = is_quarantined(&path)?;
+        persisted.quarantined |= is_quarantined(&path)?;
         proven_assets.push(persisted);
     }
     pending_entries.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -4514,7 +4526,11 @@ where
             rel_path: entry.rel_path.clone(),
             blake3: entry.blake3_entry.out.clone(),
             sync_status: photos_sync_status(&verified_probe.probe).to_string(),
-            quarantined: is_quarantined(&entry.path)?,
+            quarantined: output_or_original_quarantined(
+                &entry.path,
+                &verified_probe.probe.path,
+                is_quarantined,
+            )?,
             photos_uuid: Some(verified_probe.probe.uuid.clone()),
             library_blake3: None,
             xmp_sidecar_blake3: None,
@@ -6081,7 +6097,8 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
                 )));
             }
         }
-        let quarantined = is_quarantined(&candidate.path)?;
+        let quarantined =
+            output_or_original_quarantined(&candidate.path, &probe.path, &mut is_quarantined)?;
         imported_assets.push(LibraryAssetRecord {
             rel_path: target.rel_path,
             blake3: candidate.blake3.clone(),
@@ -6162,7 +6179,8 @@ fn library_handle_from_batch_probes(
             ))
         })?;
         let output_path = marker.working_copy.join(&target.rel_path);
-        let quarantined = is_quarantined(&output_path)?;
+        let quarantined =
+            output_or_original_quarantined(&output_path, &probe.path, &mut is_quarantined)?;
         imported_assets.push(LibraryAssetRecord {
             rel_path: target.rel_path,
             blake3,
@@ -7126,6 +7144,16 @@ const fn clear_quarantine_xattr(path: &Path) {
     let _ = path;
 }
 
+fn output_or_original_quarantined(
+    output: &Path,
+    original: &Path,
+    is_quarantined: &mut impl FnMut(&Path) -> Result<bool>,
+) -> Result<bool> {
+    let output_quarantined = is_quarantined(output)?;
+    let original_quarantined = is_quarantined(original)?;
+    Ok(output_quarantined || original_quarantined)
+}
+
 #[cfg(target_os = "macos")]
 fn path_has_quarantine_xattr(path: &Path) -> Result<bool> {
     xattr::get(path, "com.apple.quarantine")
@@ -7859,7 +7887,7 @@ mod tests {
     }
 
     #[test]
-    fn library_handle_quarantine_check_uses_controlled_output_path() -> Result<()> {
+    fn library_handle_quarantine_check_covers_output_and_photos_original() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let src_root = temp_dir.path().join("src");
         let wc = temp_dir.path().join("src_optimized");
@@ -7886,22 +7914,28 @@ mod tests {
             },
         );
 
-        let handle = library_handle_from_probes(
-            &marker,
-            &[("a.JXL".to_string(), "UUID-A".to_string())],
-            |_uuid| {
-                Ok(FastImgLibraryAssetProbe {
-                    uuid: "UUID-A".to_string(),
-                    path: photos_asset.clone(),
-                    iscloudasset: false,
-                    incloud: Some(false),
-                    ismissing: false,
-                })
-            },
-            |path| Ok(path != out),
-        )?;
-
-        assert!(!handle.imported_assets[0].quarantined);
+        for quarantined_path in [None, Some(out.as_path()), Some(photos_asset.as_path())] {
+            let mut checked_paths = Vec::new();
+            let handle = library_handle_from_probes(
+                &marker,
+                &[("a.JXL".to_string(), "UUID-A".to_string())],
+                |_uuid| {
+                    Ok(FastImgLibraryAssetProbe {
+                        uuid: "UUID-A".to_string(),
+                        path: photos_asset.clone(),
+                        iscloudasset: false,
+                        incloud: Some(false),
+                        ismissing: false,
+                    })
+                },
+                |path| {
+                    checked_paths.push(path.to_path_buf());
+                    Ok(quarantined_path == Some(path))
+                },
+            )?;
+            assert_eq!(checked_paths, [out.clone(), photos_asset.clone()]);
+            assert_eq!(handle.imported_assets[0].quarantined, quarantined_path.is_some());
+        }
         Ok(())
     }
 
@@ -7940,7 +7974,7 @@ mod tests {
                     ismissing: false,
                 }])
             },
-            |path| Ok(path != out),
+            |path| Ok(path == photos_asset.as_path()),
         )?;
 
         assert_eq!(handle.imported_assets.len(), 1);
@@ -7951,7 +7985,7 @@ mod tests {
             Some("UUID-A")
         );
         assert_eq!(handle.imported_assets[0].sync_status, "photos_local");
-        assert!(!handle.imported_assets[0].quarantined);
+        assert!(handle.imported_assets[0].quarantined);
         Ok(())
     }
 
@@ -8943,9 +8977,9 @@ mod tests {
     }
 
     #[test]
-    fn photos_custody_progress_counts_only_matching_original_bytes() -> Result<()> {
+    fn photos_custody_progress_counts_only_verified_originals() -> Result<()> {
         use crate::ui::progress::{GateActivityState, GateFileProgress};
-        for drift in [false, true] {
+        for failure in [None, Some("BLAKE3 drift"), Some("original is quarantined")] {
             let root = tempfile::tempdir()?;
             let mut assets = Vec::new();
             let mut probes = Vec::new();
@@ -8968,7 +9002,7 @@ mod tests {
                     ismissing: false,
                 });
             }
-            if drift {
+            if failure == Some("BLAKE3 drift") {
                 std::fs::write(&probes[1].path, b"changed")?;
             }
             let mut events = Vec::new();
@@ -8981,10 +9015,13 @@ mod tests {
                     assert_eq!(ids, ["UUID-a", "UUID-b"]);
                     Ok(probes.clone())
                 },
+                &mut |path| {
+                    Ok(failure == Some("original is quarantined") && path == probes[1].path.as_path())
+                },
                 &mut |check, completed, state, files| events.push((check, completed, state, files)),
             );
-            let expected = if drift { 1 } else { 2 };
-            let state = if drift {
+            let expected = if failure.is_some() { 1 } else { 2 };
+            let state = if failure.is_some() {
                 GateActivityState::Failed
             } else {
                 GateActivityState::Passed
@@ -9018,13 +9055,8 @@ mod tests {
                     .3
                     .is_some_and(|files| files.total == 2 && files.processed <= expected)
             }));
-            if drift {
-                assert!(
-                    result
-                        .unwrap_err()
-                        .to_string()
-                        .contains("Photos BLAKE3 drift for b.webp")
-                );
+            if let Some(failure) = failure {
+                assert!(result.unwrap_err().to_string().contains(failure));
                 assert!(
                     events
                         .iter()
@@ -9036,7 +9068,7 @@ mod tests {
             assert_eq!(std::fs::read(&probes[0].path)?, b"a");
             assert_eq!(
                 std::fs::read(&probes[1].path)?,
-                if drift {
+                if failure == Some("BLAKE3 drift") {
                     b"changed".as_slice()
                 } else {
                     b"b".as_slice()
@@ -9084,6 +9116,7 @@ mod tests {
                     }
                     Ok(Vec::new())
                 },
+                &mut |_| panic!("invalid custody query must not read quarantine state"),
                 &mut |check, completed, state, files| events.push((check, completed, state, files)),
             );
             assert!(result.is_err());
@@ -9114,6 +9147,7 @@ mod tests {
         reverify_modern_lossy_static_photos_custody_with(
             &LibraryHandle::default(),
             &mut |_| panic!("empty inventory must not query Photos"),
+            &mut |_| panic!("empty inventory must not read quarantine state"),
             &mut |check, completed, state, files| events.push((check, completed, state, files)),
         )?;
         assert_eq!(

@@ -535,10 +535,25 @@ fn gui_needs_rebuild(project_root: &Path) -> bool {
         || newest_input > get_mtime(&completed)
 }
 
+fn gui_needs_publication(project_root: &Path) -> bool {
+    let assembled =
+        native_app_bundle_path(project_root).join("Contents/Resources/native-build-complete.txt");
+    let published = project_root.join("Modern Format Boost.app/Contents");
+    !published.join("MacOS/Modern Format Boost").is_file()
+        || bundle_file_needs_sync(
+            &assembled,
+            &published.join("Resources/native-build-complete.txt"),
+        )
+}
+
 fn quiet_can_skip(args: &Args, project_root: &Path, targets: &[(&str, String, bool)]) -> bool {
+    let resources = project_root.join("Modern Format Boost.app/Contents/Resources");
     args.quiet
         && !args.force
-        && (!(args.gui || args.all) || args.rust_only || !gui_needs_rebuild(project_root))
+        && (!(args.gui || args.all)
+            || args.rust_only
+            || (!gui_needs_rebuild(project_root) && !gui_needs_publication(project_root)))
+        && (!resources.is_dir() || app_bundle_changed_bins(project_root, &resources).is_empty())
         && targets.iter().all(|(project_dir, binary_name, _)| {
             decide_build_action(project_root, project_dir, binary_name, false).0 == "skip"
         })
@@ -1171,7 +1186,23 @@ fn bundle_file_needs_sync(src: &Path, dest: &Path) -> bool {
     }
 }
 
-fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: bool) -> Result<bool> {
+fn app_bundle_changed_bins(project_root: &Path, resources: &Path) -> Vec<&'static str> {
+    let release = project_root.join("target/release");
+    APP_BUNDLE_RESOURCE_BINARIES
+        .iter()
+        .copied()
+        .filter(|bin| {
+            let source = release.join(bin);
+            source.is_file() && bundle_file_needs_sync(&source, &resources.join(bin))
+        })
+        .collect()
+}
+
+fn sync_foundation_dylib_artifact(
+    project_root: &Path,
+    style: &Style,
+    force: bool,
+) -> Result<PathBuf> {
     let dylib_name = if cfg!(target_os = "macos") {
         "libfoundation.dylib"
     } else if cfg!(target_os = "windows") {
@@ -1238,64 +1269,69 @@ fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: boo
         );
     }
 
-    let app_bundle = project_root.join("Modern Format Boost.app");
-    if !app_bundle.is_dir() {
-        return Ok(false);
-    }
-
-    let app_res = app_bundle
-        .join("Contents")
-        .join("Resources")
-        .join(dylib_name);
-    let app_fw_dir = app_bundle.join("Contents").join("Frameworks");
-    fs::create_dir_all(&app_fw_dir)
-        .with_context(|| format!("create framework dir {}", app_fw_dir.display()))?;
-    let app_fw = app_fw_dir.join(dylib_name);
-    let mut app_changed = false;
-    for destination in [&app_res, &app_fw] {
-        if force || bundle_file_needs_sync(&target_dylib, destination) {
-            fs::copy(&target_dylib, destination).with_context(|| {
-                format!(
-                    "copy {} to {}",
-                    target_dylib.display(),
-                    destination.display()
-                )
-            })?;
-            app_changed = true;
-        }
-    }
-
-    if app_changed && cfg!(target_os = "macos") {
-        if !command_exists("codesign") {
-            anyhow::bail!("codesign not found; cannot sign foundation dylib");
-        }
-        for destination in [&app_res, &app_fw] {
-            let status = Command::new("codesign")
-                .arg("--force")
-                .arg("--sign")
-                .arg(app_bundle_codesign_identity()?)
-                .arg(destination)
-                .status()
-                .with_context(|| format!("codesign {}", destination.display()))?;
-            if !status.success() {
-                anyhow::bail!("codesign failed for {}", destination.display());
-            }
-        }
-    }
-
-    Ok(app_changed)
+    Ok(target_dylib)
 }
 
-fn sync_app_bundle(project_root: &Path, style: &Style, force: bool) -> Result<()> {
+fn sync_app_bundle(
+    project_root: &Path,
+    style: &Style,
+    force: bool,
+    native_build: bool,
+) -> Result<()> {
     let _production_lease = foundation::production_lock::acquire_production_lease()
         .context("cannot refresh app artifacts while a production task is active")?;
-    let foundation_changed = sync_foundation_dylib_artifact(project_root, style, force)?;
+    let native_bundle = if native_build {
+        if force || gui_needs_rebuild(project_root) {
+            println!(
+                "\n{}{} Building native macOS GUI...{}",
+                style.bold, style.cyan, style.reset
+            );
+            compile_swift_native_host(project_root, style)?;
+        }
+        Some(native_app_bundle_path(project_root))
+    } else {
+        None
+    };
+    let foundation = sync_foundation_dylib_artifact(project_root, style, force)?;
 
-    let app_res_dir = project_root
-        .join("Modern Format Boost.app")
-        .join("Contents")
-        .join("Resources");
+    let app_bundle = project_root.join("Modern Format Boost.app");
+    let source_bundle = native_bundle.as_deref().unwrap_or(&app_bundle);
+    let app_res_dir = source_bundle.join("Contents/Resources");
     if !app_res_dir.is_dir() {
+        anyhow::ensure!(!native_build, "built app bundle is missing its Resources");
+        return Ok(());
+    }
+    for directory in [source_bundle, &source_bundle.join("Contents"), &app_res_dir] {
+        anyhow::ensure!(
+            directory.symlink_metadata()?.is_dir(),
+            "App bundle directory must be real: {}",
+            directory.display()
+        );
+    }
+
+    let target_release = project_root.join("target/release");
+    let changed_bins = app_bundle_changed_bins(project_root, &app_res_dir);
+    let dylib_name = foundation
+        .file_name()
+        .context("foundation dylib has no filename")?;
+    let foundation_paths =
+        ["Contents/Resources", "Contents/Frameworks"].map(|dir| Path::new(dir).join(dylib_name));
+    let foundation_changed = force
+        || foundation_paths
+            .iter()
+            .any(|path| bundle_file_needs_sync(&foundation, &source_bundle.join(path)));
+    let mut resources_changed = false;
+    for (source, name) in NATIVE_APP_BUNDLE_RESOURCES {
+        let source = project_root.join(source);
+        anyhow::ensure!(
+            source.is_file(),
+            "required App bundle resource is missing: {}",
+            source.display()
+        );
+        resources_changed |= bundle_file_needs_sync(&source, &app_res_dir.join(name));
+    }
+    if !native_build && changed_bins.is_empty() && !foundation_changed && !resources_changed {
+        println!("{}App Bundle already current.{}", style.dim, style.reset);
         return Ok(());
     }
 
@@ -1303,24 +1339,62 @@ fn sync_app_bundle(project_root: &Path, style: &Style, force: bool) -> Result<()
         "\n{}Syncing binaries to App Bundle...{}",
         style.dim, style.reset
     );
-    let target_release = project_root.join("target").join("release");
+    let staging = tempfile::Builder::new()
+        .prefix("mfb-app-staging-")
+        .tempdir_in(project_root.join("target"))
+        .context("create private App bundle staging directory")?;
+    let staged = staging.path().join("Modern Format Boost.app");
+    let status = Command::new("ditto")
+        .arg(source_bundle)
+        .arg(&staged)
+        .status()?;
+    anyhow::ensure!(status.success(), "copy App bundle into staging failed");
 
-    let mut changed_bins = Vec::new();
-    for bin in APP_BUNDLE_RESOURCE_BINARIES {
-        let src = target_release.join(bin);
-        if src.is_file() {
-            let dest = app_res_dir.join(bin);
-            if bundle_file_needs_sync(&src, &dest) {
-                fs::copy(&src, &dest)
-                    .with_context(|| format!("sync {} to App bundle", src.display()))?;
-                changed_bins.push(*bin);
+    let staged_resources = staged.join("Contents/Resources");
+    for bin in &changed_bins {
+        let source = target_release.join(bin);
+        copy_bundle_file(&source, &staged_resources.join(bin))?;
+    }
+    if foundation_changed {
+        let frameworks = staged.join("Contents/Frameworks");
+        fs::create_dir_all(&frameworks)?;
+        anyhow::ensure!(
+            frameworks.symlink_metadata()?.is_dir(),
+            "App Frameworks must be a real directory"
+        );
+        for path in foundation_paths {
+            let destination = staged.join(path);
+            copy_bundle_file(&foundation, &destination)?;
+            if cfg!(target_os = "macos") {
+                let status = Command::new("codesign")
+                    .args(["--force", "--sign"])
+                    .arg(app_bundle_codesign_identity()?)
+                    .arg(&destination)
+                    .status()?;
+                anyhow::ensure!(
+                    status.success(),
+                    "codesign failed for {}",
+                    destination.display()
+                );
             }
         }
     }
-    let resources_changed = sync_native_app_bundle_resources(project_root, &app_res_dir)?;
-    if changed_bins.is_empty() && !foundation_changed && !resources_changed {
-        println!("{}App Bundle already current.{}", style.dim, style.reset);
-        return Ok(());
+    sync_native_app_bundle_resources(project_root, &staged_resources)?;
+    sign_app_bundle(project_root, &staged, style, &changed_bins)?;
+    verify_app_bundle_signature(&staged)?;
+    ensure_app_bundle_idle(project_root, &app_bundle)?;
+
+    let backups = foundation::process_lock::get_mfb_root()?.join("backups");
+    if let Err(error) = publish_app_bundle(
+        &staged,
+        &app_bundle,
+        &backups,
+        style,
+        verify_app_bundle_signature,
+    ) {
+        let retained = staging.keep();
+        return Err(error)
+            .with_context(|| format!("App bundle staging retained at {}", retained.display()));
     }
 
     if foundation_changed {
@@ -1337,9 +1411,23 @@ fn sync_app_bundle(project_root: &Path, style: &Style, force: bool) -> Result<()
             style.reset
         );
     }
+    Ok(())
+}
 
-    sign_app_bundle(project_root, style, &changed_bins)?;
-
+fn copy_bundle_file(source: &Path, destination: &Path) -> Result<()> {
+    match destination.symlink_metadata() {
+        Ok(metadata) => anyhow::ensure!(
+            metadata.is_file(),
+            "App bundle file must be regular: {}",
+            destination.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspect {}", destination.display()));
+        }
+    }
+    fs::copy(source, destination)
+        .with_context(|| format!("sync {} to {}", source.display(), destination.display()))?;
     Ok(())
 }
 
@@ -1352,16 +1440,139 @@ fn sync_native_app_bundle_resources(project_root: &Path, resources_dir: &Path) -
             anyhow::bail!("required App bundle resource is missing: {}", src.display());
         }
         if bundle_file_needs_sync(&src, &dest) {
-            fs::copy(&src, &dest)
-                .with_context(|| format!("copy {} to App bundle", src.display()))?;
+            copy_bundle_file(&src, &dest)?;
             changed = true;
         }
     }
     Ok(changed)
 }
 
-fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) -> Result<()> {
-    let app_bundle = project_root.join("Modern Format Boost.app");
+fn ensure_app_bundle_idle(project_root: &Path, app_bundle: &Path) -> Result<()> {
+    let system = sysinfo::System::new_all().context("initialize running application inventory")?;
+    let app_bundle = app_bundle
+        .canonicalize()
+        .unwrap_or_else(|_| app_bundle.to_path_buf());
+    for process in system.processes().values() {
+        let name = process.name().to_string_lossy();
+        let command = process_cmd_joined_lower(process);
+        if process_path_is_under_project(process.exe(), &app_bundle)
+            || (matches!(name.as_ref(), "Modern Format Boost" | "mfb-photos-import")
+                && process_belongs_to_project(process, project_root, &command))
+        {
+            anyhow::bail!(
+                "close the project App and let its helpers exit before refreshing {}",
+                app_bundle.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn verify_app_bundle_signature(bundle: &Path) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        let status = Command::new("codesign")
+            .args(["--verify", "--deep", "--strict"])
+            .arg(bundle)
+            .status()
+            .with_context(|| format!("verify signature of {}", bundle.display()))?;
+        anyhow::ensure!(
+            status.success(),
+            "signature verification failed for {}",
+            bundle.display()
+        );
+    }
+    Ok(())
+}
+
+fn publish_app_bundle(
+    staged: &Path,
+    destination: &Path,
+    backups: &Path,
+    style: &Style,
+    verify_published: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    match destination.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::rename(staged, destination)
+                .with_context(|| format!("publish signed App bundle {}", destination.display()))?;
+            if let Err(error) = verify_published(destination) {
+                fs::rename(destination, staged).with_context(|| {
+                    format!("withdraw App bundle after publication failure: {error:#}")
+                })?;
+                return Err(error);
+            }
+        }
+        Err(error) => return Err(error).context("inspect current App bundle"),
+        Ok(metadata) => {
+            anyhow::ensure!(
+                metadata.is_dir(),
+                "App destination is not a real directory: {}",
+                destination.display()
+            );
+            fs::create_dir_all(backups).context("create App backup directory")?;
+            let backup = tempfile::Builder::new()
+                .prefix("app-build-")
+                .tempdir_in(backups)
+                .context("allocate App backup directory")?;
+            let backup_bundle = backup.path().join("Modern Format Boost.app");
+            swap_app_bundles(staged, destination)
+                .context("exchange staged and current App bundles")?;
+            let finish = verify_published(destination).and_then(|()| {
+                fs::rename(staged, &backup_bundle).context("retain previous App bundle")
+            });
+            if let Err(error) = finish {
+                swap_app_bundles(staged, destination).with_context(|| {
+                    format!("restore previous App bundle after publication failure: {error:#}")
+                })?;
+                return Err(error);
+            }
+            let retained = backup.keep();
+            println!(
+                "{}Previous App bundle retained at {}.{}",
+                style.dim,
+                retained.join("Modern Format Boost.app").display(),
+                style.reset
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn swap_app_bundles(left: &Path, right: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let left = std::ffi::CString::new(left.as_os_str().as_bytes())?;
+    let right = std::ffi::CString::new(right.as_os_str().as_bytes())?;
+    // Both paths remain occupied, even if publication is interrupted mid-exchange.
+    let result = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            left.as_ptr(),
+            libc::AT_FDCWD,
+            right.as_ptr(),
+            libc::RENAME_SWAP,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn swap_app_bundles(_left: &Path, _right: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic replacement of an existing macOS App bundle requires macOS",
+    ))
+}
+
+fn sign_app_bundle(
+    project_root: &Path,
+    app_bundle: &Path,
+    style: &Style,
+    changed_bins: &[&str],
+) -> Result<()> {
     if !app_bundle.is_dir() {
         return Ok(());
     }
@@ -1778,47 +1989,6 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     Ok(())
 }
 
-fn build_and_sync_gui(project_root: &Path, style: &Style) -> Result<()> {
-    println!(
-        "\n{}{} Building native macOS GUI...{}",
-        style.bold, style.cyan, style.reset
-    );
-    compile_swift_native_host(project_root, style)?;
-
-    println!("{}Syncing App bundle...{}", style.dim, style.reset);
-    let src_bundle = native_app_bundle_path(project_root);
-    let dest_bundle = project_root.join("Modern Format Boost.app");
-
-    if src_bundle.exists() {
-        if dest_bundle.exists() {
-            fs::remove_dir_all(&dest_bundle)
-                .with_context(|| format!("remove stale app bundle {}", dest_bundle.display()))?;
-        }
-
-        let cp_status = Command::new("cp")
-            .arg("-R")
-            .arg(&src_bundle)
-            .arg(&dest_bundle)
-            .status()?;
-
-        if cp_status.success() {
-            println!(
-                "{}App bundle replaced successfully.{}",
-                style.green, style.reset
-            );
-        } else {
-            anyhow::bail!("Failed to copy App bundle");
-        }
-    } else {
-        anyhow::bail!("Built app bundle not found at {:?}", src_bundle);
-    }
-
-    // Step 3: Sync Rust binaries and sign the final bundle
-    sync_app_bundle(project_root, style, false)?;
-
-    Ok(())
-}
-
 /// Map a binary name to its owning crate directory (relative to workspace root).
 ///
 /// # Errors
@@ -2015,7 +2185,7 @@ fn main() -> Result<()> {
             "{}{}[sync mode]{} Syncing binaries to app bundle (no build).",
             style.cyan, style.bold, style.reset
         );
-        sync_app_bundle(&project_root, &style, args.force)?;
+        sync_app_bundle(&project_root, &style, args.force, false)?;
         return Ok(());
     }
 
@@ -2180,12 +2350,13 @@ fn main() -> Result<()> {
     // Build the GUI only when its own native inputs changed. Running it after
     // native compilation ensures the generated app receives the current bundled
     // binaries during the following sync step.
-    if (args.gui || args.all) && !args.rust_only {
-        if args.force || gui_needs_rebuild(&project_root) {
-            build_and_sync_gui(&project_root, &style)?;
-        } else {
-            println!("[OK] GUI bundle up-to-date (skipped)");
-        }
+    let wants_gui = (args.gui || args.all) && !args.rust_only;
+    let publish_gui = wants_gui
+        && (args.force || gui_needs_rebuild(&project_root) || gui_needs_publication(&project_root));
+    if publish_gui {
+        sync_app_bundle(&project_root, &style, args.force, true)?;
+    } else if wants_gui {
+        println!("[OK] GUI bundle up-to-date (skipped)");
     }
 
     if rebuilt == 0 {
@@ -2226,7 +2397,9 @@ fn main() -> Result<()> {
         }
     }
 
-    sync_app_bundle(&project_root, &style, args.force)?;
+    if !publish_gui {
+        sync_app_bundle(&project_root, &style, args.force, false)?;
+    }
 
     Ok(())
 }
@@ -2263,6 +2436,19 @@ mod tests {
         fs::create_dir_all(contents.join("Resources"))?;
         fs::write(contents.join("Resources/native-build-complete.txt"), b"1\n")?;
         assert!(!gui_needs_rebuild(root));
+        assert!(!quiet_can_skip(&quiet_gui, root, &targets));
+        assert!(!quiet_can_skip(&quiet_all, root, &targets));
+        let published = root.join("Modern Format Boost.app/Contents");
+        for file in [
+            "MacOS/Modern Format Boost",
+            "Resources/native-build-complete.txt",
+        ] {
+            let destination = published.join(file);
+            fs::create_dir_all(destination.parent().unwrap())?;
+            fs::copy(contents.join(file), destination)?;
+        }
+        assert!(!quiet_can_skip(&quiet_gui, root, &targets));
+        fs::copy(root.join("target/release/img"), published.join("Resources/img"))?;
         assert!(quiet_can_skip(&quiet_gui, root, &targets));
         assert!(quiet_can_skip(&quiet_all, root, &targets));
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -2274,6 +2460,84 @@ mod tests {
         assert!(!quiet_can_skip(&quiet_all, root, &targets));
         let rust_only = Args::try_parse_from(["smart_build", "--quiet", "--all", "--rust-only"])?;
         assert!(quiet_can_skip(&rust_only, root, &targets));
+        Ok(())
+    }
+
+    #[test]
+    fn completed_native_assembly_can_retry_publication_without_rebuild() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let assembled = native_app_bundle_path(root.path()).join("Contents");
+        let published = root.path().join("Modern Format Boost.app/Contents");
+        for dir in [&assembled, &published] {
+            fs::create_dir_all(dir.join("MacOS"))?;
+            fs::create_dir_all(dir.join("Resources"))?;
+            fs::write(dir.join("MacOS/Modern Format Boost"), b"host")?;
+        }
+        let marker = "Resources/native-build-complete.txt";
+        fs::write(assembled.join(marker), b"1\n")?;
+        assert!(!gui_needs_rebuild(root.path()));
+        assert!(gui_needs_publication(root.path()));
+        fs::copy(assembled.join(marker), published.join(marker))?;
+        assert!(!gui_needs_publication(root.path()));
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_publication_rolls_back_on_failed_verification_and_retains_previous_on_success()
+    -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let staged = root.path().join("staged.app");
+        let live = root.path().join("live.app");
+        let backups = root.path().join("backups");
+        for (path, content) in [(&staged, "new"), (&live, "old")] {
+            fs::create_dir(path)?;
+            fs::write(path.join("fixture"), content)?;
+        }
+
+        let style = Style::current();
+        let failed = publish_app_bundle(&staged, &live, &backups, &style, |bundle| {
+            assert_eq!(fs::read_to_string(bundle.join("fixture"))?, "new");
+            anyhow::bail!("synthetic signature rejection")
+        });
+        assert!(
+            failed
+                .unwrap_err()
+                .to_string()
+                .contains("synthetic signature rejection")
+        );
+        assert_eq!(fs::read_to_string(live.join("fixture"))?, "old");
+        assert_eq!(fs::read_to_string(staged.join("fixture"))?, "new");
+        assert!(fs::read_dir(&backups)?.next().is_none());
+
+        publish_app_bundle(&staged, &live, &backups, &style, |_| Ok(()))?;
+        assert_eq!(fs::read_to_string(live.join("fixture"))?, "new");
+        assert!(!staged.exists());
+        let mut backups = fs::read_dir(backups)?;
+        let backup = backups
+            .next()
+            .context("previous App backup missing")??
+            .path();
+        assert_eq!(
+            fs::read_to_string(backup.join("Modern Format Boost.app/fixture"))?,
+            "old"
+        );
+        assert!(backups.next().is_none());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_bundle_sync_does_not_follow_destination_symlinks() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("new");
+        let original = root.path().join("outside");
+        let destination = root.path().join("destination");
+        fs::write(&source, b"new")?;
+        fs::write(&original, b"preserve")?;
+        std::os::unix::fs::symlink(&original, &destination)?;
+        assert!(copy_bundle_file(&source, &destination).is_err());
+        assert_eq!(fs::read(&original)?, b"preserve");
         Ok(())
     }
 
