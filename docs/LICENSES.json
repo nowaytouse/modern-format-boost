@@ -219,7 +219,7 @@
     {
       "package": {
         "name": "bit-vec",
-        "version": "0.10.1",
+        "version": "0.10.2",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/contain-rs/bit-vec"
       },
@@ -228,11 +228,11 @@
     {
       "package": {
         "name": "bit_field",
-        "version": "0.10.3",
+        "version": "0.10.4",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/phil-opp/rust-bit-field"
       },
-      "license": "Apache-2.0 OR MIT"
+      "license": "MIT OR Apache-2.0"
     },
     {
       "package": {
@@ -256,7 +256,7 @@
       "package": {
         "name": "blake3",
         "version": "1.8.7",
-        "source": "git+https://github.com/BLAKE3-team/BLAKE3#f55849f89cd85083c1c9daa2c5de20766f309c00",
+        "source": "git+https://github.com/BLAKE3-team/BLAKE3#657284b1fa4c4378aa7422b4450dcb5c2c9052fc",
         "repository": "https://github.com/BLAKE3-team/BLAKE3"
       },
       "license": "CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception"
@@ -363,7 +363,7 @@
     {
       "package": {
         "name": "cc",
-        "version": "1.11.0",
+        "version": "1.11.1",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/rust-lang/cc-rs"
       },
@@ -499,7 +499,7 @@
       "package": {
         "name": "console",
         "version": "0.16.6",
-        "source": "git+https://github.com/console-rs/console#7acdc5f8ef9789ed5c85cde4fb9bead53a95c81d",
+        "source": "git+https://github.com/console-rs/console#c1220d680ee805612c85a8644205fd57d7df273e",
         "repository": "https://github.com/console-rs/console"
       },
       "license": "MIT"
@@ -507,7 +507,7 @@
     {
       "package": {
         "name": "const-oid",
-        "version": "0.10.2",
+        "version": "0.10.3",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/RustCrypto/formats"
       },
@@ -552,8 +552,8 @@
     {
       "package": {
         "name": "crc32fast",
-        "version": "1.5.4",
-        "source": "git+https://github.com/srijs/rust-crc32fast#118796a864d40beed113e887522531d5474b8abc",
+        "version": "1.5.5",
+        "source": "git+https://github.com/srijs/rust-crc32fast#8a93d2a70c00ab3e72beda42014b18fad8e496ea",
         "repository": "https://github.com/srijs/rust-crc32fast"
       },
       "license": "MIT OR Apache-2.0"
@@ -759,8 +759,8 @@
     {
       "package": {
         "name": "exr",
-        "version": "1.74.2",
-        "source": "git+https://github.com/johannesvollmer/exrs#d30fac43653b9064f4135a0b51b3579c8128c711",
+        "version": "1.74.3",
+        "source": "git+https://github.com/johannesvollmer/exrs#773af1efd2a250f976601c8708ae980333e0c681",
         "repository": "https://github.com/johannesvollmer/exrs"
       },
       "license": "BSD-3-Clause"
@@ -840,8 +840,8 @@
     {
       "package": {
         "name": "flate2",
-        "version": "1.1.10",
-        "source": "git+https://github.com/rust-lang/flate2-rs#d05c7c4af2879369e4cdc72827ee71216f868eb7",
+        "version": "1.1.11",
+        "source": "git+https://github.com/rust-lang/flate2-rs#e3a3423a16facde6218ed18fd68c0cdd5df68545",
         "repository": "https://github.com/rust-lang/flate2-rs"
       },
       "license": "MIT OR Apache-2.0"
@@ -1075,7 +1075,7 @@
       "package": {
         "name": "image",
         "version": "0.25.9",
-        "source": "git+https://github.com/image-rs/image#075e65d618a323e5cb48c1d8710a2eca25d690c6",
+        "source": "git+https://github.com/image-rs/image#e70e9fe5073f4b298a33b72993847241a8eaaca6",
         "repository": "https://github.com/image-rs/image"
       },
       "license": "MIT OR Apache-2.0"
@@ -1111,7 +1111,7 @@
       "package": {
         "name": "indicatif",
         "version": "0.18.6",
-        "source": "git+https://github.com/console-rs/indicatif#66b0ee253f2a2923dd1e861d3d35f20c4f09546c",
+        "source": "git+https://github.com/console-rs/indicatif#bd7a6b6fa4eacc76144a4d23f35a9063f4dd1cb0",
         "repository": "https://github.com/console-rs/indicatif"
       },
       "license": "MIT"
@@ -1182,7 +1182,7 @@
     {
       "package": {
         "name": "itoa",
-        "version": "1.0.18",
+        "version": "1.0.19",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/dtolnay/itoa"
       },
@@ -1452,7 +1452,7 @@
     {
       "package": {
         "name": "libsqlite3-sys",
-        "version": "0.39.1",
+        "version": "0.40.0",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/rusqlite/rusqlite"
       },
@@ -1650,7 +1650,7 @@
     {
       "package": {
         "name": "notify",
-        "version": "8.2.1",
+        "version": "8.2.2",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/notify-rs/notify.git"
       },
@@ -1659,7 +1659,7 @@
     {
       "package": {
         "name": "notify-types",
-        "version": "2.2.0",
+        "version": "2.3.0",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/notify-rs/notify.git"
       },
@@ -1876,7 +1876,7 @@
       "package": {
         "name": "pgvector",
         "version": "0.4.2",
-        "source": "git+https://github.com/pgvector/pgvector-rust#a956f31718f8576fcf062b7edcf9c01d6588aaa5",
+        "source": "git+https://github.com/pgvector/pgvector-rust#32108fc4acd9297880c4359f5946f9d525179aa1",
         "repository": "https://github.com/pgvector/pgvector-rust"
       },
       "license": "MIT OR Apache-2.0"
@@ -2074,7 +2074,7 @@
       "package": {
         "name": "quick-xml",
         "version": "0.42.0",
-        "source": "git+https://github.com/tafia/quick-xml#250824b3f7c1bfa986177083b89263d7103b5e62",
+        "source": "git+https://github.com/tafia/quick-xml#0e8db4ce7c961e9a6eb2be33ad97c308ad4c22ad",
         "repository": "https://github.com/tafia/quick-xml"
       },
       "license": "MIT"
@@ -2271,7 +2271,7 @@
     {
       "package": {
         "name": "rusqlite",
-        "version": "0.41.1",
+        "version": "0.42.0",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/rusqlite/rusqlite"
       },
@@ -2379,7 +2379,7 @@
     {
       "package": {
         "name": "serde_spanned",
-        "version": "1.1.2",
+        "version": "1.1.3",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/toml-rs/toml"
       },
@@ -2478,7 +2478,7 @@
     {
       "package": {
         "name": "smallvec",
-        "version": "1.16.4",
+        "version": "1.16.5",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/servo/rust-smallvec"
       },
@@ -2496,7 +2496,7 @@
     {
       "package": {
         "name": "sqlite-wasm-rs",
-        "version": "0.6.2",
+        "version": "0.6.3",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/Spxg/sqlite-wasm-rs"
       },
@@ -2550,7 +2550,7 @@
     {
       "package": {
         "name": "syn",
-        "version": "3.0.9",
+        "version": "3.0.10",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/dtolnay/syn"
       },
@@ -2559,7 +2559,7 @@
     {
       "package": {
         "name": "sysinfo",
-        "version": "0.40.1",
+        "version": "0.40.3",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/GuillaumeGomez/sysinfo"
       },
@@ -2694,7 +2694,7 @@
     {
       "package": {
         "name": "toml",
-        "version": "1.2.0+spec-1.1.0",
+        "version": "1.2.1+spec-1.1.0",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/toml-rs/toml"
       },
@@ -2703,7 +2703,7 @@
     {
       "package": {
         "name": "toml_datetime",
-        "version": "1.1.2+spec-1.1.0",
+        "version": "1.1.3+spec-1.1.0",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/toml-rs/toml"
       },
@@ -2722,7 +2722,7 @@
       "package": {
         "name": "tracing",
         "version": "0.1.44",
-        "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+        "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
         "repository": "https://github.com/tokio-rs/tracing"
       },
       "license": "MIT"
@@ -2731,7 +2731,7 @@
       "package": {
         "name": "tracing-appender",
         "version": "0.2.5",
-        "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+        "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
         "repository": "https://github.com/tokio-rs/tracing"
       },
       "license": "MIT"
@@ -2740,7 +2740,7 @@
       "package": {
         "name": "tracing-attributes",
         "version": "0.1.31",
-        "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+        "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
         "repository": "https://github.com/tokio-rs/tracing"
       },
       "license": "MIT"
@@ -2749,7 +2749,7 @@
       "package": {
         "name": "tracing-core",
         "version": "0.1.36",
-        "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+        "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
         "repository": "https://github.com/tokio-rs/tracing"
       },
       "license": "MIT"
@@ -2758,7 +2758,7 @@
       "package": {
         "name": "tracing-log",
         "version": "0.2.0",
-        "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+        "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
         "repository": "https://github.com/tokio-rs/tracing"
       },
       "license": "MIT"
@@ -2767,7 +2767,7 @@
       "package": {
         "name": "tracing-serde",
         "version": "0.2.0",
-        "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+        "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
         "repository": "https://github.com/tokio-rs/tracing"
       },
       "license": "MIT"
@@ -2776,7 +2776,7 @@
       "package": {
         "name": "tracing-subscriber",
         "version": "0.3.23",
-        "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+        "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
         "repository": "https://github.com/tokio-rs/tracing"
       },
       "license": "MIT"
@@ -2865,7 +2865,7 @@
     {
       "package": {
         "name": "uuid",
-        "version": "1.29.0",
+        "version": "1.29.2",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/uuid-rs/uuid"
       },
@@ -3198,7 +3198,7 @@
     {
       "package": {
         "name": "winnow",
-        "version": "1.0.4",
+        "version": "1.0.5",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "repository": "https://github.com/winnow-rs/winnow"
       },
@@ -3706,7 +3706,7 @@
           "crate": {
             "name": "blake3",
             "version": "1.8.7",
-            "source": "git+https://github.com/BLAKE3-team/BLAKE3#f55849f89cd85083c1c9daa2c5de20766f309c00",
+            "source": "git+https://github.com/BLAKE3-team/BLAKE3#657284b1fa4c4378aa7422b4450dcb5c2c9052fc",
             "repository": "https://github.com/BLAKE3-team/BLAKE3"
           }
         },
@@ -4508,8 +4508,8 @@
         {
           "crate": {
             "name": "exr",
-            "version": "1.74.2",
-            "source": "git+https://github.com/johannesvollmer/exrs#d30fac43653b9064f4135a0b51b3579c8128c711",
+            "version": "1.74.3",
+            "source": "git+https://github.com/johannesvollmer/exrs#773af1efd2a250f976601c8708ae980333e0c681",
             "repository": "https://github.com/johannesvollmer/exrs"
           }
         }
@@ -4613,8 +4613,8 @@
         {
           "crate": {
             "name": "exr",
-            "version": "1.74.2",
-            "source": "git+https://github.com/johannesvollmer/exrs#d30fac43653b9064f4135a0b51b3579c8128c711",
+            "version": "1.74.3",
+            "source": "git+https://github.com/johannesvollmer/exrs#773af1efd2a250f976601c8708ae980333e0c681",
             "repository": "https://github.com/johannesvollmer/exrs"
           }
         }
@@ -4643,7 +4643,7 @@
         {
           "crate": {
             "name": "notify",
-            "version": "8.2.1",
+            "version": "8.2.2",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/notify-rs/notify.git"
           }
@@ -4825,7 +4825,7 @@
         {
           "crate": {
             "name": "cc",
-            "version": "1.11.0",
+            "version": "1.11.1",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/rust-lang/cc-rs"
           }
@@ -5100,7 +5100,7 @@
         {
           "crate": {
             "name": "uuid",
-            "version": "1.29.0",
+            "version": "1.29.2",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/uuid-rs/uuid"
           }
@@ -5115,7 +5115,7 @@
         {
           "crate": {
             "name": "libsqlite3-sys",
-            "version": "0.39.1",
+            "version": "0.40.0",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/rusqlite/rusqlite"
           }
@@ -5123,7 +5123,7 @@
         {
           "crate": {
             "name": "rusqlite",
-            "version": "0.41.1",
+            "version": "0.42.0",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/rusqlite/rusqlite"
           }
@@ -5168,8 +5168,8 @@
         {
           "crate": {
             "name": "flate2",
-            "version": "1.1.10",
-            "source": "git+https://github.com/rust-lang/flate2-rs#d05c7c4af2879369e4cdc72827ee71216f868eb7",
+            "version": "1.1.11",
+            "source": "git+https://github.com/rust-lang/flate2-rs#e3a3423a16facde6218ed18fd68c0cdd5df68545",
             "repository": "https://github.com/rust-lang/flate2-rs"
           }
         }
@@ -5870,7 +5870,7 @@
         {
           "crate": {
             "name": "smallvec",
-            "version": "1.16.4",
+            "version": "1.16.5",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/servo/rust-smallvec"
           }
@@ -6067,7 +6067,7 @@
           "crate": {
             "name": "tracing",
             "version": "0.1.44",
-            "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+            "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
             "repository": "https://github.com/tokio-rs/tracing"
           }
         },
@@ -6075,7 +6075,7 @@
           "crate": {
             "name": "tracing-appender",
             "version": "0.2.5",
-            "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+            "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
             "repository": "https://github.com/tokio-rs/tracing"
           }
         },
@@ -6083,7 +6083,7 @@
           "crate": {
             "name": "tracing-attributes",
             "version": "0.1.31",
-            "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+            "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
             "repository": "https://github.com/tokio-rs/tracing"
           }
         },
@@ -6091,7 +6091,7 @@
           "crate": {
             "name": "tracing-core",
             "version": "0.1.36",
-            "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+            "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
             "repository": "https://github.com/tokio-rs/tracing"
           }
         },
@@ -6099,7 +6099,7 @@
           "crate": {
             "name": "tracing-log",
             "version": "0.2.0",
-            "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+            "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
             "repository": "https://github.com/tokio-rs/tracing"
           }
         },
@@ -6107,7 +6107,7 @@
           "crate": {
             "name": "tracing-serde",
             "version": "0.2.0",
-            "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+            "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
             "repository": "https://github.com/tokio-rs/tracing"
           }
         },
@@ -6115,7 +6115,7 @@
           "crate": {
             "name": "tracing-subscriber",
             "version": "0.3.23",
-            "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+            "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
             "repository": "https://github.com/tokio-rs/tracing"
           }
         }
@@ -6197,7 +6197,7 @@
         {
           "crate": {
             "name": "const-oid",
-            "version": "0.10.2",
+            "version": "0.10.3",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/RustCrypto/formats"
           }
@@ -6288,7 +6288,7 @@
         {
           "crate": {
             "name": "notify-types",
-            "version": "2.2.0",
+            "version": "2.3.0",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/notify-rs/notify.git"
           }
@@ -6311,7 +6311,7 @@
         {
           "crate": {
             "name": "bit-vec",
-            "version": "0.10.1",
+            "version": "0.10.2",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/contain-rs/bit-vec"
           }
@@ -6452,7 +6452,7 @@
         {
           "crate": {
             "name": "serde_spanned",
-            "version": "1.1.2",
+            "version": "1.1.3",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/toml-rs/toml"
           }
@@ -6460,7 +6460,7 @@
         {
           "crate": {
             "name": "toml",
-            "version": "1.2.0+spec-1.1.0",
+            "version": "1.2.1+spec-1.1.0",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/toml-rs/toml"
           }
@@ -6468,7 +6468,7 @@
         {
           "crate": {
             "name": "toml_datetime",
-            "version": "1.1.2+spec-1.1.0",
+            "version": "1.1.3+spec-1.1.0",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/toml-rs/toml"
           }
@@ -6857,8 +6857,8 @@
         {
           "crate": {
             "name": "crc32fast",
-            "version": "1.5.4",
-            "source": "git+https://github.com/srijs/rust-crc32fast#118796a864d40beed113e887522531d5474b8abc",
+            "version": "1.5.5",
+            "source": "git+https://github.com/srijs/rust-crc32fast#8a93d2a70c00ab3e72beda42014b18fad8e496ea",
             "repository": "https://github.com/srijs/rust-crc32fast"
           }
         }
@@ -7121,7 +7121,7 @@
         {
           "crate": {
             "name": "sqlite-wasm-rs",
-            "version": "0.6.2",
+            "version": "0.6.3",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/Spxg/sqlite-wasm-rs"
           }
@@ -7610,7 +7610,7 @@
           "crate": {
             "name": "image",
             "version": "0.25.9",
-            "source": "git+https://github.com/image-rs/image#075e65d618a323e5cb48c1d8710a2eca25d690c6",
+            "source": "git+https://github.com/image-rs/image#e70e9fe5073f4b298a33b72993847241a8eaaca6",
             "repository": "https://github.com/image-rs/image"
           }
         },
@@ -7703,7 +7703,7 @@
         {
           "crate": {
             "name": "itoa",
-            "version": "1.0.18",
+            "version": "1.0.19",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/dtolnay/itoa"
           }
@@ -7951,7 +7951,7 @@
         {
           "crate": {
             "name": "syn",
-            "version": "3.0.9",
+            "version": "3.0.10",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/dtolnay/syn"
           }
@@ -8046,7 +8046,7 @@
         {
           "crate": {
             "name": "winnow",
-            "version": "1.0.4",
+            "version": "1.0.5",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/winnow-rs/winnow"
           }
@@ -8137,7 +8137,7 @@
           "crate": {
             "name": "tracing-core",
             "version": "0.1.36",
-            "source": "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d",
+            "source": "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a",
             "repository": "https://github.com/tokio-rs/tracing"
           }
         }
@@ -8281,7 +8281,7 @@
         {
           "crate": {
             "name": "sysinfo",
-            "version": "0.40.1",
+            "version": "0.40.3",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/GuillaumeGomez/sysinfo"
           }
@@ -8342,7 +8342,7 @@
           "crate": {
             "name": "quick-xml",
             "version": "0.42.0",
-            "source": "git+https://github.com/tafia/quick-xml#250824b3f7c1bfa986177083b89263d7103b5e62",
+            "source": "git+https://github.com/tafia/quick-xml#0e8db4ce7c961e9a6eb2be33ad97c308ad4c22ad",
             "repository": "https://github.com/tafia/quick-xml"
           }
         }
@@ -8356,7 +8356,7 @@
         {
           "crate": {
             "name": "bit_field",
-            "version": "0.10.3",
+            "version": "0.10.4",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "repository": "https://github.com/phil-opp/rust-bit-field"
           }
@@ -8449,7 +8449,7 @@
           "crate": {
             "name": "console",
             "version": "0.16.6",
-            "source": "git+https://github.com/console-rs/console#7acdc5f8ef9789ed5c85cde4fb9bead53a95c81d",
+            "source": "git+https://github.com/console-rs/console#c1220d680ee805612c85a8644205fd57d7df273e",
             "repository": "https://github.com/console-rs/console"
           }
         },
@@ -8457,7 +8457,7 @@
           "crate": {
             "name": "indicatif",
             "version": "0.18.6",
-            "source": "git+https://github.com/console-rs/indicatif#66b0ee253f2a2923dd1e861d3d35f20c4f09546c",
+            "source": "git+https://github.com/console-rs/indicatif#bd7a6b6fa4eacc76144a4d23f35a9063f4dd1cb0",
             "repository": "https://github.com/console-rs/indicatif"
           }
         }
@@ -8511,7 +8511,7 @@
           "crate": {
             "name": "pgvector",
             "version": "0.4.2",
-            "source": "git+https://github.com/pgvector/pgvector-rust#a956f31718f8576fcf062b7edcf9c01d6588aaa5",
+            "source": "git+https://github.com/pgvector/pgvector-rust#32108fc4acd9297880c4359f5946f9d525179aa1",
             "repository": "https://github.com/pgvector/pgvector-rust"
           }
         }

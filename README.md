@@ -114,6 +114,11 @@ the application's private backup directory. Use
 `--all` to build the other project targets as well. Native builds require
 Apple's command-line development tools. Quit the App before refreshing it.
 
+Edit the [native interface JSON catalogs](crates/gui/src-macos/Locales) for
+English, Simplified Chinese, and Japanese. Smart Build checks that all three
+catalogs have the same keys and compiles them into the bundle's Apple string
+resources.
+
 For Linux/Windows dependency setup, consult the
 [media dependency installer](crates/dev/src/bin/install_media_dependencies.rs)
 and [build workflows](.github/workflows). The GUI's **Inspect Processing Tools**

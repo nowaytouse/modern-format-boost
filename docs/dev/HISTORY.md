@@ -13,11 +13,15 @@ documentation cleanup commit: 15 commits at this boundary. This is a one-time
 history change, not a release, algorithm rollback or deletion of development work.
 Later work adds normal commits; the number is not a permanent limit.
 
-The archive ends at `589b5921e343a55c26c9edab28d8e3b9cb40939b`.
-Its branch is `archive/nightly-before-phase-squash-20261018-589b5921`.
+The last original snapshot is `589b5921e343a55c26c9edab28d8e3b9cb40939b`.
+The archive is now held by the annotated Git tag `archive/nightly-before-phase-squash-20261018-589b5921`, at
+`5c2e1fe2da70121774969eaad27f9fdaca0cf8f3`. This tip also includes the later CI-only archive maintenance commit.
+The active branches are `main` and `nightly`.
 Existing version tags and `main` were not rewritten. The historical
 `v6.4.6-pre-refactor` label is retained as a historical phase name, not reinterpreted
 as part of the current version sequence.
+
+**中文摘要**：原始 nightly 历史仍可通过同名归档标签查看。标签保留原始快照及其后的 CI 维护提交，常用分支保留 `main` 与 `nightly`。
 
 ## Snapshot Map
 

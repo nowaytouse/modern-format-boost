@@ -98,6 +98,9 @@ cargo run --locked -p dev --bin smart_build -- --all
 并替换仓库根目录的 `Modern Format Boost.app`。
 **该应用正在处理文件时，不要执行此构建命令。** 原生构建还需要 Apple 命令行开发工具。
 
+界面文案维护在[原生界面 JSON 字典](../crates/gui/src-macos/Locales)中，包含英语、简体中文
+和日语。Smart Build 会核对三种语言的键是否一致，再编译为应用包内的 Apple 字符串资源。
+
 Linux、Windows 的依赖配置可参考[媒体依赖安装器](../crates/dev/src/bin/install_media_dependencies.rs)
 和[构建工作流](../.github/workflows)。设置中的**检查处理工具**可查看实际使用的路径
 和版本输出，但版本命令成功不等于编解码能力或交付验证通过。

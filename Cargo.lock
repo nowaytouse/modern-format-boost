@@ -232,9 +232,9 @@ dependencies = [
 
 [[package]]
 name = "bit-vec"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5727b15fa97d4f4fee0a3b7c3d550ed0269f54329207b86388de918604e31269"
+checksum = "72503af1e72be411d74ca45cd6b309878fcb35354e252fc2a3a8bda3a97082a0"
 dependencies = [
  "borsh",
  "serde",
@@ -242,9 +242,9 @@ dependencies = [
 
 [[package]]
 name = "bit_field"
-version = "0.10.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
+checksum = "cb2907cc03d08cdb1c6724ad0670ce67c4a71e1c45a6d7635224011714cfc4b1"
 
 [[package]]
 name = "bitflags"
@@ -266,7 +266,7 @@ dependencies = [
 [[package]]
 name = "blake3"
 version = "1.8.7"
-source = "git+https://github.com/BLAKE3-team/BLAKE3#f55849f89cd85083c1c9daa2c5de20766f309c00"
+source = "git+https://github.com/BLAKE3-team/BLAKE3#657284b1fa4c4378aa7422b4450dcb5c2c9052fc"
 dependencies = [
  "arrayvec",
  "cc",
@@ -531,9 +531,9 @@ dependencies = [
 
 [[package]]
 name = "const-oid"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
 
 [[package]]
 name = "constant_time_eq"
@@ -803,7 +803,7 @@ dependencies = [
 [[package]]
 name = "exr"
 version = "1.74.3"
-source = "git+https://github.com/johannesvollmer/exrs#818866d5f9f7e1a3d98fbff92d464f8cd0b0235f"
+source = "git+https://github.com/johannesvollmer/exrs#773af1efd2a250f976601c8708ae980333e0c681"
 dependencies = [
  "bit_field",
  "half",
@@ -1144,7 +1144,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#19223272831d2c8169333b86de9bef0c38b77fb2"
+source = "git+https://github.com/image-rs/image#e70e9fe5073f4b298a33b72993847241a8eaaca6"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1603,9 +1603,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.39.1"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
+checksum = "b06e69070b7e12262b0cd90832f0a7396f142a2b330181255562decf9f0c6215"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2250,7 +2250,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.42.0"
-source = "git+https://github.com/tafia/quick-xml#250824b3f7c1bfa986177083b89263d7103b5e62"
+source = "git+https://github.com/tafia/quick-xml#0e8db4ce7c961e9a6eb2be33ad97c308ad4c22ad"
 dependencies = [
  "memchr",
 ]
@@ -2471,9 +2471,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.41.1"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
+checksum = "a4edff0039f148731aee2fd80f76dbfeb12d204ab3d1c544838d34e02151049b"
 dependencies = [
  "bitflags",
  "fallible-iterator 0.3.0",
@@ -2765,9 +2765,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.40.1"
+version = "0.40.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e8a3edbe0394ce115f3917a00349dd242be09eb5a091ed509eaf67b55cfb8a8"
+checksum = "a86bac2f7d06e6384984118ad727f5694110f0ec44d924d05c8fdec3d030bee6"
 dependencies = [
  "libc",
  "memchr",

@@ -46,7 +46,7 @@ const NATIVE_APP_BUNDLE_RESOURCES: &[(&str, &str)] = &[
     ("LICENSE", "LICENSE"),
 ];
 const RUST_SOURCE_EXTENSIONS: &[&str] = &["rs", "sql", "c", "h", "cpp", "cc", "proto", "py", "sh"];
-const GUI_SOURCE_EXTENSIONS: &[&str] = &["icns", "plist", "sh", "strings", "swift"];
+const GUI_SOURCE_EXTENSIONS: &[&str] = &["icns", "json", "plist", "sh", "strings", "swift"];
 const IGNORED_SOURCE_DIRECTORIES: &[&str] = &[
     ".git",
     "node_modules",
@@ -1814,6 +1814,40 @@ fn run_native_host_self_test(bundle: &Path) -> Result<()> {
     }
 }
 
+const NATIVE_LOCALES: [&str; 3] = ["en", "zh-Hans", "ja"];
+
+fn compile_localized_catalogs(native_dir: &Path, resources_dir: &Path) -> Result<()> {
+    let mut english_keys = None;
+    for locale in NATIVE_LOCALES {
+        let source = native_dir.join("Locales").join(format!("{locale}.json"));
+        let bytes = fs::read(&source)
+            .with_context(|| format!("read localization catalog {}", source.display()))?;
+        let catalog: std::collections::BTreeMap<String, String> = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse localization catalog {}", source.display()))?;
+        let keys = catalog.into_keys().collect::<Vec<_>>();
+        if let Some(english_keys) = &english_keys {
+            anyhow::ensure!(
+                keys == *english_keys,
+                "{locale} localization keys differ from en"
+            );
+        } else {
+            anyhow::ensure!(!keys.is_empty(), "English localization catalog is empty");
+            english_keys = Some(keys);
+        }
+
+        let output = resources_dir.join(format!("{locale}.lproj/Localizable.strings"));
+        let status = Command::new("/usr/bin/plutil")
+            .args(["-convert", "binary1", "-o"])
+            .arg(&output)
+            .arg("--")
+            .arg(&source)
+            .status()
+            .with_context(|| format!("compile localization catalog {}", source.display()))?;
+        anyhow::ensure!(status.success(), "plutil failed for {}", source.display());
+    }
+    Ok(())
+}
+
 /// Compile the Swift native host and assemble the macOS .app bundle at
 /// `target/release/bundle/macos/Modern Format Boost.app`.
 ///
@@ -1944,6 +1978,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
         );
     }
 
+    compile_localized_catalogs(&native_dir, &resources_dir)?;
     sync_native_app_bundle_resources(project_root, &resources_dir)?;
 
     // Validate plists
@@ -1959,7 +1994,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
             }
         }
     }
-    for locale in ["en", "zh-Hans", "ja"] {
+    for locale in NATIVE_LOCALES {
         for resource in ["Localizable.strings", "InfoPlist.strings"] {
             let strings = resources_dir.join(format!("{locale}.lproj/{resource}"));
             let status = Command::new("plutil")
@@ -2407,6 +2442,38 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_catalogs_compile_to_strings_and_reject_missing_keys() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        fs::create_dir(root.join("Locales"))?;
+        for locale in NATIVE_LOCALES {
+            fs::create_dir(root.join(format!("{locale}.lproj")))?;
+            fs::write(
+                root.join(format!("Locales/{locale}.json")),
+                serde_json::to_vec(&serde_json::json!({"status": format!("{locale} 中文 %@")}))?,
+            )?;
+        }
+        compile_localized_catalogs(root, root)?;
+        let output = Command::new("/usr/bin/plutil")
+            .args(["-convert", "json", "-o", "-", "--"])
+            .arg(root.join("zh-Hans.lproj/Localizable.strings"))
+            .output()?;
+        assert!(output.status.success());
+        let catalog: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(catalog["status"], "zh-Hans 中文 %@");
+
+        fs::write(root.join("Locales/zh-Hans.json"), r#"{"unknown": "value"}"#)?;
+        let error = compile_localized_catalogs(root, root).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("zh-Hans localization keys differ")
+        );
+        Ok(())
+    }
 
     #[test]
     fn sync_rejects_native_build_requests() {
