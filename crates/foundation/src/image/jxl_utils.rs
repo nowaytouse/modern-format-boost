@@ -10,7 +10,7 @@ use crate::VmafBuilder;
 use crate::builder_base::ToolBuilder;
 use anyhow::Context;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Whether an otherwise healthy JXL can reproduce its original JPEG bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +134,7 @@ fn run_exact_jpeg_reconstruction_with_mode(
     output: &Path,
     context: &str,
     mode: DjxlReconstructionMode,
+    timings: &mut JpegReconstructionTimings,
 ) -> Result<std::process::Output, String> {
     let mut command = crate::DjxlBuilder::new()
         .input(input)
@@ -142,19 +143,44 @@ fn run_exact_jpeg_reconstruction_with_mode(
     if mode == DjxlReconstructionMode::ExplicitFlag {
         command.arg("--reconstruct_jpeg");
     }
-    run_jxl_reconstruction_probe(&mut command, context)
+    let started = Instant::now();
+    let process = crate::process_runner::ManagedProcess::spawn_captured(&mut command);
+    timings.spawn += started.elapsed();
+    let started = Instant::now();
+    let output = process.and_then(|process| {
+        process.wait_liveness_timeout_for_short_task(
+            Duration::from_secs(120),
+            crate::process_runner::image_process_hard_timeout(),
+            context,
+        )
+    });
+    timings.wait += started.elapsed();
+    let output = output.map_err(|error| format!("{context} failed: {error}"))?;
+    Ok(std::process::Output {
+        status: output.status,
+        stdout: output.stdout.into_bytes(),
+        stderr: output.stderr.into_bytes(),
+    })
+}
+
+#[derive(Default)]
+pub(crate) struct JpegReconstructionTimings {
+    pub spawn: Duration,
+    pub wait: Duration,
 }
 
 fn run_strict_jpeg_reconstruction(
     input: &Path,
     output: &Path,
     context: &str,
+    timings: &mut JpegReconstructionTimings,
 ) -> Result<(std::process::Output, DjxlReconstructionMode), String> {
     let explicit = run_exact_jpeg_reconstruction_with_mode(
         input,
         output,
         context,
         DjxlReconstructionMode::ExplicitFlag,
+        timings,
     )?;
     let explicit_diagnostic = djxl_diagnostic(&explicit);
     if !djxl_rejected_explicit_reconstruction_option(&explicit_diagnostic) {
@@ -186,6 +212,7 @@ fn run_strict_jpeg_reconstruction(
         output,
         context,
         DjxlReconstructionMode::DefaultJpegOutput,
+        timings,
     )?;
     Ok((legacy, DjxlReconstructionMode::DefaultJpegOutput))
 }
@@ -207,7 +234,21 @@ pub fn run_exact_jpeg_reconstruction(
     output: &Path,
     context: &str,
 ) -> Result<std::process::Output, String> {
-    let (result, mode) = run_strict_jpeg_reconstruction(input, output, context)?;
+    run_exact_jpeg_reconstruction_profiled(
+        input,
+        output,
+        context,
+        &mut JpegReconstructionTimings::default(),
+    )
+}
+
+pub(crate) fn run_exact_jpeg_reconstruction_profiled(
+    input: &Path,
+    output: &Path,
+    context: &str,
+    timings: &mut JpegReconstructionTimings,
+) -> Result<std::process::Output, String> {
+    let (result, mode) = run_strict_jpeg_reconstruction(input, output, context, timings)?;
     if !djxl_completed_exact_jpeg_reconstruction(&result) {
         let diagnostic = djxl_diagnostic(&result);
         let reason = if djxl_used_pixel_to_jpeg_fallback(&diagnostic) {
@@ -335,6 +376,7 @@ pub fn probe_jpeg_reconstruction_eligibility(
         path,
         strict_output.path(),
         "strict JPEG reconstruction probe",
+        &mut JpegReconstructionTimings::default(),
     )?;
     if djxl_completed_exact_jpeg_reconstruction(&strict) {
         let strict_output_len = strict_output

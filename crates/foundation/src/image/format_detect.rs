@@ -125,13 +125,14 @@ impl FormatKind {
 /// # Errors
 /// Returns an error only on I/O failure (cannot open/read the file).
 pub fn detect_true_format(path: &Path) -> Result<FormatKind> {
+    detect_open_format(path, &mut std::fs::File::open(path)?)
+}
+
+fn detect_open_format(path: &Path, file: &mut std::fs::File) -> Result<FormatKind> {
     use std::io::Read;
 
     let mut buf = [0u8; 4096];
-    let n = {
-        let mut f = std::fs::File::open(path)?;
-        f.read(&mut buf).map_err(ImgQualityError::IoError)?
-    };
+    let n = file.read(&mut buf).map_err(ImgQualityError::IoError)?;
 
     let b = &buf[..n];
 
@@ -265,6 +266,34 @@ pub fn detect_true_format(path: &Path) -> Result<FormatKind> {
     }
 
     Ok(FormatKind::Unknown)
+}
+
+/// Read geometry from a fresh file handle after confirming the expected format.
+pub(crate) fn read_expected_raster_dimensions(
+    path: &Path,
+    expected: FormatKind,
+) -> Result<(u32, u32)> {
+    use std::io::{BufReader, Seek};
+
+    let decoder = match expected {
+        FormatKind::Jpeg => image::ImageFormat::Jpeg,
+        FormatKind::Png => image::ImageFormat::Png,
+        FormatKind::Pnm => image::ImageFormat::Pnm,
+        _ => {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "strict geometry has no decoder for {expected:?}"
+            )));
+        }
+    };
+    let mut file = std::fs::File::open(path)?;
+    let actual = detect_open_format(path, &mut file)?;
+    if actual != expected {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "geometry requires {expected:?} content, found {actual:?}"
+        )));
+    }
+    file.rewind()?;
+    Ok(image::ImageReaderOptions::with_format(BufReader::new(file), decoder).into_dimensions()?)
 }
 
 /// Dedicated tool policy for deep format validation.

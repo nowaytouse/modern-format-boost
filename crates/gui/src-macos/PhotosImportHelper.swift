@@ -157,6 +157,56 @@ private func verifyWitness(_ identifiers: [String]) throws {
     }
 }
 
+private func checkedAlbumTargets<Albums: Sequence>(
+    _ candidates: Albums, expected: Set<String>,
+    identifier: (Albums.Element) -> String, canAdd: (Albums.Element) -> Bool
+) throws -> [String: Albums.Element] {
+    var albums: [String: Albums.Element] = [:]
+    for album in candidates {
+        let id = identifier(album)
+        guard expected.contains(id), albums[id] == nil, canAdd(album) else {
+            throw failure("Requested PhotoKit destination is ambiguous or is not a writable album; no import submitted")
+        }
+        albums[id] = album
+    }
+    guard albums.count == expected.count else {
+        throw failure("Requested album is not visible in the selected PhotoKit library; no import submitted")
+    }
+    return albums
+}
+
+private func importAlbums(_ assets: [ImportAsset]) throws -> [String: PHAssetCollection] {
+    let identifiers = Set(assets.compactMap(\.albumIdentifier))
+    guard identifiers.allSatisfy({ !$0.isEmpty && !$0.utf8.contains(0) }) else {
+        throw failure("Invalid PhotoKit album identifier; no import submitted")
+    }
+    guard !identifiers.isEmpty else { return [:] }
+    let fetched = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: identifiers.sorted(), options: nil)
+    return try checkedAlbumTargets((0..<fetched.count).lazy.map(fetched.object(at:)), expected: identifiers,
+                                   identifier: \.localIdentifier) { album in
+        album.assetCollectionType == .album && album.assetCollectionSubtype == .albumRegular
+            && album.canPerform(.addContent)
+    }
+}
+
+private func testAlbumTargets() throws {
+    struct Album {
+        let id: String
+        let writableUserAlbum: Bool
+    }
+    let first = Album(id: "first", writableUserAlbum: true)
+    let second = Album(id: "second", writableUserAlbum: true)
+    let readOnly = Album(id: first.id, writableUserAlbum: false)
+    let expected: Set<String> = [first.id, second.id]
+    let matches = try checkedAlbumTargets([second, first], expected: expected,
+                                          identifier: \.id, canAdd: \.writableUserAlbum)
+    guard Set(matches.keys) == expected else { throw failure("Exact album identifiers failed preflight") }
+    for invalid in [[first, first], [first], [second, readOnly], [first, Album(id: "other", writableUserAlbum: true)]] {
+        let result = try? checkedAlbumTargets(invalid, expected: expected, identifier: \.id, canAdd: \.writableUserAlbum)
+        guard result == nil else { throw failure("An ambiguous or unavailable album passed preflight") }
+    }
+}
+
 private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
     guard let assets = request.assets, !assets.isEmpty, assets.count <= 1000,
           Set(assets.map(\.entryID)).count == assets.count,
@@ -184,13 +234,7 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
         }
     }
     try verifyWitness(request.witnessIdentifiers ?? [])
-    var albums: [String: PHAssetCollection] = [:]
-    for id in Set(assets.compactMap(\.albumIdentifier)) {
-        guard let album = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject else {
-            throw failure("Requested album is not visible in the selected PhotoKit library")
-        }
-        albums[id] = album
-    }
+    let albums = try importAlbums(assets)
     let encoded = try JSONEncoder().encode(request)
     var record: [String: Any] = ["version": 1, "batchID": request.batchID, "state": "submitted",
         "request": try JSONSerialization.jsonObject(with: encoded)]
@@ -202,6 +246,12 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
     let done = DispatchSemaphore(value: 0)
     PHPhotoLibrary.shared().performChanges({
         autoreleasepool {
+            var albumChanges: [String: PHAssetCollectionChangeRequest] = [:]
+            for (id, album) in albums {
+                guard album.canPerform(.addContent),
+                      let change = PHAssetCollectionChangeRequest(for: album) else { Darwin._exit(74) }
+                albumChanges[id] = change
+            }
             var albumAssets: [String: [PHObjectPlaceholder]] = [:]
             for asset in assets {
                 let creation = PHAssetCreationRequest.forAsset()
@@ -223,8 +273,7 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
                 }
             }
             for (id, placeholders) in albumAssets {
-                guard let album = albums[id],
-                      let change = PHAssetCollectionChangeRequest(for: album) else { Darwin._exit(74) }
+                guard let change = albumChanges[id] else { Darwin._exit(74) }
                 change.addAssets(placeholders as NSArray)
             }
             record["identities"] = identities
@@ -260,12 +309,19 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
 private struct PhotosImportHelper {
     static func main() {
         let args = CommandLine.arguments
+        if Array(args.dropFirst()) == ["--self-test"] {
+            do {
+                try testAlbumTargets()
+            }
+            catch { fputs("\(error.localizedDescription)\n", stderr); Darwin.exit(1) }
+            return
+        }
         var writerLock: Int32 = -1
         if args.count == 5, args[1] == "--socket", args[3] == "--lock" {
             do { writerLock = try connectParent(socketPath: args[2], lockPath: args[4]) }
             catch { fputs("\(error.localizedDescription)\n", stderr); Darwin.exit(74) }
         } else if args.count != 1 {
-            fputs("Usage: mfb-photos-import [--socket path --lock path]\n", stderr)
+            fputs("Usage: mfb-photos-import [--socket path --lock path | --self-test]\n", stderr)
             Darwin.exit(64)
         }
         defer { if writerLock >= 0 { Darwin.close(writerLock) } }

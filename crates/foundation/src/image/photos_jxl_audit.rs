@@ -1080,55 +1080,28 @@ pub fn photos_backup_original_candidates(
 }
 
 fn add_uuids_to_album(album: &[String], uuids: &[String]) -> Result<()> {
-    const SCRIPT: &str = r#"
+    const SCRIPT: &str = concat!(
+        r#"
 on run argv
     set componentCount to item 1 of argv as integer
-    set folderNames to items 2 thru componentCount of argv
-    set albumName to item (componentCount + 1) of argv
+    set pathItems to items 2 thru (componentCount + 1) of argv
     set assetUUIDs to items (componentCount + 2) thru -1 of argv
     tell application "Photos"
-        set parentFolder to missing value
-        repeat with folderName in folderNames
-            set folderName to contents of folderName
-            if parentFolder is missing value then
-                set matchingFolders to every folder whose name is folderName
-                if (count of matchingFolders) is 0 then
-                    set parentFolder to make new folder named folderName
-                else if (count of matchingFolders) is 1 then
-                    set parentFolder to item 1 of matchingFolders
-                else
-                    error "ambiguous Photos audit folder name"
-                end if
-            else
-                set matchingFolders to every folder of parentFolder whose name is folderName
-                if (count of matchingFolders) is 0 then
-                    set parentFolder to make new folder at parentFolder named folderName
-                else if (count of matchingFolders) is 1 then
-                    set parentFolder to item 1 of matchingFolders
-                else
-                    error "ambiguous Photos audit subfolder name"
-                end if
-            end if
-        end repeat
-        set matchingAlbums to every album of parentFolder whose name is albumName
-        if (count of matchingAlbums) is 0 then
-            set targetAlbum to make new album at parentFolder named albumName
-        else if (count of matchingAlbums) is 1 then
-            set targetAlbum to item 1 of matchingAlbums
-        else
-            error "ambiguous Photos audit album name"
-        end if
         set selectedItems to {}
         repeat with assetUUID in assetUUIDs
             set assetUUID to contents of assetUUID
-            set matchedItems to every media item whose id contains assetUUID
+            set identifierPrefix to assetUUID & "/"
+            set matchedItems to every media item whose id is assetUUID or id begins with identifierPrefix
             if (count of matchedItems) is not 1 then error "expected one Photos asset for UUID " & assetUUID
             set end of selectedItems to item 1 of matchedItems
         end repeat
+        set targetAlbum to my mfbResolveAlbum(pathItems, true)
         add selectedItems to targetAlbum
     end tell
 end run
-"#;
+"#,
+        include_str!("photos_album_path.applescript")
+    );
 
     anyhow::ensure!(
         album.len() >= 2,

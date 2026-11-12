@@ -219,6 +219,8 @@ private struct HistoryFinished: Decodable, Equatable {
     let outcome: String
     let error: String?
     let output_sequence: Int64?
+    let completed_with_file_errors: Bool?
+    let photos_quarantine_blocked: Int?
 }
 
 struct FastImgFailedRetryAvailable: Decodable, Equatable {
@@ -413,6 +415,12 @@ struct FastImgFailedRetrySelection {
 }
 
 struct FastImgDeliveryReceipt: Codable, Equatable {
+    private struct QuarantineLocations: Codable, Equatable {
+        let workingCopies: Int
+        let photosOriginals: Int
+        let affected: Int
+    }
+
     static let prefix = "MFB_FAST_IMG_RESULT="
     static let historyPrefix = "MFB_HISTORY_FAST_IMG_RESULT="
     let schemaVersion: Int
@@ -432,11 +440,15 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
     let finalizationError: String?
     let photosDeliveryDeferred: Bool?
     let primaryVerificationComplete: Bool?
+    let retainedOnlyComplete: Bool?
+    let photosQuarantineBlocked: Int?
+    private let photosQuarantineLocations: QuarantineLocations?
     let sourceDirectory: String?
     let outputDirectory: String?
 
     var counts: [Int?] { [succeeded, skipped, failed, ignored] }
     var isDeferred: Bool { photosDeliveryDeferred == true }
+    var isRetainedOnly: Bool { retainedOnlyComplete == true }
     var isValid: Bool {
         guard schemaVersion == 1,
               let total = processingCountTotal(counts + [unprocessed]),
@@ -453,6 +465,32 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
                   finalizationError?.isEmpty == false,
                   let sourceDirectory, let outputDirectory,
                   Self.absolute(sourceDirectory), Self.absolute(outputDirectory) else { return false }
+        }
+        if isRetainedOnly {
+            guard !isDeferred, !primaryCleanupComplete, succeeded == 0, unprocessed == 0,
+                  encoded == 0, photosVerified == 0, failed > 0,
+                  let retained = processingCountTotal([failed, skipped]), sourceRetained == retained,
+                  failedSourcesRetained == failed, failedSourcesVerified == failed,
+                  failedSourceVerificationError == nil, finalizationError == nil,
+                  let sourceDirectory, let outputDirectory,
+                  Self.absolute(sourceDirectory), Self.absolute(outputDirectory) else { return false }
+        }
+        if let quarantined = photosQuarantineBlocked {
+            guard quarantined > 0, quarantined <= unprocessed, !isDeferred, !isRetainedOnly,
+                  primaryVerificationComplete == true,
+                  !primaryCleanupComplete, succeeded == 0, failed == 0, unprocessed > 0,
+                  encoded == unprocessed, photosVerified == unprocessed,
+                  let retained = processingCountTotal([skipped, unprocessed]), sourceRetained == retained,
+                  failedSourcesRetained == 0, failedSourcesVerified == 0,
+                  failedSourceVerificationError == nil, finalizationError?.isEmpty == false,
+                  let sourceDirectory, let outputDirectory,
+                  Self.absolute(sourceDirectory), Self.absolute(outputDirectory) else { return false }
+        }
+        if let locations = photosQuarantineLocations {
+            guard locations.affected > 0, locations.affected == photosQuarantineBlocked,
+                  (0...locations.affected).contains(locations.workingCopies),
+                  (0...locations.affected).contains(locations.photosOriginals),
+                  locations.photosOriginals >= locations.affected - locations.workingCopies else { return false }
         }
         return true
     }
@@ -483,6 +521,7 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
     }
 
     var finalPhotosQuarantineCount: Int? {
+        if let photosQuarantineBlocked { return photosQuarantineBlocked }
         let prefix = "Gate 2 failed: "
         let check = "quarantine expected=0 quarantined actual="
         guard !isDeferred, !primaryCleanupComplete,
@@ -493,6 +532,16 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
         let value = result.dropFirst(check.count)
         guard value.utf8.allSatisfy({ (48...57).contains($0) }), let count = Int(value), count > 0 else { return nil }
         return count
+    }
+
+    var finalPhotosQuarantineLocationsText: String? {
+        guard let locations = photosQuarantineLocations else { return nil }
+        return localized("result.final_photos_quarantine_locations", String(locations.affected),
+                         String(locations.workingCopies), String(locations.photosOriginals))
+    }
+
+    func hasBlockedOutputCleanup(_ receipts: [OutputCleanupReceipt]) -> Bool {
+        receipts.contains { $0.outcome == "verification_blocked" && Self.samePath($0.output_path, outputDirectory) }
     }
 }
 
@@ -978,6 +1027,7 @@ private struct HistoryEntry {
     }
     var deliveryIsDeferred: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !fastDeliveryInvalid,
+              finished?.photos_quarantine_blocked == nil,
               !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
               workerExecutions.values.allSatisfy({ $0.last?.state == "exited" && $0.last?.signal == nil && $0.last?.exit_code == 2 }),
               !hasVerificationFailure, context?.dry_run == false, context?.mode == "fast-img",
@@ -986,13 +1036,55 @@ private struct HistoryEntry {
               summary.integrity.state == nil || ["CLEAN", "WARNINGS"].contains(summary.integrity.state!),
               !summary.vid.active, summary.img.exit_code == 2, fastDeliveries.count == 1,
               fastDeliveries.contains(where: \.isDeferred),
-              finished?.outcome == "failed", finished?.error == "fast-img exited with code 2",
+               finished?.completed_with_file_errors != true,
+               finished?.outcome == "failed", finished?.error == "fast-img exited with code 2",
               summary.img.unprocessed == processingCountTotal(fastDeliveries.map(\.unprocessed)),
               fastDeliveries.allSatisfy({ $0.isDeferred && $0.sourceRetained != nil && $0.retentionUnknownReason == nil
                   && $0.failedSourcesVerified == $0.failed && $0.failedSourcesRetained == $0.failed
                   && $0.failedSourceVerificationError == nil }) else { return false }
         let counts = [summary.img.succeeded, summary.img.skipped, summary.img.failed, summary.img.ignored]
         return (0..<4).allSatisfy { index in counts[index] == processingCountTotal(fastDeliveries.map { $0.counts[index] }) }
+    }
+    var confirmedPhotosQuarantine: Int? {
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure,
+              !fastDeliveryInvalid, !outputCleanupInvalid,
+              !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
+              context?.mode == "fast-img", context?.dry_run == false, context?.shortest_path == true,
+              context?.inputs.count == 1, inputPlan == nil,
+              verification == nil, inputVerifications.isEmpty,
+              finished?.outcome == "failed", finished?.completed_with_file_errors != true,
+              let count = finished?.photos_quarantine_blocked,
+              let summary, summary.valid, summary.img.complete, !summary.vid.active, summary.img.exit_code == 2,
+              summary.integrity.state == nil || summary.integrity.state == "CLEAN",
+              workerExecutions.values.allSatisfy({ $0.last?.state == "exited"
+                  && $0.last?.signal == nil && $0.last?.exit_code == 2 }),
+              fastDeliveries.count == 1, let receipt = fastDeliveries.first, receipt.photosQuarantineBlocked == count,
+              summary.img.unprocessed == receipt.unprocessed, receipt.hasBlockedOutputCleanup(outputCleanups),
+              [summary.img.succeeded, summary.img.skipped, summary.img.failed, summary.img.ignored] == receipt.counts
+        else { return nil }
+        return count
+    }
+    var retainedOnlySourceCount: Int? {
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty,
+              !fastDeliveryInvalid, !outputCleanupInvalid, !hasVerificationFailure,
+              !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
+              context?.mode == "fast-img", context?.dry_run == false,
+              finished?.completed_with_file_errors == true, finished?.outcome == "failed",
+              let summary, summary.valid, summary.img.complete, !summary.vid.active,
+              summary.img.exit_code == 1, summary.img.unprocessed == 0,
+              !fastDeliveries.isEmpty, fastDeliveries.count == context?.inputs.count,
+              fastDeliveries.allSatisfy(\.isRetainedOnly),
+              workerExecutions.values.allSatisfy({ $0.last?.state == "exited"
+                  && $0.last?.signal == nil && $0.last?.exit_code == 1 }),
+              fastDeliveries.allSatisfy({ report in
+                  outputCleanups.contains { $0.outcome == "not_requested"
+                      && FastImgDeliveryReceipt.samePath($0.output_path, report.outputDirectory) }
+              }) else { return nil }
+        let counts = [summary.img.succeeded, summary.img.skipped, summary.img.failed, summary.img.ignored]
+        guard (0..<4).allSatisfy({ index in
+            counts[index] == processingCountTotal(fastDeliveries.map { $0.counts[index] })
+        }) else { return nil }
+        return processingCountTotal(fastDeliveries.map(\.sourceRetained))
     }
     var hasPartialSuccess: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure, context?.dry_run == false,
@@ -1019,8 +1111,14 @@ private struct HistoryEntry {
         if finished?.outcome == "cancelled" { return "history.status.cancelled" }
         if hasValidRetryFinalization { return "retry.finalized.title" }
         if hasValidRetryReuse { return "retry.reused.title" }
+        if confirmedPhotosQuarantine != nil { return "result.final_photos_quarantine_title" }
         if deliveryIsDeferred { return "result.delivery_deferred" }
         if hasPartialSuccess { return "history.status.partial" }
+        if retainedOnlySourceCount != nil { return "history.status.file_failures" }
+        if finished?.outcome == "failed", context?.shortest_path == true,
+           !fastDeliveryInvalid, fastDeliveries.contains(where: { $0.finalPhotosQuarantineCount != nil }) {
+            return "result.final_photos_quarantine_review"
+        }
         if finished?.outcome == "failed" { return "history.status.failed" }
         if hasProcessorError { return "history.status.failed" }
         if hasFailures { return "history.status.file_failures" }
@@ -1054,8 +1152,8 @@ private struct HistoryEntry {
     }
     var statusColor: NSColor {
         if hasVerificationFailure { return .systemRed }
-        if deliveryIsDeferred { return .systemOrange }
-        if hasPartialSuccess { return .systemOrange }
+        if deliveryIsDeferred || confirmedPhotosQuarantine != nil { return .systemOrange }
+        if hasPartialSuccess || retainedOnlySourceCount != nil { return .systemOrange }
         if finished?.outcome == "failed" || hasFailures { return .systemRed }
         return needsAttention ? .systemOrange : .labelColor
     }
@@ -1462,7 +1560,6 @@ private enum HistoryStore {
                     guard let receipt = try OutputCleanupReceipt.decode(event, prefix: OutputCleanupReceipt.historyPrefix),
                           let context = current.context, context.mode == "fast-img", !context.dry_run,
                           let runID = context.run_id, receipt.run_id == runID,
-                          context.shortest_path == (receipt.outcome != "not_requested"),
                           !current.outputCleanupInvalid, current.outputCleanups.count < 64 else { throw HistoryParseError.invalid }
                     if let previous = current.outputCleanups.first(where: { Data($0.output_path.utf8) == Data(receipt.output_path.utf8) }) {
                         guard previous == receipt else { throw HistoryParseError.invalid }
@@ -1530,6 +1627,11 @@ private enum HistoryStore {
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     let finished = try decode(HistoryFinished.self, from: event, prefix: "MFB_HISTORY_FINISHED=")
                     guard finished.schema_version == 1, ["completed", "failed", "cancelled"].contains(finished.outcome),
+                          finished.completed_with_file_errors != true || (finished.outcome == "failed" && finished.error?.isEmpty == false),
+                          finished.photos_quarantine_blocked.map({
+                              $0 > 0 && finished.outcome == "failed" && finished.error?.isEmpty == false
+                                  && finished.completed_with_file_errors != true
+                          }) ?? true,
                           current.context?.output_sequence == nil || finished.output_sequence != nil,
                           finished.output_sequence.map({ $0 >= (current.context?.output_sequence ?? 0) }) ?? true,
                           !current.contradictoryFields.contains("finished")
@@ -1629,12 +1731,19 @@ private enum HistoryStore {
             let contextOutput = entries[index].context?.output
             let verifiedOutput = entries[index].verification?.output_path
             let outputs = planOutputs ?? [verifiedOutput ?? contextOutput].compactMap { $0 }
+            let retainedOnlyOutputs = entries[index].fastDeliveries.filter(\.isRetainedOnly).compactMap(\.outputDirectory)
             let conflictingOutputs: Bool
             if planOutputs == nil, let contextOutput, let verifiedOutput {
                 conflictingOutputs = Data(contextOutput.utf8) != Data(verifiedOutput.utf8)
             } else { conflictingOutputs = false }
             if entries[index].outputCleanups.contains(where: { receipt in
-                conflictingOutputs || !outputs.contains(where: { Data($0.utf8) == Data(receipt.output_path.utf8) })
+                if conflictingOutputs { return true }
+                if receipt.outcome == "not_requested",
+                   retainedOnlyOutputs.contains(where: { FastImgDeliveryReceipt.samePath($0, receipt.output_path) }) {
+                    return false
+                }
+                return entry.context?.shortest_path != (receipt.outcome != "not_requested")
+                    || !outputs.contains(where: { FastImgDeliveryReceipt.samePath($0, receipt.output_path) })
             }) {
                 entries[index].outputCleanups.removeAll()
                 entries[index].outputCleanupInvalid = true
@@ -3895,11 +4004,16 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                       "  " + localized("result.unprocessed", count(media?.unprocessed)),
                       "  " + row("exit", count(media?.exit_code))]
         }
-        lines += ["", localized("history.verification"), row("integrity", entry.summary?.integrity.state ?? unknown),
-                  row("issues", count(entry.summary?.integrity.issue_count))]
-        if let verification = entry.verification {
-            lines += verificationRows(verification)
-        } else { lines += [row("verification_state", unknown), row("count_status", unknown)] }
+        lines += ["", localized("history.verification")]
+        if let retained = entry.retainedOnlySourceCount {
+            lines.append(localized("result.retained_only_facts", String(retained)))
+        } else {
+            lines += [row("integrity", entry.summary?.integrity.state ?? unknown),
+                      row("issues", count(entry.summary?.integrity.issue_count))]
+            if let verification = entry.verification {
+                lines += verificationRows(verification)
+            } else { lines += [row("verification_state", unknown), row("count_status", unknown)] }
+        }
         if let inputPlan = entry.inputPlan {
             for input in inputPlan.inputs {
                 lines += ["", row("output", input.output ?? unknown)]
@@ -3917,12 +4031,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 if let error = receipt.finalizationError { lines.append(error) }
             }
             if !entry.fastDeliveryInvalid {
+                let confirmedQuarantine = entry.confirmedPhotosQuarantine
                 for receipt in entry.fastDeliveries {
                     guard let quarantined = receipt.finalPhotosQuarantineCount else { continue }
+                    let locations = confirmedQuarantine == quarantined ? receipt.finalPhotosQuarantineLocationsText : nil
                     lines += ["", localized("result.delivery_record_title"),
-                              localized("result.final_photos_quarantine", String(quarantined)),
+                              locations ?? localized("result.final_photos_quarantine", String(quarantined)),
                               localized("result.independent_delivery_facts", String(receipt.encoded),
                                         String(receipt.photosVerified), count(receipt.sourceRetained))]
+                    if locations != nil { lines.append(localized("result.final_photos_quarantine_resume")) }
                 }
             }
             lines += ["", localized("cleanup.history_title")]
@@ -4202,7 +4319,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         fixture.context = HistoryContext(schema_version: 1, inputs: ["/synthetic/Private holiday photographs"], output: nil,
             backup: nil, mode: "standard", dry_run: false, in_place: false, shortest_path: false,
             version: "0.12.0", retry: nil, resume: nil, no_resume: nil, output_sequence: 0, run_id: "fixture-run-one")
-        fixture.finished = HistoryFinished(schema_version: 1, outcome: "completed", error: nil, output_sequence: 4)
+        fixture.finished = HistoryFinished(schema_version: 1, outcome: "completed", error: nil, output_sequence: 4,
+                                           completed_with_file_errors: nil, photos_quarantine_blocked: nil)
         fixture.summary = HistorySummary(schema_version: 1, count_scope: "processor_outcomes",
             img: HistoryMedia(active: true, succeeded: 12, skipped: 2, ignored: 0, failed: 0, unprocessed: 0, exit_code: 0),
             vid: HistoryMedia(active: false, succeeded: nil, skipped: nil, ignored: nil, failed: nil, unprocessed: nil, exit_code: nil),
@@ -5234,7 +5352,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         let inactive = HistoryMedia(active: false, succeeded: nil, skipped: nil, ignored: nil, failed: nil, unprocessed: nil, exit_code: nil)
         entry.summary = HistorySummary(schema_version: 1, count_scope: "processor_outcomes", img: media, vid: inactive,
             integrity: .init(state: "CLEAN", issue_count: 0), failed_files: [problemPath], skipped_files: [normalPath])
-        entry.finished = HistoryFinished(schema_version: 1, outcome: "failed", error: "decoder failed: " + problemPath, output_sequence: 2)
+        entry.finished = HistoryFinished(schema_version: 1, outcome: "failed", error: "decoder failed: " + problemPath,
+                                         output_sequence: 2, completed_with_file_errors: nil, photos_quarantine_blocked: nil)
         entry.invocations = [HistoryInvocation(schema_version: 1, invocation_id: "invocation-privacy", run_id: "run-privacy",
             pipeline: "img", state: "launch_requested", program_requested: "img", program_path: "/synthetic/bin/img",
             arguments: ["--input", normalPath], binary: .init(scope: "observed_before_launch", bytes: 1,
@@ -5998,7 +6117,8 @@ private func runHistoryRemovalSelfTests() throws {
         value.context = HistoryContext(schema_version: 1, inputs: ["/synthetic/private-normal.jpeg"], output: nil,
             backup: nil, mode: "standard", dry_run: false, in_place: false, shortest_path: false,
             version: nil, retry: nil, resume: nil, no_resume: nil, output_sequence: 0, run_id: run)
-        value.finished = HistoryFinished(schema_version: 1, outcome: "completed", error: nil, output_sequence: 4)
+        value.finished = HistoryFinished(schema_version: 1, outcome: "completed", error: nil, output_sequence: 4,
+                                         completed_with_file_errors: nil, photos_quarantine_blocked: nil)
         return value
     }
     func require(_ value: Bool, _ message: String) throws { if !value { throw HostError(message: message) } }
@@ -6148,6 +6268,85 @@ func runProcessingHistorySelfTests() throws {
         && ProcessingHistoryPanel.render(deferredEntry).contains("/synthetic/output")
         && ProcessingHistoryPanel.render(deferredEntry).contains("synthetic Photos target unavailable"),
         "History lost deferred delivery evidence or claimed completed delivery")
+    var retainedOnly = deferredReceipt
+    retainedOnly["skipped"] = 4
+    retainedOnly["ignored"] = 9
+    retainedOnly["failed"] = 4
+    retainedOnly["unprocessed"] = 0
+    retainedOnly["encoded"] = 0
+    retainedOnly["source_retained"] = 8
+    retainedOnly["failed_sources_retained"] = 4
+    retainedOnly["failed_sources_verified"] = 4
+    retainedOnly["primary_verification_complete"] = false
+    retainedOnly["photos_delivery_deferred"] = false
+    retainedOnly["finalization_error"] = NSNull()
+    retainedOnly["retained_only_complete"] = true
+    let retainedOnlyDelivery = try payload("MFB_HISTORY_FAST_IMG_RESULT", retainedOnly)
+    var retainedOnlySummary = deferredSummary
+    retainedOnlySummary["img"] = ["active": true, "succeeded": 0, "skipped": 4, "ignored": 9,
+                                  "failed": 4, "unprocessed": 0, "exit_code": 1]
+    let retainedOnlyCounts = try payload("MFB_HISTORY_SUMMARY", retainedOnlySummary)
+    let notRequested = try payload("MFB_HISTORY_OUTPUT_CLEANUP", ["schema_version": 1, "run_id": deferredRun,
+        "output_path": "/synthetic/output", "outcome": "not_requested", "error": NSNull()])
+    let retainedOnlyEnd = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "run_id": deferredRun,
+        "outcome": "failed", "error": "batch completed with 4 failed sources", "completed_with_file_errors": true])
+    let retainedOnlyEntry = try parsed([
+        deferredContext, notRequested, retainedOnlyDelivery, retainedOnlyCounts, retainedOnlyEnd,
+    ]).entries[0]
+    try require(retainedOnlyEntry.retainedOnlySourceCount == 8
+        && retainedOnlyEntry.statusKey == "history.status.file_failures" && retainedOnlyEntry.statusColor == .systemOrange
+        && !retainedOnlyEntry.hasCleanupAttention && retainedOnlyEntry.needsAttention
+        && ProcessingHistoryPanel.render(retainedOnlyEntry).contains(localized("result.retained_only_facts", "8")),
+        "History lost corroborated retained originals or marked their lack of output as a cleanup failure")
+    let unconfirmedRetainedOnly = try parsed([
+        deferredContext, notRequested, retainedOnlyDelivery, retainedOnlyCounts, deferredFinal,
+    ]).entries[0]
+    try require(unconfirmedRetainedOnly.retainedOnlySourceCount == nil && unconfirmedRetainedOnly.statusColor == .systemRed,
+        "History used a worker receipt to conceal the launcher's different terminal outcome")
+    var quarantined = retainedOnly
+    quarantined["failed"] = 0
+    quarantined["failed_sources_retained"] = 0
+    quarantined["failed_sources_verified"] = 0
+    quarantined["unprocessed"] = 4
+    quarantined["encoded"] = 4
+    quarantined["photos_verified"] = 4
+    quarantined["primary_verification_complete"] = true
+    quarantined["retained_only_complete"] = false
+    quarantined["photos_quarantine_blocked"] = 4
+    quarantined["photos_quarantine_locations"] = ["working_copies": 0, "photos_originals": 4, "affected": 4]
+    quarantined["finalization_error"] = "Gate 2 failed: quarantine expected=0 quarantined actual=4; wc preserved at /synthetic/output"
+    let quarantinedDelivery = try payload("MFB_HISTORY_FAST_IMG_RESULT", quarantined)
+    var quarantineSummary = retainedOnlySummary
+    quarantineSummary["img"] = ["active": true, "succeeded": 0, "skipped": 4, "ignored": 9,
+                                "failed": 0, "unprocessed": 4, "exit_code": 2]
+    let quarantineCounts = try payload("MFB_HISTORY_SUMMARY", quarantineSummary)
+    let quarantineCleanup = try payload("MFB_HISTORY_OUTPUT_CLEANUP", ["schema_version": 1, "run_id": deferredRun,
+        "output_path": "/synthetic/output", "outcome": "verification_blocked", "error": NSNull()])
+    let quarantineEnd = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "run_id": deferredRun,
+        "outcome": "failed", "error": "synthetic blocked delivery", "photos_quarantine_blocked": 4])
+    let blocked = try parsed([deferredContext, quarantineCleanup, quarantinedDelivery, quarantineCounts, quarantineEnd]).entries[0]
+    try require(blocked.confirmedPhotosQuarantine == 4 && blocked.statusKey == "result.final_photos_quarantine_title"
+        && blocked.statusColor == .systemOrange && blocked.hasPending && blocked.hasCleanupAttention
+        && ProcessingHistoryPanel.render(blocked).contains(localized("result.final_photos_quarantine_locations", "4", "0", "4")),
+        "History presented the verified quarantine block as a generic failure or completed delivery")
+    let cleanupNotProven = try parsed([deferredContext, quarantinedDelivery, quarantineCounts, quarantineEnd]).entries[0]
+    try require(cleanupNotProven.confirmedPhotosQuarantine == nil && cleanupNotProven.statusColor == .systemRed,
+        "History allowed a missing cleanup receipt to prove quarantine-only failure")
+    var conflictingSummary = quarantineSummary
+    conflictingSummary["integrity"] = ["state": "WARNINGS", "issue_count": 1]
+    let conflictingCounts = try payload("MFB_HISTORY_SUMMARY", conflictingSummary)
+    let conflicting = try parsed([deferredContext, quarantineCleanup, quarantinedDelivery, conflictingCounts, quarantineEnd]).entries[0]
+    try require(conflicting.confirmedPhotosQuarantine == nil && conflicting.statusColor == .systemRed,
+        "History allowed quarantine to mask independently reported integrity issues")
+    quarantined.removeValue(forKey: "photos_quarantine_blocked")
+    quarantined.removeValue(forKey: "photos_quarantine_locations")
+    quarantined["primary_verification_complete"] = false
+    let historicalQuarantine = try parsed([deferredContext, quarantineCleanup,
+        payload("MFB_HISTORY_FAST_IMG_RESULT", quarantined), quarantineCounts, deferredFinal]).entries[0]
+    try require(historicalQuarantine.confirmedPhotosQuarantine == nil && historicalQuarantine.statusColor == .systemRed
+        && historicalQuarantine.statusKey == "result.final_photos_quarantine_review"
+        && ProcessingHistoryPanel.render(historicalQuarantine).contains(localized("result.final_photos_quarantine", "4")),
+        "Historical quarantine hid its reason or became a retrospectively corroborated result")
     for (key, value) in [("run_id", "another-run" as Any), ("source_directory", "/synthetic/other" as Any),
                          ("output_directory", "/synthetic/other" as Any), ("failed_sources_verified", 0 as Any),
                          ("primary_verification_complete", false as Any), ("unprocessed", 2 as Any)] {
@@ -7533,7 +7732,9 @@ func runProcessingHistorySelfTests() throws {
         .sorted { ($0.context?.output_sequence ?? -1) < ($1.context?.output_sequence ?? -1) }
     try require(exportEntries.count == 2, "Synthetic export batches merged")
     var unknownFinishedBoundary = exportEntries[0]
-    unknownFinishedBoundary.finished = HistoryFinished(schema_version: 1, outcome: "failed", error: "synthetic failure", output_sequence: nil)
+    unknownFinishedBoundary.finished = HistoryFinished(schema_version: 1, outcome: "failed", error: "synthetic failure",
+                                                      output_sequence: nil, completed_with_file_errors: nil,
+                                                      photos_quarantine_blocked: nil)
     unknownFinishedBoundary.outputUpperSequence = 6
     try require(unknownFinishedBoundary.outputEndSource == "next_batch_boundary",
                 "A finished record without an output sequence fabricated terminal boundary provenance")

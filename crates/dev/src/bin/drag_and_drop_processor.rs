@@ -8,11 +8,11 @@ use clap::{Parser, ValueEnum};
 use dev::app::session::{AppSession, RunContext, processor_history_counts};
 use dev::app::worker::{CollectedChildError, LaunchCommand, WorkerSession};
 use dev::infra::drag_drop::{
-    ContentScan, FastImgAction, OutputCleanupOutcome, OutputCleanupReceipt, ProcessingFilter,
+    ContentScan, FastImgAction, OutputCleanupOutcome, OutputCleanupReceipt, PhotosQuarantineBlocked, ProcessingFilter,
     ScanRoute, acquire_global_lock, adjacent_output_for_target, build_size_comparison_summary,
     confirm_in_place, count_fast_img_jxl_outputs, create_directory_structure,
     delete_fast_img_shortest_path_output_dir, fast_img_partial_cleanup_verified,
-    fast_img_retained_file_names, fast_img_session_size_metrics,
+    fast_img_retained_file_names, fast_img_retained_only_verified, fast_img_session_size_metrics,
     prune_completed_fast_img_empty_outputs, run_unified_verification, safety_check, scan_content,
     sync_non_media_files,
 };
@@ -2599,12 +2599,8 @@ fn run_drag_drop_inner(
         } else {
             draw_separator("Processing (fast-img)");
             // The worker can delete the input before historical output cleanup.
-            let source_root = args
-                .shortest_path
-                .then(|| {
-                    fast_img_source_root_for_run(args.inputs.first().context("input required")?)
-                })
-                .transpose()?;
+            let source_root =
+                fast_img_source_root_for_run(args.inputs.first().context("input required")?)?;
             match run_fast_img_task(args, &root, session.expect("session")) {
                 Ok(FastImgTaskOutcome {
                     stats,
@@ -2613,6 +2609,8 @@ fn run_drag_drop_inner(
                 }) => {
                     summary.img = stats.clone();
                     let mut failed_sources_verified = None;
+                    let mut retained_only_verified = false;
+                    let mut quarantine_blocked = None;
                     let mut evidence_available = false;
                     match dev::infra::history_store::read_fast_img_finalization_since(
                         session.expect("session").log_dir(),
@@ -2631,15 +2629,24 @@ fn run_drag_drop_inner(
                                 session.expect("session").finish_log(&summary, None)?;
                                 return Ok(());
                             }
-                            if let Err(error) = session
+                            match session
                                 .expect("session")
                                 .record_fast_img_result(&text, &stats)
                             {
-                                eprintln!("[ERROR] fast-img result history failed: {error:#}");
-                                first_error =
-                                    Some(error.context("persist fast-img result receipt"));
-                            } else {
-                                evidence_available = true;
+                                Err(error) => {
+                                    eprintln!("[ERROR] fast-img result history failed: {error:#}");
+                                    first_error = Some(error.context("persist fast-img result receipt"));
+                                }
+                                Ok(report) => {
+                                    evidence_available = true;
+                                    retained_only_verified =
+                                        fast_img_retained_only_verified(&text, &stats, &source_root, &output);
+                                    if args.shortest_path {
+                                        quarantine_blocked = report.as_ref().and_then(|report| {
+                                            PhotosQuarantineBlocked::from_receipt(report, &stats, &source_root, &output)
+                                        });
+                                    }
+                                }
                             }
                             if args.shortest_path {
                                 failed_sources_verified =
@@ -2682,14 +2689,14 @@ fn run_drag_drop_inner(
                             &mut summary,
                             &output,
                             failed_sources_verified,
-                            source_root.as_deref(),
+                            Some(&source_root),
                         )
                     } else {
                         std::path::absolute(&output)
                             .context("resolve blocked output cleanup path")
                             .and_then(|path| {
                                 session.expect("session").record_output_cleanup(
-                                    if args.shortest_path {
+                                    if args.shortest_path && !retained_only_verified {
                                         OutputCleanupReceipt::verification_blocked(&path)
                                     } else {
                                         OutputCleanupReceipt::not_requested(&path)
@@ -2700,6 +2707,12 @@ fn run_drag_drop_inner(
                     println!("{}", batch_result_line("img", &summary.img));
                     match verified {
                         Err(error) => first_error = Some(error),
+                        Ok(()) if only_worker_exit && retained_only_verified => {
+                            first_error = Some(CompletedWithFileFailures { failed: stats.failed }.into());
+                        }
+                        Ok(()) if only_worker_exit && quarantine_blocked.is_some() => {
+                            first_error = quarantine_blocked.map(Into::into);
+                        }
                         Ok(()) => {
                             if let Some(completed) = fast_img_file_only_completion(
                                 only_worker_exit, failed_sources_verified, &stats, &summary,
@@ -3879,10 +3892,24 @@ fn report_drag_drop_failure(result: &Result<()>) {
         if foundation::production_lock::is_production_task_busy(err) {
             return;
         }
-        eprintln!("{err:#}");
-        let completed_failures = (err.chain().count() == 1)
-            .then(|| err.downcast_ref::<CompletedWithFileFailures>().map(|result| result.failed))
-            .flatten();
+        let completed_failures = dev::infra::rich_panel::completed_file_failure_count(err);
+        if let Some(blocked) = PhotosQuarantineBlocked::from_error(err) {
+            println!(
+                "MFB_BATCH_PHOTOS_QUARANTINE_BLOCKED={}",
+                serde_json::json!({"schema_version": 1, "quarantined": blocked.count})
+            );
+            println!("[WARN] {blocked}");
+            pause_before_gui_exit();
+            return;
+        }
+        if let Some(failed) = completed_failures {
+            println!(
+                "MFB_BATCH_FILE_ERRORS_COMPLETE={}",
+                serde_json::json!({"schema_version": 1, "failed": failed})
+            );
+        } else {
+            eprintln!("{err:#}");
+        }
         print_pipeline_failure_panel(completed_failures);
         pause_before_gui_exit();
     }
@@ -4427,7 +4454,7 @@ mod tests {
             "photos_delivery_deferred":true,"source_directory":"/fixture/source","output_directory":"/fixture/output"
         });
         let line = format!("MFB_FAST_IMG_RESULT={payload}");
-        session.record_fast_img_result(&line, &stats).unwrap();
+        assert!(session.record_fast_img_result(&line, &stats).unwrap().is_some());
         let receipts = history_payloads(&session, "MFB_HISTORY_FAST_IMG_RESULT");
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0]["run_id"].as_str(), session.run_id());

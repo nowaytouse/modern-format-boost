@@ -5409,7 +5409,13 @@ private struct PhotosImportProgress {
     }
     private(set) var event: Event?
     private(set) var invalid = false
+    private var stoppedDuringPreparation = false
     private var highestCounter: [UInt32: UInt64] = [:]
+
+    var preparationStopPendingCount: Int? {
+        guard !invalid, stoppedDuringPreparation, let event else { return nil }
+        return Int(exactly: event.pending_total)
+    }
 
     mutating func ingest(_ line: String) -> Bool {
         let raw = LogTone.message(line)
@@ -5438,6 +5444,10 @@ private struct PhotosImportProgress {
             }
             highestCounter[identity.pid] = identity.counter
         }
+        // A gap can hide a later phase, so name the stop phase only from adjacent events.
+        stoppedDuringPreparation = next.phase == "stopped" && next.verified == 0
+            && event.map { $0.operation_id == next.operation_id && $0.phase == "target_preparation"
+                && $0.sequence > 1 && $0.sequence == next.sequence - 1 } == true
         event = next
         return true
     }
@@ -5772,6 +5782,8 @@ private struct BatchResults {
     private(set) var outputCleanups: [OutputCleanupReceipt] = []
     private(set) var outputCleanupInvalid = false
     private var workerExitCodes: [Int] = []
+    private var completedFileErrors: Int?
+    private var photosQuarantineBlocked: Int?
     private(set) var mandatoryEvidenceConflict = false
     private(set) var integrityIssueCount: Int?
     private(set) var failedRetryRequest: FastImgRetryReference?
@@ -5885,20 +5897,82 @@ private struct BatchResults {
         processingCountTotal(fastDeliveries.map { $0[keyPath: key] })
     }
 
+    mutating func ingestTerminalEvidence(_ raw: String) -> Bool {
+        let quarantinePrefix = "MFB_BATCH_PHOTOS_QUARANTINE_BLOCKED="
+        let isQuarantine = raw.hasPrefix(quarantinePrefix)
+        let prefix = isQuarantine ? quarantinePrefix : "MFB_BATCH_FILE_ERRORS_COMPLETE="
+        guard isQuarantine || raw.hasPrefix(prefix) else { return false }
+        struct Receipt: Decodable {
+            let schema_version: Int
+            let failed: Int?
+            let quarantined: Int?
+        }
+        let payload = raw.dropFirst(prefix.count)
+        guard payload.utf8.count <= 128, photosQuarantineBlocked == nil, completedFileErrors == nil,
+              let receipt = try? JSONDecoder().decode(Receipt.self, from: Data(payload.utf8)),
+              receipt.schema_version == 1,
+              let count = isQuarantine ? receipt.quarantined : receipt.failed,
+              count > 0, (isQuarantine ? receipt.failed : receipt.quarantined) == nil else {
+            mandatoryEvidenceConflict = true
+            return true
+        }
+        if isQuarantine { photosQuarantineBlocked = count } else { completedFileErrors = count }
+        return true
+    }
+
+    func confirmedPhotosQuarantine(source: String?, processExit: Int32?, exitedNormally: Bool) -> Int? {
+        guard processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
+              hasCompleteCountReport, !fastDeliveryInvalid, !outputCleanupInvalid,
+              let count = photosQuarantineBlocked, completedFileErrors == nil,
+              workerExitCodes == [2], totals.count == 1, let img = totals["img"],
+              fastDeliveries.count == 1, let receipt = fastDeliveries.first,
+              receipt.photosQuarantineBlocked == count,
+              FastDelivery.samePath(receipt.sourceDirectory, source),
+              img == receipt.counts, (pendingTotals["img"] ?? nil) == receipt.unprocessed,
+              receipt.hasBlockedOutputCleanup(outputCleanups) else { return nil }
+        return count
+    }
+
+    func photosPreparationStopped(source: String?, pendingCount: Int?, processExit: Int32?, exitedNormally: Bool) -> Bool {
+        guard processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
+              hasCompleteCountReport, !fastDeliveryInvalid, !outputCleanupInvalid,
+              completedFileErrors == nil, photosQuarantineBlocked == nil,
+              workerExitCodes == [2], totals.count == 1, let img = totals["img"],
+              fastDeliveries.count == 1, let receipt = fastDeliveries.first,
+              receipt.primaryVerificationComplete == true, !receipt.primaryCleanupComplete,
+              !receipt.isDeferred, receipt.finalPhotosQuarantineCount == nil,
+              receipt.finalizationError?.isEmpty == false, receipt.photosVerified == 0,
+              receipt.unprocessed > 0, receipt.unprocessed == pendingCount,
+              FastDelivery.samePath(receipt.sourceDirectory, source),
+              img == receipt.counts, (pendingTotals["img"] ?? nil) == receipt.unprocessed,
+              receipt.hasBlockedOutputCleanup(outputCleanups) else { return false }
+        return true
+    }
+
     func fastDeliveryIsConfirmed(photos: Bool, processExit: Int32?, exitedNormally: Bool = true) -> Bool {
         guard let processExit, exitedNormally, !mandatoryEvidenceConflict,
+              photosQuarantineBlocked == nil,
               !isIncomplete, !fastDeliveryInvalid, !fastDeliveries.isEmpty,
               totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
               let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
               pending == fastDeliveryCount(\.unprocessed),
               fastDeliveries.allSatisfy({ $0.finalizationError == nil && $0.failedSourcesRetained == $0.failed
                   && $0.failedSourcesVerified == $0.failed && $0.failedSourceVerificationError == nil
-                  && ($0.failed == 0 || $0.primaryCleanupComplete) }),
+                  && ($0.failed == 0 || $0.primaryCleanupComplete || $0.isRetainedOnly) }),
               workerExitCodes.count == fastDeliveries.count,
               zip(workerExitCodes, fastDeliveries).allSatisfy({ code, report in code == (report.failed > 0 ? 1 : 0) }),
               let successes = fastDeliveryCount(\.succeeded),
               let failures = fastDeliveryCount(\.failed),
               processingCountTotal(fastDeliveries.map(\.sourceRetained)) != nil else { return false }
+        if let completedFileErrors, completedFileErrors != failures { return false }
+        let retainedOnly = fastDeliveries.filter(\.isRetainedOnly)
+        if !retainedOnly.isEmpty {
+            guard completedFileErrors == failures, !outputCleanupInvalid,
+                  retainedOnly.allSatisfy({ report in
+                      outputCleanups.contains { $0.outcome == "not_requested"
+                          && FastDelivery.samePath($0.output_path, report.outputDirectory) }
+                  }) else { return false }
+        }
         for index in 0..<4 {
             guard img[index] == processingCountTotal(fastDeliveries.map { $0.counts[index] }) else { return false }
         }
@@ -5910,6 +5984,7 @@ private struct BatchResults {
 
     func deliveryIsDeferred(photos: Bool, source: String?, processExit: Int32?, exitedNormally: Bool) -> Bool {
         guard photos, processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
+              completedFileErrors == nil, photosQuarantineBlocked == nil,
               !isIncomplete, !fastDeliveryInvalid, fastDeliveries.count == 1,
               fastDeliveries.contains(where: \.isDeferred), totals.keys.allSatisfy({ $0 == "img" }),
               pendingTotals.count == 1, let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
@@ -6012,8 +6087,7 @@ private struct BatchResults {
         return parts.joined(separator: " · ")
     }
 
-    mutating func ingest(_ line: String) -> String? {
-        let raw = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
+    mutating func ingest(_ raw: String) -> String? {
         let prefix = "MFB_BATCH_RESULT="
         guard raw.hasPrefix(prefix) else { return nil }
         let decoder = JSONDecoder()
@@ -6057,8 +6131,8 @@ private struct BatchResults {
                                 count(event.failed), count(event.ignored))
             + " · " + localized("result.unprocessed", count(event.unprocessed))
         // Counts do not prove delivery or source retention; confirmed receipts control softer styling.
-        let tag = (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0 ? "FAIL"
-            : (event.exitCode == nil || event.counts.contains { $0 == nil } || (event.unprocessed ?? 0) > 0 ? "WARN" : "SUMMARY")
+        let tag = (event.failed ?? 0) > 0 ? "FAIL"
+            : (event.exitCode != 0 || event.counts.contains { $0 == nil } || (event.unprocessed ?? 0) > 0 ? "WARN" : "SUMMARY")
         return "[\(tag)] \(event.media.uppercased()): \(summary) (exit=\(count(event.exitCode)))"
     }
 }
@@ -6227,7 +6301,8 @@ enum DisplayPrivacy {
     static func problemTone(_ line: String) -> LogTone? {
         let raw = LogTone.message(line)
         if raw.hasPrefix(HistoryIgnoredSource.prefix)
-            || ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: raw.hasPrefix) { return nil }
+            || ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: raw.hasPrefix)
+            || raw == "Failed: 0" || LogTone.isExpectedExistingJxlSkip(raw) { return nil }
         if raw.hasPrefix(HistoryFileFailure.prefix) {
             return (try? HistoryFileFailure.decode(raw)) != nil ? .failure : .warning
         }
@@ -6241,6 +6316,7 @@ enum DisplayPrivacy {
         if raw.range(of: #"(?i)^\s*(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|(?:Permission denied|No space left on device|exiting with failures)\b|\[Summary\]\s*.*\bfailed=[1-9]\d*(?:\s|$)|Integrity Issues:\s*[1-9]\d*|Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil
             || hasSeriousProcessingDiagnostic(raw) { return .failure }
         if raw.range(of: #"(?i)^\s*(?:\[WARN(?:ING)?\s*\]|(?:warning|警告):|Integrity:\s*WARNINGS\b)"#, options: .regularExpression) != nil { return .warning }
+        if LogTone.isQuarantineGateResult(raw) { return .warning }
         if raw.range(of: #"^\s*(?:\[[^\]\r\n]{1,40}\]\s*)?(?:✗|❌)(?:\s|$)"#, options: .regularExpression) != nil { return .failure }
         // String regex uses graphemes: both literal forms must require a warning symbol.
         if raw.range(of: #"^\s*(?:\[[^\]\r\n]{1,40}\]\s*)?(?:⚠️|⚠)(?:\s|$)"#, options: .regularExpression) != nil { return .warning }
@@ -6260,6 +6336,26 @@ enum LogTone: Equatable {
         return text
     }
 
+    static func isQuarantineGateResult(_ raw: String) -> Bool {
+        guard raw.hasPrefix("[GATE 2"), raw.hasSuffix(" → QUARANTINE_BLOCKED") else { return false }
+        return raw.range(of: #"^\[GATE 2\s*\] (?:\w+:✅ )*quarantine:❌ (?:\w+:✅ )*→ QUARANTINE_BLOCKED$"#,
+                         options: .regularExpression) != nil
+    }
+
+    static func isQuarantineWrapperSummary(_ raw: String) -> Bool {
+        guard raw.hasPrefix("[WARN] Final Photos verification blocked by quarantine on ")
+            || raw.hasPrefix("Error: Final Photos verification blocked by quarantine on ") else { return false }
+        return raw.range(of: #"^(?:\[WARN\]|Error:) Final Photos verification blocked by quarantine on [1-9][0-9]* item\(s\); sources and working copy retained$"#,
+                         options: .regularExpression) != nil
+    }
+
+    static func isExpectedExistingJxlSkip(_ raw: String) -> Bool {
+        guard raw.hasPrefix("⚠️ WRN fast-img source skipped — original file retained file=")
+            || raw.hasPrefix("WRN fast-img source skipped — original file retained file=") else { return false }
+        return raw.range(of: #" reason=existing JXL verified; full E1–E11 winner is not smaller \([0-9]+ B\)$"#,
+                         options: .regularExpression) != nil
+    }
+
     static func classify(_ line: String) -> Self {
         let line = message(line)
         if line.hasPrefix(OutputCleanupReceipt.prefix) {
@@ -6272,9 +6368,10 @@ enum LogTone: Equatable {
             do { return try HistoryIgnoredSource.decode(line) == nil ? .warning : .muted }
             catch { return .warning }
         }
-        if ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: line.hasPrefix) { return .normal }
+        if line == "Failed: 0" || ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: line.hasPrefix) { return .normal }
         if line.hasPrefix(HistoryFileFailure.prefix) { return .muted }
         if line == "WARNING: Always keep a backup of your original media before optimization." { return .muted }
+        if line.hasPrefix("Error:"), isQuarantineWrapperSummary(line) { return .muted }
         if line.range(of: #"(?i)^Error: fast-img exited with (?:code|status) \d+$"#, options: .regularExpression) != nil {
             return .muted
         }
@@ -6302,6 +6399,39 @@ enum LogTone: Equatable {
 
     var font: NSFont {
         .monospacedSystemFont(ofSize: 12, weight: self == .normal || self == .muted ? .regular : .semibold)
+    }
+}
+
+private struct PhotosQuarantineLogBlock {
+    static let pathPrefix = "[GATE 2 quarantine] "
+    private var awaitingCount = false
+    private var pathsRemaining = 0
+
+    mutating func scopedPath(in raw: String) -> String? {
+        if LogTone.isQuarantineGateResult(raw) {
+            awaitingCount = true
+            pathsRemaining = 0
+            return nil
+        }
+        if awaitingCount {
+            awaitingCount = false
+            let prefix = "quarantine: expected 0 quarantined, got "
+            let value = raw.dropFirst(prefix.count)
+            if raw.hasPrefix(prefix), value.utf8.allSatisfy({ (48...57).contains($0) }),
+               let count = Int(value), count > 0 {
+                pathsRemaining = count
+                return nil
+            }
+        }
+        guard pathsRemaining > 0 else { return nil }
+        let prefix = raw.hasPrefix("[QUARANTINE] ") ? "[QUARANTINE] " : "❌ "
+        let path = String(raw.dropFirst(prefix.count))
+        if raw.hasPrefix(prefix), FastImgDeliveryReceipt.absolute(path) {
+            pathsRemaining -= 1
+            return path
+        }
+        pathsRemaining = 0
+        return nil
     }
 }
 
@@ -6367,6 +6497,9 @@ private struct LatestDiagnostics {
         let tone = LogTone.classify(line)
         guard tone == .failure || tone == .warning else { return false }
         let message = LogTone.message(line)
+        if tone == .warning, LogTone.isQuarantineGateResult(message) || LogTone.isQuarantineWrapperSummary(message) {
+            return false
+        }
         // Keep presentation bounded; the launcher retains the full output in history.
         let scalars = message.unicodeScalars
         let bounded = String(String.UnicodeScalarView(scalars.prefix(4_096)))
@@ -7313,6 +7446,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var deliveryFixture = false
     private var restoreFixture = false
     private var hasConfirmedFileFailures = false
+    private var hasConfirmedPhotosQuarantine = false
+    private var explicitPhotosFreshTarget: String?
+    private var quarantineLogBlock = PhotosQuarantineLogBlock()
     private let countStatusLabel = NSTextField(labelWithString: "")
     private var countStatus: String?
     private let statusLabel = NSTextField(labelWithString: "")
@@ -7413,6 +7549,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func restoreOptions(for operation: OperationMode) {
+        explicitPhotosFreshTarget = nil
         for (control, name) in optionControls {
             let saved = preferences.object(forKey: optionKey(name, for: operation)) as? Bool
             let enabledByDefault = name == "verbose"
@@ -7422,10 +7559,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         verboseCheck.state = .on
         if operation.capabilities.supportsResume {
+            let photos = operation.backendMode == "fast-img" && shortestPathCheck.state == .on
             let resuming = freshCheck.state != .on
                 && (resumeCheck.state == .on || retryCheck.state == .on)
             resumeCheck.state = resuming ? .on : .off
-            freshCheck.state = resuming ? .off : .on
+            freshCheck.state = resuming || photos ? .off : .on
             if !resuming { retryCheck.state = .off }
         }
     }
@@ -7866,7 +8004,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
             label.font = .systemFont(ofSize: label === batchOverviewTitle ? 14 : 12,
                                      weight: label === batchOverviewTitle ? .semibold : .regular)
-            label.textColor = label === batchOverviewTitle ? .labelColor : .secondaryLabelColor
+            label.textColor = .labelColor
             label.isSelectable = true
             label.lineBreakMode = .byWordWrapping
             label.maximumNumberOfLines = 2
@@ -8074,6 +8212,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func configurationChanged() {
+        if isFastImgPhotosSelection, freshCheck.state == .on, !hasExplicitPhotosFreshSelection {
+            explicitPhotosFreshTarget = nil
+            freshCheck.state = .off
+        }
         invalidatePreflight()
         applyCapabilityState()
         updateMetadataSafetyNotice()
@@ -8100,6 +8242,9 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func optionChanged(_ sender: NSButton) {
         saveOption(sender)
+        if sender === shortestPathCheck, selectedOperation.backendMode == "fast-img" {
+            restoreOptions(for: selectedOperation)
+        }
         configurationChanged()
     }
 
@@ -8122,7 +8267,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func resumeChoiceChanged(_ sender: NSButton) {
         if sender === freshCheck {
-            freshCheck.state = .on
+            if !isFastImgPhotosSelection { freshCheck.state = .on }
             resumeCheck.state = .off
             retryCheck.state = .off
         } else if sender === resumeCheck || sender.state == .on {
@@ -8130,11 +8275,14 @@ private final class AppController: NSObject, NSWindowDelegate {
             freshCheck.state = .off
             if selectedOperation.backendMode == "fast-img" { retryCheck.state = .on }
         } else if selectedOperation.backendMode == "fast-img" {
-            // Fast-img aliases resume/retry; disabling retry selects a fresh run.
             resumeCheck.state = .off
-            freshCheck.state = .on
+            freshCheck.state = isFastImgPhotosSelection ? .off : .on
         }
-        for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
+        if isFastImgPhotosSelection {
+            explicitPhotosFreshTarget = freshCheck.state == .on ? targetField.stringValue : nil
+        } else {
+            for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
+        }
         configurationChanged()
     }
 
@@ -8159,6 +8307,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         processEndedWithError = false
         sawProductionBusy = false
         hasConfirmedFileFailures = false
+        let hadQuarantineResume = hasConfirmedPhotosQuarantine
+        hasConfirmedPhotosQuarantine = false
+        explicitPhotosFreshTarget = nil
+        if isFastImgPhotosSelection { freshCheck.state = .off }
+        if hadQuarantineResume { refreshQuarantineResumeControls() }
+        quarantineLogBlock = PhotosQuarantineLogBlock()
         logView.string = ""
         fullLogPresentation.setAttributedString(NSAttributedString(string: ""))
         privateLogPresentation.setAttributedString(NSAttributedString(string: ""))
@@ -8420,6 +8574,30 @@ private final class AppController: NSObject, NSWindowDelegate {
             .flatMap { OperationMode(rawValue: $0 as? String ?? "") } ?? .adjacent
     }
 
+    private var isFastImgPhotosSelection: Bool {
+        selectedOperation.backendMode == "fast-img" && shortestPathCheck.state == .on
+    }
+
+    private var hasExplicitPhotosFreshSelection: Bool {
+        developerMode && freshCheck.state == .on
+            && FastImgDeliveryReceipt.samePath(explicitPhotosFreshTarget, targetField.stringValue)
+    }
+
+    private var canResumeConfirmedPhotosQuarantine: Bool {
+        hasConfirmedPhotosQuarantine && isFastImgPhotosSelection && !hasExplicitPhotosFreshSelection
+            && dryRunCheck.state != .on && watchCheck.state != .on
+            && lastRequest?.shortestPath == true && lastRequest?.retryFailed == false
+            && lastRequest?.operationMode == selectedOperation
+            && FastImgDeliveryReceipt.samePath(lastRequest?.targetPath, targetField.stringValue)
+    }
+
+    private func refreshQuarantineResumeControls() {
+        updateMetadataSafetyNotice()
+        if developerMode, !isDebugWindow {
+            commandField.stringValue = (try? host.terminalCommand(for: request())) ?? ""
+        }
+    }
+
     private var isPhotosRestoreAudit: Bool {
         selectedOperation == .restoreJpeg && isPhotosLibraryPath(targetField.stringValue)
     }
@@ -8540,13 +8718,15 @@ private final class AppController: NSObject, NSWindowDelegate {
                 ? "operation.restore_jpeg_audit" : "operation.restore_jpeg")
         }
         let runKey: String
-        if !restoresJpeg { runKey = "button.run" }
+        if canResumeConfirmedPhotosQuarantine { runKey = "alert.resume.resume" }
+        else if !restoresJpeg { runKey = "button.run" }
         else if dryRunCheck.state == .on {
             runKey = isPhotosRestoreAudit ? "button.preview_audit_restore_jpeg" : "button.preview_restore_jpeg"
         } else { runKey = isPhotosRestoreAudit ? "button.audit_restore_jpeg" : "button.restore_jpeg" }
         runButton.title = localized(runKey)
         runButton.setAccessibilityLabel(runButton.title)
         runButton.toolTip = historyRemovalInProgress ? historyRemovalNotice.stringValue
+            : canResumeConfirmedPhotosQuarantine ? localized("result.final_photos_quarantine_resume")
             : restoresJpeg ? metadataSafetyLabel.stringValue : nil
         runButton.setAccessibilityHelp(runButton.toolTip)
         if isDebugWindow {
@@ -8562,7 +8742,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             throw HostError(message: localized("error.select_target"))
         }
         let processing = ProcessingMode.allCases[safe: processingPopup.indexOfSelectedItem] ?? .both
-        return ProcessorRequest(
+        var request = ProcessorRequest(
             targetPath: targetField.stringValue,
             processingMode: processing,
             operationMode: selectedOperation,
@@ -8572,7 +8752,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             verbose: true,
             shortestPath: shortestPathCheck.state == .on,
             resume: developerMode && resumeCheck.state == .on,
-            fresh: developerMode && freshCheck.state == .on,
+            fresh: isFastImgPhotosSelection ? hasExplicitPhotosFreshSelection : developerMode && freshCheck.state == .on,
             archive: developerMode && archiveCheck.state == .on,
             retry: developerMode && retryCheck.state == .on,
             force: forceCheck.state == .on,
@@ -8583,6 +8763,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             photosContainer: selectedPhotosContainer,
             mediaSettings: MediaSettings(preferences: preferences),
         )
+        if canResumeConfirmedPhotosQuarantine {
+            applyResumeDecision(fresh: false, to: &request, updateOptions: false)
+        }
+        return request
     }
 
     @objc private func toggleDisplayPrivacy() {
@@ -8652,6 +8836,14 @@ private final class AppController: NSObject, NSWindowDelegate {
         if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
         for line in rawLines {
             let control = LogTone.message(line)
+            if let path = quarantineLogBlock.scopedPath(in: control) {
+                let finding = PhotosQuarantineLogBlock.pathPrefix + path
+                displayLines.append(finding)
+                privateLines.append(finding)
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                continue
+            }
             if startupAdmission.ingest(line, request: lastRequest, hasMediaEvidence: hasStartedMediaEvidence) {
                 refreshToolSnapshot()
                 displayLines.append(startupAdmission.status)
@@ -8794,7 +8986,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 progressChanged = true
                 continue
             }
-            if let summary = batchResults.ingest(line) {
+            if let summary = batchResults.ingest(control) {
                 diagnosticLogFolder.reset()
                 lastBufferedDiagnostic = nil
                 displayLines.append(developerMode ? "\(line)\n\(summary)" : summary)
@@ -8802,6 +8994,10 @@ private final class AppController: NSObject, NSWindowDelegate {
                 continue
             }
             if batchResults.ingestFastDelivery(line) {
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if batchResults.ingestTerminalEvidence(control) {
                 if developerMode { displayLines.append(line) }
                 continue
             }
@@ -8826,7 +9022,12 @@ private final class AppController: NSObject, NSWindowDelegate {
                 continue
             }
             batchResults.observeMandatoryEvidence(line)
+            if !developerMode, control.hasPrefix("Error:"), LogTone.isQuarantineWrapperSummary(control) { continue }
             var visibleLine = line
+            if !developerMode, line.hasPrefix("ERR:"),
+               control.range(of: #"^\[SKIP\s*\]"#, options: .regularExpression) != nil {
+                visibleLine = control
+            }
             if line.hasPrefix(HistoryFileFailure.prefix) {
                 do {
                     if let failure = try HistoryFileFailure.decode(line) {
@@ -8965,7 +9166,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         let result = NSMutableAttributedString(string: "")
         for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             if index > 0 { result.append(NSAttributedString(string: "\n")) }
-            let tone = LogTone.classify(String(line))
+            let tone: LogTone
+            if line.hasPrefix(PhotosQuarantineLogBlock.pathPrefix) {
+                tone = hasConfirmedPhotosQuarantine ? .warning : .failure
+            } else {
+                tone = LogTone.classify(String(line))
+            }
             let restrained = hasConfirmedFileFailures && (tone == .failure || tone == .warning)
                 && !hasSeriousProcessingDiagnostic(String(line))
             let rendered = NSMutableAttributedString(string: String(line), attributes: [
@@ -9020,7 +9226,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func updateLogPresentation() {
         logScroll.isHidden = !logDetailsExpanded
-        statusLabel.isHidden = !batchOverview.isHidden && !logDetailsExpanded
+        statusLabel.isHidden = !batchOverview.isHidden
+            && (!logDetailsExpanded || statusLabel.stringValue == batchOverviewTitle.stringValue)
         logDetailsButton.title = localized(logDetailsExpanded ? "log.details.hide" : "log.details.show")
         logDetailsButton.image = NSImage(systemSymbolName: logDetailsExpanded ? "chevron.down" : "chevron.right",
                                         accessibilityDescription: nil)
@@ -9124,7 +9331,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         request.resume = !fresh
         request.fresh = fresh
         request.retry = !fresh && (request.retry || request.operationMode.backendMode == "fast-img")
-        guard updateOptions else { return }
+        guard updateOptions, request.operationMode.backendMode != "fast-img" || !request.shortestPath else { return }
         resumeCheck.state = request.resume ? .on : .off
         freshCheck.state = request.fresh ? .on : .off
         retryCheck.state = request.retry ? .on : .off
@@ -9696,6 +9903,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                 alert.informativeText = available.map { $0.existingChildComplete
                     ? localized("retry.reused.choice_info") : localized("retry.choice.info", String($0.failedCount)) }
                     ?? localized("alert.resume.info")
+                if retry.shortestPath, retry.operationMode.backendMode == "fast-img" {
+                    alert.informativeText += "\n\n" + localized("alert.resume.photos_fresh")
+                }
                 alert.addButton(withTitle: localized(available == nil ? "alert.resume.resume"
                     : available?.existingChildComplete == true ? "retry.reused.open" : "retry.only_failed"))
                 alert.addButton(withTitle: localized("alert.resume.fresh"))
@@ -9737,20 +9947,25 @@ private final class AppController: NSObject, NSWindowDelegate {
             let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(
                 photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
                 processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
+            let quarantineBlocked = host.controlState != "cancelled" && lastRequest?.shortestPath == true
+                && batchResults.confirmedPhotosQuarantine(source: lastRequest?.targetPath,
+                    processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal) != nil
             if !deliveryConfirmed && !deferred {
                 photosDiagnostics.markFailed()
             }
             refreshDiagnostics()
             let interrupted = interruptedWithoutFileSummary
-            let failureMessage = interrupted
+            let failureMessage = quarantineBlocked ? localized("result.final_photos_quarantine_title")
+                : interrupted
                 ? localized("result.process_terminated") + " · " + localized("result.files_not_summarized")
                     + "\n" + error.localizedDescription
                 : batchResults.hasPartialSuccess
                 ? localized("result.partially_completed") + " · " + error.localizedDescription
                 : error.localizedDescription
-            let tag = interrupted || deferred || (deliveryConfirmed && batchResults.hasPartialSuccess) ? "WARN" : "FAIL"
+            let tag = interrupted || deferred || quarantineBlocked
+                || (deliveryConfirmed && batchResults.hasFileFailures) ? "WARN" : "FAIL"
             appendLog("[\(tag)] \(failureMessage)" + countSummary,
-                      captureDiagnostics: latestDiagnostics.failure == nil)
+                      captureDiagnostics: !quarantineBlocked && latestDiagnostics.failure == nil)
             setProcessing(false)
             if interrupted { setLocalizedStatus("result.process_terminated") }
             else if batchResults.hasPartialSuccess { setLocalizedStatus("result.partially_completed") }
@@ -9811,23 +10026,34 @@ private final class AppController: NSObject, NSWindowDelegate {
             exitedNormally: normalExit)
         let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(photos: photos,
             source: lastRequest?.targetPath, processExit: terminalExit, exitedNormally: normalExit)
+        let quarantineBlocked = host.controlState != "cancelled" && photos
+            && batchResults.confirmedPhotosQuarantine(source: lastRequest?.targetPath,
+                processExit: terminalExit, exitedNormally: normalExit) != nil
+        let preparationStopped = host.controlState != "cancelled" && photos
+            && batchResults.photosPreparationStopped(source: lastRequest?.targetPath,
+                pendingCount: photosImportProgress.preparationStopPendingCount,
+                processExit: terminalExit, exitedNormally: normalExit)
         let finalPhotosQuarantine = photos && !batchResults.fastDeliveryInvalid
             ? processingCountTotal(batchResults.fastDeliveries.map { $0.finalPhotosQuarantineCount ?? 0 }) : nil
-        let quarantineReason = finalPhotosQuarantine.flatMap { count in
+        let quarantineLocations = quarantineBlocked ? batchResults.fastDeliveries.first?.finalPhotosQuarantineLocationsText : nil
+        let quarantineReason = quarantineLocations ?? finalPhotosQuarantine.flatMap { count in
             count > 0 ? localized("result.final_photos_quarantine", String(count)) : nil
         }
         batchOverviewDelivery.maximumNumberOfLines = deferred || quarantineReason != nil ? 0 : 2
-        let verifiedPartialFailure = confirmed && photos && countStatus?.uppercased() == "MATCH"
-            && batchResults.hasPartialSuccess
-        let previousConfirmation = hasConfirmedFileFailures
+        let retainedOnly = confirmed && batchResults.fastDeliveries.allSatisfy(\.isRetainedOnly)
+        let quarantineChanged = hasConfirmedPhotosQuarantine != quarantineBlocked
+        let presentationChanged = hasConfirmedFileFailures != (confirmed && batchResults.hasFileFailures)
+            || quarantineChanged
         hasConfirmedFileFailures = confirmed && batchResults.hasFileFailures
-        if previousConfirmation != hasConfirmedFileFailures {
+        hasConfirmedPhotosQuarantine = quarantineBlocked
+        if quarantineChanged { refreshQuarantineResumeControls() }
+        if presentationChanged {
             fullLogPresentation.setAttributedString(styledLog(fullLogPresentation.string))
             privateLogPresentation.setAttributedString(styledLog(privateLogPresentation.string))
             logView.textStorage?.setAttributedString(privacyEnabled ? privateLogPresentation : fullLogPresentation)
         }
         let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
-            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !deferred)
+            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !deferred && !quarantineBlocked)
             || (processEndedWithError && batchResults.totals.isEmpty)
         let countsNeedReview = normalExit && !batchResults.hasCompleteCountReport
             && !batchResults.fastDeliveryInvalid
@@ -9842,19 +10068,21 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if host.controlState == "cancelled" { title = localized("status.stopped") }
         else if interrupted { title = localized("result.process_terminated") }
         else if countsNeedReview { title = localized("result.counts_need_review") }
+        else if preparationStopped { title = localized("result.photos_preparation_stopped") }
         else if uncertain { title = localized("result.unconfirmed") }
         else if deferred { title = localized("result.delivery_deferred") }
+        else if quarantineBlocked { title = localized("result.final_photos_quarantine_title") }
         else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
-        else if batchResults.hasPartialSuccess { title = localized("result.attention_count", String(failures ?? 0)) }
+        else if batchResults.hasPartialSuccess || retainedOnly { title = localized("result.attention_count", String(failures ?? 0)) }
         else if batchResults.hasFileFailures { title = localized("result.finished_with_failures") }
         else if batchResults.hasFailure { title = localized("result.stopped_with_error") }
         else { title = localized("status.completed") }
         batchOverviewTitle.stringValue = title
         batchOverviewTitle.textColor = batchResults.mandatoryEvidenceConflict ? .systemRed
-            : host.controlState == "cancelled" ? .secondaryLabelColor
+            : host.controlState == "cancelled" ? .labelColor
             : interrupted ? .systemOrange
             : countsNeedReview ? .systemOrange
-            : uncertain ? .systemRed : deferred ? .systemOrange : verifiedPartialFailure ? .secondaryLabelColor
+            : uncertain ? .systemRed : deferred || quarantineBlocked ? .systemOrange
             : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
         batchOverviewCounts.stringValue = interrupted ? localized("result.files_not_summarized")
             : logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
@@ -9872,7 +10100,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || (!logDetailsExpanded && !cleanupNeedsAttention)
         if batchResults.hasFastDelivery {
             let usable = !batchResults.fastDeliveryInvalid
-            batchOverviewDelivery.stringValue = usable ? localized(uncertain || countsNeedReview
+            batchOverviewDelivery.stringValue = usable ? localized(uncertain || countsNeedReview || quarantineBlocked
                 ? "result.independent_delivery_facts" : "result.delivery_facts",
                 value(usable ? batchResults.fastDeliveryCount(\.encoded) : nil),
                 value(usable ? batchResults.fastDeliveryCount(\.photosVerified) : nil),
@@ -9880,8 +10108,14 @@ private final class AppController: NSObject, NSWindowDelegate {
                 : localized("result.delivery_invalid")
             if let quarantineReason {
                 batchOverviewDelivery.stringValue = quarantineReason + "\n" + batchOverviewDelivery.stringValue
+                if quarantineLocations != nil {
+                    batchOverviewDelivery.stringValue += "\n" + localized("result.final_photos_quarantine_resume")
+                }
             }
-            if !logDetailsExpanded && !uncertain && !countsNeedReview {
+            if retainedOnly {
+                batchOverviewDelivery.stringValue = localized("result.retained_only_facts",
+                    value(processingCountTotal(batchResults.fastDeliveries.map(\.sourceRetained))))
+            } else if !logDetailsExpanded && !uncertain && !countsNeedReview && !quarantineBlocked {
                 if failures.map({ $0 > 0 }) == true {
                     let retained = value(processingCountTotal(batchResults.fastDeliveries.map(\.failedSourcesRetained)))
                     batchOverviewDelivery.stringValue = photos ? localized("result.photos_with_retained",
@@ -9894,10 +10128,11 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
             let cleanup = usable && !batchResults.fastDeliveries.isEmpty
                 && batchResults.fastDeliveries.allSatisfy { $0.primaryCleanupComplete && $0.finalizationError == nil }
-            let primary = localized(cleanup ? "result.cleanup_primary" : "result.cleanup_unknown")
-            batchOverviewCleanup.stringValue = (logDetailsExpanded ? primary + "\n" : "")
+            let primary = logDetailsExpanded && photos && cleanup ? localized("result.cleanup_primary") + "\n" : ""
+            batchOverviewCleanup.stringValue = primary
                 + batchResults.outputCleanupText(detailed: logDetailsExpanded)
-            batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .secondaryLabelColor
+            batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .labelColor
+            if retainedOnly && !cleanupNeedsAttention { batchOverviewCleanup.isHidden = true }
             if deferred {
                 batchOverviewDelivery.stringValue = batchResults.fastDeliveries.filter(\.isDeferred)
                     .map(\.deferredDetails).joined(separator: "\n")
@@ -9909,15 +10144,17 @@ private final class AppController: NSObject, NSWindowDelegate {
             label.setAccessibilityLabel(label.stringValue)
         }
         batchOverview.isHidden = false
-        updateLogPresentation()
         fileProgressRow.isHidden = true
         if batchResults.mandatoryEvidenceConflict { setStatus(title) }
         else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
         else if interrupted { setLocalizedStatus("result.process_terminated") }
         else if countsNeedReview { setLocalizedStatus("result.counts_need_review") }
+        else if preparationStopped { setLocalizedStatus("result.photos_preparation_stopped") }
         else if uncertain { setLocalizedStatus("result.unconfirmed") }
         else if deferred { setLocalizedStatus("result.delivery_deferred") }
-        else if batchResults.hasPartialSuccess { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
+        else if quarantineBlocked { setLocalizedStatus("result.final_photos_quarantine_title") }
+        else if batchResults.hasPartialSuccess || retainedOnly { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
+        updateLogPresentation()
     }
 
     @objc func showSettings() { openSettings(section: "general") }
@@ -10598,6 +10835,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.contentView?.layoutSubtreeIfNeeded()
         guard !batchOverview.isHidden,
               batchOverviewTitle.stringValue == localized("result.attention_count", "1"),
+              batchOverviewTitle.textColor == .systemOrange, batchOverviewCounts.textColor == .labelColor,
+              batchOverviewDelivery.textColor == .labelColor,
               batchOverviewDelivery.stringValue.contains("1829"), !batchOverviewDelivery.stringValue.contains("1163"),
               batchOverviewCleanup.stringValue == localized("cleanup.outcome.removed"),
               batchOverviewCleanup.isHidden, logScroll.isHidden, latestDiagnosticsRow.isHidden,
@@ -10624,6 +10863,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.contentView?.layoutSubtreeIfNeeded()
         guard !logScroll.isHidden, logScroll.frame.height >= 260,
               !batchOverviewCleanup.isHidden, batchOverviewDelivery.stringValue.contains("1163"),
+              statusLabel.isHidden,
               latestFailureLabel.stringValue == localized("log.unsuccessful_file", "[FAIL] sample.jpeg: decoder failed"),
               latestFailureLabel.textColor == .labelColor,
               logDetailsButton.accessibilityLabel() == localized("log.details.hide") else {
@@ -10701,6 +10941,146 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard unrecognized != nil, unrecognized?.finalPhotosQuarantineCount == nil else {
             throw HostError(message: "An unrelated final verification error was labeled quarantine")
         }
+        let typedQuarantine: [String: Any] = ["schema_version": 1,
+            "source_directory": "/synthetic/results", "output_directory": "/synthetic/results_optimized",
+            "succeeded": 0, "skipped": 4, "ignored": 9, "failed": 0, "unprocessed": 4, "encoded": 4,
+            "photos_verified": 4, "source_retained": 8, "failed_sources_retained": 0,
+            "failed_sources_verified": 0, "failed_source_verification_error": NSNull(),
+            "retention_unknown_reason": NSNull(), "primary_cleanup_complete": false,
+            "primary_verification_complete": true, "photos_quarantine_blocked": 4,
+            "photos_quarantine_locations": ["working_copies": 0, "photos_originals": 4, "affected": 4],
+            "finalization_error": "Gate 2 failed: quarantine expected=0 quarantined actual=4; wc preserved at /synthetic/results_optimized"]
+        for (working, originals, affected) in [(-1, 4, 4), (5, 0, 4), (0, 3, 4), (0, 3, 3)] {
+            var invalid = typedQuarantine
+            invalid["photos_quarantine_locations"] = ["working_copies": working, "photos_originals": originals, "affected": affected]
+            guard (try? FastImgDeliveryReceipt.decode(line(invalid))) == nil else {
+                throw HostError(message: "Quarantine location counts contradicted the final item count")
+            }
+        }
+        var overlapping = typedQuarantine
+        overlapping["photos_quarantine_locations"] = ["working_copies": 2, "photos_originals": 4, "affected": 4]
+        guard try FastImgDeliveryReceipt.decode(line(overlapping))?.finalPhotosQuarantineLocationsText != nil else {
+            throw HostError(message: "A quarantined item at both locations invalidated the receipt")
+        }
+        let typedQuarantineBatch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":4,"failed":0,"ignored":9,"unprocessed":4,"exit_code":2}"#
+        var preparationReceipt = typedQuarantine
+        preparationReceipt.removeValue(forKey: "photos_quarantine_blocked")
+        preparationReceipt.removeValue(forKey: "photos_quarantine_locations")
+        preparationReceipt["photos_verified"] = 0
+        preparationReceipt["finalization_error"] = "synthetic Photos destination preparation failed"
+        for sequence in [5, 4] {
+            clearBatchLog()
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":1,"phase":"target_preparation","pending_total":4,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"reconciling","pending_total":4,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":3,"phase":"target_preparation","pending_total":4,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":\#(sequence),"phase":"stopped","pending_total":4,"verified":0}"#)
+            appendLog(try line(preparationReceipt))
+            appendLog(typedQuarantineBatch)
+            appendLog(try cleanupLine(blockedCleanup))
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            let expectedTitle = localized(sequence == 4 ? "result.photos_preparation_stopped" : "result.unconfirmed")
+            guard batchOverviewTitle.stringValue == expectedTitle, batchOverviewTitle.textColor == .systemRed,
+                  batchOverviewDelivery.stringValue == localized("result.independent_delivery_facts", "4", "0", "8"),
+                  batchOverviewCleanup.stringValue == localized("cleanup.outcome.verification_blocked") else {
+                throw HostError(message: "Photos preparation failure lost its retained-output evidence or named an unproven stop phase")
+            }
+        }
+        let typedQuarantineEnd = #"MFB_BATCH_PHOTOS_QUARANTINE_BLOCKED={"schema_version":1,"quarantined":4}"#
+        let gateNotice = "[GATE 2  ] count:✅ blake3_sample:✅ no_error:✅ count_x3:✅ sync:✅ quarantine:❌ chain:✅ → QUARANTINE_BLOCKED"
+        let wrapperNotice = "Final Photos verification blocked by quarantine on 4 item(s); sources and working copy retained"
+        let expectedSkip = "⚠️ WRN fast-img source skipped — original file retained file=sample.jxl reason=existing JXL verified; full E1–E11 winner is not smaller (1234 B)"
+        let legacyQuarantinedPath = "/synthetic/output/sample.jxl"
+        let scopedFinding = PhotosQuarantineLogBlock.pathPrefix + legacyQuarantinedPath
+        let taggedQuarantinedPath = "/synthetic/library/another.jxl"
+        let scopedTaggedFinding = PhotosQuarantineLogBlock.pathPrefix + taggedQuarantinedPath
+        func logColor(_ row: String) -> NSColor? {
+            guard let storage = logView.textStorage else { return nil }
+            let range = (storage.string as NSString).range(of: row)
+            guard range.location != NSNotFound else { return nil }
+            return storage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+        }
+        clearBatchLog()
+        appendLog(gateNotice)
+        appendLog("           quarantine: expected 0 quarantined, got 4")
+        appendLog("           ❌ " + legacyQuarantinedPath)
+        appendLog("           [QUARANTINE] " + taggedQuarantinedPath)
+        appendLog("Failed: 0")
+        appendLog(expectedSkip)
+        appendLog(try line(typedQuarantine))
+        appendLog(typedQuarantineBatch)
+        appendLog(try cleanupLine(blockedCleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed, logColor(scopedFinding) == .systemRed,
+              batchOverviewDelivery.stringValue.hasPrefix(localized("result.final_photos_quarantine", "4")) else {
+            throw HostError(message: "Quarantine worker evidence concealed a missing launcher verdict")
+        }
+        appendLog(typedQuarantineEnd)
+        appendLog("[WARN] " + wrapperNotice)
+        appendLog("ERR: Error: " + wrapperNotice)
+        for expanded in [false, true] {
+            logDetailsExpanded = expanded
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewTitle.stringValue == localized("result.final_photos_quarantine_title"),
+                  batchOverviewTitle.textColor == .systemOrange,
+                  batchOverviewDelivery.stringValue == localized("result.final_photos_quarantine_locations", "4", "0", "4") + "\n"
+                    + localized("result.independent_delivery_facts", "4", "4", "8") + "\n"
+                    + localized("result.final_photos_quarantine_resume"),
+                  batchOverviewDelivery.accessibilityLabel() == batchOverviewDelivery.stringValue,
+                  !batchOverviewCleanup.isHidden,
+                  batchOverviewCleanup.stringValue.hasPrefix(localized("cleanup.outcome.verification_blocked")),
+                  latestDiagnostics.failure == nil,
+                  latestDiagnostics.warning == nil, logView.string.contains("[WARN] IMG:"),
+                  !logView.string.contains("Error: " + wrapperNotice),
+                  logColor(scopedFinding) == .systemOrange, logColor(scopedTaggedFinding) == .systemOrange,
+                  logColor("Failed: 0") == .labelColor,
+                  LogTone.classify(gateNotice) == .warning, LogTone.classify(expectedSkip) == .normal else {
+                throw HostError(message: "Corroborated quarantine was reported as a generic failure or completed delivery")
+            }
+        }
+        do {
+            let previousOperation = operationPopup.indexOfSelectedItem
+            let previousTarget = targetField.stringValue
+            let previousPhotos = shortestPathCheck.state
+            let previousPreview = dryRunCheck.state
+            let previousWatch = watchCheck.state
+            defer {
+                operationPopup.selectItem(at: previousOperation)
+                targetField.stringValue = previousTarget
+                shortestPathCheck.state = previousPhotos
+                dryRunCheck.state = previousPreview
+                watchCheck.state = previousWatch
+                updateMetadataSafetyNotice()
+            }
+            let photoOperation = operationPopup.itemArray.first {
+                ($0.representedObject as? String) == OperationMode.fastImgJxl.rawValue
+            }
+            operationPopup.select(photoOperation)
+            targetField.stringValue = "/synthetic/results"
+            shortestPathCheck.state = .on
+            dryRunCheck.state = .off
+            watchCheck.state = .off
+            updateMetadataSafetyNotice()
+            let continuation = try request()
+            guard runButton.title == localized("alert.resume.resume"),
+                  continuation.resume, continuation.retry, !continuation.fresh else {
+                throw HostError(message: "The confirmed quarantine action failed to resume its saved Photos task")
+            }
+            targetField.stringValue = "/synthetic/other-input"
+            guard !(try request().resume), !canResumeConfirmedPhotosQuarantine else {
+                throw HostError(message: "A different source inherited the quarantine resume action")
+            }
+        }
+        let unrelatedPath = "❌ /synthetic/other/decoder.jpg"
+        appendLog(unrelatedPath)
+        guard logColor(unrelatedPath) == .systemRed, latestDiagnostics.failure == unrelatedPath else {
+            throw HostError(message: "Quarantine styling concealed an unrelated failure path")
+        }
+        appendLog("[GATE 2  ] count:❌ → FAIL")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed, batchResults.mandatoryEvidenceConflict,
+              logColor(scopedFinding) == .systemRed else {
+            throw HostError(message: "Corroborated quarantine concealed an independent Gate 2 failure")
+        }
         for expanded in [false, true] {
             clearBatchLog()
             logDetailsExpanded = expanded
@@ -10732,12 +11112,59 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
         }
         logDetailsExpanded = false
+        let retainedOnlyReceipt: [String: Any] = ["schema_version": 1,
+            "source_directory": "/synthetic/results", "output_directory": "/synthetic/results_optimized",
+            "succeeded": 0, "skipped": 4, "ignored": 9, "failed": 4, "unprocessed": 0, "encoded": 0,
+            "photos_verified": 0, "source_retained": 8, "failed_sources_retained": 4,
+            "failed_sources_verified": 4, "failed_source_verification_error": NSNull(),
+            "retention_unknown_reason": NSNull(), "primary_cleanup_complete": false,
+            "finalization_error": NSNull(), "retained_only_complete": true]
+        let retainedOnlyBatch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":4,"failed":4,"ignored":9,"unprocessed":0,"exit_code":1}"#
+        let retainedOnlyCompletion = #"MFB_BATCH_FILE_ERRORS_COMPLETE={"schema_version":1,"failed":4}"#
+        let noCleanup: [String: Any] = ["schema_version": 1, "run_id": "synthetic-retained-only-run",
+            "output_path": "/synthetic/results_optimized", "outcome": "not_requested", "error": NSNull()]
+        clearBatchLog()
+        appendLog("ERR: [FAIL] extensionless: source geometry unavailable")
+        appendLog("ERR: [SKIP] synthetic retained image")
+        appendLog(try line(retainedOnlyReceipt))
+        appendLog("ERR:    " + retainedOnlyBatch)
+        appendLog(try cleanupLine(noCleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Worker receipt concealed a missing launcher completion")
+        }
+        appendLog(retainedOnlyCompletion)
+        for expanded in [false, true] {
+            logDetailsExpanded = expanded
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewTitle.stringValue == localized("result.attention_count", "4"),
+                  batchOverviewTitle.textColor == .systemOrange, statusLabel.isHidden,
+                  batchOverviewDelivery.stringValue == localized("result.retained_only_facts", "8"),
+                  batchOverviewDelivery.accessibilityLabel() == batchOverviewDelivery.stringValue,
+                  !batchOverviewDelivery.isHidden, batchOverviewCleanup.isHidden,
+                  !fullLogPresentation.string.contains("ERR: [SKIP]"),
+                  !logView.string.contains("MFB_BATCH_FILE_ERRORS_COMPLETE=") else {
+                throw HostError(message: "Retained-only completion hid failures, invented delivery or repeated a status")
+            }
+        }
+        for exit in [Int32(2), Int32(130)] {
+            refreshBatchOverview(processExit: exit, exitedNormally: true)
+            guard batchOverviewTitle.textColor == .systemRed else {
+                throw HostError(message: "Retained-only completion concealed a different process exit")
+            }
+        }
+        appendLog("[FATAL] synthetic archive failure")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Retained-only completion concealed an infrastructure failure")
+        }
+        logDetailsExpanded = false
         clearBatchLog()
         appendLog(batch)
         try host.setControlState("cancelled")
         refreshBatchOverview(processExit: 130, exitedNormally: true)
         guard batchOverviewTitle.stringValue == localized("status.stopped"),
-              batchOverviewTitle.textColor == .secondaryLabelColor,
+              batchOverviewTitle.textColor == .labelColor,
               statusLabel.stringValue == localized("status.stopped") else {
             throw HostError(message: "Ordinary cancellation became an integrity failure")
         }
@@ -10916,6 +11343,11 @@ private final class AppController: NSObject, NSWindowDelegate {
               !batchResults.deliveryIsDeferred(photos: false, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true),
               !batchResults.deliveryIsDeferred(photos: true, source: "/synthetic/other", processExit: 1, exitedNormally: true) else {
             throw HostError(message: "Deferred delivery lost its recorded facts or became confirmed delivery")
+        }
+        var contradictory = batchResults
+        _ = contradictory.ingestTerminalEvidence(#"MFB_BATCH_FILE_ERRORS_COMPLETE={"schema_version":1,"failed":1}"#)
+        guard !contradictory.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true) else {
+            throw HostError(message: "Conflicting terminal evidence was accepted as deferred delivery")
         }
         let batch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":1,"ignored":0,"unprocessed":3,"exit_code":2}"#
         var duplicate = batchResults
@@ -11919,17 +12351,30 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard ultimateCheck.state == .on, !ultimateCheck.isEnabled, ultimateCheck.isHidden,
               archiveCheck.isEnabled, retryCheck.isEnabled, !forceCheck.isEnabled,
               verboseCheck.state == .on, archiveCheck.state == .off,
-              shortestPathCheck.state == .on, freshCheck.state == .on
+              shortestPathCheck.state == .on, freshCheck.state == .off
         else { throw HostError(message: "Incorrect option capabilities or defaults") }
         guard try ProcessorCommand.arguments(from: request()).contains("--shortest-path") else {
             throw HostError(message: "Fast-img Photos import default was not forwarded")
         }
+        preferences.set(true, forKey: optionKey("fresh", for: .fastImgJxl))
+        setDeveloperMode(true)
+        operationChanged()
+        guard freshCheck.state == .off, !(try request().fresh) else {
+            throw HostError(message: "A saved Fresh preference authorized another Photos import")
+        }
         retryCheck.state = .on
         freshCheck.state = .on
         resumeChoiceChanged(freshCheck)
-        guard retryCheck.state == .off, resumeCheck.state == .off else {
-            throw HostError(message: "Fresh run left conflicting retry options enabled")
+        guard retryCheck.state == .off, resumeCheck.state == .off, try request().fresh else {
+            throw HostError(message: "An explicit Fresh Photos attempt was lost or retained conflicting options")
         }
+        clearBatchLog()
+        guard freshCheck.state == .off, !(try request().fresh) else {
+            throw HostError(message: "An explicit Photos Fresh choice was reused beyond its attempt")
+        }
+        shortestPathCheck.state = .off
+        optionChanged(shortestPathCheck)
+        setDeveloperMode(false)
         var recovery = ProcessorRequest(
             targetPath: "/tmp/media", processingMode: .imagesOnly, operationMode: .fastImgJxl,
             resume: true, retry: true

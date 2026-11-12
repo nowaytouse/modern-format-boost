@@ -457,7 +457,7 @@ fn totals_as_stats(summary: &PipelineSummary) -> ProcessorStats {
 /// Optimization summary report (mirrors Python end-of-run Rich table + success
 /// bar).
 pub fn print_summary_report(summary: &PipelineSummary) {
-    draw_separator("Task Completed");
+    draw_separator("Task Summary");
 
     let rate = summary.success_rate();
 
@@ -585,7 +585,7 @@ pub fn print_menu_hint() {
     flush();
 }
 
-/// File failures remain a nonzero outcome after every deliverable was verified.
+/// File failures remain a nonzero outcome after delivery or retention was verified.
 #[derive(Debug)]
 pub struct CompletedWithFileFailures {
     pub failed: usize,
@@ -593,10 +593,18 @@ pub struct CompletedWithFileFailures {
 
 impl std::fmt::Display for CompletedWithFileFailures {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "batch completed with {} failed source(s); verified deliveries completed and failed originals retained", self.failed)
+        write!(formatter, "batch completed with {} failed source(s); failed originals verified and retained", self.failed)
     }
 }
 impl std::error::Error for CompletedWithFileFailures {}
+
+#[must_use]
+pub fn completed_file_failure_count(error: &anyhow::Error) -> Option<usize> {
+    if error.chain().count() != 1 {
+        return None;
+    }
+    Some(error.downcast_ref::<CompletedWithFileFailures>()?.failed)
+}
 
 /// Summarize the observed outcome without inventing a child crash or success.
 pub fn print_pipeline_failure_panel(completed_failures: Option<usize>) {
@@ -611,10 +619,11 @@ fn render_pipeline_failure_panel(colored: bool, completed_failures: Option<usize
         None => ("PROCESSING FAILED", "The batch did not complete. Review the error details above.".into()),
     };
     if colored {
+        let color = if completed_failures.is_some() { YELLOW } else { RED };
         format!(
-            "{RED}{BOLD}╭──────────────────────────────────────────────────────────────╮{RESET}\n\
-             {RED}{BOLD}│  {heading:<58}│{RESET}\n\
-             {RED}{BOLD}╰──────────────────────────────────────────────────────────────╯{RESET}\n\
+            "{color}{BOLD}╭──────────────────────────────────────────────────────────────╮{RESET}\n\
+             {color}{BOLD}│  {heading:<58}│{RESET}\n\
+             {color}{BOLD}╰──────────────────────────────────────────────────────────────╯{RESET}\n\
                {YELLOW}{detail}{RESET}\n"
         )
     } else {

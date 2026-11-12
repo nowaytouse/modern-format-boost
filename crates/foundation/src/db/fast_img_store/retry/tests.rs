@@ -423,7 +423,7 @@ fn failed_retry_new_avif_attempt_derives_metadata_version_without_rewriting_fail
         child.metadata_policy_version,
         crate::runtime_config::AvifMetadataPolicy::Clear.version()
     );
-    assert_eq!(child.metadata_policy_version, 3);
+    assert_eq!(child.metadata_policy_version, 4);
     child.stage = FastImgStageName::TranscodeComplete;
     child.encoded_count = 1;
     child.blake3_log.insert(

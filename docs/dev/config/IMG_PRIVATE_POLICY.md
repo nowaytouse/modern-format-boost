@@ -202,7 +202,8 @@ the encoder, candidate publication, existing-AVIF custody and local Gate 1.
 Unsupported preservation intent is rejected rather than represented by an
 unimplemented switch. Gate 1 requires an explicit supported metadata policy;
 container type alone cannot grant permission to clear metadata. Policy version
-3 remains part of AVIF output reuse, separate from source and delivery proofs.
+4 binds progressive output to new AVIF reuse. Version 3 outputs need fresh
+progressive proof before reuse.
 
 ## Fast IMG Saved-Task Choice And Recovery Boundaries
 
@@ -417,8 +418,13 @@ The existing progressive-output policy requires the fixed quality to be at least
 `img.avif_speed` (0..10, default 0) selects the final domain for lossless and
 quality probes. The locator remains Speed6 and its candidate is discarded before
 re-probing in that final domain. Confirmed-lossless input still attempts the
-existing true-lossless route first; existing AVIF is not re-encoded by these
-settings. Final verification uses the actual delivery domain. Its Meme Mode
+existing true-lossless route first. A verified progressive AVIF can be adopted
+with its encoded media intact. A non-progressive AVIF with a proven, compatible
+8-bit RGB layout can be normalized in the selected final speed domain if its
+full decoded samples, color features, cleared metadata, and payload budget
+all pass. Automatic quality uses Q100 for that exact normalization, and fixed
+quality uses the configured Q. Other non-progressive layouts are retained.
+Final verification uses the actual delivery domain. Its Meme Mode
 metadata cleanup policy is distinct from ordinary JXL archival metadata
 preservation; these settings do not silently unify them. Fixed Q is not lowered
 to manufacture success if its candidate fails verification or the size policy.

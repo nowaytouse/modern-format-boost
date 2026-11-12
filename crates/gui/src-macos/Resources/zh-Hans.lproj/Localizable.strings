@@ -239,6 +239,7 @@
 "status.resume_choice_cancelled" = "尚未开始处理 · 已取消此次选择，已有处理记录未改动。";
 "alert.resume.info" = "继续之前，会重新核验原件、已有产物和恢复证据；选择继续，不代表旧产物已经通过核验。也可以在独立输出目录中重新开始。";
 "alert.resume.resume" = "核验并继续";
+"alert.resume.photos_fresh" = "重新开始会使用独立输出目录，并可能在照片 App 中新增一批资产。之前已导入的原件仍会保留原有的隔离标记。";
 "alert.resume.fresh" = "重新开始";
 "alert.cancel" = "取消";
 "admission.invalid" = "启动记录与本次请求无法核对。处理已停止，请查看处理详情。";
@@ -546,6 +547,7 @@
 "process.observation_invalid" = "进程终止详情无法确认，请查看处理记录。";
 "result.integrity_issues" = "完整性检查发现 %@ 项问题 · 请查看处理记录";
 "result.delivery_deferred" = "照片导入暂缓";
+"result.photos_preparation_stopped" = "照片交付中止 · 准备导入目标失败";
 "result.delivery_record_title" = "照片交付记录";
 "result.delivery_invalid" = "照片交付记录不完整或互相冲突，请查看原始诊断。";
 "result.delivery_deferred_facts" = "已编码 %@ · 照片本地已核验 %@ · 导入尚未完成";
@@ -554,8 +556,12 @@
 "result.delivery_facts" = "已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
 "result.independent_delivery_facts" = "独立回执：已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
 "result.final_photos_quarantine" = "最终核验发现 %@ 项带有系统隔离标记。标记可能在工作副本或照片 App 的原件上。请查看处理记录。";
+"result.final_photos_quarantine_title" = "交付暂停 · 发现隔离标记";
+"result.final_photos_quarantine_review" = "交付未确认 · 发现隔离标记";
+"result.final_photos_quarantine_locations" = "隔离标记影响 %@ 项 · 工作副本 %@ 项 · 照片 App 本地原件 %@ 项";
+"result.final_photos_quarantine_resume" = "重新运行同一任务时，选「核验并继续」以重新核验已导入的原件。隔离标记仍在时，交付和清理保持暂停。";
 "result.cleanup_primary" = "主流程清理已完成；其他残留目录未检查。照片本地核验不代表 iCloud 已同步。";
-"result.cleanup_unknown" = "收尾状态尚待确认；未自动清理其他目录。照片本地核验不代表 iCloud 已同步。";
+"result.retained_only_facts" = "已保留 %@ 个源文件 · 未生成交付输出";
 "cleanup.history_title" = "输出目录清理（当时记录）";
 "cleanup.inspect" = "查看输出目录与清理详情";
 "cleanup.attention.short" = "清理需关注";

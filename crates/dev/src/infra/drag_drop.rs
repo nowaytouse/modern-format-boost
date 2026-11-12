@@ -1286,10 +1286,10 @@ pub fn count_fast_img_jxl_outputs(output_dir: &Path) -> Result<(usize, u64)> {
 }
 
 /// A partial exit only authorizes independent verification, never cleanup by itself.
-pub fn fast_img_partial_cleanup_verified(
+fn fast_img_file_failure_receipt(
     text: &str,
     stats: &crate::infra::process_stream::ProcessorStats,
-) -> Option<usize> {
+) -> Option<Value> {
     if stats.exit_code != 1
         || stats.failed == 0
         || !stats.counts_complete()
@@ -1327,14 +1327,8 @@ pub fn fast_img_partial_cleanup_verified(
         || count("skipped") != Some(stats.skipped)
         || count("ignored") != Some(stats.ignored)
         || count("unprocessed") != Some(0)
-        || count("photos_verified") != Some(stats.succeeded)
-        || count("encoded").is_none_or(|encoded| encoded > stats.succeeded)
         || count("failed_sources_retained") != Some(stats.failed)
         || count("failed_sources_verified") != Some(stats.failed)
-        || report
-            .get("primary_cleanup_complete")
-            .and_then(Value::as_bool)
-            != Some(true)
         || !report.get("finalization_error")?.is_null()
         || !report.get("retention_unknown_reason")?.is_null()
         || !report.get("failed_source_verification_error")?.is_null()
@@ -1342,7 +1336,96 @@ pub fn fast_img_partial_cleanup_verified(
     {
         return None;
     }
-    Some(stats.failed)
+    Some(report)
+}
+
+pub fn fast_img_partial_cleanup_verified(
+    text: &str,
+    stats: &crate::infra::process_stream::ProcessorStats,
+) -> Option<usize> {
+    let report = fast_img_file_failure_receipt(text, stats)?;
+    let succeeded = u64::try_from(stats.succeeded).ok()?;
+    (report["primary_cleanup_complete"].as_bool() == Some(true)
+        && report["retained_only_complete"].as_bool() != Some(true)
+        && report["photos_verified"].as_u64() == Some(succeeded)
+        && report["encoded"].as_u64().is_some_and(|encoded| encoded <= succeeded))
+    .then_some(stats.failed)
+}
+
+pub fn fast_img_retained_only_verified(
+    text: &str,
+    stats: &crate::infra::process_stream::ProcessorStats,
+    source: &Path,
+    output: &Path,
+) -> bool {
+    let Some(report) = fast_img_file_failure_receipt(text, stats) else {
+        return false;
+    };
+    stats.succeeded == 0
+        && report["encoded"].as_u64() == Some(0)
+        && report["photos_verified"].as_u64() == Some(0)
+        && report["retained_only_complete"].as_bool() == Some(true)
+        && report["primary_cleanup_complete"].as_bool() == Some(false)
+        && report["photos_delivery_deferred"].as_bool() == Some(false)
+        && stats.failed.checked_add(stats.skipped).and_then(|count| u64::try_from(count).ok())
+            == report["source_retained"].as_u64()
+        && report["source_directory"].as_str().map(Path::new) == Some(source)
+        && report["output_directory"].as_str().map(Path::new) == Some(output)
+}
+
+#[derive(Debug)]
+pub struct PhotosQuarantineBlocked {
+    pub count: usize,
+}
+
+impl std::fmt::Display for PhotosQuarantineBlocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Final Photos verification blocked by quarantine on {} item(s); sources and working copy retained", self.count)
+    }
+}
+
+impl std::error::Error for PhotosQuarantineBlocked {}
+
+impl PhotosQuarantineBlocked {
+    pub fn from_error(error: &anyhow::Error) -> Option<&Self> {
+        (error.chain().count() == 1).then(|| error.downcast_ref::<Self>()).flatten()
+    }
+
+    pub fn from_receipt(
+        report: &Value,
+        stats: &crate::infra::process_stream::ProcessorStats,
+        source: &Path,
+        output: &Path,
+    ) -> Option<Self> {
+        let count = usize::try_from(report["photos_quarantine_blocked"].as_u64()?).ok()?;
+        if let Some(locations) = report.get("photos_quarantine_locations").filter(|value| !value.is_null()) {
+            let locations: foundation::fast_img::PhotosQuarantineLocations =
+                serde_json::from_value(locations.clone()).ok()?;
+            if !locations.agrees_with(count) {
+                return None;
+            }
+        }
+        let unprocessed = stats.unprocessed?;
+        let retained = u64::try_from(stats.skipped.checked_add(unprocessed)?).ok()?;
+        let pending = u64::try_from(unprocessed).ok()?;
+        (stats.counts_complete() && stats.exit_code == 2 && stats.succeeded == 0 && stats.failed == 0
+            && count > 0 && count <= unprocessed
+            && report["encoded"].as_u64() == Some(pending)
+            && report["photos_verified"].as_u64() == Some(pending)
+            && report["source_retained"].as_u64() == Some(retained)
+            && report["failed_sources_retained"].as_u64() == Some(0)
+            && report["failed_sources_verified"].as_u64() == Some(0)
+            && report.get("failed_source_verification_error")?.is_null()
+            && report.get("retention_unknown_reason")?.is_null()
+            && report["finalization_error"].as_str().is_some_and(|reason| !reason.is_empty())
+            && report["photos_delivery_deferred"].as_bool() == Some(false)
+            && report["primary_verification_complete"].as_bool() == Some(true)
+            && report["primary_cleanup_complete"].as_bool() == Some(false)
+            && report["retained_only_complete"].as_bool() == Some(false)
+            && report["source_directory"].as_str().map(Path::new) == Some(source)
+            && report["output_directory"].as_str().map(Path::new) == Some(output))
+            .then_some(Self { count })
+    }
 }
 
 fn fast_img_safe_output_path(output_root: &Path, rel: &str) -> Result<PathBuf> {
@@ -1577,8 +1660,25 @@ fn fast_img_prune_empty_dirs(
             });
         }
     }
+    // Metadata mirroring also creates branches with no recorded media outputs.
+    let directories = WalkDir::new(output_root)
+        .follow_root_links(false)
+        .same_file_system(true)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.file_type().is_dir()
+                && foundation::safety::check_apple_photos_library(entry.path()).is_ok()
+        })
+        .map(|entry| entry.map(walkdir::DirEntry::into_path))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("scan fast-img output for empty directories")?;
+    let pruned_empty =
+        foundation::io_utils::prune_empty_directories_within(output_root, &directories)
+            .context("prune empty fast-img output directories")?;
+
     let candidates = candidate_dirs.iter().cloned().collect::<Vec<_>>();
     foundation::io_utils::prune_delivered_directories_within(output_root, &candidates)
+        .map(|pruned| pruned_empty + pruned)
         .with_context(|| {
             format!(
                 "fast-img refused unsafe empty-directory cleanup under {}",
@@ -2046,6 +2146,14 @@ cat "$MFB_TEST_VERIFY_REPLY"
         }
         write_marker_atomic(&marker).unwrap();
 
+        #[cfg(unix)]
+        let (outside, link) = {
+            let outside = root.path().join("outside/empty");
+            fs::create_dir_all(&outside).unwrap();
+            let link = output.join("linked-directory");
+            std::os::unix::fs::symlink(outside.parent().unwrap(), &link).unwrap();
+            (outside, link)
+        };
         let residual = delete_fast_img_outputs_with(&output, |_| Ok(|_: &Path| Ok(())));
         assert_eq!(
             residual.outcome,
@@ -2058,6 +2166,12 @@ cat "$MFB_TEST_VERIFY_REPLY"
         assert_eq!(residual.pruned_directories, Some(0));
         assert_eq!(fs::read(&unknown).unwrap(), b"preserve user data");
         assert_eq!(fs::read(&finder_metadata).unwrap(), finder_bytes);
+        #[cfg(unix)]
+        {
+            assert!(outside.is_dir());
+            assert!(link.is_symlink());
+            fs::remove_file(link).unwrap();
+        }
 
         fs::remove_file(unknown).unwrap();
         fs::write(&finder_metadata, b"unrecognized contents").unwrap();
@@ -2119,12 +2233,78 @@ cat "$MFB_TEST_VERIFY_REPLY"
             entry("b.jpg", "b.JXL", second_actual_hash),
         );
         write_marker_atomic(&marker).unwrap();
+        fs::create_dir_all(output.join("metadata-mirror/ignored-format")).unwrap();
         let removed = delete_fast_img_outputs_with(&output, |_| Ok(|_: &Path| Ok(())));
         assert_eq!(removed.outcome, OutputCleanupOutcome::Removed);
         assert_eq!(removed.removed_files, Some(1));
         assert_eq!(removed.already_absent_files, Some(1));
-        assert_eq!(removed.pruned_directories, Some(1));
+        assert_eq!(removed.pruned_directories, Some(3));
         assert!(!output.exists());
+    }
+
+    #[test]
+    fn photos_quarantine_receipt_binds_paths_and_verified_pending_outputs() {
+        let stats = crate::infra::process_stream::ProcessorStats {
+            skipped: 4, unprocessed: Some(4), exit_code: 2, reported: [true; 4], ..Default::default()
+        };
+        let report = serde_json::json!({
+            "photos_quarantine_blocked": 4, "encoded": 4, "photos_verified": 4,
+            "photos_quarantine_locations": {"working_copies": 0, "photos_originals": 4, "affected": 4},
+            "source_retained": 8, "failed_sources_retained": 0, "failed_sources_verified": 0,
+            "failed_source_verification_error": null, "retention_unknown_reason": null,
+            "finalization_error": "quarantine blocked Gate 2", "photos_delivery_deferred": false,
+            "primary_verification_complete": true, "primary_cleanup_complete": false,
+            "retained_only_complete": false, "source_directory": "/input", "output_directory": "/output"
+        });
+        let verify = |value: &Value| {
+            PhotosQuarantineBlocked::from_receipt(value, &stats, Path::new("/input"), Path::new("/output"))
+                .map(|error| error.count)
+        };
+        assert_eq!(verify(&report), Some(4));
+        for (key, value) in [
+            ("photos_quarantine_locations", serde_json::json!({"working_copies": 0, "photos_originals": 3, "affected": 4})),
+            ("photos_quarantine_blocked", 5.into()), ("source_retained", 7.into()),
+            ("photos_verified", 3.into()), ("output_directory", "/other".into()),
+            ("primary_cleanup_complete", true.into()), ("photos_delivery_deferred", true.into()),
+        ] {
+            let mut conflicting = report.clone();
+            conflicting[key] = value;
+            assert_eq!(verify(&conflicting), None, "{key}");
+        }
+    }
+
+    #[test]
+    fn retained_only_receipt_binds_paths_and_all_dispositions() {
+        let stats = crate::infra::process_stream::ProcessorStats {
+            failed: 1, skipped: 1, reported: [true; 4], unprocessed: Some(0), exit_code: 1,
+            ..Default::default()
+        };
+        let receipt = serde_json::json!({
+            "schema_version": 1, "succeeded": 0, "skipped": 1, "ignored": 0, "failed": 1,
+            "unprocessed": 0, "photos_verified": 0, "encoded": 0, "failed_sources_retained": 1,
+            "failed_sources_verified": 1, "source_retained": 2, "retained_only_complete": true,
+            "primary_cleanup_complete": false, "photos_delivery_deferred": false,
+            "finalization_error": null, "retention_unknown_reason": null,
+            "failed_source_verification_error": null, "source_directory": "/input",
+            "output_directory": "/output"
+        });
+        let verified = |value: &serde_json::Value| {
+            fast_img_retained_only_verified(
+                &format!("MFB_FAST_IMG_RESULT={value}"), &stats, Path::new("/input"), Path::new("/output"),
+            )
+        };
+        assert!(verified(&receipt));
+        for (key, value) in [
+            ("source_directory", "/other".into()), ("output_directory", "/other".into()),
+            ("retained_only_complete", false.into()), ("source_retained", 1.into()),
+            ("encoded", 1.into()), ("photos_verified", 1.into()),
+            ("retention_unknown_reason", "source changed".into()),
+        ] {
+            let mut invalid = receipt.clone();
+            invalid[key] = value;
+            assert!(!verified(&invalid), "{key}");
+        }
+        assert_eq!(fast_img_partial_cleanup_verified(&format!("MFB_FAST_IMG_RESULT={receipt}"), &stats), None);
     }
 
     #[test]

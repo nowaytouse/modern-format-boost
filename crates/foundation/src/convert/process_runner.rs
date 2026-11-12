@@ -11,6 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const MANAGED_PROCESS_CAPTURE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const MANAGED_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(35);
 
 fn capture_text_stream_bounded<R: Read>(
     stream: R,
@@ -481,6 +482,26 @@ impl ManagedProcess {
         self.wait_liveness_timeout_cancellable(soft_timeout, hard_timeout, context, || Ok(false))
     }
 
+    /// Wait for a short task with finer initial polling and the usual deadlines.
+    ///
+    /// # Errors
+    /// Returns error if waiting, killing, or draining fails, or when the hard
+    /// deadline is exceeded.
+    pub fn wait_liveness_timeout_for_short_task(
+        self,
+        soft_timeout: Duration,
+        hard_timeout: Duration,
+        context: &str,
+    ) -> Result<ProcessOutput> {
+        self.wait_liveness_timeout_with_poll_interval(
+            soft_timeout,
+            hard_timeout,
+            context,
+            Duration::from_millis(1),
+            || Ok(false),
+        )
+    }
+
     /// Wait with the same liveness policy, while allowing a diagnostic probe to
     /// stop at an explicit cancellation request. Cancellation drains and reaps.
     ///
@@ -491,6 +512,23 @@ impl ManagedProcess {
         soft_timeout: Duration,
         hard_timeout: Duration,
         context: &str,
+        cancelled: impl FnMut() -> std::io::Result<bool>,
+    ) -> Result<ProcessOutput> {
+        self.wait_liveness_timeout_with_poll_interval(
+            soft_timeout,
+            hard_timeout,
+            context,
+            MANAGED_PROCESS_POLL_INTERVAL,
+            cancelled,
+        )
+    }
+
+    fn wait_liveness_timeout_with_poll_interval(
+        self,
+        soft_timeout: Duration,
+        hard_timeout: Duration,
+        context: &str,
+        mut poll_interval: Duration,
         mut cancelled: impl FnMut() -> std::io::Result<bool>,
     ) -> Result<ProcessOutput> {
         let soft_timeout = soft_timeout.min(hard_timeout);
@@ -579,7 +617,10 @@ impl ManagedProcess {
                      Stdout tail: {stdout_tail}\n   Stderr:\n{stderr_summary}\n",
                 );
             }
-            thread::sleep(Duration::from_millis(35));
+            thread::sleep(poll_interval);
+            poll_interval = poll_interval
+                .saturating_mul(2)
+                .min(MANAGED_PROCESS_POLL_INTERVAL);
         }
     }
 }
@@ -836,6 +877,41 @@ mod tests {
 
         assert!(output.status.success());
         assert_eq!(output.stdout, "done\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn short_task_wait_captures_output_and_preserves_hard_deadline() -> Result<()> {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf done; printf diagnostic >&2"]);
+        let output = ManagedProcess::spawn_captured(&mut command)?
+            .wait_liveness_timeout_for_short_task(
+                Duration::from_millis(5),
+                Duration::from_secs(2),
+                "short captured fixture",
+            )?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, "done\n");
+        assert_eq!(output.stderr, "diagnostic\n");
+
+        let mut command = Command::new("/bin/sleep");
+        command.arg("5");
+        let process = ManagedProcess::spawn_captured(&mut command)?;
+        let pid = libc::pid_t::try_from(process.pid())?;
+        let error = process
+            .wait_liveness_timeout_for_short_task(
+                Duration::from_millis(5),
+                Duration::from_millis(30),
+                "short wait hard deadline fixture",
+            )
+            .err()
+            .context("sleep fixture unexpectedly finished before its deadline")?;
+        assert!(error.to_string().contains("hard timeout"));
+        let exists = unsafe { libc::kill(pid, 0) };
+        let last = std::io::Error::last_os_error();
+        assert_eq!(exists, -1);
+        assert_eq!(last.raw_os_error(), Some(libc::ESRCH));
+        Ok(())
     }
 
     #[cfg(unix)]

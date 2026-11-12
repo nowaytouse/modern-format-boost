@@ -1157,12 +1157,11 @@ fn contract_meme_finalize_requires_cleared_embedded_metadata() {
         finalize.contains("verify_output_embedded_metadata("),
         "CONTRACT: meme finalize must run per-file cleared metadata verification"
     );
-    let policy = fs::read_to_string(manifest_dir.join("src/infra/runtime_config.rs"))
-        .expect("runtime configuration source must be readable");
-    assert!(
-        policy.contains("Self::Clear => crate::metadata::MetadataOutputPolicy::Clear")
-            && policy.contains("Self::Clear => 3"),
-        "CONTRACT: the supported private AVIF policy must require the existing version-3 Clear audit"
+    let policy = crate::infra::runtime_config::AvifMetadataPolicy::Clear;
+    assert_eq!(policy.output_policy(), crate::metadata::MetadataOutputPolicy::Clear);
+    assert_eq!(
+        policy.version(), 4,
+        "CONTRACT: existing AVIF output reuse requires the progressive Clear contract"
     );
 }
 
@@ -1224,4 +1223,29 @@ fn contract_metadata_directory_and_xmp_probe_errors_are_not_silent() {
             "metadata preservation must handle probe/read results with explicit error branches, found: {forbidden}"
         );
     }
+}
+#[cfg(target_os = "macos")]
+#[test]
+fn contract_macos_delivery_copies_preservable_xattrs_without_quarantine() -> anyhow::Result<()> {
+    let scratch = tempfile::tempdir()?;
+    let source = scratch.path().join("source");
+    let output = scratch.path().join("generated");
+    std::fs::write(&source, b"synthetic source")?;
+    std::fs::write(&output, b"synthetic output")?;
+    let quarantine = "com.apple.quarantine";
+    let custom = "user.mfb_contract";
+    xattr::set(&source, quarantine, b"0081;0;MFB-test;")?;
+    xattr::set(&source, custom, b"keep this metadata")?;
+
+    let mut report = super::MetadataDeliveryReport::default();
+    super::preserve_pro_for_delivery(&source, &output, &mut report, false)?;
+    assert!(xattr::get(&source, quarantine)?.is_some());
+    assert_eq!(xattr::get(&output, quarantine)?, None);
+    assert_eq!(xattr::get(&output, custom)?.as_deref(), Some(b"keep this metadata".as_slice()));
+    assert_eq!(std::fs::read(&output)?, b"synthetic output");
+    let previous = b"0083;1;MFB-existing;";
+    xattr::set(&output, quarantine, previous)?;
+    super::preserve_pro_for_delivery(&source, &output, &mut report, false)?;
+    assert_eq!(xattr::get(&output, quarantine)?.as_deref(), Some(previous.as_slice()));
+    Ok(())
 }

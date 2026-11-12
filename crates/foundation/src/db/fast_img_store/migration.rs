@@ -260,24 +260,23 @@ fn local_candidates(source: &Path, requested: Option<&Path>) -> Result<Vec<PathB
             .file_name()
             .context("Source has no final component")?,
     ))?;
-    let prefix = format!("{name}_optimized");
-    outputs.insert(parent.join(&prefix));
+    let base = format!("{name}_optimized");
+    let numbered_prefix = format!("{base}_");
     for entry in fs::read_dir(parent)? {
         let entry = entry?;
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(&prefix))
-        {
-            // Do not traverse a user-controlled symlink while searching for state.
-            ensure!(
-                !entry.file_type()?.is_symlink(),
-                "Adjacent output candidate is a symlink: {}",
-                entry.path().display()
-            );
-            if entry.file_type()?.is_dir() {
-                outputs.insert(entry.path());
-            }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let numbered = name.strip_prefix(&numbered_prefix).is_some_and(|suffix| {
+            !suffix.starts_with('0')
+                && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                && suffix.parse::<usize>().is_ok_and(|ordinal| ordinal >= 2)
+        });
+        // Only real directories with an allocated name can hold adjacent state.
+        // A symlink or file at that name occupies it without granting ownership.
+        if (name == base || numbered) && entry.file_type()?.is_dir() {
+            outputs.insert(entry.path());
         }
     }
     Ok(outputs

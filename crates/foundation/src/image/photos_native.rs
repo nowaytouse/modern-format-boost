@@ -1,7 +1,7 @@
 //! Persistent, single-writer `PhotoKit` transport. No retry after an import intent.
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -14,15 +14,24 @@ pub(super) struct Client {
     pending: Option<(Value, crate::image::photos_import_metrics::Timer)>,
 }
 
-fn retain_worker_log(socket_dir: tempfile::TempDir) -> String {
-    let path = socket_dir.keep().join("worker.log");
-    match std::fs::read_to_string(&path) {
-        Ok(log) => format!("worker log retained at {}: {log}", path.display()),
-        Err(error) => format!(
-            "worker log retained at {} but unreadable: {error}",
-            path.display()
-        ),
+fn retain_worker_log(socket_dir: tempfile::TempDir, failure: Option<&[u8]>) -> String {
+    let directory = socket_dir.keep();
+    if let Some(failure) = failure {
+        const MAX_FAILURE_BYTES: usize = 64 * 1024;
+        let result = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(directory.join("failure.log"))
+            .and_then(|mut file| file.write_all(&failure[..failure.len().min(MAX_FAILURE_BYTES)]));
+        if let Err(error) = result {
+            return format!(
+                "private diagnostic directory: {}; could not save additional failure details: {error}",
+                directory.display()
+            );
+        }
     }
+    format!("private diagnostic directory: {}", directory.display())
 }
 
 impl Client {
@@ -61,14 +70,14 @@ impl Client {
             Ok(launch) => launch,
             Err(error) => anyhow::bail!(
                 "PhotoKit helper launch failed: {error}; {}",
-                retain_worker_log(socket_dir)
+                retain_worker_log(socket_dir, None)
             ),
         };
         anyhow::ensure!(
             launch.status.success(),
             "PhotoKit helper launch failed: {}; {}",
-            String::from_utf8_lossy(&launch.stderr),
-            retain_worker_log(socket_dir)
+            launch.status,
+            retain_worker_log(socket_dir, Some(&launch.stderr))
         );
         let deadline = Instant::now() + Duration::from_secs(20);
         let stream = loop {
@@ -82,7 +91,7 @@ impl Client {
                 }
                 Err(error) => anyhow::bail!(
                     "PhotoKit helper connection failed: {error}; {}",
-                    retain_worker_log(socket_dir)
+                    retain_worker_log(socket_dir, None)
                 ),
             }
         };
@@ -95,7 +104,7 @@ impl Client {
         })() {
             anyhow::bail!(
                 "PhotoKit helper socket setup failed: {error}; {}",
-                retain_worker_log(socket_dir)
+                retain_worker_log(socket_dir, None)
             );
         }
         let mut client = Self {
@@ -103,28 +112,25 @@ impl Client {
             socket_dir: Some(socket_dir),
             pending: None,
         };
-        let reply = client.request(&serde_json::json!({"version":1,"operation":"probe",
-            "batchID":"probe","witnessIdentifiers":witnesses}));
-        let reply = match reply {
-            Ok(reply) => reply,
-            Err(error) => anyhow::bail!(
-                "PhotoKit startup probe failed: {error:#}; {}",
-                client.retain_log()
-            ),
-        };
+        let reply = client
+            .request(&serde_json::json!({"version":1,"operation":"probe",
+            "batchID":"probe","witnessIdentifiers":witnesses}))
+            .map_err(|error| error.context("PhotoKit startup probe failed"))?;
         if reply["state"] != "ready" {
+            let failure = serde_json::to_vec(&reply)?;
             anyhow::bail!(
-                "PhotoKit authorization/target probe failed: {reply}; {}",
-                client.retain_log()
+                "PhotoKit authorization/target probe failed; {}",
+                client.retain_log(Some(&failure))
             );
         }
         Ok(client)
     }
 
-    fn retain_log(&mut self) -> String {
-        self.socket_dir
-            .take()
-            .map_or_else(|| "worker log unavailable".into(), retain_worker_log)
+    fn retain_log(&mut self, failure: Option<&[u8]>) -> String {
+        self.socket_dir.take().map_or_else(
+            || "private diagnostics unavailable".into(),
+            |directory| retain_worker_log(directory, failure),
+        )
     }
 
     pub(super) fn request(&mut self, request: &Value) -> anyhow::Result<Value> {
@@ -138,7 +144,12 @@ impl Client {
         anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "PhotoKit request too large");
         bytes.push(b'\n');
         let timing = crate::image::photos_import_metrics::timer("native_request_wall");
-        self.stream.get_mut().write_all(&bytes)?;
+        if let Err(error) = self.stream.get_mut().write_all(&bytes) {
+            anyhow::bail!(
+                "PhotoKit request write failed: {error}; {}; reconcile durable journals",
+                self.retain_log(None)
+            );
+        }
         self.pending = Some((request.clone(), timing));
         Ok(())
     }
@@ -157,32 +168,40 @@ impl Client {
         {
             anyhow::bail!(
                 "PhotoKit reply read failed: {error}; {}; reconcile durable journals",
-                self.retain_log()
+                self.retain_log(None)
             );
         }
         if line.last() != Some(&b'\n') {
             anyhow::bail!(
                 "PhotoKit reply ended before completion: {}; reconcile durable journals",
-                self.retain_log()
+                self.retain_log(None)
             );
         }
         if line.len() > 8 * 1024 * 1024 {
             anyhow::bail!(
                 "PhotoKit reply oversized; {}; reconcile durable journals",
-                self.retain_log()
+                self.retain_log(None)
             );
         }
         let reply: Value = serde_json::from_slice(&line).map_err(|error| {
-            anyhow::anyhow!("PhotoKit reply invalid: {error}; {}", self.retain_log())
+            anyhow::anyhow!(
+                "PhotoKit reply invalid at line {}, column {}; {}",
+                error.line(),
+                error.column(),
+                self.retain_log(None)
+            )
         })?;
         if reply["version"] != 1 || reply["batchID"] != request["batchID"] {
             anyhow::bail!(
                 "PhotoKit reply identity mismatch; {}; reconcile durable journals",
-                self.retain_log()
+                self.retain_log(None)
             );
         }
         if reply["state"] == "error" {
-            anyhow::bail!("PhotoKit request failed: {reply}; {}", self.retain_log());
+            anyhow::bail!(
+                "PhotoKit request failed; {}; reconcile durable journals before retrying an import",
+                self.retain_log(Some(&line))
+            );
         }
         Ok(reply)
     }
@@ -207,6 +226,47 @@ pub(super) fn committed_pairs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_failure_keeps_private_diagnostics_out_of_reported_error() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let socket_dir = tempfile::Builder::new().tempdir_in(root.path())?;
+        let directory = socket_dir.path().to_owned();
+        let filename = "/Synthetic/Private Photo.jxl";
+        let uuid = "DEADBEAF-0000-4000-8000-000000000001";
+        std::fs::write(directory.join("worker.log"), filename)?;
+        let (stream, mut peer) = UnixStream::pair()?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        peer.set_write_timeout(Some(Duration::from_secs(5)))?;
+        let mut client = Client {
+            stream: BufReader::new(stream),
+            socket_dir: Some(socket_dir),
+            pending: None,
+        };
+        client.begin_request(&serde_json::json!({"version": 1, "batchID": "batch"}))?;
+        let worker = std::thread::spawn(move || -> anyhow::Result<()> {
+            let reply = serde_json::json!({"version": 1, "batchID": "batch", "state": "error",
+                "error": format!("{filename} {uuid} {}", "x".repeat(128 * 1024))});
+            writeln!(peer, "{reply}")?;
+            Ok(())
+        });
+        let message = client.finish_request().unwrap_err().to_string();
+        worker.join().expect("mock helper panicked")?;
+        assert!(message.contains("PhotoKit request failed"));
+        assert!(message.contains(&directory.display().to_string()));
+        assert!(!message.contains(filename) && !message.contains(uuid));
+        assert_eq!(
+            std::fs::read_to_string(directory.join("worker.log"))?,
+            filename
+        );
+        let path = directory.join("failure.log");
+        let failure = std::fs::read_to_string(&path)?;
+        assert!(failure.contains(filename) && failure.contains(uuid));
+        assert_eq!(failure.len(), 64 * 1024);
+        assert_eq!(std::fs::metadata(path)?.permissions().mode() & 0o077, 0);
+        Ok(())
+    }
+
     #[test]
     fn journal_requires_exact_request_and_unique_complete_identity_mapping() {
         let request = serde_json::json!({"version":1,"batchID":"b","assets":[{"entryID":"a"},{"entryID":"b"}]});

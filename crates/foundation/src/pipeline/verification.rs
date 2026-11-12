@@ -4223,16 +4223,21 @@ pub(super) fn validate_marker_relative_path(kind: &str, rel: &str) -> Result<(),
     Ok(())
 }
 
-fn validate_no_symlink_components(root: &Path, rel: &Path) -> Result<(), String> {
+/// Reject linked components in a Fast IMG output path, including a linked root.
+///
+/// # Errors
+/// Returns an error for an invalid relative path, symlink, or inspection failure.
+pub fn validate_no_symlink_components(root: &Path, rel: &Path) -> Result<(), String> {
     let mut current = root.to_path_buf();
-    for component in rel.components() {
-        let Component::Normal(name) = component else {
+    for component in std::iter::once(None).chain(rel.components().map(Some)) {
+        if let Some(Component::Normal(name)) = component {
+            current.push(name);
+        } else if component.is_some() {
             return Err(format!(
                 "fast-img marker output path is not normalized: {}",
                 rel.display()
             ));
-        };
-        current.push(name);
+        }
         match std::fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(format!(
@@ -4671,9 +4676,14 @@ fn resolve_working_copy_dir_inner(src: &Path) -> std::io::Result<PathBuf> {
             };
             base.with_file_name(format!("{name}_{}", suffix + 1))
         };
-        let reserved = crate::db::fast_img_store::is_reserved(&candidate)?;
-        if !candidate.try_exists()? && !reserved {
-            return Ok(candidate);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !crate::db::fast_img_store::is_reserved(&candidate)? {
+                    return Ok(candidate);
+                }
+            }
+            Err(error) => return Err(error),
         }
         suffix += 1;
     }
@@ -5491,6 +5501,63 @@ mod working_copy_tests {
         assert_eq!(
             resolve_working_copy_dir(&src, "jxl").unwrap(),
             root.path().join("Photos_optimized_2")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn working_copy_collision_keeps_non_owned_paths_and_missing_reservations() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().unwrap(),
+        );
+        let src = root.path().join("Photos");
+        std::fs::create_dir(&src).unwrap();
+        let src = src.canonicalize().unwrap();
+        let base = working_copy_dir(&src);
+        std::fs::write(&base, b"keep this file").unwrap();
+        let directory = base.with_file_name("Photos_optimized_2");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("unrelated"), b"keep this directory").unwrap();
+        let third = base.with_file_name("Photos_optimized_3");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.path().join("missing"), &third).unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(&third, b"keep this numbered file").unwrap();
+        let reservation = base.with_file_name("Photos_optimized_4");
+        let marker = WorkingCopyMarker::new(src.clone(), reservation.clone(), 1)
+            .with_strategy("avif".into());
+        write_marker_atomic(&marker).unwrap();
+        let unrelated = base.with_file_name("Photos_optimized_notes");
+        std::fs::create_dir(&unrelated).unwrap();
+        std::fs::write(unrelated.join(".mfb_wc"), b"unrelated marker name").unwrap();
+
+        let next = base.with_file_name("Photos_optimized_5");
+        assert_eq!(resolve_fresh_working_copy_dir(&src).unwrap(), next);
+        assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), next);
+        assert_eq!(resolve_working_copy_dir(&src, "avif").unwrap(), reservation);
+        assert!(!reservation.exists());
+        assert!(!next.exists());
+        assert_eq!(std::fs::read(&base).unwrap(), b"keep this file");
+        assert_eq!(
+            std::fs::read(directory.join("unrelated")).unwrap(),
+            b"keep this directory"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::read_link(&third).unwrap(),
+            root.path().join("missing")
+        );
+        #[cfg(not(unix))]
+        assert_eq!(std::fs::read(&third).unwrap(), b"keep this numbered file");
+        assert_eq!(
+            std::fs::read(unrelated.join(".mfb_wc")).unwrap(),
+            b"unrelated marker name"
         );
     }
 

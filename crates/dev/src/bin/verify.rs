@@ -469,7 +469,7 @@ fn run_fast_img_delivery_check_with(
         source_files_label: if strategy == "avif" {
             "Recorded source static images".to_string()
         } else {
-            "Recorded source JPEGs".to_string()
+            "Recorded JPEG-derived sources".to_string()
         },
         optimized_files_label: if strategy == "avif" {
             "Optimized AVIF files".to_string()
@@ -611,16 +611,18 @@ fn run_fast_img_delivery_check_with(
 
     if strategy == "avif" {
         source_true_jpegs.clear();
+    }
+    // Recorded target-format inputs are in scope even when they are not JPEGs.
+    source_true_jpegs.extend(
         successful_source_rels
             .iter()
             .chain(&skipped_source_rels)
             .chain(&failed_source_rels)
             .map(|rel| source_dir.join(rel))
-            .filter(|path| path.is_file())
-            .for_each(|path| source_true_jpegs.push(path));
-        source_true_jpegs.sort();
-        source_true_jpegs.dedup();
-    }
+            .filter(|path| path.is_file()),
+    );
+    source_true_jpegs.sort();
+    source_true_jpegs.dedup();
 
     let mut skipped_sources_present = Vec::new();
     let mut failed_sources_present = Vec::new();
@@ -772,7 +774,7 @@ fn run_fast_img_delivery_check_with(
     let source_kind = if strategy == "avif" {
         "static images"
     } else {
-        "JPEGs"
+        "JPEG-derived files"
     };
     report.push_str(&format!(
         "Recorded source {source_kind}:       {recorded_source_jpegs}\n"
@@ -3113,17 +3115,22 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         fs::create_dir_all(&optimized).unwrap();
 
         fs::write(source.join("djxl_failed.jpg"), b"\xff\xd8\xff\xe0jpeg").unwrap();
+        fs::write(source.join("retained.JXL"), b"\xff\x0aretained").unwrap();
         fs::write(optimized.join("converted.JXL"), b"\xff\x0aencoded").unwrap();
 
         let marker_path = optimized.join("fastmode_img_marker.json");
         let marker_data = serde_json::json!({
             "working_copy": optimized.to_string_lossy().to_string(),
-            "src_jpeg_count": 2,
+            "src_jpeg_count": 3,
             "skipped_sources": {},
             "failed_sources": {
                 "djxl_failed.jpg": {
                     "src": "failed-source-blake3",
                     "reason": "pixel-diff: djxl exited non-zero decoding output.JXL"
+                },
+                "retained.JXL": {
+                    "src": "jxl-source-blake3",
+                    "reason": "existing JXL exact reconstruction failed"
                 }
             }
         });
@@ -3134,10 +3141,10 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             delivery_inventory_fixture(&source, &optimized, &mut report, "images_only", "jxl")
                 .unwrap();
 
-        assert_eq!(stats.source_files, 2);
+        assert_eq!(stats.source_files, 3);
         assert_eq!(stats.optimized_files, 1);
-        assert_eq!(stats.source_remaining_files, 1);
-        assert_eq!(stats.failed_sources, 1);
+        assert_eq!(stats.source_remaining_files, 2);
+        assert_eq!(stats.failed_sources, 2);
         assert_eq!(stats.integrity_failures, 0);
     }
 

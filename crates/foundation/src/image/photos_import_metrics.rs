@@ -1,7 +1,7 @@
 //! Per-import measurements, not estimates derived from asset counts.
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 thread_local! {
     static CURRENT: RefCell<Option<Data>> = const { RefCell::new(None) };
@@ -25,6 +25,8 @@ struct Data {
     helper_peak_rss_bytes: Option<u64>,
     helper_user_cpu_seconds: Option<f64>,
     helper_system_cpu_seconds: Option<f64>,
+    #[serde(skip)]
+    last_resource_sample: Option<Instant>,
     #[serde(skip)]
     transaction_seconds: Vec<f64>,
 }
@@ -105,6 +107,21 @@ pub(super) fn batch_sizes(import: usize, verify: usize) {
             data.verification_batch_size = Some(verify);
         }
     });
+}
+
+/// Resource diagnostics spawn system tools. Bound their frequency across the
+/// whole import profile, including singleton AppleScript submissions.
+pub(super) fn resource_sample_due(now: Instant) -> bool {
+    CURRENT.with_borrow_mut(|current| {
+        let Some(data) = current else { return false };
+        if data.last_resource_sample.is_some_and(|last| {
+            now.saturating_duration_since(last) < Duration::from_secs(30)
+        }) {
+            return false;
+        }
+        data.last_resource_sample = Some(now);
+        true
+    })
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -216,6 +233,22 @@ impl Drop for Timer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_sampling_is_bounded_across_import_requests() {
+        let start = Instant::now();
+        assert!(!resource_sample_due(start));
+        {
+            let _profile = Profile::start("applescript");
+            assert!(resource_sample_due(start));
+            for attempt in 0..600 {
+                assert!(!resource_sample_due(start + Duration::from_millis(attempt * 40)));
+            }
+            assert!(resource_sample_due(start + Duration::from_secs(30)));
+            assert!(!resource_sample_due(start + Duration::from_secs(31)));
+        }
+        assert!(!resource_sample_due(start + Duration::from_secs(32)));
+    }
 
     #[test]
     fn measurements_are_scoped_and_quantiles_do_not_invent_samples() {

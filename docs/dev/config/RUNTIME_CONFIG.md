@@ -140,6 +140,16 @@ their existing recovery rules. A failed full search preserves the original.
 Explicit saved choices are preserved, not forcibly migrated. Resetting GUI
 overrides inherits the current typed configuration; old files that explicitly
 request `fixed` remain manual. Defaults are shared by CLI and direct engine calls.
+Existing static JXL inputs with exact JPEG reconstruction enter the full
+E1–E11 comparison. Both the original and the selected JXL must reconstruct the
+same complete JPEG. A replacement must preserve displayed samples, embedded
+metadata and ancillary container boxes. If no candidate offers a size benefit,
+local delivery retains the valid input. Fast JXL Photos delivery stages that
+input unchanged and uses the normal delivery and source-deletion gates.
+Existing JXL delivery prepares its reserved output's nested parent directory
+before atomic publication. Reconstruction, candidate, or metadata failures
+retain the original.
+
 Fast AVIF keeps its own Q search and locator/final Speed domains; JXL D/E does
 not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
 
@@ -150,7 +160,9 @@ not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
   in the final speed domain, not silently lowered on failure or oversize. With
   `mode-default` or `adaptive`, the stored Q is inactive and the existing bounded
   search starts at Q100. A true-lossless candidate may still be accepted first
-  for a confirmed-lossless source; existing AVIF retains its no-reencode route.
+  for a confirmed-lossless source. A progressive AVIF can keep its existing
+  encoded media. A compatible non-progressive AVIF must pass exact full-sample
+  and payload-budget checks before a progressive candidate can be published.
 - **Fast AVIF final Speed.** `img.avif_speed` accepts integers 0..10 (default 0,
   slowest; 10 is fastest). It applies to true-lossless probes, final-domain Q
   probes and refinement. The existing fast locator remains Speed6; its temporary
@@ -162,7 +174,8 @@ not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
   unknown values and null are rejected. `--avif-metadata-policy clear` is scoped
   to Fast AVIF and configuration inspection. The resolved policy binds candidate
   preparation, publication, existing-AVIF custody, local Gate 1 and policy version
-  3 in recovery evidence. An AVIF extension alone never authorizes clearing.
+  4 in recovery evidence. Version 3 output requires fresh progressive proof
+  before reuse. An AVIF extension alone never authorizes clearing.
   The native Fast AVIF settings show this effective intent read-only, with
   separate loading, unavailable and unsupported states. Standard JXL retains its
   preservation policy. Removable metadata clearing does not waive pixel, color,
@@ -400,15 +413,55 @@ or status. In checkpoint-owned output directories, cleanup can remove a
 recognized Finder `.DS_Store` when it is the only remaining entry. This
 requires the same fresh Photos custody checks as other output cleanup.
 
+During cleanup, the indexed Photos lookup can reuse its read-only database
+connection and prepared statements. Each removal still starts a fresh
+transaction for the exact UUID, checks the database identity and schema,
+and rereads the complete original and its quarantine attribute. Unsupported
+original layouts still use the existing verifier.
+
+Photos import resource diagnostics are sampled at most once per 30 seconds
+within an import profile. Only actual AppleScript media submissions pause
+between manifest chunks for Photos to flush its buffers. Native helper errors
+report the phase and a private diagnostic location. Raw replies and helper
+stderr are kept out of the session error.
+
 Fast IMG checks the macOS quarantine attribute on both the working copy
 and the current Photos original selected by UUID before deleting sources.
-Either attribute blocks deletion. Existing import receipts remain available
-for a later verification attempt.
+On a byte-identical generated JXL or AVIF inside the checkpoint-bound library's
+managed originals, the exact local Photos sandbox record seen in live tests
+(`0082`, a timestamp, `Photos` or `photolibraryd`, and an empty download
+event field) is recorded on disk and does not block cleanup. The record remains
+on the original. Download, hard quarantine, unknown records and any mark on a
+working copy still block deletion. Existing import receipts remain available
+for fresh verification.
+macOS file metadata copying applies the existing xattr exclusion list even when
+native ACL and stat copying succeeds. Before Photos submission, Fast IMG clears
+quarantine only from pending, checkpoint-bound generated files and verifies
+the attribute is absent. Original-media candidates and already imported
+resources receive read-only quarantine checks. Fresh verification logs separate
+counts for working copies and Photos originals with blocking marks.
+The final result receipt carries both location counts when quarantine is the
+sole blocker. One asset can count in both locations. Continue an existing
+Photos task to recheck its saved resource UUIDs. Starting a fresh task can
+submit new assets and does not repair attributes on existing Photos originals.
+If the working copy changed after a recorded import, resume preserves the
+existing import receipts and stops before automatic rebuild or re-import.
 
 On a mixed cleanup resume, final Gate 2 decodes outputs for remaining
 source pairs with per-pair input and tool verification. It checks the whole
 output inventory and decodes the outputs whose sources were already removed.
 All outputs receive a fresh decode in the same cache-disabled attempt.
+
+Include `fast_img_delete=info` in `RUST_LOG` to record aggregate timing for the
+final JPEG-to-JXL delete proof. The timing event carries no asset paths.
+Worker-time totals include hash reads, scratch allocation, decoder startup,
+decoder completion (including its JPEG write), and orientation/gain-map
+checks. These totals can overlap across workers. Exact JPEG reconstruction
+uses shorter initial process polling and the existing deadlines. The
+independent orientation check can use an uncompressed PNM raster for matching
+source and codestream dimensions up to four million pixels, with PNG retained
+for larger images or when PNM cannot be read. Final hashes must match the
+hashes observed during the exact roundtrip.
 
 History's file-failure details and their complete-detail copy include the
 associated worker launch and execution evidence. The recorded run, invocation
@@ -1024,17 +1077,31 @@ rewriting the full collection as a JSON checkpoint. Complete DTO validation and
 snapshot hashing still scan the logical state; this is not a measured throughput
 claim.
 
+Album preparation, AppleScript import and reconciliation resolve each component
+within its parent. Intermediate components select folders and the last component
+selects an album. This lets an album hold media from one level while a
+same-named folder holds the descendants. Matches of the requested type must be
+unique. If two siblings of that type share a name, rename the conflicting item
+in Photos and continue the saved task. The AppleScript import resolves the
+destinations in its request before submitting assets and imports using the
+resolved Photos album references. The PhotoKit helper independently checks
+the returned IDs against writable albums.
+
 AppleScript reconciliation reports `MFB_NOT_FOUND` only after a successful query
-returns no match. Query failures and ambiguous folder/album or single-asset
-matches propagate instead of authorizing a new import. Discovery still does not
-replace original-resource identity verification. Failed-only children consume
-these references before any new submission. A complete source/sidecar execution
-manifest and general recovery of every interrupted stage remain separate work.
+returns no match. Query failures and ambiguous single-asset matches stop
+reconciliation. Discovery is followed by original-resource identity
+verification. Failed-only children consume saved references before any new
+submission. A complete source/sidecar execution manifest and general recovery
+of every interrupted stage remain separate work.
 
 ## Failed-source Child Attempts
 
 Fast IMG distinguishes continuing an unfinished task (`--retry`), starting a new
 isolated task (`--no-resume`), and retrying retained failures (`--retry-failed`).
+Fresh runs select an available `_optimized` or numbered `_optimized_N` output.
+Existing files, directories, symbolic links and saved reservations occupy their
+paths. Continuing a saved task uses its recorded working copy, including a
+numbered one.
 The latter applies to a completed checkpoint with recorded failures and complete
 source dispositions. It creates a child attempt without resetting the completed
 parent's outcomes, gates or receipts. Successful parent media are outside the

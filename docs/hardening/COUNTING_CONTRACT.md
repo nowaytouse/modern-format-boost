@@ -54,6 +54,10 @@ all entries ever stored in a checkpoint.
   and unique recorded Photos UUIDs across tiers. Output-root and source-root
   paths are separate domains. Duplicate proof is rejected at marker read,
   write and reporting boundaries, not silently deduplicated.
+- For Fast IMG Photos delivery, an existing JPEG-reconstructible JXL that wins
+  the full candidate comparison enters the delivery inventory as a byte-identical
+  staged copy. It is excluded from conversion byte totals. Source cleanup
+  requires fresh proof of that staged output and the current Photos original.
 - Fast IMG's `MFB_FAST_IMG_RESULT` keeps encoded, successful, Photos-verified and
   retained-source counts distinct. `source_retained` counts all observed existing
   source paths; it is not a failed-source safety proof. The additive nullable
@@ -75,6 +79,18 @@ all entries ever stored in a checkpoint.
   History additionally requires its source/output-bound verification receipt and
   no later session/cleanup failure. Old receipts without this proof stay unconfirmed
   as safe partial completion; their original counts and failures remain visible.
+- When Fast IMG ends with only failed or skipped inputs and zero eligible
+  delivery outputs, it can record `retained_only_complete` after freshly hashing
+  every retained original against the checkpoint. The launcher checks current
+  counts, source and output scope, records cleanup as unnecessary, and reports
+  completion with file errors. Photos verification and deletion are inapplicable
+  to this outcome. The exit remains nonzero and existing outputs are left alone.
+- A Photos quarantine block can carry `photos_quarantine_blocked` only when
+  quarantine is the sole failure of fresh final Gate 2 and the current counts
+  agree. The launcher binds the worker receipt to the selected input and output,
+  records blocked cleanup, and preserves the nonzero exit. Encoded and
+  Photos-local counts describe verified intermediate results. The blocked
+  files remain unprocessed and are excluded from delivery success.
 - `primary_cleanup_complete` covers only the owning primary workflow. It is not
   proof that all output folders were removed; local Photos verification is not
   iCloud synchronization evidence.

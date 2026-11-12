@@ -9,14 +9,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::app::worker::{ToolSnapshotBindings, WorkerSession};
-use crate::infra::drag_drop::OutputCleanupReceipt;
+use crate::infra::drag_drop::{OutputCleanupReceipt, PhotosQuarantineBlocked};
 use crate::infra::history_store::{self, HistorySessionLease};
 use crate::infra::log_paths::{
     append_jsonl_audit_record, archive_drag_drop_session_bundle_with_label, ensure_unified_log_dir,
     format_session_stamp,
 };
 use crate::infra::process_stream::{ProcessorByteTotals, ProcessorStats};
-use crate::infra::rich_panel::PipelineSummary;
+use crate::infra::rich_panel::{PipelineSummary, completed_file_failure_count};
 use crate::infra::ui_tokens::pick_symbol;
 
 /// A session owns its history lease and artifacts; each attempt has an independent run identity.
@@ -281,12 +281,12 @@ impl AppSession {
     ///
     /// # Errors
     /// Returns malformed, oversized, duplicate or conflicting result and persistence errors.
-    pub fn record_fast_img_result(&self, text: &str, stats: &ProcessorStats) -> Result<()> {
+    pub fn record_fast_img_result(&self, text: &str, stats: &ProcessorStats) -> Result<Option<serde_json::Value>> {
         let mut reports = text
             .lines()
             .filter(|line| line.contains("MFB_FAST_IMG_RESULT="));
         let Some(line) = reports.next() else {
-            return Ok(());
+            return Ok(None);
         };
         let payload = line
             .strip_prefix("MFB_FAST_IMG_RESULT=")
@@ -318,7 +318,8 @@ impl AppSession {
                 "fast-img result count {key} disagrees with worker output"
             );
         }
-        self.append_history_event("MFB_HISTORY_FAST_IMG_RESULT", report)
+        self.append_history_event("MFB_HISTORY_FAST_IMG_RESULT", report.clone())?;
+        Ok(Some(report))
     }
 
     /// Record the selected immutable parent before the worker can create a child.
@@ -791,16 +792,25 @@ pub fn run_with_history(
         } else {
             false
         };
+        let completed_with_file_errors = !cancelled
+            && result.as_ref().err().and_then(completed_file_failure_count).is_some();
+        let photos_quarantine_blocked = if cancelled {
+            None
+        } else {
+            result.as_ref().err().and_then(PhotosQuarantineBlocked::from_error).map(|error| error.count)
+        };
         let finished = (|| {
             session.append_history_event("MFB_HISTORY_FINISHED", serde_json::json!({
             "schema_version": 1,
             "outcome": if cancelled { "cancelled" } else if result.is_err() { "failed" } else { "completed" },
+            "completed_with_file_errors": completed_with_file_errors,
+            "photos_quarantine_blocked": photos_quarantine_blocked,
             "error": result.as_ref().err().map(|error| format!("{error:#}")),
             "output_sequence": history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
         }))
         })();
         if let Err(error) = finished {
-            if result.is_ok() {
+            if result.is_ok() || completed_with_file_errors || photos_quarantine_blocked.is_some() {
                 return Err(error).context("write history terminal outcome");
             }
             eprintln!("history terminal outcome write failed: {error:#}");

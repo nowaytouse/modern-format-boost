@@ -682,8 +682,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
 
-        // copyfile: copies ACL + STAT + xattr in one syscall
-        if let Err(e) = macos::copy_native_metadata(src, dst) {
+        if let Err(e) = macos::copy_native_acl_and_stat(src, dst) {
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata",
                 crate::infra::static_logs::messages::MSG_METADATA_MACOS_COPY_FAIL
@@ -1129,7 +1128,7 @@ pub(super) fn preserve_pro_for_delivery(
 ) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
-        if let Err(e) = macos::copy_native_metadata(src, dst) {
+        if let Err(e) = macos::copy_native_acl_and_stat(src, dst) {
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata",
                 crate::infra::static_logs::messages::MSG_METADATA_MACOS_COPY_FAIL

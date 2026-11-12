@@ -1,8 +1,10 @@
 //! Pipeline-agnostic orientation correction and pixel-diff verification.
 
-use crate::image::format_detect::FormatKind;
+use crate::image::format_detect::{FormatKind, read_expected_raster_dimensions};
 use crate::unified_error::{ImgQualityError, Result};
 use std::path::Path;
+
+const JXL_RECONSTRUCTION_PNM_MAX_PIXELS: u64 = 4_000_000;
 
 /// Outcome of the selected decoded-image evidence contract.
 #[derive(Debug, PartialEq, Eq)]
@@ -241,6 +243,41 @@ pub fn verify_orientation_pixel_diff(
         command.arg(out).output()
     };
 
+    let reconstruction = if diff_tolerance == DiffTolerance::JxlReconstructionOrientation {
+        let source_orientation = read_exif_orientation(source_image)?;
+        let source_dimensions = read_expected_raster_dimensions(source_image, FormatKind::Jpeg)
+            .map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "pixel-diff: cannot read source JPEG geometry: {error}"
+                ))
+            })?;
+        let codestream = read_jxl_codestream_info(output)?;
+        let (width, height) = source_dimensions;
+        let pixels = u64::from(width) * u64::from(height);
+        // Full djxl raster output without PNG compression. Limit uncompressed scratch
+        // size and use PNG if this decoder cannot produce a readable PNM.
+        if source_dimensions == codestream.dimensions
+            && (1..=JXL_RECONSTRUCTION_PNM_MAX_PIXELS).contains(&pixels)
+            && let Ok(tmp) = orientation_decode_tempfile(".pnm")
+            && let Ok(decoded) = decode_cmd(output, tmp.path())
+            && decoded.status.success()
+            && let Ok(decoded_dimensions) =
+                read_expected_raster_dimensions(tmp.path(), FormatKind::Pnm)
+        {
+            log_suppressed_tool_output(decoder_tool, output, &decoded.stdout, &decoded.stderr);
+            verify_reconstruction_geometry(
+                source_orientation,
+                source_dimensions,
+                codestream,
+                decoded_dimensions,
+            )?;
+            return Ok(PixelDiffResult::Match);
+        }
+        Some((source_orientation, source_dimensions, codestream))
+    } else {
+        None
+    };
+
     let primary_temp_suffix = decode_temp_extension_for_format(fmt).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
             "pixel-diff: unsupported decoded temp format for {fmt:?}"
@@ -277,22 +314,18 @@ pub fn verify_orientation_pixel_diff(
         &decode_output.stderr,
     );
 
-    if diff_tolerance == DiffTolerance::JxlReconstructionOrientation {
-        let source_orientation = read_exif_orientation(source_image)?;
-        let source_dimensions = image::image_dimensions(source_image).map_err(|error| {
-            ImgQualityError::AnalysisError(format!(
-                "pixel-diff: cannot read source JPEG geometry: {error}"
-            ))
-        })?;
-        let decoded_dimensions = image::image_dimensions(tmp_decoded.path()).map_err(|error| {
-            ImgQualityError::AnalysisError(format!(
-                "pixel-diff: cannot read independently decoded JXL geometry: {error}"
-            ))
-        })?;
+    if let Some((source_orientation, source_dimensions, codestream)) = reconstruction {
+        let decoded = tmp_decoded.path();
+        let decoded_dimensions = read_expected_raster_dimensions(decoded, FormatKind::Png)
+            .map_err(|error| {
+                ImgQualityError::AnalysisError(format!(
+                    "pixel-diff: cannot read independently decoded JXL geometry: {error}"
+                ))
+            })?;
         verify_reconstruction_geometry(
             source_orientation,
             source_dimensions,
-            read_jxl_codestream_info(output)?,
+            codestream,
             decoded_dimensions,
         )?;
         return Ok(PixelDiffResult::Match);
@@ -346,11 +379,9 @@ fn read_jxl_codestream_info(path: &Path) -> Result<JxlCodestreamInfo> {
         .input(path)
         .build();
     command.arg("-v");
+    let timeout = std::time::Duration::from_secs(30);
     let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)?
-        .wait_timeout(
-            std::time::Duration::from_secs(30),
-            "JXL codestream orientation",
-        )?;
+        .wait_liveness_timeout_for_short_task(timeout, timeout, "JXL codestream orientation")?;
     if !output.status.success() {
         return Err(ImgQualityError::AnalysisError(format!(
             "pixel-diff: jxlinfo failed for {}: {}",
@@ -1189,7 +1220,7 @@ mod tests {
     use super::{
         DiffTolerance, PixelDiffResult, decode_temp_extension_for_format, diff_dynamic_images,
         diff_orientation_images, official_source_decoder, orientation_diff_tolerance_for_format,
-        parse_exif_orientation_stdout, read_exif_orientation,
+        parse_exif_orientation_stdout, read_exif_orientation, read_expected_raster_dimensions,
         verify_pixel_diff_against_decoded_image,
     };
     use crate::image::format_detect::FormatKind;
@@ -1310,6 +1341,44 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_reconstruction_geometry_uses_the_shared_content_format() {
+        use crate::image::format_detect::detect_true_format;
+
+        let root = tempfile::tempdir().unwrap();
+        let image = patterned_image(32, 48);
+        for name in ["source", "source.png"] {
+            let source = root.path().join(name);
+            image
+                .save_with_format(&source, image::ImageFormat::Jpeg)
+                .unwrap();
+            assert_eq!(detect_true_format(&source).unwrap(), FormatKind::Jpeg);
+            assert_eq!(
+                read_expected_raster_dimensions(&source, FormatKind::Jpeg).unwrap(),
+                (32, 48)
+            );
+            assert!(read_expected_raster_dimensions(&source, FormatKind::Png).is_err());
+        }
+        let png = root.path().join("not-a-jpeg.jpg");
+        image
+            .save_with_format(&png, image::ImageFormat::Png)
+            .unwrap();
+        assert_eq!(detect_true_format(&png).unwrap(), FormatKind::Png);
+        assert_eq!(
+            read_expected_raster_dimensions(&png, FormatKind::Png).unwrap(),
+            (32, 48)
+        );
+        assert!(read_expected_raster_dimensions(&png, FormatKind::Jpeg).is_err());
+
+        let pnm = root.path().join("decoded.pnm");
+        std::fs::write(&pnm, b"P5\n2 3\n255\n\x00\x20\x40\x60\x80\xff").unwrap();
+        assert_eq!(
+            read_expected_raster_dimensions(&pnm, FormatKind::Pnm).unwrap(),
+            (2, 3)
+        );
+        assert!(read_expected_raster_dimensions(&pnm, FormatKind::Png).is_err());
+    }
+
+    #[test]
     fn jpeg_reconstruction_does_not_hide_short_exif_orientation_loss() {
         use crate::ToolBuilder;
 
@@ -1342,7 +1411,11 @@ mod tests {
             source_bytes.extend(u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
             source_bytes.extend(exif);
             source_bytes.extend_from_slice(&jpeg[2..]);
-            let source = root.path().join(format!("ifd-{complete_ifd}.jpg"));
+            let source = root.path().join(if complete_ifd {
+                "complete-ifd"
+            } else {
+                "short-ifd.jpg"
+            });
             let output = source.with_extension("jxl");
             std::fs::write(&source, &source_bytes).unwrap();
             assert_eq!(read_exif_orientation(&source).unwrap(), 6);

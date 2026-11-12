@@ -1909,6 +1909,109 @@ fn run_cjxl_jpeg_full_effort_search(
     .map(|(observation, _)| observation)
 }
 
+/// The result of comparing an existing JPEG-reconstructible JXL to the full effort winner.
+pub enum ExistingJxlCandidate {
+    Keep(String),
+    Replace(tempfile::TempPath),
+}
+
+fn reconstruct_existing_jxl(input: &Path) -> anyhow::Result<tempfile::NamedTempFile> {
+    use anyhow::Context;
+    let jpeg = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "existing_jxl_reconstruction",
+        Some("mfb-jxl-"),
+        Some(".jpg"),
+    )?;
+    foundation::image::jxl_utils::run_exact_jpeg_reconstruction(
+        input, jpeg.path(), "existing JXL exact JPEG reconstruction",
+    )
+        .map_err(anyhow::Error::msg)?;
+    foundation::image::jxl_utils::verify_reconstructed_jpeg_bytes(input, jpeg.path())
+        .map_err(anyhow::Error::msg)
+        .context("verify complete reconstruction independently")?;
+    Ok(jpeg)
+}
+
+fn verify_existing_jxl_candidate(input: &Path, jpeg: &Path, output: &Path) -> anyhow::Result<()> {
+    use foundation::image::{
+        format_detect::FormatKind,
+        orientation::{DiffTolerance, PixelDiffResult, verify_orientation_pixel_diff},
+    };
+    foundation::fast_img::verify_final_jxl_delivery_integrity(jpeg, output)?;
+    foundation::image::jxl_utils::verify_reconstructed_jpeg_bytes(output, jpeg)
+        .map_err(anyhow::Error::msg)?;
+    foundation::image::static_payload::verify_jxl_recompression_boxes(input, output)?;
+    foundation::metadata::verify_output_embedded_metadata(
+        input, output, foundation::metadata::MetadataOutputPolicy::Preserve,
+    )?;
+    anyhow::ensure!(
+        matches!(
+            verify_orientation_pixel_diff(input, output, FormatKind::Jxl, DiffTolerance::Exact)?,
+            PixelDiffResult::Match
+        ),
+        "JXL normalization could not prove identical displayed samples"
+    );
+    Ok(())
+}
+
+/// Recheck the complete JPEG and original JXL semantics before publishing a replacement.
+///
+/// # Errors
+/// Rejects invalid reconstruction, metadata changes, or displayed sample differences.
+pub fn verify_existing_jxl_replacement(input: &Path, output: &Path) -> anyhow::Result<()> {
+    let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
+    let filesystem = foundation::metadata::verify_exact_metadata_copy(input, output)?;
+    anyhow::ensure!(
+        filesystem.passed,
+        "JXL filesystem metadata differs: {}",
+        filesystem.mismatches.join("; ")
+    );
+    let jpeg = reconstruct_existing_jxl(input)?;
+    verify_existing_jxl_candidate(input, jpeg.path(), output)
+}
+
+/// Normalize an existing JXL with the same exact JPEG search used for new JPEG inputs.
+///
+/// # Errors
+/// Retains the source when reconstruction or the full candidate search cannot be proven.
+pub fn prepare_existing_jxl(
+    input: &Path,
+    options: &ConvertOptions,
+) -> anyhow::Result<ExistingJxlCandidate> {
+    use anyhow::Context;
+    use foundation::common_utils::calculate_blake3_hash;
+    let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
+    let source = fs::symlink_metadata(input)?;
+    anyhow::ensure!(source.file_type().is_file(), "existing JXL must be a regular file");
+    let source_hash = calculate_blake3_hash(input)?;
+    let jpeg = reconstruct_existing_jxl(input)?;
+    anyhow::ensure!(is_jpeg_complete(&fs::read(jpeg.path())?), "reconstructed JPEG is incomplete");
+    foundation::image::orientation::read_exif_orientation(jpeg.path())
+        .context("verify reconstructed JPEG orientation before effort search")?;
+    let output = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "existing_jxl_candidate",
+        Some("mfb-jxl-"),
+        Some(".JXL"),
+    )?
+    .into_temp_path();
+    run_cjxl_jpeg_full_effort_search(jpeg.path(), &output, options, jpeg_encode_threads(options))?;
+    verify_existing_jxl_candidate(input, jpeg.path(), &output)?;
+    let candidate_size = fs::metadata(&output)?.len();
+    let keep = candidate_size >= source.len()
+        && foundation::fast_img::verify_final_jxl_delivery_integrity(jpeg.path(), input).is_ok();
+    anyhow::ensure!(
+        calculate_blake3_hash(input)? == source_hash,
+        "existing JXL changed during normalization"
+    );
+    if keep {
+        Ok(ExistingJxlCandidate::Keep(format!(
+            "existing JXL verified; full E1–E11 winner is not smaller ({candidate_size} B)"
+        )))
+    } else {
+        Ok(ExistingJxlCandidate::Replace(output))
+    }
+}
+
 fn run_cjxl_jpeg_encode_attempts(
     input: &Path,
     temp_output: &Path,

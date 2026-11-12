@@ -237,6 +237,39 @@ pub fn isobmff_mdat(path: &Path) -> anyhow::Result<u64> {
 /// # Errors
 /// Returns an error for malformed/truncated JXL streams.
 pub fn jxl(path: &Path) -> anyhow::Result<u64> {
+    inspect_jxl_boxes(path, |_, _, _| Ok(()))
+}
+
+/// Compare the ordered contents of boxes that are independent of the JPEG reconstruction.
+///
+/// # Errors
+/// Rejects malformed containers and any added, removed, or changed ancillary box.
+pub fn verify_jxl_recompression_boxes(source: &Path, candidate: &Path) -> anyhow::Result<()> {
+    let boxes = |path: &Path| {
+        let mut receipts = Vec::new();
+        inspect_jxl_boxes(path, |kind, file, size| {
+            if !matches!(&kind, b"JXL " | b"jxll" | b"jbrd" | b"jxlc" | b"jxlp") {
+                anyhow::ensure!(receipts.len() < 1024, "too many JXL ancillary boxes to normalize");
+                let mut hasher = blake3::Hasher::new();
+                let read = std::io::copy(&mut file.take(size), &mut hasher)?;
+                anyhow::ensure!(read == size, "truncated JXL ancillary box");
+                receipts.push((kind, size, hasher.finalize()));
+            }
+            Ok(())
+        })?;
+        Ok::<_, anyhow::Error>(receipts)
+    };
+    anyhow::ensure!(
+        boxes(source)? == boxes(candidate)?,
+        "JXL normalization would change independent container metadata or auxiliary data"
+    );
+    Ok(())
+}
+
+fn inspect_jxl_boxes(
+    path: &Path,
+    mut inspect: impl FnMut([u8; 4], &mut std::fs::File, u64) -> anyhow::Result<()>,
+) -> anyhow::Result<u64> {
     let total_size = std::fs::metadata(path)?.len();
     let mut file = std::fs::File::open(path)?;
     let mut magic = [0_u8; 2];
@@ -277,6 +310,7 @@ pub fn jxl(path: &Path) -> anyhow::Result<u64> {
             "invalid JXL box size"
         );
         let payload = box_size - header_size;
+        inspect([header[4], header[5], header[6], header[7]], &mut file, payload)?;
         match &header[4..8] {
             b"jxlp" => {
                 anyhow::ensure!(payload >= 4, "short JXL jxlp sequence header");

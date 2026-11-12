@@ -5,13 +5,25 @@
 use super::FastImgLibraryAssetProbe;
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use std::cell::Cell;
 use std::collections::BTreeSet;
-use std::path::{Component, Path};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 pub(super) enum Lookup {
     Probes(Vec<FastImgLibraryAssetProbe>),
     UnsupportedLayout(&'static str),
+}
+
+pub(super) struct Reader {
+    library: PathBuf,
+    database: PathBuf,
+    #[cfg(unix)]
+    identity: (u64, u64),
+    connection: Connection,
+    schema: Cell<Option<(i64, Option<&'static str>)>>,
 }
 
 const ASSET_SQL: &str = "SELECT Z_PK,ZUUID,ZDIRECTORY,ZFILENAME,ZCLOUDASSETGUID,ZMASTER,
@@ -44,48 +56,118 @@ fn normal_relative(path: &Path) -> bool {
         && path.components().all(|part| matches!(part, Component::Normal(_)))
 }
 
-pub(super) fn query(uuids: &[String], library: &Path) -> Result<Lookup> {
+fn validate_uuids(uuids: &[String]) -> Result<()> {
     ensure!(uuids.iter().all(|uuid| !uuid.is_empty()), "Photos custody query contains an empty UUID");
     ensure!(uuids.iter().collect::<BTreeSet<_>>().len() == uuids.len(),
         "Photos custody query contains duplicate UUIDs");
-    let selected = crate::common_utils::validate_photos_library_path(library)?;
-    let database = selected.join("database/Photos.sqlite").canonicalize()?;
-    ensure!(database.starts_with(&selected), "Photos database escaped the selected library");
-    #[cfg(unix)]
-    let before = std::fs::metadata(&database)?;
-    let conn = Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+    Ok(())
+}
+
+pub(super) fn query(uuids: &[String], library: &Path) -> Result<Lookup> {
+    validate_uuids(uuids)?;
+    Reader::open(library)?.query_validated(uuids)
+}
+
+impl Reader {
+    pub(super) fn open(library: &Path) -> Result<Self> {
+        let library = crate::common_utils::validate_photos_library_path(library)?;
+        let database = library.join("database/Photos.sqlite").canonicalize()?;
+        ensure!(database.starts_with(&library), "Photos database escaped the selected library");
+        #[cfg(unix)]
+        let identity = {
+            let metadata = std::fs::metadata(&database)?;
+            (metadata.dev(), metadata.ino())
+        };
+        let connection = Connection::open_with_flags(
+            &database,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
         .context("open selected Photos database read-only")?;
-    conn.busy_timeout(Duration::from_millis(250))?;
-    conn.execute_batch("PRAGMA query_only=ON; PRAGMA trusted_schema=OFF;")?;
-    let tx = conn.unchecked_transaction()?;
-    if !has_table(&tx, "ZASSET")? {
-        ensure!(has_table(&tx, "ZGENERICASSET")? || has_table(&tx, "RKMaster")?,
+        connection.busy_timeout(Duration::from_millis(250))?;
+        connection.execute_batch("PRAGMA query_only=ON; PRAGMA trusted_schema=OFF;")?;
+        let reader = Self {
+            library,
+            database,
+            #[cfg(unix)]
+            identity,
+            connection,
+            schema: Cell::new(None),
+        };
+        reader.verify_database_identity()?;
+        Ok(reader)
+    }
+
+    pub(super) fn query(&self, uuids: &[String]) -> Result<Lookup> {
+        validate_uuids(uuids)?;
+        self.query_validated(uuids)
+    }
+
+    fn verify_database_identity(&self) -> Result<()> {
+        ensure!(self.library.join("database/Photos.sqlite").canonicalize()? == self.database,
+            "Selected Photos database path changed during the custody query");
+        #[cfg(unix)]
+        {
+            let metadata = std::fs::metadata(&self.database)?;
+            ensure!((metadata.dev(), metadata.ino()) == self.identity,
+                "Selected Photos database was replaced during the custody query");
+        }
+        Ok(())
+    }
+
+    fn query_validated(&self, uuids: &[String]) -> Result<Lookup> {
+        self.verify_database_identity()?;
+        // Reuse the connection and SQL, never a transaction snapshot or an asset row.
+        let transaction = self.connection.unchecked_transaction()?;
+        let version = transaction.pragma_query_value(None, "schema_version", |row| row.get(0))?;
+        let unsupported = if let Some((previous, unsupported)) = self.schema.get() {
+            ensure!(previous == version, "Selected Photos database schema changed during custody verification");
+            unsupported
+        } else {
+            unsupported_layout(&transaction)?
+        };
+        let lookup = match unsupported {
+            Some(reason) => Lookup::UnsupportedLayout(reason),
+            None => query_originals(&transaction, &self.library, uuids)?,
+        };
+        transaction.commit()?;
+        self.verify_database_identity()?;
+        self.schema.set(Some((version, unsupported)));
+        Ok(lookup)
+    }
+}
+
+fn unsupported_layout(conn: &Connection) -> Result<Option<&'static str>> {
+    if !has_table(conn, "ZASSET")? {
+        ensure!(has_table(conn, "ZGENERICASSET")? || has_table(conn, "RKMaster")?,
             "unsupported database schema for Photos original-resource lookup");
-        return Ok(Lookup::UnsupportedLayout("older Photos asset schema"));
+        return Ok(Some("older Photos asset schema"));
     }
     for table in ["ZINTERNALRESOURCE", "ZCLOUDMASTER"] {
-        ensure!(has_table(&tx, table)?, "Photos original-resource schema has no such table: {table}");
+        ensure!(has_table(conn, table)?, "Photos original-resource schema has no such table: {table}");
     }
-    require_lookup_index(&tx, "ZASSET", "ZUUID")?;
-    require_lookup_index(&tx, "ZINTERNALRESOURCE", "ZASSET")?;
-    tx.prepare("SELECT Z_PK,ZUUID,ZDIRECTORY,ZFILENAME,ZCLOUDASSETGUID,ZMASTER,ZCLOUDBATCHPUBLISHDATE,ZTRASHEDSTATE FROM ZASSET LIMIT 0")
+    require_lookup_index(conn, "ZASSET", "ZUUID")?;
+    require_lookup_index(conn, "ZINTERNALRESOURCE", "ZASSET")?;
+    conn.prepare("SELECT Z_PK,ZUUID,ZDIRECTORY,ZFILENAME,ZCLOUDASSETGUID,ZMASTER,ZCLOUDBATCHPUBLISHDATE,ZTRASHEDSTATE FROM ZASSET LIMIT 0")
         .context("validate Photos core original identity fields")?;
-    tx.prepare(RESOURCE_SQL).context("validate Photos original-resource fields")?;
-    tx.prepare(CLOUD_SQL).context("validate Photos cloud state fields")?;
-    let layout_fields: i64 = tx.query_row(
+    conn.prepare_cached(RESOURCE_SQL).context("validate Photos original-resource fields")?;
+    conn.prepare_cached(CLOUD_SQL).context("validate Photos cloud state fields")?;
+    let layout_fields: i64 = conn.query_row(
         "SELECT count(*) FROM pragma_table_info('ZASSET') WHERE name IN ('ZSYNDICATIONSTATE','ZMOMENTSHARE')",
         [], |row| row.get(0),
     )?;
-    if layout_fields != 2 {
-        return Ok(Lookup::UnsupportedLayout("older Photos original location discriminators"));
-    }
+    Ok((layout_fields != 2).then_some("older Photos original location discriminators"))
+}
+
+fn query_originals(conn: &Connection, selected: &Path, uuids: &[String]) -> Result<Lookup> {
     let originals = selected.join("originals").canonicalize()
         .context("resolve the selected library originals directory")?;
-    ensure!(originals.starts_with(&selected) && originals.is_dir(),
+    ensure!(originals.starts_with(selected) && originals.is_dir(),
         "Photos originals directory escaped the selected library");
-    let mut assets = tx.prepare(ASSET_SQL).context("validate Photos asset fields")?;
-    let mut resources = tx.prepare(RESOURCE_SQL).context("validate Photos original-resource fields")?;
-    let mut cloud = tx.prepare(CLOUD_SQL).context("validate Photos cloud state fields")?;
+    let mut assets = conn.prepare_cached(ASSET_SQL).context("validate Photos asset fields")?;
+    let mut resources = conn.prepare_cached(RESOURCE_SQL).context("validate Photos original-resource fields")?;
+    let mut cloud = conn.prepare_cached(CLOUD_SQL).context("validate Photos cloud state fields")?;
     let mut probes = Vec::with_capacity(uuids.len());
     for uuid in uuids {
         let mut rows = assets.query([uuid])?;
@@ -138,17 +220,6 @@ pub(super) fn query(uuids: &[String], library: &Path) -> Result<Lookup> {
         };
         probes.push(FastImgLibraryAssetProbe { uuid: actual_uuid, path, iscloudasset, incloud, ismissing: local != 1 || absent });
     }
-    drop((assets, resources, cloud));
-    tx.commit()?;
-    ensure!(selected.join("database/Photos.sqlite").canonicalize()? == database,
-        "Selected Photos database path changed during the custody query");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        let after = std::fs::metadata(&database)?;
-        ensure!((before.dev(), before.ino()) == (after.dev(), after.ino()),
-            "Selected Photos database was replaced during the custody query");
-    }
     Ok(Lookup::Probes(probes))
 }
 
@@ -185,6 +256,71 @@ mod tests {
         assert!(probes[0].iscloudasset && probes[0].incloud == Some(true) && !probes[0].ismissing);
         assert_eq!(std::fs::read(&database)?, before);
         assert_eq!(std::fs::read(&probes[0].path)?, b"exact-original");
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_reader_sees_fresh_rows_and_rejects_schema_changes() -> Result<()> {
+        let (_root, library) = fixture()?;
+        let writer = Connection::open(library.join("database/Photos.sqlite"))?;
+        let mode: String = writer.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        assert_eq!(mode, "wal");
+        let reader = Reader::open(&library)?;
+        let uuids = ["UUID-A".into()];
+        assert!(matches!(reader.query(&uuids)?, Lookup::Probes(probes)
+            if probes[0].incloud == Some(true) && !probes[0].ismissing));
+
+        writer.execute_batch("UPDATE ZCLOUDMASTER SET ZCLOUDLOCALSTATE=2;
+            UPDATE ZINTERNALRESOURCE SET ZLOCALAVAILABILITY=0;")?;
+        assert!(matches!(reader.query(&uuids)?, Lookup::Probes(probes)
+            if probes[0].incloud == Some(false) && probes[0].ismissing));
+        writer.execute("UPDATE ZASSET SET ZSYNDICATIONSTATE=1", [])?;
+        assert!(matches!(reader.query(&uuids)?, Lookup::UnsupportedLayout(_)));
+        writer.execute("UPDATE ZASSET SET ZSYNDICATIONSTATE=0", [])?;
+        assert!(matches!(reader.query(&uuids)?, Lookup::Probes(_)));
+
+        writer.execute("DROP INDEX asset_uuid", [])?;
+        let error = reader.query(&uuids).err().context("changed schema was accepted")?;
+        assert!(error.to_string().contains("schema changed"), "{error}");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_reader_rejects_database_replacement() -> Result<()> {
+        let (_root, library) = fixture()?;
+        let reader = Reader::open(&library)?;
+        let uuids = ["UUID-A".into()];
+        assert!(matches!(reader.query(&uuids)?, Lookup::Probes(_)));
+        let database = library.join("database/Photos.sqlite");
+        let old_database = database.with_extension("old");
+        std::fs::rename(&database, &old_database)?;
+        std::fs::copy(&old_database, &database)?;
+        let error = reader.query(&uuids).err().context("replacement database was accepted")?;
+        assert!(error.to_string().contains("was replaced"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "synthetic lookup timing, run explicitly"]
+    fn synthetic_scoped_photos_lookup_timing() -> Result<()> {
+        const LOOKUPS: usize = 1_000;
+        let (_root, library) = fixture()?;
+        let uuids = ["UUID-A".into()];
+        let started = std::time::Instant::now();
+        for _ in 0..LOOKUPS {
+            assert!(matches!(query(&uuids, &library)?, Lookup::Probes(_)));
+        }
+        let one_shot = started.elapsed();
+        let started = std::time::Instant::now();
+        let reader = Reader::open(&library)?;
+        for _ in 0..LOOKUPS {
+            assert!(matches!(reader.query(&uuids)?, Lookup::Probes(_)));
+        }
+        eprintln!(
+            "{LOOKUPS} fresh Photos lookups: one-shot {one_shot:?}, scoped {:?}",
+            started.elapsed()
+        );
         Ok(())
     }
 

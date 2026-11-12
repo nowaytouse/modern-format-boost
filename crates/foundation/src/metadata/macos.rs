@@ -13,14 +13,61 @@ use std::path::Path;
 // copyfile.h constants
 const COPYFILE_ACL: u32 = 1 << 0; // 0x1
 const COPYFILE_STAT: u32 = 1 << 1; // 0x2
-const COPYFILE_XATTR: u32 = 1 << 2; // 0x4
-const COPYFILE_RECURSIVE: u32 = 1 << 15; // 0x8000
+const QUARANTINE: &str = "com.apple.quarantine";
 
-// COPYFILE_METADATA = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR
-const COPYFILE_FLAGS: u32 = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR | COPYFILE_RECURSIVE;
+pub(super) fn copy_native_acl_and_stat(src: &Path, dst: &Path) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use xattr::FileExt;
 
-pub(super) fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
-    copy_native_metadata_flags(src, dst, COPYFILE_FLAGS)
+    let source = std::fs::File::open(src)?;
+    let destination = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(dst)?;
+    let before = destination.get_xattr(QUARANTINE)?;
+    let source_marked = source.get_xattr(QUARANTINE)?.is_some();
+    let metadata = destination.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "metadata destination must be a standalone file",
+        ));
+    }
+    // SAFETY: Both owned descriptors are valid for the call. No data or general xattrs are copied.
+    let status = unsafe {
+        libc::fcopyfile(
+            source.as_raw_fd(),
+            destination.as_raw_fd(),
+            std::ptr::null_mut(),
+            COPYFILE_STAT | COPYFILE_ACL,
+        )
+    };
+    let result = if status == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    };
+    // Darwin can apply quarantine separately from COPYFILE_XATTR.
+    let after = destination.get_xattr(QUARANTINE)?;
+    if after != before {
+        if !source_marked {
+            return Err(io::Error::other(
+                "destination quarantine changed during native metadata copy",
+            ));
+        }
+        if let Some(mark) = &before {
+            destination.set_xattr(QUARANTINE, mark)?;
+        } else {
+            destination.remove_xattr(QUARANTINE)?;
+        }
+        if destination.get_xattr(QUARANTINE)? != before {
+            return Err(io::Error::other(
+                "could not preserve the destination quarantine state",
+            ));
+        }
+    }
+    result
 }
 
 pub(super) fn copy_directory_acl(src: &Path, dst: &Path) -> io::Result<()> {

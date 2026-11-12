@@ -553,6 +553,7 @@ where
             library,
             &mut |entries, update| match update {
                 PhotosImportCheckpointUpdate::SubmissionIntent(request) => {
+                    super::prepare_generated_photos_import_entries(marker, entries)?;
                     super::submission_checkpoint::record_native(
                         marker,
                         entries,
@@ -577,6 +578,21 @@ where
         profile.report(result.is_ok());
     }
     result.map_err(|error| native_import_error(error, "PhotoKit import"))
+}
+
+fn require_checkpointed_journal_identity(
+    imported: &BTreeMap<String, super::LibraryAssetRecord>,
+    entry_id: &str,
+    identifier: &str,
+) -> anyhow::Result<()> {
+    let uuid = osxphotos_uuid_from_photos_import_identifier(identifier)?;
+    anyhow::ensure!(
+        imported
+            .get(entry_id)
+            .is_some_and(|asset| asset.photos_uuid.as_deref() == Some(uuid)),
+        "old intent does not belong to a current pending or checkpointed asset"
+    );
+    Ok(())
 }
 
 fn try_import_inner<Q, P, C>(
@@ -673,7 +689,14 @@ where
         .iter()
         .map(|entry| (entry.rel_path.clone(), entry.clone()))
         .collect::<BTreeMap<_, _>>();
-    let mut imported = plan.proven_assets.clone();
+    let mut imported = BTreeMap::new();
+    for asset in &plan.proven_assets {
+        anyhow::ensure!(
+            !pending.contains_key(&asset.rel_path)
+                && imported.insert(asset.rel_path.clone(), asset.clone()).is_none(),
+            "duplicate checkpointed asset path during Photos reconciliation"
+        );
+    }
     progress.phase(PhotosImportPhase::Reconciling)?;
     // Reconcile ALL old intents before submitting anything new, including when
     // the batch size changed between runs. Filename/content dedup is never used.
@@ -709,17 +732,12 @@ where
                 recovered_entries.push(entry.clone());
                 recovered_pairs.push((entry_id, identifier));
             } else {
-                let uuid = osxphotos_uuid_from_photos_import_identifier(&identifier)?;
-                anyhow::ensure!(
-                    imported.iter().any(|asset| asset.rel_path == entry_id
-                        && asset.photos_uuid.as_deref() == Some(uuid)),
-                    "old intent does not belong to a current pending or checkpointed asset"
-                );
+                require_checkpointed_journal_identity(&imported, &entry_id, &identifier)?;
             }
         }
         if !recovered_entries.is_empty() {
             let _transaction = crate::batch_control::begin_transaction()?;
-            let mut proofs = library_records_from_pending_import(
+            let proofs = library_records_from_pending_import(
                 &recovered_entries,
                 &recovered_pairs,
                 query,
@@ -729,16 +747,18 @@ where
             for entry in recovered_entries {
                 pending.remove(&entry.rel_path);
             }
-            imported.append(&mut proofs);
+            for asset in proofs {
+                imported.insert(asset.rel_path.clone(), asset);
+            }
         }
     }
+    let mut imported = imported.into_values().collect::<Vec<_>>();
     let pending = pending.into_values().collect::<Vec<_>>();
     if pending.is_empty() {
         anyhow::ensure!(
             imported.len() == task.expected,
             "native verified asset count mismatch"
         );
-        imported.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
         progress.complete()?;
         return Ok(Some(LibraryHandle {
             imported_assets: imported,
@@ -1281,6 +1301,27 @@ mod tests {
         assert_eq!(plan.proven_assets[0].blake3, hash);
         marker.tier2_imported_assets[0].library_blake3 = Some("changed".into());
         assert!(super::super::original_photos_checkpoint_plan(&marker, &[candidate]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn checkpointed_journal_matches_both_relative_path_and_uuid() -> anyhow::Result<()> {
+        let entry_id = "album/fixture.jxl";
+        let imported = BTreeMap::from([(
+            entry_id.to_owned(),
+            super::super::LibraryAssetRecord {
+                rel_path: entry_id.to_owned(),
+                photos_uuid: Some("synthetic-uuid".into()),
+                ..Default::default()
+            },
+        )]);
+        require_checkpointed_journal_identity(&imported, entry_id, "synthetic-uuid/L0/001")?;
+        assert!(require_checkpointed_journal_identity(
+            &imported, "other/fixture.jxl", "synthetic-uuid/L0/001",
+        ).is_err());
+        assert!(require_checkpointed_journal_identity(
+            &imported, entry_id, "another-uuid/L0/001",
+        ).is_err());
         Ok(())
     }
 

@@ -192,11 +192,11 @@ impl AvifMetadataPolicy {
         }
     }
 
-    /// Version of the existing cleanup contract required by reusable AVIF outputs.
+    /// Version of the Meme Mode output contract required by reusable AVIF outputs.
     #[must_use]
     pub const fn version(self) -> u32 {
         match self {
-            Self::Clear => 3,
+            Self::Clear => 4,
         }
     }
 }
@@ -1240,7 +1240,7 @@ mod tests {
             defaults.img.avif_metadata_policy.output_policy(),
             crate::metadata::MetadataOutputPolicy::Clear
         );
-        assert_eq!(defaults.img.avif_metadata_policy.version(), 3);
+        assert_eq!(defaults.img.avif_metadata_policy.version(), 4);
         defaults.validate()?;
         let empty_config: RuntimeConfig = serde_json::from_value(json!({}))?;
         assert_eq!(empty_config.img.avif_quality, 100);

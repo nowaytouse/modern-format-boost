@@ -5,9 +5,10 @@
 )]
 use foundation::ModernLossyStaticCandidate;
 use foundation::common_utils::calculate_blake3_hash;
+use foundation::fast_img::PhotosQuarantineLocations;
 use foundation::pipeline::verification::{
-    FastImgStageName, WorkingCopyMarker, gate1_complete_or_later, gate3_complete_or_later,
-    write_marker_atomic,
+    FastImgStageName, GateResult, WorkingCopyMarker, gate1_complete_or_later,
+    gate3_complete_or_later, write_marker_atomic,
 };
 use foundation::unified_error::PhotosDeliveryDeferred;
 use std::collections::BTreeSet;
@@ -49,12 +50,47 @@ impl std::fmt::Display for FileFailures {
 }
 impl std::error::Error for FileFailures {}
 
+#[derive(Debug)]
+pub(super) struct PhotosQuarantineBlocked {
+    pub locations: PhotosQuarantineLocations,
+    pub detail: String,
+}
+
+impl std::fmt::Display for PhotosQuarantineBlocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for PhotosQuarantineBlocked {}
+
+pub(super) fn final_quarantine_count(result: &GateResult) -> Option<usize> {
+    let required = [
+        "count",
+        "blake3_sample",
+        "no_error",
+        "count_x3",
+        "sync",
+        "quarantine",
+        "chain",
+    ];
+    if result.passed || !result.checks.iter().map(|check| check.name).eq(required) {
+        return None;
+    }
+    let mut failed = result.checks.iter().filter(|check| !check.passed);
+    let quarantine = failed.next()?;
+    let count = quarantine.affected_files.len();
+    (quarantine.name == "quarantine" && count > 0 && failed.next().is_none()).then_some(count)
+}
+
 #[derive(Debug, serde::Serialize)]
 struct Report {
     schema_version: u8,
     source_directory: std::path::PathBuf,
     output_directory: std::path::PathBuf,
     photos_delivery_deferred: bool,
+    photos_quarantine_blocked: Option<usize>,
+    photos_quarantine_locations: Option<PhotosQuarantineLocations>,
     primary_verification_complete: bool,
     succeeded: usize,
     skipped: usize,
@@ -69,7 +105,32 @@ struct Report {
     failed_source_verification_error: Option<String>,
     retention_unknown_reason: Option<String>,
     primary_cleanup_complete: bool,
+    retained_only_complete: bool,
     finalization_error: Option<String>,
+}
+
+fn verify_retained_source(root: &std::path::Path, rel: &str, hash: &str) -> anyhow::Result<()> {
+    let mut path = root.to_path_buf();
+    anyhow::ensure!(
+        std::fs::symlink_metadata(&path)?.is_dir(),
+        "retained source root is not a real directory"
+    );
+    for component in std::path::Path::new(rel).components() {
+        path.push(component);
+        anyhow::ensure!(
+            !std::fs::symlink_metadata(&path)?.file_type().is_symlink(),
+            "retained source path contains a symlink: {rel}"
+        );
+    }
+    anyhow::ensure!(
+        std::fs::symlink_metadata(&path)?.is_file(),
+        "retained source is not a regular file: {rel}"
+    );
+    anyhow::ensure!(
+        calculate_blake3_hash(&path)? == hash,
+        "retained source no longer matches its recorded content hash: {rel}"
+    );
+    Ok(())
 }
 
 impl Report {
@@ -169,7 +230,7 @@ impl Report {
             }
             _ => None,
         };
-        let (source_retained, retention_unknown_reason) = match retention {
+        let (mut source_retained, mut retention_unknown_reason) = match retention {
             Err(error) => (
                 None,
                 Some(format!("source existence inspection failed: {error}")),
@@ -187,25 +248,7 @@ impl Report {
                 "failed sources are not all bound to recorded source hashes"
             );
             for (rel, entry) in &marker.failed_sources {
-                let mut path = marker.src_dir.clone();
-                let root = std::fs::symlink_metadata(&path)?;
-                anyhow::ensure!(root.is_dir(), "failed source root is not a real directory");
-                for component in std::path::Path::new(rel).components() {
-                    path.push(component);
-                    let metadata = std::fs::symlink_metadata(&path)?;
-                    anyhow::ensure!(
-                        !metadata.file_type().is_symlink(),
-                        "failed source path contains a symlink: {rel}"
-                    );
-                }
-                anyhow::ensure!(
-                    std::fs::symlink_metadata(&path)?.is_file(),
-                    "failed source is not a regular file: {rel}"
-                );
-                anyhow::ensure!(
-                    calculate_blake3_hash(&path)? == entry.src,
-                    "failed source no longer matches its recorded content hash: {rel}"
-                );
+                verify_retained_source(&marker.src_dir, rel, &entry.src)?;
             }
             Ok(marker.failed_sources.len())
         })();
@@ -214,11 +257,38 @@ impl Report {
             Ok(count) => (Some(count), None),
             Err(error) => (None, Some(format!("{error:#}"))),
         };
+        let retained_only_complete =
+            recorded_failures.is_some_and(|failures| {
+                failures.total == failed
+                    && failed > 0
+                    && succeeded == 0
+                    && unprocessed == 0
+                    && marker.blake3_log.is_empty()
+                    && photos_verified == 0
+                    && !marker.tier2_in_progress
+                    && matches!(
+                        marker.stage,
+                        FastImgStageName::TranscodeComplete | FastImgStageName::Gate1Failed
+                    )
+                    && failed_sources_verified == Some(failed)
+                    && source_retained == Some(dispositions)
+            }) && match marker.skipped_sources.iter().try_for_each(|(rel, entry)| {
+                verify_retained_source(&marker.src_dir, rel, &entry.src)
+            }) {
+                Ok(()) => true,
+                Err(error) => {
+                    source_retained = None;
+                    retention_unknown_reason = Some(format!("{error:#}"));
+                    false
+                }
+            };
         Ok(Self {
             schema_version: 1,
             source_directory: std::path::absolute(&marker.src_dir)?,
             output_directory: std::path::absolute(&marker.working_copy)?,
             photos_delivery_deferred: false,
+            photos_quarantine_blocked: None,
+            photos_quarantine_locations: None,
             primary_verification_complete: gate1_complete_or_later(&marker.stage),
             succeeded,
             skipped,
@@ -233,6 +303,7 @@ impl Report {
             failed_source_verification_error,
             retention_unknown_reason,
             primary_cleanup_complete: marker.stage == FastImgStageName::CleanupComplete,
+            retained_only_complete,
             finalization_error: None,
         })
     }
@@ -247,6 +318,29 @@ impl Report {
                     .chain()
                     .any(<dyn std::error::Error>::is::<PhotosDeliveryDeferred>)
             });
+        self.photos_quarantine_locations = execution
+            .as_ref()
+            .err()
+            .filter(|error| error.chain().count() == 1)
+            .and_then(|error| error.downcast_ref::<PhotosQuarantineBlocked>())
+            .map(|error| error.locations)
+            .filter(|locations| {
+                photos
+                    && self.succeeded == 0
+                    && self.failed == 0
+                    && locations.affected > 0
+                    && locations.affected <= self.unprocessed
+                    && self.encoded == self.unprocessed
+                    && self.photos_verified == self.unprocessed
+                    && !self.primary_cleanup_complete
+                    && self.source_retained.is_some()
+                    && self.skipped.checked_add(self.unprocessed) == self.source_retained
+            });
+        self.photos_quarantine_blocked = self
+            .photos_quarantine_locations
+            .map(|locations| locations.affected);
+        // A typed final Gate 2 result includes a fresh local recheck even after the checkpoint rolls back.
+        self.primary_verification_complete |= self.photos_quarantine_blocked.is_some();
         self.finalization_error = execution.as_ref().err().and_then(|error| {
             let isolated_file_failures =
                 error
@@ -255,12 +349,13 @@ impl Report {
                         error.chain().count() == 1
                             && failures.total == self.failed
                             && self.unprocessed == 0
-                            && self.primary_cleanup_complete
+                            && (self.primary_cleanup_complete || self.retained_only_complete)
                             && self.failed_sources_verified == Some(self.failed)
                             && (!photos || self.photos_verified == self.succeeded)
                     });
             (!isolated_file_failures).then(|| format!("{error:#}"))
         });
+        self.retained_only_complete &= self.finalization_error.is_none() && execution.is_err();
     }
 }
 
@@ -550,6 +645,137 @@ mod tests {
         report.primary_cleanup_complete = false;
         report.record_execution(&Err(FileFailures::primary(1).into()), false);
         assert!(report.finalization_error.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn final_quarantine_requires_every_other_gate_check_to_pass() {
+        use foundation::pipeline::verification::{CheckDetail, CheckFailureScope};
+
+        let mut gate = GateResult {
+            passed: false,
+            checks: [
+                "count",
+                "blake3_sample",
+                "no_error",
+                "count_x3",
+                "sync",
+                "quarantine",
+                "chain",
+            ]
+            .into_iter()
+            .map(|name| CheckDetail {
+                name,
+                passed: name != "quarantine",
+                expected: String::new(),
+                actual: String::new(),
+                affected_files: if name == "quarantine" {
+                    vec!["output.jxl".into()]
+                } else {
+                    vec![]
+                },
+                failure_scope: CheckFailureScope::Shared,
+            })
+            .collect(),
+        };
+        assert_eq!(final_quarantine_count(&gate), Some(1));
+        gate.checks[6].passed = false;
+        assert_eq!(final_quarantine_count(&gate), None);
+        gate.checks.pop();
+        assert_eq!(final_quarantine_count(&gate), None);
+    }
+
+    #[test]
+    fn final_quarantine_receipt_never_reports_delivery_or_cleanup() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut marker = partial_marker(root.path(), 0);
+        marker.failed_sources.clear();
+        marker.src_jpeg_count = 0;
+        marker.stage = FastImgStageName::Gate3Failed;
+        let mut report = Report::from_marker(&marker, true, &[], 0, None)?;
+        report.encoded = 4;
+        report.photos_verified = 4;
+        report.unprocessed = 4;
+        report.skipped = 4;
+        report.source_retained = Some(8);
+        let locations = PhotosQuarantineLocations {
+            working_copies: 0,
+            photos_originals: 4,
+            affected: 4,
+        };
+        let blocked = || PhotosQuarantineBlocked {
+            locations,
+            detail: "synthetic quarantine".into(),
+        };
+        report.record_execution(&Err(blocked().into()), true);
+        assert_eq!(report.photos_quarantine_blocked, Some(4));
+        assert_eq!(report.photos_quarantine_locations, Some(locations));
+        assert!(report.primary_verification_complete);
+        assert!(!report.primary_cleanup_complete);
+        assert_eq!(report.succeeded, 0);
+        assert_eq!(report.unprocessed, 4);
+        assert!(report.finalization_error.is_some());
+        report.record_execution(
+            &Err(anyhow::Error::new(blocked()).context("checkpoint write failed")),
+            true,
+        );
+        assert_eq!(report.photos_quarantine_blocked, None);
+        assert_eq!(report.photos_quarantine_locations, None);
+        Ok(())
+    }
+
+    #[test]
+    fn retained_only_completion_requires_fresh_hashes_for_failures_and_skips() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let mut marker = partial_marker(root.path(), 0);
+        marker.stage = FastImgStageName::TranscodeComplete;
+        marker.src_jpeg_count += 1;
+        std::fs::create_dir(&marker.src_dir)?;
+        let failed = marker.src_dir.join("invalid.jpg");
+        let skipped = marker.src_dir.join("existing.jxl");
+        std::fs::write(&failed, b"synthetic failed source")?;
+        std::fs::write(&skipped, b"synthetic retained source")?;
+        marker
+            .failed_sources
+            .get_mut("invalid.jpg")
+            .context("failed entry")?
+            .src = calculate_blake3_hash(&failed)?;
+        marker.skipped_sources.insert(
+            "existing.jxl".into(),
+            SkippedSourceEntry {
+                src: calculate_blake3_hash(&skipped)?,
+                reason: "existing JXL verified".into(),
+            },
+        );
+        let build_report = |execution: anyhow::Result<()>| -> anyhow::Result<Report> {
+            let mut report = Report::from_marker(
+                &marker,
+                true,
+                &[],
+                0,
+                execution
+                    .as_ref()
+                    .err()
+                    .and_then(|error| error.downcast_ref::<FileFailures>()),
+            )?;
+            report.record_execution(&execution, true);
+            Ok(report)
+        };
+        let report = build_report(Err(FileFailures::primary(1).into()))?;
+        assert!(report.retained_only_complete);
+        assert!(!report.primary_cleanup_complete);
+        assert!(!report.primary_verification_complete);
+        assert_eq!(report.source_retained, Some(2));
+        assert_eq!(report.finalization_error, None);
+        let wrapped = anyhow::Error::new(FileFailures::primary(1)).context("marker write failed");
+        assert!(!build_report(Err(wrapped))?.retained_only_complete);
+        std::fs::write(&skipped, b"modified retained source")?;
+        let modified = build_report(Err(FileFailures::primary(1).into()))?;
+        assert!(!modified.retained_only_complete);
+        assert_eq!(modified.source_retained, None);
+        assert!(modified.retention_unknown_reason.is_some());
+        assert!(modified.finalization_error.is_some());
         Ok(())
     }
 
