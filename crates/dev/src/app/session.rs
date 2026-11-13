@@ -78,9 +78,16 @@ impl FastImgRetryRequest {
             self.before
                 .as_ref()
                 .map_or(serde_json::Value::Null, |before| {
-                    serde_json::json!({"snapshot_blake3":before.snapshot_blake3(),
-                "revision":before.revision(),"manifest_blake3":before.manifest_blake3(),
-                "task_key":before.task_key()})
+                    let mut snapshot = serde_json::json!({
+                        "snapshot_blake3": before.snapshot_blake3(),
+                        "revision": before.revision(),
+                        "manifest_blake3": before.manifest_blake3(),
+                        "task_key": before.task_key(),
+                    });
+                    if let Some(digest) = before.primary_cleanup_blake3() {
+                        snapshot["primary_cleanup_blake3"] = serde_json::json!(digest);
+                    }
+                    snapshot
                 });
         value
     }
@@ -475,6 +482,8 @@ impl AppSession {
                     && evidence.request_key == before.request_key()
                     && evidence.manifest_blake3 == before.manifest_blake3()
                     && evidence.verified_snapshot_blake3 == before.snapshot_blake3()
+                    && evidence.verified_primary_cleanup_blake3.as_deref()
+                        == before.primary_cleanup_blake3()
                     && evidence.verified_revision == before.revision()
                     && evidence.verified_stage == before.marker().stage
                     && evidence.verified_tier2_in_progress == before.marker().tier2_in_progress

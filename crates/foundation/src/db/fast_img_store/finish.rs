@@ -3,9 +3,9 @@
 
 use super::{
     FailedRetryContext, FailedRetryDeliveryIntent, FailedRetryFinishEvidence,
-    FailedRetrySourceRootObservation, as_io, current_family, in_snapshot, key_for_canonical,
-    matching_markers_in_snapshot, open_readonly, open_store_connection, read_snapshot,
-    read_snapshot_base, retry, snapshot_digest, text, validate_locator,
+    FailedRetrySourceRootObservation, as_io, cleanup, current_family, in_snapshot,
+    key_for_canonical, matching_markers_in_snapshot, open_readonly, open_store_connection,
+    read_snapshot, read_snapshot_base, retry, snapshot_digest, text, validate_locator,
     write_snapshot_at_with_finish,
 };
 use crate::image::fast_img::VerifiedFailedRetryFinish;
@@ -25,6 +25,7 @@ pub struct FailedRetryFinishSnapshot {
     revision: i64,
     request: String,
     manifest: String,
+    primary_cleanup: Option<(String, bool)>,
 }
 
 impl FailedRetryFinishSnapshot {
@@ -55,6 +56,12 @@ impl FailedRetryFinishSnapshot {
     #[must_use]
     pub fn manifest_blake3(&self) -> &str {
         &self.manifest
+    }
+    #[must_use]
+    pub fn primary_cleanup_blake3(&self) -> Option<&str> {
+        self.primary_cleanup
+            .as_ref()
+            .map(|(digest, _)| digest.as_str())
     }
 }
 
@@ -234,6 +241,13 @@ impl FailedRetryFinishSnapshot {
     /// Check this immutable snapshot's Gate boundary and exact successful admission set.
     pub(crate) fn validate_eligibility(&self) -> Result<()> {
         require_eligible(self.marker(), self.context().requested_delivery())?;
+        ensure!(
+            matches!(
+                (self.marker().primary_cleanup_journal, &self.primary_cleanup),
+                (false, None) | (true, Some((_, true)))
+            ),
+            "Finish-only snapshot is missing required primary cleanup intent"
+        );
         require_admission_coverage(self.marker(), self.context())
     }
 }
@@ -241,7 +255,8 @@ impl FailedRetryFinishSnapshot {
 /// Inspect a prospective finish boundary without accessing media paths or changing storage.
 ///
 /// # Errors
-/// Rejects damaged state and broken lineage. Media verification determines finish eligibility.
+/// Rejects damaged state or broken lineage. Finish-only verification requires
+/// complete cleanup intent and checks current custody.
 pub fn inspect_failed_retry_finish(
     child_wc: &Path,
 ) -> io::Result<Option<FailedRetryFinishSnapshot>> {
@@ -277,6 +292,7 @@ pub fn inspect_failed_retry_finish(
                 revision >= 0 && digest.as_bytes().as_slice() == bytes,
                 "Finish-only snapshot changed within its read transaction"
             );
+            let primary_cleanup = cleanup::finish_digest(conn, &key, &marker)?;
             Ok(Some(FailedRetryFinishSnapshot {
                 manifest: marker
                     .failed_retry_manifest_blake3
@@ -288,6 +304,7 @@ pub fn inspect_failed_retry_finish(
                 snapshot: digest.to_hex().to_string(),
                 revision,
                 request,
+                primary_cleanup,
             }))
         })
     })()
@@ -328,6 +345,8 @@ pub(super) fn validate_write(
             && evidence.request_key == expected.request_key()
             && evidence.manifest_blake3 == expected.manifest_blake3()
             && evidence.verified_snapshot_blake3 == expected.snapshot_blake3()
+            && evidence.verified_primary_cleanup_blake3.as_deref()
+                == expected.primary_cleanup_blake3()
             && evidence.verified_revision == expected.revision()
             && evidence.verified_stage == old.stage
             && evidence.verified_tier2_in_progress == old.tier2_in_progress
@@ -366,6 +385,11 @@ pub fn finalize_failed_retry_finish(
         next.failed_retry_finish_evidence = Some(evidence.clone());
         let mut conn = open_store_connection()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure!(
+            cleanup::finish_digest(&tx, expected.task_key(), expected.marker())?
+                == expected.primary_cleanup,
+            "MFB_FINISH_STATE_CHANGED: primary cleanup journal changed after verification; no finalization committed"
+        );
         write_snapshot_at_with_finish(
             &tx,
             &next,
@@ -423,6 +447,16 @@ pub(super) fn validate_persisted(
     prior.failed_retry_finish_evidence = None;
     require_eligible(&prior, &delivery)?;
     require_counts(&prior, evidence)?;
+    ensure!(
+        cleanup::finish_digest(conn, key, &prior)?
+            .as_ref()
+            .map(|(digest, complete)| (digest.as_str(), *complete))
+            == evidence
+                .verified_primary_cleanup_blake3
+                .as_deref()
+                .map(|digest| (digest, true)),
+        "Saved finish-only observation no longer binds its primary cleanup journal"
+    );
     ensure!(
         snapshot_digest(text(&prior.working_copy)?, text(&prior.src_dir)?, &prior)?
             .to_hex()

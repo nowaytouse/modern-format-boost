@@ -171,12 +171,29 @@ pub fn verify_failed_retry_retained_companions(
 ) -> Result<()> {
     let root = &marker.src_dir;
     let source = root.join(relative(&admission.source_rel)?);
+    let missing_parent = if marker.primary_cleanup_journal {
+        crate::pipeline::verification::validate_no_symlink_components(
+            root,
+            relative(&admission.source_rel)?,
+        ).map_err(anyhow::Error::msg)?;
+        let parent = source.parent().context("Admitted source has no parent")?;
+        match std::fs::symlink_metadata(parent) {
+            Ok(metadata) => {
+                ensure!(metadata.is_dir(), "Failed-only companion parent is not a directory");
+                false
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(error) => return Err(error).context("Inspect failed-only companion parent"),
+        }
+    } else {
+        false
+    };
     verify_companion(
         root,
         &admission.aae,
-        crate::metadata::find_aae_sidecar(&source)?,
+        if missing_parent { None } else { crate::metadata::find_aae_sidecar(&source)? },
     )?;
-    let current = crate::metadata::find_xmp_sidecar(&source)?;
+    let current = if missing_parent { None } else { crate::metadata::find_xmp_sidecar(&source)? };
     if let (FailedRetrySidecar::Present { blake3, .. }, None) = (&admission.xmp, &current) {
         let entry = marker
             .blake3_log

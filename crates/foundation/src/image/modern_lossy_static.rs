@@ -204,12 +204,12 @@ pub fn scan_modern_lossy_static_candidates(
         progress.set((index + 1) as u64);
         match result {
             Ok(Some(candidate)) => {
-                let rel = crate::media_conversion_gate::strip_prefix_or_self(
+                let rel_path = crate::pipeline::verification::fast_img_relative_key(
                     path,
                     src_root,
-                    "modern_lossy_static_rel",
-                );
-                let rel_path = rel.to_string_lossy().to_string();
+                    "Tier-2 source",
+                )
+                .map_err(ImgQualityError::AnalysisError)?;
                 if !relative_paths.insert(rel_path.clone()) {
                     return Err(ImgQualityError::AnalysisError(format!(
                         "modern lossy static scan produced duplicate relative path {rel_path}"

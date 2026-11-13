@@ -282,9 +282,11 @@ struct FastImgRetryReference: Decodable, Equatable {
         let revision: Int64
         let manifestBlake3: String
         let taskKey: String
+        let primaryCleanupBlake3: String?
 
         var valid: Bool {
             revision >= 0 && [snapshotBlake3, manifestBlake3, taskKey].allSatisfy(FastImgFailedRetryAvailable.hash)
+                && (primaryCleanupBlake3.map(FastImgFailedRetryAvailable.hash) ?? true)
         }
     }
     struct FinishEvidence: Decodable, Equatable {
@@ -293,6 +295,7 @@ struct FastImgRetryReference: Decodable, Equatable {
         let requestKey: String
         let manifestBlake3: String
         let verifiedSnapshotBlake3: String
+        let verifiedPrimaryCleanupBlake3: String?
         let verifiedRevision: Int64
         let verifiedStage: String
         let verifiedTier2InProgress: Bool
@@ -307,6 +310,7 @@ struct FastImgRetryReference: Decodable, Equatable {
             guard let before = reference.childSnapshotBefore, before.valid,
                   schema == 1, taskKey == before.taskKey, requestKey == reference.requestKey,
                   manifestBlake3 == before.manifestBlake3, verifiedSnapshotBlake3 == before.snapshotBlake3,
+                  verifiedPrimaryCleanupBlake3 == before.primaryCleanupBlake3,
                   verifiedRevision == before.revision, sourceRootObservation == "not_found",
                   ["gate1_passed", "gate3_passed", "cleanup_complete"].contains(verifiedStage),
                   verifiedStage != "cleanup_complete" || verifiedTier2InProgress,
@@ -382,7 +386,12 @@ struct FastImgRetryReference: Decodable, Equatable {
                 || (kind == "photos" && Set(delivery.keys) == ["kind", "library_path", "naming_policy"])
         else { throw HostError(message: localized("retry.invalid")) }
         if let snapshot = object["child_snapshot_before"] as? [String: Any] {
-            guard Set(snapshot.keys) == ["snapshot_blake3", "revision", "manifest_blake3", "task_key"]
+            var keys = Set(snapshot.keys)
+            if keys.remove("primary_cleanup_blake3") != nil {
+                guard let digest = snapshot["primary_cleanup_blake3"] as? String, FastImgFailedRetryAvailable.hash(digest)
+                else { throw HostError(message: localized("retry.invalid")) }
+            }
+            guard keys == ["snapshot_blake3", "revision", "manifest_blake3", "task_key"]
             else { throw HostError(message: localized("retry.invalid")) }
         }
         if finalized {
@@ -390,7 +399,14 @@ struct FastImgRetryReference: Decodable, Equatable {
                 "verified_snapshot_blake3", "verified_revision", "verified_stage", "verified_tier2_in_progress",
                 "verified_error", "source_root_observation", "verified_output_count", "verified_primary_photos_count",
                 "verified_original_photos_count", "observed_at"]
-            guard let evidence = object["evidence"] as? [String: Any], Set(evidence.keys) == evidenceFields
+            guard let evidence = object["evidence"] as? [String: Any]
+            else { throw HostError(message: localized("retry.invalid")) }
+            var keys = Set(evidence.keys)
+            if keys.remove("verified_primary_cleanup_blake3") != nil {
+                guard let digest = evidence["verified_primary_cleanup_blake3"] as? String, FastImgFailedRetryAvailable.hash(digest)
+                else { throw HostError(message: localized("retry.invalid")) }
+            }
+            guard keys == evidenceFields
             else { throw HostError(message: localized("retry.invalid")) }
         }
         let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase

@@ -3955,7 +3955,6 @@ impl PhotosSubmissionIntent {
             ("Photos submission output", self.output_rel.as_str()),
         ] {
             validate_marker_relative_path(kind, rel)?;
-            validate_submission_path_normalized(kind, Path::new(rel))?;
         }
         validate_submission_blake3("source", &self.source_blake3)?;
         validate_submission_blake3("output", &self.output_blake3)?;
@@ -4074,6 +4073,8 @@ pub struct FailedRetryFinishEvidence {
     pub request_key: String,
     pub manifest_blake3: String,
     pub verified_snapshot_blake3: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_primary_cleanup_blake3: Option<String>,
     pub verified_revision: i64,
     pub verified_stage: FastImgStageName,
     pub verified_tier2_in_progress: bool,
@@ -4098,6 +4099,9 @@ impl FailedRetryFinishEvidence {
         ] {
             validate_submission_blake3(name, hash)?;
         }
+        if let Some(hash) = &self.verified_primary_cleanup_blake3 {
+            validate_submission_blake3("finish primary cleanup", hash)?;
+        }
         chrono::DateTime::parse_from_rfc3339(&self.observed_at).map_err(|error| {
             format!("Invalid failed-only finalization observation time: {error}")
         })?;
@@ -4121,6 +4125,9 @@ pub struct WorkingCopyMarker {
     pub gate3_checks: Gate3Checks,
     #[serde(deserialize_with = "deserialize_unique_marker_map")]
     pub blake3_log: Blake3Log,
+    /// Present once this task has committed to durable primary unlink evidence.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub primary_cleanup_journal: bool,
     #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
     pub skipped_sources: SkippedSourceLog,
     #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
@@ -4209,18 +4216,39 @@ fn default_strategy() -> String {
     "jxl".to_string()
 }
 
-pub(super) fn validate_marker_relative_path(kind: &str, rel: &str) -> Result<(), String> {
+pub(crate) fn validate_marker_relative_path(kind: &str, rel: &str) -> Result<(), String> {
     let path = Path::new(rel);
     if rel.is_empty()
+        || rel.contains('\0')
         || path
             .components()
             .any(|component| !matches!(component, Component::Normal(_)))
+        || path.components().collect::<PathBuf>().as_os_str() != path.as_os_str()
     {
         return Err(format!(
             "fast-img marker {kind} must be a non-empty normalized relative path: {rel:?}"
         ));
     }
     Ok(())
+}
+
+/// Derive an exact Fast IMG state key from a file path inside its inventory root.
+///
+/// # Errors
+/// Rejects paths outside the root and keys that cannot be represented exactly in state.
+pub fn fast_img_relative_key(path: &Path, root: &Path, kind: &str) -> Result<String, String> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        format!(
+            "fast-img {kind} path {} is outside its root {}",
+            path.display(),
+            root.display()
+        )
+    })?;
+    let key = relative
+        .to_str()
+        .ok_or_else(|| format!("fast-img {kind} path is not UTF-8: {path:?}"))?;
+    validate_marker_relative_path(kind, key)?;
+    Ok(key.to_owned())
 }
 
 /// Reject linked components in a Fast IMG output path, including a linked root.
@@ -4273,6 +4301,7 @@ impl WorkingCopyMarker {
             gate2_checks: Gate2Checks::default(),
             gate3_checks: Gate3Checks::default(),
             blake3_log: Blake3Log::new(),
+            primary_cleanup_journal: false,
             skipped_sources: SkippedSourceLog::new(),
             failed_sources: FailedSourceLog::new(),
             tier2_imported_assets: Vec::new(),
@@ -5775,6 +5804,69 @@ mod working_copy_tests {
                 .to_string()
                 .contains("unknown field")
         );
+    }
+
+    #[test]
+    #[serial]
+    fn marker_rejects_relative_path_aliases_without_rewriting_saved_keys() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().canonicalize().unwrap().join("source");
+        let wc = src.with_file_name("source_optimized");
+        let source_rel = PathBuf::from("nested").join("合成.jpg");
+        let output_rel = source_rel.with_extension("JXL");
+        let source_rel = source_rel.to_str().unwrap();
+        let output_rel = output_rel.to_str().unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        marker.blake3_log.insert(
+            source_rel.into(),
+            Blake3Entry {
+                out_rel: Some(output_rel.into()),
+                src: "source-hash".into(),
+                out: "output-hash".into(),
+                library_asset: None,
+            },
+        );
+        write_marker_atomic(&marker).unwrap();
+
+        let sep = std::path::MAIN_SEPARATOR;
+        for alias in [
+            format!("nested{sep}{sep}合成.jpg"),
+            format!("nested{sep}.{sep}合成.jpg"),
+            format!("{source_rel}{sep}"),
+            format!("{source_rel}\0"),
+        ] {
+            let mut changed = marker.clone();
+            changed.skipped_sources.insert(
+                alias,
+                SkippedSourceEntry {
+                    src: "source-hash".into(),
+                    reason: "synthetic skip".into(),
+                },
+            );
+            assert!(
+                write_marker_atomic(&changed)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("normalized relative path")
+            );
+            assert!(
+                parse_marker_for_working_copy(&serde_json::to_vec(&changed).unwrap(), &wc)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("normalized relative path")
+            );
+        }
+        let saved = read_marker(&wc).unwrap();
+        assert_eq!(saved.blake3_log, marker.blake3_log);
+        assert!(saved.skipped_sources.is_empty());
     }
 
     #[test]

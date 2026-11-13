@@ -617,6 +617,7 @@ fn verify_with(
             request_key: snapshot.request_key().to_owned(),
             manifest_blake3: snapshot.manifest_blake3().to_owned(),
             verified_snapshot_blake3: snapshot.snapshot_blake3().to_owned(),
+            verified_primary_cleanup_blake3: snapshot.primary_cleanup_blake3().map(str::to_owned),
             verified_revision: snapshot.revision(),
             verified_stage: marker.stage.clone(),
             verified_tier2_in_progress: marker.tier2_in_progress,

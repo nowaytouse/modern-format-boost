@@ -1235,7 +1235,7 @@ not establish that production route or real Photos acceptance.
 ## Canonical Fast IMG State
 
 Fast IMG task headers, source outcomes, Photos request/entry references and
-verified receipt records use the existing Core SQLite store, schema 5. Large
+verified receipt records use the existing Core SQLite store, schema 6. Large
 per-file collections are normalized rows, not a second authoritative JSON blob.
 One IMMEDIATE transaction publishes a logical snapshot; failed writes and commits
 preserve the last committed snapshot. The writer validates the saved state first,
@@ -1292,16 +1292,16 @@ a new directory generation. These snapshots authorize neither media deletion
 nor Photos delivery, and do not establish complete crash atomicity across the
 rest of the processing pipeline.
 
-Core schema migrations from CRC32 v1 and BLAKE3 v2/v3/v4 to v5 are transactional.
-Known v2/v3/v4 databases remain inspectable read-only without pretending they already
+Core schema migrations from CRC32 v1 and BLAKE3 v2 through v5 to v6 are transactional.
+Known v2 through v5 databases remain inspectable read-only without pretending they already
 have the newer tables, directory evidence or retry relations. Integrity inspection
-verifies all eight Fast IMG tables and migration backups in a consistent SQL snapshot. Durable
+verifies all nine Fast IMG tables and migration backups in a consistent SQL snapshot. Durable
 directory evidence is parsed, hashed and scope-checked without revisiting media
 paths. It does not open media files or
 confer Photos custody or deletion permission. Cache management counts these as
 protected State and includes them in verified backups; cache pruning never
 deletes them. Reported payload bytes cover actual stored headers, legacy marker
-bytes, directory snapshots and retry admission/request payloads, not database pages, indexes or estimated
+bytes, directory snapshots, retry admission/request payloads and cleanup evidence, not database pages, indexes or estimated
 disk recovery.
 
 The formal Rust Core root is fixed for the process; invalid or unavailable
@@ -1313,6 +1313,38 @@ still lives at `cache/mfb_store.sqlite` and also contains protected legacy
 Checkpoint/processed records. This change does not physically separate Cache and
 State, implement a complete file-task Manifest or prove cross-filesystem crash
 atomicity. Failed-only child attempts provide the narrower recovery contract above.
+
+## Fast IMG Primary Cleanup Journal
+
+New ordinary Fast IMG tasks persist primary media and eligible XMP unlink
+intents in the same SQLite store as their delivery checkpoint. The entries
+bind exact relative paths, the observed filesystem identity and content of
+each entry, and the verified source and output hashes. An intent for a media
+file and its selected XMP commits as a pair before the media unlink. After each
+successful unlink, the worker flushes the containing directory on Unix and
+records that unlink separately. A write failure stops additional removals.
+
+If a run stops between unlink and recording its outcome, a later run can
+observe that the exact intended entry is absent, while its previous unlink
+outcome stays unknown. A remaining XMP must match its own original intent
+and the current delivered output. A new XMP, a replaced entry, or an output
+that has changed since cleanup began cannot inherit the prior proof. Photos
+delivery still runs fresh final Gate 2 verification. Pending cleanup takes
+precedence over retrying unrelated retained failures in the same task.
+
+The migration creates an empty journal. New failed-only attempts created
+from a journaled parent also use the journal. The media and any XMP claims
+must match the child's immutable admission exactly. When the entire source
+root is absent, finish-only recovery requires the journal to cover every
+converted source. The fresh finish proof and its compare-and-finalize
+transaction bind the exact journal digest. Earlier tasks keep their recorded
+recovery contract.
+
+Tier-2 originals use their separate custody evidence. The worker commits
+their completed state before pruning the selected source directory. Eligible
+subdirectories can be pruned earlier without removing the selected root. For
+a completed journaled local delivery, an explicit retry of the source directory
+can finish pruning that root after checking the current outputs again.
 
 ## Standard Worker Preflight Admission
 
@@ -1336,10 +1368,24 @@ for transport. Fail-fast still stops subsequent invocations after failure, but
 uses the same per-file launch boundary as record mode; it no longer obtains
 directory-worker batching throughput. No general throughput improvement is claimed.
 
-The check is not a file lock or immutable snapshot. Inputs can still change after
-admission, so actual conversion, associated metadata, final-artifact and deletion
-checks remain required. This does not implement the Fast IMG inventory handoff,
-verified sidecar relationships, a persistent execution plan, or failed-only retry.
+Inputs can still change after admission. Conversion, associated metadata,
+final-artifact and deletion checks remain required.
+
+### Fast IMG Launcher Input Scope
+
+For a new Fast IMG run, the launcher and worker use the same regular-file
+enumerator. A fixed-size claim binds the canonical selection, recursive scope,
+relative path bytes, and file metadata. The worker compares its observation
+under the source lock before probing formats or creating the output. It uses
+the matched candidates for the rest of admission. A late file or changed file
+identity observed at that boundary refuses the run and preserves sources.
+Existing-task decisions and explicit retries continue through saved-state
+admission.
+
+The extra launcher traversal reads filesystem metadata only. The worker still
+performs its full content checks and independent delivery gates. The scope claim
+records the attempted handoff in invocation history. It carries no per-file
+media hash, execution policy, or cleanup receipt.
 
 ## Background Native Validation
 

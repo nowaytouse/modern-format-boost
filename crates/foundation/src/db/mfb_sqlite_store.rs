@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::runtime_config::CachePolicy;
 
-pub const STORE_SCHEMA_VERSION: i32 = 5;
+pub const STORE_SCHEMA_VERSION: i32 = 6;
 pub const NS_PATH_TREE: &str = "path_tree";
 pub const NS_GATE1_PROOF: &str = "gate1_verified_file";
 pub const NS_CHECKPOINT: &str = "checkpoint";
@@ -160,6 +160,22 @@ const FAST_IMG_RETRY_SCHEMA: &str = "
            OR (aae_rel IS NOT NULL AND aae_blake3 IS NOT NULL AND aae_claim IS NOT NULL))
     ) STRICT;
 ";
+
+const FAST_IMG_PRIMARY_CLEANUP_SCHEMA: &str = "CREATE TABLE fast_img_primary_cleanup (
+        task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE RESTRICT,
+        source_rel TEXT NOT NULL,
+        entry_rel TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('media', 'xmp')),
+        source_blake3 TEXT NOT NULL,
+        output_rel TEXT NOT NULL,
+        output_blake3 TEXT NOT NULL,
+        entry_blake3 TEXT NOT NULL,
+        entry_claim TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('planned', 'removed')),
+        evidence_blake3 BLOB NOT NULL CHECK(length(evidence_blake3) = 32),
+        PRIMARY KEY(task_key, source_rel, entry_rel),
+        UNIQUE(task_key, entry_rel)
+    ) STRICT";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PathTreeMissReason {
@@ -941,6 +957,18 @@ fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()>
             "Older SQLite store contains conflicting retry objects; state retained without repair"
         );
     }
+    let cleanup_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE name = 'fast_img_primary_cleanup'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let expected = (version >= 6).then_some(FAST_IMG_PRIMARY_CLEANUP_SCHEMA);
+    anyhow::ensure!(
+        cleanup_sql.as_deref() == expected,
+        "SQLite primary cleanup evidence schema conflicts with version {version}; state retained without repair"
+    );
     Ok(())
 }
 
@@ -973,7 +1001,7 @@ fn schema_version(conn: &Connection) -> Result<Option<i32>> {
     let version =
         current.context("SQLite store is missing its schema version; database retained")?;
     anyhow::ensure!(
-        matches!(version, 1 | 2 | 3 | 4 | STORE_SCHEMA_VERSION),
+        matches!(version, 1..=STORE_SCHEMA_VERSION),
         "mfb_store.sqlite schema version mismatch (db={version}, expected={STORE_SCHEMA_VERSION}); \
          database retained, use a compatible application or a verified backup"
     );
@@ -1164,6 +1192,19 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
         tx.execute_batch(FAST_IMG_RETRY_SCHEMA)
             .context("Failed to create normalized failed-retry manifests; state retained")?;
         tx.execute(
+            "UPDATE store_metadata SET value=5 WHERE key='schema_version'",
+            [],
+        )?;
+        version = 5;
+    }
+    if version == 5 {
+        anyhow::ensure!(
+            schema_version(&tx)? == Some(5),
+            "SQLite v5 migration precondition changed"
+        );
+        tx.execute_batch(FAST_IMG_PRIMARY_CLEANUP_SCHEMA)
+            .context("Failed to create primary cleanup evidence; state retained")?;
+        tx.execute(
             "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
             [STORE_SCHEMA_VERSION],
         )?;
@@ -1307,10 +1348,7 @@ fn preview_path_tree_at(
 ) -> Result<CachePrunePreview> {
     policy.validate()?;
     anyhow::ensure!(
-        matches!(
-            schema_version(snapshot)?,
-            Some(2 | 3 | 4 | STORE_SCHEMA_VERSION)
-        ),
+        matches!(schema_version(snapshot)?, Some(2..=STORE_SCHEMA_VERSION)),
         "cache pruning preview requires a recognized BLAKE3 store schema; database retained without migration"
     );
     let now = clock()?;
@@ -2622,6 +2660,130 @@ mod tests {
         Ok(())
     }
 
+    fn seed_v5_store(store: &Path) -> Result<()> {
+        seed_v4_store(store)?;
+        let mut conn = Connection::open(store)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(FAST_IMG_RETRY_SCHEMA)?;
+        tx.execute(
+            "UPDATE store_metadata SET value=5 WHERE key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+        assert_eq!(schema_version(&conn)?, Some(5));
+        Ok(())
+    }
+
+    #[test]
+    fn schema6_preserves_v5_and_does_not_invent_cleanup_evidence() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v5_store(&store)?;
+        let conn = Connection::open(&store)?;
+        seed_fast_img_schema_rows(&conn)?;
+        drop(conn);
+
+        let before = std::fs::read(&store)?;
+        let mut reader = Connection::open_with_flags(&store, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let snapshot = reader.transaction()?;
+        assert_eq!(inspect_store_schema_version(&snapshot)?, Some(5));
+        preview_path_tree_at(&snapshot, CachePolicy::default(), || Ok(100))?;
+        assert!(
+            snapshot
+                .prepare("SELECT * FROM fast_img_primary_cleanup")
+                .is_err()
+        );
+        snapshot.commit()?;
+        drop(reader);
+        assert_eq!(std::fs::read(&store)?, before);
+
+        let _guard = set_test_store_path_for_tests(store);
+        let mut conn = open_connection()?;
+        assert_eq!(
+            inspect_store_schema_version(&conn)?,
+            Some(STORE_SCHEMA_VERSION)
+        );
+        let counts: (i64, i64) = conn.query_row(
+            "SELECT (SELECT count(*) FROM fast_img_tasks),
+                    (SELECT count(*) FROM fast_img_primary_cleanup)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(counts, (1, 0));
+        let insert = "INSERT INTO fast_img_primary_cleanup VALUES(
+            ?1,?2,'retained.jpg','media','src','retained.jxl','out','src','claim',?3,zeroblob(32))";
+        assert!(
+            conn.execute(insert, ["missing", "retained.jpg", "planned"])
+                .is_err()
+        );
+        assert!(
+            conn.execute(insert, ["task", "retained.jpg", "unknown"])
+                .is_err()
+        );
+        conn.execute(insert, ["task", "retained.jpg", "planned"])?;
+        assert!(
+            conn.execute(insert, ["task", "another.jpg", "planned"])
+                .is_err()
+        );
+        assert!(
+            conn.execute(
+                "UPDATE fast_img_primary_cleanup SET evidence_blake3=zeroblob(31)",
+                [],
+            )
+            .is_err()
+        );
+
+        blob_put(NS_PATH_TREE, "cache", 1, None, b"rebuildable")?;
+        blob_delete_namespace(NS_PATH_TREE)?;
+        prune_path_tree_cache(&mut conn, CachePolicy::default())?;
+        let saved_state: String = conn.query_row(
+            "SELECT state FROM fast_img_primary_cleanup WHERE task_key='task'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(saved_state, "planned");
+        Ok(())
+    }
+
+    #[test]
+    fn schema6_migration_rolls_back_and_rejects_conflicting_cleanup_schema() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v5_store(&store)?;
+        let conn = Connection::open(&store)?;
+        conn.execute_batch(
+            "CREATE TRIGGER reject_cleanup_extension BEFORE UPDATE OF value ON store_metadata
+             WHEN NEW.value=6 BEGIN SELECT RAISE(ABORT,'synthetic cleanup schema failure'); END",
+        )?;
+        drop(conn);
+        let _guard = set_test_store_path_for_tests(store.clone());
+        assert!(
+            format!("{:#}", open_connection().unwrap_err())
+                .contains("synthetic cleanup schema failure")
+        );
+        let conn = Connection::open(&store)?;
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(5));
+        assert!(
+            conn.prepare("SELECT * FROM fast_img_primary_cleanup")
+                .is_err()
+        );
+        conn.execute_batch("DROP TRIGGER reject_cleanup_extension")?;
+        conn.execute_batch(
+            &FAST_IMG_PRIMARY_CLEANUP_SCHEMA.replace("CHECK(state IN ('planned', 'removed'))", ""),
+        )?;
+        assert!(inspect_store_schema_version(&conn).is_err());
+        conn.execute(
+            "UPDATE store_metadata SET value=6 WHERE key='schema_version'",
+            [],
+        )?;
+        assert!(inspect_store_schema_version(&conn).is_err());
+        drop(conn);
+        let before = std::fs::read(&store)?;
+        assert!(open_connection().is_err());
+        assert_eq!(std::fs::read(&store)?, before);
+        Ok(())
+    }
+
     #[test]
     fn schema5_keeps_v4_readonly_and_migrates_without_inventing_retry_history() -> Result<()> {
         let root = tempfile::tempdir()?;
@@ -2646,7 +2808,10 @@ mod tests {
         assert_eq!(std::fs::read(&store)?, before);
         let _guard = set_test_store_path_for_tests(store);
         let conn = open_connection()?;
-        assert_eq!(inspect_store_schema_version(&conn)?, Some(5));
+        assert_eq!(
+            inspect_store_schema_version(&conn)?,
+            Some(STORE_SCHEMA_VERSION)
+        );
         let counts:(i64,i64,i64)=conn.query_row("SELECT (SELECT count(*) FROM fast_img_tasks),
             (SELECT count(*) FROM fast_img_retry_tasks),(SELECT count(*) FROM fast_img_retry_sources)",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         assert_eq!(counts, (1, 0, 0));

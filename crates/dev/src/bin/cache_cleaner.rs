@@ -651,13 +651,12 @@ fn validate_cache_schema(conn: &Connection) -> Result<()> {
     anyhow::ensure!(
         matches!(
             version,
-            2 | 3 | 4 | foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION
+            2..=foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION
         ),
         "unsupported cache store schema {version}; database retained"
     );
-    // Legacy v2/v3 stores already use BLAKE3; reading or backing them up must
-    // preserve their actual schema and evidence coverage. CRC32 v1 is not this
-    // reader's payload format.
+    // Reading or backing up older BLAKE3 stores preserves their actual schema
+    // and evidence coverage. CRC32 v1 is outside this reader's payload format.
     conn.prepare("SELECT namespace, cache_key, schema_version, root_path, payload, payload_blake3, updated_at FROM blob_store LIMIT 0")?;
     conn.prepare("INSERT INTO blob_store(namespace,cache_key) VALUES (?1,?2) ON CONFLICT(namespace,cache_key) DO NOTHING")?;
     Ok(())
@@ -876,8 +875,7 @@ fn add_fast_img_state_namespace(
     if rows == 0 {
         return Ok(());
     }
-    // These are the actual explicit evidence BLOBs. Relational columns are not
-    // described as payload bytes; store_bytes remains the physical store size.
+    // Count explicit evidence payloads. store_bytes is the physical store size.
     let version = cache_store_schema_version(conn)?;
     let payload_query = if version >= 5 {
         "SELECT COALESCE((SELECT SUM(length(header_json)) FROM fast_img_tasks),0)
@@ -895,7 +893,18 @@ fn add_fast_img_state_namespace(
         "SELECT COALESCE((SELECT SUM(length(header_json)) FROM fast_img_tasks),0)
               + COALESCE((SELECT SUM(length(source_json)) FROM fast_img_migrations),0)"
     };
-    let payload_bytes = conn.query_row(payload_query, [], |row| nonnegative_column(row, 0))?;
+    let mut payload_bytes = conn.query_row(payload_query, [], |row| nonnegative_column(row, 0))?;
+    if version >= 6 {
+        let cleanup_bytes = conn.query_row(
+            "SELECT COALESCE(SUM(length(CAST(entry_claim AS BLOB)) + length(evidence_blake3)),0)
+             FROM fast_img_primary_cleanup",
+            [],
+            |row| nonnegative_column(row, 0),
+        )?;
+        payload_bytes = payload_bytes
+            .checked_add(cleanup_bytes)
+            .context("Fast IMG namespace payload byte count overflow")?;
+    }
     if let Some(existing) = namespaces
         .iter_mut()
         .find(|namespace| namespace.name == "fast_img_state")
@@ -2239,7 +2248,8 @@ mod tests {
         let (cache, conn, _marker) = fast_img_state_fixture(&root);
         // Reproduce the exact previous release shape using only disposable data.
         conn.execute_batch(
-            "DROP TABLE fast_img_retry_sources;
+            "DROP TABLE fast_img_primary_cleanup;
+             DROP TABLE fast_img_retry_sources;
              DROP TABLE fast_img_retry_tasks;
              ALTER TABLE fast_img_migrations DROP COLUMN directory_snapshot_blake3;
              ALTER TABLE fast_img_migrations DROP COLUMN directory_snapshot;
@@ -2339,6 +2349,63 @@ mod tests {
             header_bytes + u64::try_from(raw_marker.len() + directory_snapshot.len()).unwrap()
         );
         assert!(!namespaces[0].rebuildable);
+    }
+
+    #[test]
+    fn fast_img_cleanup_evidence_counts_payload_bytes_and_v5_readers_do_not_migrate() {
+        let Some(root) = fast_img_state_test_root() else {
+            return;
+        };
+        let (cache, conn, _marker) = fast_img_state_fixture(&root);
+        let claim = "合成 claim";
+        conn.execute(
+            "INSERT INTO fast_img_primary_cleanup (
+                task_key,source_rel,entry_rel,kind,source_blake3,output_rel,output_blake3,
+                entry_blake3,entry_claim,state,evidence_blake3
+             ) SELECT task_key,'one.jpg','one.jpg','media','src','one.JXL','out',
+                      'src',?1,'planned',zeroblob(32) FROM fast_img_tasks",
+            [claim],
+        )
+        .unwrap();
+        // Storage accounting uses actual evidence bytes. Other tests exercise
+        // durable receipt integrity independently from these synthetic columns.
+        let header_bytes = conn
+            .query_row(
+                "SELECT SUM(length(header_json)) FROM fast_img_tasks",
+                [],
+                |row| nonnegative_column(row, 0),
+            )
+            .unwrap();
+        let mut namespaces = Vec::new();
+        add_fast_img_state_namespace(&conn, &mut namespaces, 8).unwrap();
+        assert_eq!(
+            namespaces[0].payload_bytes,
+            header_bytes + u64::try_from(claim.len() + 32).unwrap()
+        );
+        assert!(!namespaces[0].rebuildable);
+
+        conn.execute_batch(
+            "DROP TABLE fast_img_primary_cleanup;
+             UPDATE store_metadata SET value=5 WHERE key='schema_version';",
+        )
+        .unwrap();
+        conn.pragma_update(None, "journal_mode", "delete").unwrap();
+        drop(conn);
+        let store = cache.join("mfb_store.sqlite");
+        let before = fs::read(&store).unwrap();
+        let status = cache_status_with_options(
+            &cache,
+            true,
+            Some(foundation::runtime_config::CachePolicy::default()),
+        )
+        .unwrap();
+        assert_eq!(status.database.unwrap().store_schema_version, 5);
+        assert_eq!(status.integrity.unwrap().status, "healthy");
+        assert_eq!(status.pruning_preview.unwrap().total_rows, 0);
+        let destination = root.join("verified-schema5-backup.sqlite");
+        let receipt = backup_local_store(&cache, &destination).unwrap();
+        assert_eq!(receipt.store_schema_version, 5);
+        assert_eq!(fs::read(store).unwrap(), before);
     }
 
     #[test]

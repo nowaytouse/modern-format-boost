@@ -1694,6 +1694,18 @@ pub fn prune_completed_fast_img_empty_outputs(source: &Path, strategy: &str) -> 
         if marker.stage != FastImgStageName::CleanupComplete || marker.tier2_in_progress {
             continue;
         }
+        // Local delivery keeps its working copy as the final output.
+        if marker.photos_imported_assets.is_empty()
+            && !marker.gate2_checks.count.0
+            && marker.gate1_checks.count.0
+            && marker.gate1_checks.blake3.0
+            && marker.gate1_checks.metadata.0
+            && marker.gate1_checks.size.0
+            && marker.gate1_checks.orient.0
+            && marker.gate1_checks.decode.0
+        {
+            continue;
+        }
         if !marker.working_copy.try_exists()? {
             continue;
         }
@@ -2057,6 +2069,13 @@ cat "$MFB_TEST_VERIFY_REPLY"
             &mut marker.gate1_checks.size,
             &mut marker.gate1_checks.orient,
             &mut marker.gate1_checks.decode,
+        ] {
+            *check = true.into();
+        }
+        write_marker_atomic(&marker).unwrap();
+        assert_eq!(prune_completed_fast_img_empty_outputs(&source, "jxl").unwrap(), 0);
+        assert!(output.exists());
+        for check in [
             &mut marker.gate2_checks.count,
             &mut marker.gate2_checks.blake3_sample,
             &mut marker.gate2_checks.no_error,

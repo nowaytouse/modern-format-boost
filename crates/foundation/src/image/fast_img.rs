@@ -664,6 +664,25 @@ pub fn safe_delete_jpeg_source(
     safe_delete_jpeg_source_recorded(source, output, integrity, &mut Vec::new())
 }
 
+/// An observation emitted around a verified source unlink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceUnlinkEvent {
+    /// A verified path and complete content hash are proposed for this operation.
+    Intent,
+    /// All intents for this operation have been emitted. A durable observer must
+    /// commit them before returning success.
+    Ready,
+    /// The filesystem confirmed that this exact unlink succeeded.
+    Removed,
+}
+
+/// The role of an entry in one primary source cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceUnlinkKind {
+    Media,
+    Xmp,
+}
+
 /// Verify and remove a source, recording only successful unlink operations.
 pub fn safe_delete_jpeg_source_recorded(
     source: &Path,
@@ -671,7 +690,27 @@ pub fn safe_delete_jpeg_source_recorded(
     integrity: &IntegrityResult,
     removed_files: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    use crate::common_utils::calculate_blake3_hash;
+    safe_delete_jpeg_source_observed(
+        source,
+        output,
+        integrity,
+        removed_files,
+        &mut |_, _, _, _| Ok(()),
+    )
+}
+
+/// Verify a source and its companion, emit intents, then report each successful unlink.
+/// # Errors
+/// Returns an error on failed custody, filesystem changes, or observer failure.
+/// If an observer fails after a removal, the removed path remains in `removed_files`.
+pub fn safe_delete_jpeg_source_observed(
+    source: &Path,
+    output: &Path,
+    integrity: &IntegrityResult,
+    removed_files: &mut Vec<PathBuf>,
+    observer: &mut impl FnMut(SourceUnlinkEvent, SourceUnlinkKind, &Path, &str) -> Result<()>,
+) -> Result<()> {
+    use crate::pipeline::verification::FinalInputObservation;
 
     // @ANCHOR:delete-gate — delete iff integrity_passed && output_size>0 &&
     // blake3_logged; atomic Gate 1: §Integrity must have passed (caller
@@ -758,13 +797,11 @@ pub fn safe_delete_jpeg_source_recorded(
         ));
     }
 
-    let current_source_hash = calculate_blake3_hash(source).map_err(|e| {
-        ImgQualityError::AnalysisError(format!("delete-gate 3 FAIL: BLAKE3(source) failed: {e}"))
-    })?;
-    let current_output_hash = calculate_blake3_hash(output).map_err(|e| {
-        ImgQualityError::AnalysisError(format!("delete-gate 3 FAIL: BLAKE3(output) failed: {e}"))
-    })?;
-    if current_source_hash != *claimed_source_hash || current_output_hash != *claimed_output_hash {
+    let source_observation = FinalInputObservation::capture(source)?;
+    let output_observation = FinalInputObservation::capture(output)?;
+    let current_source_hash = source_observation.blake3();
+    let current_output_hash = output_observation.blake3();
+    if current_source_hash != claimed_source_hash || current_output_hash != claimed_output_hash {
         tracing::error!(
             target: "fast_img_delete",
             source = %source.display(),
@@ -781,6 +818,37 @@ pub fn safe_delete_jpeg_source_recorded(
     }
 
     let matching_xmp_sidecar = xmp_sidecar_for_verified_output_cleanup(source, output)?;
+    if let Some(sidecar) = &matching_xmp_sidecar {
+        observer(
+            SourceUnlinkEvent::Intent,
+            SourceUnlinkKind::Xmp,
+            &sidecar.path,
+            sidecar.observation.blake3(),
+        )?;
+    }
+    observer(
+        SourceUnlinkEvent::Intent,
+        SourceUnlinkKind::Media,
+        source,
+        current_source_hash,
+    )?;
+    observer(
+        SourceUnlinkEvent::Ready,
+        SourceUnlinkKind::Media,
+        source,
+        current_source_hash,
+    )?;
+    source_observation.verify_unchanged()?;
+    output_observation.verify_unchanged()?;
+    let current_sidecar = crate::metadata::find_xmp_sidecar(source)?;
+    if current_sidecar.as_ref() != matching_xmp_sidecar.as_ref().map(|sidecar| &sidecar.path) {
+        return Err(ImgQualityError::AnalysisError(
+            "delete-gate XMP identity changed before source unlink".into(),
+        ));
+    }
+    if let Some(sidecar) = &matching_xmp_sidecar {
+        sidecar.verify_unchanged()?;
+    }
 
     // Gate 3: audit log after all custody checks pass.
     tracing::info!(
@@ -800,14 +868,23 @@ pub fn safe_delete_jpeg_source_recorded(
         ))
     })?;
     removed_files.push(source.to_path_buf());
-
-    delete_matching_xmp_sidecar_path(
+    observer(
+        SourceUnlinkEvent::Removed,
+        SourceUnlinkKind::Media,
         source,
-        output,
-        matching_xmp_sidecar.as_ref(),
-        removed_files,
+        current_source_hash,
     )?;
 
+    if let Some(sidecar) = &matching_xmp_sidecar {
+        output_observation.verify_unchanged()?;
+        delete_matching_xmp_sidecar_path(source, output, Some(sidecar), removed_files, false)?;
+        observer(
+            SourceUnlinkEvent::Removed,
+            SourceUnlinkKind::Xmp,
+            &sidecar.path,
+            sidecar.observation.blake3(),
+        )?;
+    }
     Ok(())
 }
 
@@ -826,30 +903,88 @@ pub fn safe_delete_matching_xmp_sidecar_recorded(
     output: &Path,
     removed_files: &mut Vec<PathBuf>,
 ) -> Result<bool> {
-    let matching_xmp_sidecar = xmp_sidecar_for_verified_output_cleanup(source, output)?;
-    delete_matching_xmp_sidecar_path(
+    safe_delete_matching_xmp_sidecar_observed(
         source,
         output,
-        matching_xmp_sidecar.as_ref(),
+        None,
         removed_files,
+        &mut |_, _, _, _| Ok(()),
     )
+}
+
+/// Resume deletion of an exact previously authorized companion.
+/// With an expected output hash, also require the primary source to remain absent.
+/// # Errors
+/// Returns an error on failed custody, filesystem changes, or observer failure.
+/// If an observer fails after removal, the removed path remains in `removed_files`.
+pub fn safe_delete_matching_xmp_sidecar_observed(
+    source: &Path,
+    output: &Path,
+    expected_output_blake3: Option<&str>,
+    removed_files: &mut Vec<PathBuf>,
+    observer: &mut impl FnMut(SourceUnlinkEvent, SourceUnlinkKind, &Path, &str) -> Result<()>,
+) -> Result<bool> {
+    let Some(sidecar) = crate::metadata::find_xmp_sidecar(source)? else {
+        return Ok(false);
+    };
+    let output_observation = crate::pipeline::verification::FinalInputObservation::capture(output)?;
+    if expected_output_blake3.is_some_and(|expected| output_observation.blake3() != expected) {
+        return Err(ImgQualityError::AnalysisError(
+            "delete-gate output differs from the saved companion delivery proof".into(),
+        ));
+    }
+    let sidecar = verify_xmp_sidecar_for_output(sidecar, output)?;
+    let hash = sidecar.observation.blake3();
+    observer(
+        SourceUnlinkEvent::Intent,
+        SourceUnlinkKind::Xmp,
+        &sidecar.path,
+        hash,
+    )?;
+    observer(
+        SourceUnlinkEvent::Ready,
+        SourceUnlinkKind::Xmp,
+        &sidecar.path,
+        hash,
+    )?;
+    output_observation.verify_unchanged()?;
+    let removed = delete_matching_xmp_sidecar_path(
+        source,
+        output,
+        Some(&sidecar),
+        removed_files,
+        expected_output_blake3.is_some(),
+    )?;
+    if removed {
+        observer(
+            SourceUnlinkEvent::Removed,
+            SourceUnlinkKind::Xmp,
+            &sidecar.path,
+            hash,
+        )?;
+    }
+    Ok(removed)
 }
 
 fn xmp_sidecar_for_verified_output_cleanup(
     source: &Path,
     output: &Path,
 ) -> Result<Option<VerifiedXmpCleanup>> {
-    let sidecar = crate::metadata::find_xmp_sidecar(source)?;
-    let sidecar = sidecar.map(VerifiedXmpCleanup::capture).transpose()?;
-    if let Some(path) = &sidecar
-        && crate::image::format_detect::detect_true_format(output)?
-            == crate::image::format_detect::FormatKind::Jxl
+    crate::metadata::find_xmp_sidecar(source)?
+        .map(|sidecar| verify_xmp_sidecar_for_output(sidecar, output))
+        .transpose()
+}
+
+fn verify_xmp_sidecar_for_output(path: PathBuf, output: &Path) -> Result<VerifiedXmpCleanup> {
+    let sidecar = VerifiedXmpCleanup::capture(path)?;
+    if crate::image::format_detect::detect_true_format(output)?
+        == crate::image::format_detect::FormatKind::Jxl
     {
-        crate::metadata::verify_jxl_xmp_sidecar_custody(&path.path, output).map_err(|error| {
+        crate::metadata::verify_jxl_xmp_sidecar_custody(&sidecar.path, output).map_err(|error| {
             ImgQualityError::AnalysisError(format!("delete-gate XMP custody failed: {error}"))
         })?;
     }
-    if let Some(sidecar) = &sidecar { sidecar.verify_unchanged()?; }
+    sidecar.verify_unchanged()?;
     Ok(sidecar)
 }
 
@@ -877,6 +1012,7 @@ fn delete_matching_xmp_sidecar_path(
     output: &Path,
     matching_xmp_sidecar: Option<&VerifiedXmpCleanup>,
     removed_files: &mut Vec<PathBuf>,
+    require_source_absent: bool,
 ) -> Result<bool> {
     let Some(verified) = matching_xmp_sidecar else {
         return Ok(false);
@@ -903,6 +1039,17 @@ fn delete_matching_xmp_sidecar_path(
         xmp_sidecar = %xmp_sidecar.display(),
         "delete-gate PASS: removing source XMP after verified delivery"
     );
+    if require_source_absent {
+        match std::fs::symlink_metadata(source) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => {
+                return Err(ImgQualityError::AnalysisError(
+                    "delete-gate primary source reappeared before companion unlink".into(),
+                ));
+            }
+        }
+    }
     std::fs::remove_file(xmp_sidecar).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
             "delete-gate sidecar FAIL: failed to delete matching XMP sidecar {} for {} (output \
@@ -1091,6 +1238,7 @@ fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
         source,
         matching_xmp_sidecar.as_ref(),
         removed_files,
+        false,
     )?;
     Ok(())
 }
@@ -1482,7 +1630,13 @@ pub fn delete_verified_modern_lossy_static_sources_recorded(
                 asset.xmp_sidecar_blake3.as_deref(),
                 true,
             )? {
-                delete_matching_xmp_sidecar_path(&source, &source, Some(&sidecar), removed_files)?;
+                delete_matching_xmp_sidecar_path(
+                    &source,
+                    &source,
+                    Some(&sidecar),
+                    removed_files,
+                    false,
+                )?;
             }
             already_deleted += 1;
             tracing::info!(
@@ -12726,6 +12880,165 @@ end mfbResolveAlbumComponent
     }
 
     #[test]
+    fn observed_source_cleanup_brackets_each_unlink_and_rechecks_bound_files() -> anyhow::Result<()>
+    {
+        use super::{SourceUnlinkEvent as Event, SourceUnlinkKind as Kind};
+        use super::{safe_delete_jpeg_source_observed, safe_delete_matching_xmp_sidecar_observed};
+        use crate::common_utils::calculate_blake3_hash;
+
+        for failure in ["ready", "replaced", "media receipt", "none"] {
+            let root = tempfile::tempdir()?;
+            let source = root.path().join("source.jpg");
+            let output = root.path().join("output.jpg");
+            let xmp = root.path().join("source.jpg.xmp");
+            write_valid_test_jpeg(&source, [37, 82, 119]);
+            std::fs::copy(&source, &output)?;
+            std::fs::write(&xmp, b"synthetic XMP fixture")?;
+            let source_hash = calculate_blake3_hash(&source)?;
+            let xmp_hash = calculate_blake3_hash(&xmp)?;
+            let proof = IntegrityResult::RoundtripMatch {
+                source_hash: source_hash.clone(),
+                output_hash: calculate_blake3_hash(&output)?,
+            };
+            let mut removed = Vec::new();
+            let mut events = Vec::new();
+            let result = safe_delete_jpeg_source_observed(
+                &source,
+                &output,
+                &proof,
+                &mut removed,
+                &mut |event, kind, path, hash| {
+                    events.push((event, kind));
+                    match kind {
+                        Kind::Media => {
+                            assert_eq!((path, hash), (source.as_path(), source_hash.as_str()));
+                        }
+                        Kind::Xmp => {
+                            assert_eq!((path, hash), (xmp.as_path(), xmp_hash.as_str()));
+                        }
+                    }
+                    assert_eq!(
+                        path.exists(),
+                        event != Event::Removed,
+                        "event {event:?} must match filesystem state",
+                    );
+                    match (failure, event, kind) {
+                        ("ready", Event::Ready, _)
+                        | ("media receipt", Event::Removed, Kind::Media) => {
+                            return Err(crate::unified_error::ImgQualityError::AnalysisError(
+                                "synthetic journal failure".into(),
+                            ));
+                        }
+                        ("replaced", Event::Ready, _) => {
+                            let replacement = root.path().join("replacement.jpg");
+                            std::fs::copy(&source, &replacement)?;
+                            std::fs::rename(replacement, &source)?;
+                        }
+                        _ => {}
+                    }
+                    Ok(())
+                },
+            );
+            assert_eq!(result.is_ok(), failure == "none");
+            assert_eq!(
+                &events[..3],
+                &[
+                    (Event::Intent, Kind::Xmp),
+                    (Event::Intent, Kind::Media),
+                    (Event::Ready, Kind::Media),
+                ]
+            );
+            match failure {
+                "ready" | "replaced" => {
+                    assert_eq!(events.len(), 3);
+                    assert!(removed.is_empty());
+                    assert!(source.is_file() && xmp.is_file());
+                }
+                "media receipt" => {
+                    assert_eq!(&events[3..], &[(Event::Removed, Kind::Media)]);
+                    assert_eq!(removed, vec![source.clone()]);
+                    assert!(!source.exists() && xmp.is_file());
+                    let rejected = safe_delete_matching_xmp_sidecar_observed(
+                        &source,
+                        &output,
+                        Some(&calculate_blake3_hash(&output)?),
+                        &mut removed,
+                        &mut |event, kind, path, hash| {
+                            assert_eq!((event, kind), (Event::Intent, Kind::Xmp));
+                            assert_eq!((path, hash), (xmp.as_path(), xmp_hash.as_str()));
+                            Err(crate::unified_error::ImgQualityError::AnalysisError(
+                                "companion intent did not match".into(),
+                            ))
+                        },
+                    );
+                    assert!(rejected.is_err());
+                    assert!(xmp.is_file());
+                }
+                _ => {
+                    assert_eq!(
+                        &events[3..],
+                        &[
+                            (Event::Removed, Kind::Media),
+                            (Event::Removed, Kind::Xmp),
+                        ]
+                    );
+                    assert_eq!(removed, vec![source.clone(), xmp.clone()]);
+                    assert!(!source.exists() && !xmp.exists());
+                }
+            }
+            assert!(output.is_file());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn observed_xmp_cleanup_rejects_drifted_output_and_reappearing_media() -> anyhow::Result<()> {
+        use super::{SourceUnlinkEvent, safe_delete_matching_xmp_sidecar_observed};
+
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source.jpg");
+        let output = root.path().join("output.jpg");
+        let xmp = root.path().join("source.xmp");
+        write_valid_test_jpeg(&output, [37, 82, 119]);
+        std::fs::write(&xmp, b"synthetic XMP")?;
+        let output_hash = crate::common_utils::calculate_blake3_hash(&output)?;
+        let mut removed = Vec::new();
+        let drifted_output = safe_delete_matching_xmp_sidecar_observed(
+            &source,
+            &output,
+            Some("different hash"),
+            &mut removed,
+            &mut |_, _, _, _| panic!("changed delivery must be rejected before reporting intent"),
+        );
+        assert!(drifted_output.is_err());
+        assert!(xmp.is_file());
+
+        let reappeared = safe_delete_matching_xmp_sidecar_observed(
+            &source,
+            &output,
+            Some(&output_hash),
+            &mut removed,
+            &mut |event, _, _, _| {
+                match event {
+                    SourceUnlinkEvent::Ready => {
+                        #[cfg(unix)]
+                        std::os::unix::fs::symlink(root.path().join("absent"), &source)?;
+                        #[cfg(not(unix))]
+                        std::fs::write(&source, b"replacement")?;
+                    }
+                    SourceUnlinkEvent::Removed => panic!("companion must remain"),
+                    SourceUnlinkEvent::Intent => {}
+                }
+                Ok(())
+            },
+        );
+        assert!(reappeared.is_err());
+        assert!(xmp.is_file());
+        assert!(removed.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn delete_gate_rechecks_bound_xmp_immediately_before_unlink() -> anyhow::Result<()> {
         for change in ["content", "filesystem", "replacement"] {
             let root = tempfile::tempdir()?;
@@ -12747,7 +13060,7 @@ end mfbResolveAlbumComponent
             }
             let mut removed = Vec::new();
             assert!(super::delete_matching_xmp_sidecar_path(
-                &source, &output, Some(&verified), &mut removed,
+                &source, &output, Some(&verified), &mut removed, false,
             ).is_err(), "{change} must invalidate the sidecar unlink proof");
             assert!(removed.is_empty());
             assert!(source.exists() && output.exists() && sidecar.exists());

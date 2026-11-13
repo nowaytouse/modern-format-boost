@@ -21,10 +21,12 @@ pub use crate::pipeline::verification::{
     FailedRetryFinishEvidence, FailedRetrySourceRootObservation,
 };
 
+mod cleanup;
 mod finish;
 mod migration;
 mod retry;
 mod retry_admission;
+pub use cleanup::{PrimaryCleanupJournal, PrimaryCleanupScope, validate_primary_cleanup_resume};
 pub use finish::{
     FailedRetryFinishSnapshot, finalize_failed_retry_finish, inspect_failed_retry_finish,
     resolve_failed_retry_child_for_source,
@@ -134,7 +136,7 @@ fn open_readonly() -> Result<Option<Connection>> {
 
 fn current_family(conn: &Connection) -> Result<bool> {
     match inspect_store_schema_version(conn)? {
-        Some(3..=5) => Ok(true),
+        Some(3..=6) => Ok(true),
         Some(1 | 2) => Ok(false),
         None => {
             bail!("Existing formal database has no recognized schema; not treated as empty state")
@@ -188,6 +190,7 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
             );
         }
         retry::reject_missing_task_evidence(conn, key)?;
+        cleanup::reject_missing_task_evidence(conn, key)?;
         return Ok(None);
     };
     validate_locator(&header.wc)?;
@@ -398,6 +401,7 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
     }
     let marker: WorkingCopyMarker = serde_json::from_value(value)?;
     validate_marker_structure(&marker)?;
+    cleanup::validate_rows(conn, key, &marker)?;
     ensure!(
         snapshot_digest(&header.wc, &header.source, &marker)?
             .as_bytes()
@@ -876,6 +880,11 @@ fn write_snapshot_at_with_finish(
         );
         finish::validate_write(old, marker, revision, finalization)?;
         preserve_history(old, marker)?;
+        ensure!(
+            !old.primary_cleanup_journal || marker.primary_cleanup_journal,
+            "Fast IMG primary cleanup journal cannot be disabled"
+        );
+        cleanup::validate_rows(conn, &key, marker)?;
         retry::validate_update(old, marker)?;
         if old == marker {
             return Ok(());
@@ -980,6 +989,9 @@ fn row_count(conn: &Connection) -> Result<usize> {
     count = count
         .checked_add(retry::row_count(conn)?)
         .context("Fast IMG retry row count overflow")?;
+    count = count
+        .checked_add(cleanup::row_count(conn)?)
+        .context("Fast IMG cleanup row count overflow")?;
     Ok(count)
 }
 

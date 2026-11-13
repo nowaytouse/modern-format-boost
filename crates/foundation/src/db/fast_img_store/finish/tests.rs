@@ -11,7 +11,9 @@ use crate::pipeline::verification::{
     SkippedSourceEntry,
 };
 
-fn fixture(root: &Path) -> Result<(WorkingCopyMarker, WorkingCopyMarker)> {
+const XMP: &[u8] = b"<xmp>synthetic failed-only companion</xmp>";
+
+fn fixture(root: &Path, journaled: bool) -> Result<(WorkingCopyMarker, WorkingCopyMarker)> {
     let root = root.canonicalize()?;
     let source = root.join("source");
     std::fs::create_dir(&source)?;
@@ -19,8 +21,21 @@ fn fixture(root: &Path) -> Result<(WorkingCopyMarker, WorkingCopyMarker)> {
     std::fs::write(&input, b"synthetic retained source")?;
     let observed = DiscoveredSource::from_metadata(&input, &std::fs::metadata(&input)?)?;
     let source_hash = observed.content_blake3();
+    let xmp = if journaled {
+        let path = source.join("retained.xmp");
+        std::fs::write(&path, XMP)?;
+        let observed = DiscoveredSource::from_metadata(&path, &std::fs::symlink_metadata(&path)?)?;
+        FailedRetrySidecar::Present {
+            relative_path: "retained.xmp".into(),
+            blake3: observed.content_blake3(),
+            claim: PlannedSource::encode(&observed)?,
+        }
+    } else {
+        FailedRetrySidecar::Absent
+    };
     let mut parent = WorkingCopyMarker::new(source, root.join("source_optimized"), 1);
     parent.stage = FastImgStageName::CleanupComplete;
+    parent.primary_cleanup_journal = journaled;
     parent.processing_contract = Some(FastImgProcessingContract {
         schema: 1,
         tool_policy: crate::runtime_config::ToolPolicy::Single,
@@ -48,7 +63,7 @@ fn fixture(root: &Path) -> Result<(WorkingCopyMarker, WorkingCopyMarker)> {
             parent_source_blake3: source_hash.clone(),
             admitted_source_blake3: source_hash.clone(),
             claim: PlannedSource::encode(&observed)?,
-            xmp: FailedRetrySidecar::Absent,
+            xmp,
             aae: FailedRetrySidecar::Absent,
         }],
         &FailedRetryDeliveryIntent::Local,
@@ -57,8 +72,16 @@ fn fixture(root: &Path) -> Result<(WorkingCopyMarker, WorkingCopyMarker)> {
     std::fs::create_dir(&child.working_copy)?;
     // This models an already Gate-verified artifact. Finish recovery observes
     // its current complete bytes/type; this fixture does not claim a new decode.
-    let output = [0xff, 0x0a, 0x31, 0x45, 0x59, 0x26];
-    std::fs::write(child.working_copy.join("retained.JXL"), output)?;
+    let output = if journaled {
+        let mut bytes = crate::constants::JXL_CONTAINER_MAGIC.to_vec();
+        bytes.extend_from_slice(&u32::try_from(XMP.len() + 8)?.to_be_bytes());
+        bytes.extend_from_slice(b"xml ");
+        bytes.extend_from_slice(XMP);
+        bytes
+    } else {
+        vec![0xff, 0x0a, 0x31, 0x45, 0x59, 0x26]
+    };
+    std::fs::write(child.working_copy.join("retained.JXL"), &output)?;
     child.blake3_log.insert(
         "retained.jpg".into(),
         Blake3Entry {
@@ -93,7 +116,7 @@ fn finish_only_commits_observed_absence_without_changing_parent_or_media() -> Re
         crate::constants::ENV_MFB_HOME_ROOT,
         root.path().join("state").to_str().unwrap(),
     );
-    let (parent, child) = fixture(root.path())?;
+    let (parent, child) = fixture(root.path(), false)?;
     let snapshot = inspect_failed_retry_finish(&child.working_copy)?.unwrap();
     std::fs::remove_dir_all(&child.src_dir)?;
     let output = std::fs::read(child.working_copy.join("retained.JXL"))?;
@@ -158,7 +181,7 @@ fn finish_only_rejects_concurrent_state_changes_and_rolls_back_write_failure() -
         crate::constants::ENV_MFB_HOME_ROOT,
         root.path().join("state").to_str().unwrap(),
     );
-    let (parent, mut child) = fixture(root.path())?;
+    let (parent, mut child) = fixture(root.path(), false)?;
     let snapshot = inspect_failed_retry_finish(&child.working_copy)?.unwrap();
     std::fs::remove_dir_all(&child.src_dir)?;
     let proof = verify_failed_retry_finish(&snapshot)?;
@@ -193,6 +216,124 @@ fn finish_only_rejects_concurrent_state_changes_and_rolls_back_write_failure() -
 }
 
 #[test]
+fn finish_only_binds_the_exact_primary_cleanup_journal() -> Result<()> {
+    use crate::fast_img_store::{PrimaryCleanupJournal, PrimaryCleanupScope};
+    use crate::image::fast_img::{SourceUnlinkEvent, SourceUnlinkKind};
+
+    if crate::common_utils::isolated_test_process() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let _env = crate::common_utils::EnvGuard::set(
+        crate::constants::ENV_MFB_HOME_ROOT,
+        root.path().join("state").to_str().unwrap(),
+    );
+    let (parent, child) = fixture(root.path(), true)?;
+    assert!(child.primary_cleanup_journal);
+    let before_intent = inspect_failed_retry_finish(&child.working_copy)?.unwrap();
+    assert!(before_intent.primary_cleanup_blake3().is_some());
+    assert!(before_intent.validate_eligibility().is_err());
+
+    let input = child.src_dir.join("retained.jpg");
+    let xmp = child.src_dir.join("retained.xmp");
+    let hash = &child.blake3_log["retained.jpg"].src;
+    let xmp_hash = blake3::hash(XMP).to_hex().to_string();
+    let mut journal = PrimaryCleanupJournal::open(&child)?;
+    {
+        let mut observe = journal.observe(&input, PrimaryCleanupScope::MediaAndCompanion)?;
+        observe(
+            SourceUnlinkEvent::Intent,
+            SourceUnlinkKind::Media,
+            &input,
+            hash,
+        )?;
+        assert!(
+            observe(
+                SourceUnlinkEvent::Ready,
+                SourceUnlinkKind::Media,
+                &input,
+                hash
+            )
+            .is_err()
+        );
+    }
+    let before_xmp_intent = inspect_failed_retry_finish(&child.working_copy)?.unwrap();
+    assert!(before_xmp_intent.validate_eligibility().is_err());
+    let mut observe = journal.observe(&input, PrimaryCleanupScope::MediaAndCompanion)?;
+    observe(
+        SourceUnlinkEvent::Intent,
+        SourceUnlinkKind::Xmp,
+        &xmp,
+        &xmp_hash,
+    )?;
+    observe(
+        SourceUnlinkEvent::Intent,
+        SourceUnlinkKind::Media,
+        &input,
+        hash,
+    )?;
+    observe(
+        SourceUnlinkEvent::Ready,
+        SourceUnlinkKind::Media,
+        &input,
+        hash,
+    )?;
+    std::fs::remove_file(&input)?;
+    let snapshot = inspect_failed_retry_finish(&child.working_copy)?.unwrap();
+    snapshot.validate_eligibility()?;
+    assert!(verify_failed_retry_finish(&snapshot).is_err());
+    std::fs::remove_file(&xmp)?;
+    std::fs::remove_dir(&child.src_dir)?;
+
+    let snapshot = inspect_failed_retry_finish(&child.working_copy)?.unwrap();
+    let proof = verify_failed_retry_finish(&snapshot)?;
+    assert!(snapshot.primary_cleanup_blake3().is_some());
+    assert_eq!(
+        proof.evidence().verified_primary_cleanup_blake3.as_deref(),
+        snapshot.primary_cleanup_blake3()
+    );
+
+    // Record the observed unlink after the first proof, without a marker revision change.
+    std::fs::create_dir(&child.src_dir)?;
+    observe(
+        SourceUnlinkEvent::Removed,
+        SourceUnlinkKind::Media,
+        &input,
+        hash,
+    )?;
+    std::fs::remove_dir(&child.src_dir)?;
+    let error = finalize_failed_retry_finish(&snapshot, proof).unwrap_err();
+    assert!(error.to_string().contains("MFB_FINISH_STATE_CHANGED"));
+
+    let current = inspect_failed_retry_finish(&child.working_copy)?.unwrap();
+    assert_eq!(current.revision(), snapshot.revision());
+    assert_ne!(
+        current.primary_cleanup_blake3(),
+        snapshot.primary_cleanup_blake3()
+    );
+    let proof = verify_failed_retry_finish(&current)?;
+    let completed = finalize_failed_retry_finish(&current, proof)?;
+    assert_eq!(read_marker(&child.working_copy)?, completed);
+    assert_eq!(read_marker(&parent.working_copy)?, parent);
+    let mut inconsistent = completed;
+    inconsistent
+        .failed_retry_finish_evidence
+        .as_mut()
+        .unwrap()
+        .verified_primary_cleanup_blake3 = snapshot.primary_cleanup_blake3().map(str::to_owned);
+    assert!(
+        validate_persisted(
+            &open_store_connection()?,
+            current.task_key(),
+            &inconsistent,
+            current.revision().checked_add(1).unwrap(),
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn finish_inspection_preserves_nonterminal_stage_and_does_not_create_storage() -> Result<()> {
     if crate::common_utils::isolated_test_process() {
         return Ok(());
@@ -205,7 +346,7 @@ fn finish_inspection_preserves_nonterminal_stage_and_does_not_create_storage() -
     );
     assert!(inspect_failed_retry_finish(&root.path().join("not_created"))?.is_none());
     assert!(!state.exists());
-    let (_, mut child) = fixture(root.path())?;
+    let (_, mut child) = fixture(root.path(), false)?;
     child.stage = FastImgStageName::CleanupComplete;
     child.tier2_in_progress = true;
     write_marker(&child)?;
@@ -233,7 +374,7 @@ fn failed_retry_source_selection_requires_one_verified_child_without_time_guessi
     assert!(resolve_failed_retry_child_for_source(&source, "jxl")?.is_none());
     assert!(!state.exists());
     assert!(!source.exists());
-    let (parent, mut child) = fixture(root.path())?;
+    let (parent, mut child) = fixture(root.path(), false)?;
     assert_eq!(
         resolve_failed_retry_child_for_source(&source, "jxl")?,
         Some(child.clone())

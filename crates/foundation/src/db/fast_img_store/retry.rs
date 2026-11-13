@@ -131,7 +131,7 @@ struct Relation {
 }
 
 fn has_schema(conn: &Connection) -> Result<bool> {
-    Ok(inspect_store_schema_version(conn)? == Some(5))
+    Ok(matches!(inspect_store_schema_version(conn)?, Some(5..=6)))
 }
 
 fn hash_text(value: &str) -> Result<()> {
@@ -333,7 +333,7 @@ fn sidecar_from_row(
     }
 }
 
-fn admissions(conn: &Connection, key: &str) -> Result<BTreeMap<String, FailedRetryAdmission>> {
+pub(super) fn admissions(conn: &Connection, key: &str) -> Result<BTreeMap<String, FailedRetryAdmission>> {
     let values = conn.prepare("SELECT source_rel,parent_source_blake3,admitted_source_blake3,source_claim,
         xmp_rel,xmp_blake3,xmp_claim,aae_rel,aae_blake3,aae_claim FROM fast_img_retry_sources WHERE task_key=?1 ORDER BY source_rel")?
         .query_map([key],|row| Ok(FailedRetryAdmission { source_rel:row.get(0)?,parent_source_blake3:row.get(1)?,
@@ -428,7 +428,11 @@ fn manifest_hash(
         &child.tool_snapshot_identity,
     );
     // Keep historical manifests byte-identical while binding the explicit unpinned mode.
-    let version = if child.tool_snapshot_disabled {
+    let version = if child.primary_cleanup_journal && child.tool_snapshot_disabled {
+        4u8
+    } else if child.primary_cleanup_journal {
+        3u8
+    } else if child.tool_snapshot_disabled {
         2u8
     } else {
         1u8
@@ -855,6 +859,7 @@ pub fn create_or_resume_failed_retry(
         let key=key_for_canonical(text(&parent.child)?);
         ensure!(read_snapshot(&tx,&key)?.is_none(),"Stable retry output is already reserved by another task");
         let mut child=WorkingCopyMarker::new(parent.marker.src_dir.clone(),parent.child.clone(),values.len()).with_strategy(parent.marker.strategy.clone());
+        child.primary_cleanup_journal=parent.marker.primary_cleanup_journal;
         child.processing_contract.clone_from(&parent.marker.processing_contract);
         child.metadata_policy_version=metadata_policy_version(&child)?;
         if let FailedRetryDeliveryIntent::Photos{library_path,naming_policy}=delivery {

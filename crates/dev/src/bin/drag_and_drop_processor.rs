@@ -1187,8 +1187,21 @@ fn bind_scanned_sources(
     commands: Vec<LaunchCommand>,
     scan: &ContentScan,
 ) -> Result<Vec<LaunchCommand>> {
-    let image_sources = scan.selected_sources(ScanRoute::Image);
-    let video_sources = scan.selected_sources(ScanRoute::Video);
+    let mut image_sources = std::collections::HashMap::new();
+    let mut video_sources = std::collections::HashMap::new();
+    for entry in scan.entries.iter().filter(|entry| entry.selected) {
+        let sources = match entry.route {
+            ScanRoute::Image => &mut image_sources,
+            ScanRoute::Video => &mut video_sources,
+            ScanRoute::Sidecar | ScanRoute::CopyOnly => continue,
+        };
+        let path = entry.source.path();
+        anyhow::ensure!(
+            sources.insert(path.as_os_str(), &entry.source).is_none(),
+            "media worker source was not uniquely observed during preflight: {}",
+            path.display()
+        );
+    }
     anyhow::ensure!(
         image_sources.len() == scan.img_count && video_sources.len() == scan.vid_count,
         "scanned media source identities do not cover the routed inventory"
@@ -1209,21 +1222,17 @@ fn bind_scanned_sources(
                 .get(1)
                 .context("media worker command omitted its input")?;
             let input = Path::new(input);
-            let selected = sources
-                .iter()
-                .filter(|source| source.path() == input)
-                .cloned()
-                .collect::<Vec<_>>();
-            anyhow::ensure!(
-                selected.len() == 1,
-                "media worker source was not uniquely observed during preflight: {}",
-                input.display()
-            );
+            let source = *sources.get(input.as_os_str()).with_context(|| {
+                format!(
+                    "media worker source was not uniquely observed during preflight: {}",
+                    input.display()
+                )
+            })?;
             command.args.extend([
                 "--planned-source".to_owned(),
-                foundation::batch::planned_source::PlannedSource::encode(&selected[0])?,
+                foundation::batch::planned_source::PlannedSource::encode(source)?,
             ]);
-            Ok(command.with_sources(selected))
+            Ok(command.with_sources(vec![source.clone()]))
         })
         .collect()
 }
@@ -1457,7 +1466,8 @@ fn run_fast_img_post_success(
     if let Some(error) = cleanup_error {
         bail!("fresh Photos/output cleanup verification failed; remaining outputs retained: {error}");
     }
-    if verify.warnings == Some(false)
+    if args.shortest_path
+        && verify.warnings == Some(false)
         && !failed_only
         && let Some(source_root) = source_root
         && source_root
@@ -1714,7 +1724,18 @@ fn run_fast_img_task(
     session: &AppSession,
 ) -> Result<FastImgTaskOutcome> {
     let target = args.inputs.first().context("input required")?;
-    let (command, output) = fast_img_launch_command(args, project_root, target)?;
+    let (mut command, output) = fast_img_launch_command(args, project_root, target)?;
+    if !args.dry_run && !args.retry && !args.resume && !args.retry_failed {
+        match foundation::fast_img_store::read_marker(&output) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                bind_fast_img_input_scope(&mut command, target)?;
+            }
+            Err(error) => {
+                return Err(error).context("inspect Fast IMG output before launcher preflight");
+            }
+        }
+    }
     let retry_request = if args.dry_run {
         None
     } else {
@@ -1757,7 +1778,9 @@ fn fast_img_launch_command(
     project_root: &Path,
     target: &Path,
 ) -> Result<(LaunchCommand, PathBuf)> {
+    target.to_str().context("Fast IMG input path is not UTF-8")?;
     let output = resolve_fast_img_output_for_run(args, target)?;
+    output.to_str().context("Fast IMG output path is not UTF-8")?;
     let img_bin = cli_binary(project_root, "img");
     let retry = args.retry || args.resume;
     let mut command = LaunchCommand::from_argv(build_fast_img_command(
@@ -1786,6 +1809,15 @@ fn fast_img_launch_command(
     push_img_policy_args(&mut command.args, args)?;
     let command = command.with_error_mode(args.img_error_mode);
     Ok((command, output))
+}
+
+fn bind_fast_img_input_scope(command: &mut LaunchCommand, target: &Path) -> Result<()> {
+    let scope = foundation::batch::fast_img_scope::FastImgInputScope::observe(target, true)
+        .context("observe Fast IMG input scope before launching the worker")?;
+    command
+        .args
+        .push(format!("--planned-fast-img-scope={}", scope.token()));
+    Ok(())
 }
 
 fn push_external_tool_snapshot_arg(command: &mut Vec<String>, args: &Args) {
@@ -4355,6 +4387,31 @@ mod tests {
                 .flat_map(|command| &command.sources)
                 .any(|source| source.verify_unchanged().is_err())
         );
+    }
+
+    #[test]
+    fn scanned_source_binding_rejects_duplicate_and_reused_path_spellings() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("synthetic.bin");
+        fs::write(&input, b"\xff\xd8\xff\xe0synthetic")?;
+        let mut scan =
+            dev::infra::drag_drop::inspect_content(temp.path(), ProcessingFilter::ImagesOnly)?;
+        let command = LaunchCommand::from_argv(vec![
+            "img".into(),
+            "run".into(),
+            input.to_str().context("synthetic path must be UTF-8")?.into(),
+        ])?;
+        assert!(bind_scanned_sources(vec![command.clone()], &scan).is_ok());
+
+        let mut alias = command.clone();
+        alias.args[1] = format!("{}/./synthetic.bin", temp.path().display());
+        assert_eq!(Path::new(&alias.args[1]), input);
+        assert!(bind_scanned_sources(vec![alias], &scan).is_err());
+
+        scan.entries.push(scan.entries[0].clone());
+        scan.img_count += 1;
+        assert!(bind_scanned_sources(vec![command], &scan).is_err());
+        Ok(())
     }
     use serial_test::serial;
     use std::path::{Path, PathBuf};
