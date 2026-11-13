@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::runtime_config::CachePolicy;
 
-pub const STORE_SCHEMA_VERSION: i32 = 6;
+pub const STORE_SCHEMA_VERSION: i32 = 7;
 pub const NS_PATH_TREE: &str = "path_tree";
 pub const NS_GATE1_PROOF: &str = "gate1_verified_file";
 pub const NS_CHECKPOINT: &str = "checkpoint";
@@ -169,6 +169,22 @@ const FAST_IMG_PRIMARY_CLEANUP_SCHEMA: &str = "CREATE TABLE fast_img_primary_cle
         source_blake3 TEXT NOT NULL,
         output_rel TEXT NOT NULL,
         output_blake3 TEXT NOT NULL,
+        entry_blake3 TEXT NOT NULL,
+        entry_claim TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('planned', 'removed')),
+        evidence_blake3 BLOB NOT NULL CHECK(length(evidence_blake3) = 32),
+        PRIMARY KEY(task_key, source_rel, entry_rel),
+        UNIQUE(task_key, entry_rel)
+    ) STRICT";
+
+const FAST_IMG_TIER2_CLEANUP_SCHEMA: &str = "CREATE TABLE fast_img_tier2_cleanup (
+        task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE RESTRICT,
+        source_rel TEXT NOT NULL,
+        entry_rel TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('media', 'xmp')),
+        source_blake3 TEXT NOT NULL,
+        asset_blake3 TEXT NOT NULL,
+        library_blake3 TEXT NOT NULL,
         entry_blake3 TEXT NOT NULL,
         entry_claim TEXT NOT NULL,
         state TEXT NOT NULL CHECK(state IN ('planned', 'removed')),
@@ -415,8 +431,19 @@ impl StorePathBinding {
         } else {
             OpenFlags::SQLITE_OPEN_READ_ONLY
         };
+        // SQLite rejects symlink ancestors even for an already bound application-root alias.
+        let directory = self
+            .directory
+            .as_ref()
+            .context("formal store directory is not bound")?;
+        let filename = self.path.file_name().context("formal database has no filename")?;
+        let database_path = directory.canonical.join(filename);
+        anyhow::ensure!(
+            self.directory_ready(false)?,
+            "formal store directory disappeared before opening"
+        );
         let connection = Connection::open_with_flags(
-            &self.path,
+            &database_path,
             mode | OpenFlags::SQLITE_OPEN_NOFOLLOW | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .with_context(|| format!("open formal SQLite store {}", self.path.display()))?;
@@ -957,18 +984,26 @@ fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()>
             "Older SQLite store contains conflicting retry objects; state retained without repair"
         );
     }
-    let cleanup_sql: Option<String> = conn
-        .query_row(
-            "SELECT sql FROM sqlite_schema WHERE name = 'fast_img_primary_cleanup'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let expected = (version >= 6).then_some(FAST_IMG_PRIMARY_CLEANUP_SCHEMA);
-    anyhow::ensure!(
-        cleanup_sql.as_deref() == expected,
-        "SQLite primary cleanup evidence schema conflicts with version {version}; state retained without repair"
-    );
+    for (table, required_since, schema) in [
+        (
+            "fast_img_primary_cleanup",
+            6,
+            FAST_IMG_PRIMARY_CLEANUP_SCHEMA,
+        ),
+        ("fast_img_tier2_cleanup", 7, FAST_IMG_TIER2_CLEANUP_SCHEMA),
+    ] {
+        let cleanup_sql: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .optional()?;
+        anyhow::ensure!(
+            cleanup_sql.as_deref() == (version >= required_since).then_some(schema),
+            "SQLite {table} evidence schema conflicts with version {version}; state retained without repair"
+        );
+    }
     Ok(())
 }
 
@@ -1204,6 +1239,19 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
         );
         tx.execute_batch(FAST_IMG_PRIMARY_CLEANUP_SCHEMA)
             .context("Failed to create primary cleanup evidence; state retained")?;
+        tx.execute(
+            "UPDATE store_metadata SET value=6 WHERE key='schema_version'",
+            [],
+        )?;
+        version = 6;
+    }
+    if version == 6 {
+        anyhow::ensure!(
+            schema_version(&tx)? == Some(6),
+            "SQLite v6 migration precondition changed"
+        );
+        tx.execute_batch(FAST_IMG_TIER2_CLEANUP_SCHEMA)
+            .context("Failed to create Tier-2 cleanup evidence; state retained")?;
         tx.execute(
             "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
             [STORE_SCHEMA_VERSION],
@@ -2005,6 +2053,39 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn formal_store_accepts_bound_root_alias_without_following_retargeting() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("original");
+        let other = temp.path().join("other");
+        fs::create_dir(&root)?;
+        fs::create_dir(&other)?;
+        let alias = temp.path().join("selected");
+        symlink(&root, &alias)?;
+        let _guard = set_test_store_path_for_tests(alias.join("cache/store.sqlite"));
+
+        assert!(open_store_readonly()?.is_none());
+        assert!(!root.join("cache").exists());
+        blob_put(NS_CHECKPOINT, "one", 1, None, b"retained")?;
+        let reader = open_store_readonly()?.context("bound database is missing")?;
+        assert_eq!(
+            read_blob(&reader, NS_CHECKPOINT, "one", 1)?.as_deref(),
+            Some(b"retained".as_slice())
+        );
+        drop(reader);
+
+        fs::remove_file(&alias)?;
+        symlink(&other, &alias)?;
+        assert!(open_store_readonly().is_err());
+        assert!(open_connection().is_err());
+        assert!(!other.join("cache").exists());
+        assert!(root.join("cache/store.sqlite").is_file());
+        Ok(())
+    }
+
+    #[test]
     fn formal_store_orphaned_sqlite_sidecars_are_not_empty_state() -> Result<()> {
         let root = tempfile::tempdir()?;
         for suffix in ["-wal", "-shm", "-journal"] {
@@ -2671,6 +2752,135 @@ mod tests {
         )?;
         tx.commit()?;
         assert_eq!(schema_version(&conn)?, Some(5));
+        Ok(())
+    }
+
+    fn seed_v6_store(store: &Path) -> Result<()> {
+        seed_v5_store(store)?;
+        let mut conn = Connection::open(store)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(FAST_IMG_PRIMARY_CLEANUP_SCHEMA)?;
+        tx.execute(
+            "UPDATE store_metadata SET value=6 WHERE key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+        assert_eq!(schema_version(&conn)?, Some(6));
+        Ok(())
+    }
+
+    #[test]
+    fn schema7_preserves_v6_primary_evidence_without_inventing_tier2_evidence() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v6_store(&store)?;
+        let conn = Connection::open(&store)?;
+        seed_fast_img_schema_rows(&conn)?;
+        conn.execute(
+            "INSERT INTO fast_img_primary_cleanup VALUES(
+                'task','synthetic.jpg','synthetic.jpg','media','src','synthetic.jxl','out',
+                'src','primary claim','planned',zeroblob(32))",
+            [],
+        )?;
+        drop(conn);
+
+        let before = std::fs::read(&store)?;
+        let mut reader = Connection::open_with_flags(&store, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let snapshot = reader.transaction()?;
+        assert_eq!(inspect_store_schema_version(&snapshot)?, Some(6));
+        preview_path_tree_at(&snapshot, CachePolicy::default(), || Ok(100))?;
+        assert!(
+            snapshot
+                .prepare("SELECT * FROM fast_img_tier2_cleanup")
+                .is_err()
+        );
+        snapshot.commit()?;
+        drop(reader);
+        assert_eq!(std::fs::read(&store)?, before);
+
+        let _guard = set_test_store_path_for_tests(store);
+        let mut conn = open_connection()?;
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(7));
+        let (claim, state): (String, String) = conn.query_row(
+            "SELECT entry_claim,state FROM fast_img_primary_cleanup WHERE task_key='task'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(
+            (claim.as_str(), state.as_str()),
+            ("primary claim", "planned")
+        );
+        let count = |conn: &Connection| -> Result<i64> {
+            Ok(
+                conn.query_row("SELECT count(*) FROM fast_img_tier2_cleanup", [], |row| {
+                    row.get(0)
+                })?,
+            )
+        };
+        assert_eq!(count(&conn)?, 0);
+        let insert = "INSERT INTO fast_img_tier2_cleanup VALUES(
+            ?1,?2,'synthetic.heic','media','src','asset','library','src','claim',?3,zeroblob(32))";
+        assert!(
+            conn.execute(insert, ["missing", "synthetic.heic", "planned"])
+                .is_err()
+        );
+        assert!(
+            conn.execute(insert, ["task", "synthetic.heic", "unknown"])
+                .is_err()
+        );
+        conn.execute(insert, ["task", "synthetic.heic", "planned"])?;
+        assert!(
+            conn.execute(insert, ["task", "another.heic", "planned"])
+                .is_err()
+        );
+        assert!(
+            conn.execute(
+                "UPDATE fast_img_tier2_cleanup SET evidence_blake3=zeroblob(31)",
+                []
+            )
+            .is_err()
+        );
+        prune_path_tree_cache(&mut conn, CachePolicy::default())?;
+        assert_eq!(count(&conn)?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn schema7_migration_rolls_back_and_rejects_conflicting_tier2_schema() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v6_store(&store)?;
+        let conn = Connection::open(&store)?;
+        conn.execute_batch(
+            "CREATE TRIGGER reject_tier2_extension BEFORE UPDATE OF value ON store_metadata
+             WHEN NEW.value=7 BEGIN SELECT RAISE(ABORT,'synthetic Tier-2 schema failure'); END",
+        )?;
+        drop(conn);
+        let _guard = set_test_store_path_for_tests(store.clone());
+        assert!(
+            format!("{:#}", open_connection().unwrap_err())
+                .contains("synthetic Tier-2 schema failure")
+        );
+        let conn = Connection::open(&store)?;
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(6));
+        assert!(
+            conn.prepare("SELECT * FROM fast_img_tier2_cleanup")
+                .is_err()
+        );
+        conn.execute_batch("DROP TRIGGER reject_tier2_extension")?;
+        conn.execute_batch(
+            &FAST_IMG_TIER2_CLEANUP_SCHEMA.replace("CHECK(state IN ('planned', 'removed'))", ""),
+        )?;
+        assert!(inspect_store_schema_version(&conn).is_err());
+        conn.execute(
+            "UPDATE store_metadata SET value=7 WHERE key='schema_version'",
+            [],
+        )?;
+        assert!(inspect_store_schema_version(&conn).is_err());
+        drop(conn);
+        let before = std::fs::read(&store)?;
+        assert!(open_connection().is_err());
+        assert_eq!(std::fs::read(&store)?, before);
         Ok(())
     }
 

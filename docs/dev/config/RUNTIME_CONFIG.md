@@ -1130,8 +1130,13 @@ admission retains the parent's source hash separately from the newly observed
 source hash and native identity, with explicit XMP/AAE presence or absence.
 Changed source bytes are a new admission, not an assertion that old evidence
 still matches. Unreadable, ambiguous or linked resources cannot be admitted by
-guessing. Current admission requires the entire selected failure set to be
-observable; per-file blocked admission is not implemented.
+guessing. Admission reports the affected files and reasons when a source or
+companion cannot be read or uniquely associated. The selected set remains
+unprocessed if admission is blocked. A new child is reserved only after the
+entire selected failure set passes admission.
+With an exact saved parent, an absent source directory and no existing child
+can be diagnosed read-only. The diagnostic cannot start a child if the source
+directory reappears during the check.
 
 One parent snapshot reserves one stable child location. Before creating that
 reservation, the processing entry holds the prospective output lease and refuses
@@ -1235,13 +1240,17 @@ not establish that production route or real Photos acceptance.
 ## Canonical Fast IMG State
 
 Fast IMG task headers, source outcomes, Photos request/entry references and
-verified receipt records use the existing Core SQLite store, schema 6. Large
+verified receipt records use the existing Core SQLite store, schema 7. Large
 per-file collections are normalized rows, not a second authoritative JSON blob.
 One IMMEDIATE transaction publishes a logical snapshot; failed writes and commits
 preserve the last committed snapshot. The writer validates the saved state first,
 updates only changed rows, and verifies exact readback before commit. Identical
 logical snapshots make no row changes. Submission history is append-only, and
 missing historical coverage cannot be promoted to complete coverage.
+
+SQLite opens the verified cache directory's canonical path so macOS root aliases
+such as `/var` work with `NOFOLLOW`. The configured root remains identity-bound,
+and cache-directory or database replacement still stops state access.
 
 Canonical source/output paths bind the header, indexed task locator and complete
 snapshot digest. The same output cannot silently become a different task or
@@ -1340,11 +1349,24 @@ converted source. The fresh finish proof and its compare-and-finalize
 transaction bind the exact journal digest. Earlier tasks keep their recorded
 recovery contract.
 
-Tier-2 originals use their separate custody evidence. The worker commits
-their completed state before pruning the selected source directory. Eligible
-subdirectories can be pruned earlier without removing the selected root. For
-a completed journaled local delivery, an explicit retry of the source directory
-can finish pruning that root after checking the current outputs again.
+New Fast IMG tasks use a separate schema 7 cleanup journal for Tier-2 original
+delivery. Before unlink the worker commits the exact source and optional XMP
+claims against the bound Photos library, asset UUID, and complete resource
+hashes. It records each successful unlink separately. A planned entry that
+is absent after interruption retains an unknown unlink outcome. The worker
+can finish a remaining XMP only if its original native identity, complete
+bytes, and fresh Photos custody still match. Failed-only recovery checks the
+original admission and binds the Tier-2 journal digest to any missing-root
+finalization receipt.
+
+Older tasks retain XMP when the media is already absent. An XMP selected for
+more than one source blocks cleanup before any unlink. The worker commits
+Tier-2 completion before pruning the selected source directory. Eligible
+subdirectories can be pruned earlier. A completed journaled local delivery
+can explicitly retry pruning its source directory after rechecking its outputs.
+An ordinary original-only task may resume with an empty primary inventory
+when its saved and current primary counts and records agree. A checkpoint
+that expects primary files still needs their BLAKE3 records.
 
 ## Standard Worker Preflight Admission
 

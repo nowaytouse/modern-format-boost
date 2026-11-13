@@ -87,6 +87,9 @@ impl FastImgRetryRequest {
                     if let Some(digest) = before.primary_cleanup_blake3() {
                         snapshot["primary_cleanup_blake3"] = serde_json::json!(digest);
                     }
+                    if let Some(digest) = before.tier2_cleanup_blake3() {
+                        snapshot["tier2_cleanup_blake3"] = serde_json::json!(digest);
+                    }
                     snapshot
                 });
         value
@@ -484,6 +487,8 @@ impl AppSession {
                     && evidence.verified_snapshot_blake3 == before.snapshot_blake3()
                     && evidence.verified_primary_cleanup_blake3.as_deref()
                         == before.primary_cleanup_blake3()
+                    && evidence.verified_tier2_cleanup_blake3.as_deref()
+                        == before.tier2_cleanup_blake3()
                     && evidence.verified_revision == before.revision()
                     && evidence.verified_stage == before.marker().stage
                     && evidence.verified_tier2_in_progress == before.marker().tier2_in_progress

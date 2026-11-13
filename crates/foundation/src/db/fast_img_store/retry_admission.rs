@@ -4,7 +4,28 @@ use super::{FailedRetryAdmission, FailedRetryParent, FailedRetrySidecar};
 use crate::batch::{DiscoveredSource, planned_source::PlannedSource};
 use crate::pipeline::verification::{FastImgEncodingParameters, WorkingCopyMarker};
 use anyhow::{Context, Result, ensure};
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+
+/// Admission diagnostics are observations, never a saved outcome or a new work set.
+#[derive(Debug)]
+pub struct FailedRetryAdmissionBlocked {
+    pub selected: usize,
+    pub issues: BTreeMap<String, String>,
+}
+
+impl std::fmt::Display for FailedRetryAdmissionBlocked {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "MFB_RETRY_ADMISSION_BLOCKED: {} of {} failed-only source(s) could not be admitted; no media were processed",
+            self.issues.len(),
+            self.selected
+        )
+    }
+}
+
+impl std::error::Error for FailedRetryAdmissionBlocked {}
 
 fn relative(value: &str) -> Result<&Path> {
     let path = Path::new(value);
@@ -100,12 +121,62 @@ fn capture(root: &Path, rel: &str, parent_hash: &str) -> Result<FailedRetryAdmis
 pub fn capture_failed_retry_admissions(
     parent: &FailedRetryParent,
 ) -> Result<Vec<FailedRetryAdmission>> {
-    parent
-        .marker()
-        .failed_sources
-        .iter()
-        .map(|(rel, failure)| capture(&parent.marker().src_dir, rel, &failure.src))
-        .collect()
+    let marker = parent.marker();
+    capture_set(
+        &marker.src_dir,
+        marker.failed_sources.len(),
+        marker
+            .failed_sources
+            .iter()
+            .map(|(rel, failure)| (rel.as_str(), failure.src.as_str())),
+    )
+}
+
+fn capture_set<'a>(
+    root: &Path,
+    selected: usize,
+    sources: impl Iterator<Item = (&'a str, &'a str)>,
+) -> Result<Vec<FailedRetryAdmission>> {
+    let mut admissions = Vec::new();
+    let mut issues = BTreeMap::new();
+    for (rel, hash) in sources {
+        crate::batch_control::checkpoint()?;
+        match capture(root, rel, hash) {
+            Ok(admission) => admissions.push(admission),
+            Err(error) => {
+                issues.insert(rel.to_owned(), format!("{error:#}"));
+            }
+        }
+    }
+    let mut companion_owners = BTreeMap::<&str, Vec<&str>>::new();
+    for admission in &admissions {
+        for sidecar in [&admission.xmp, &admission.aae] {
+            if let FailedRetrySidecar::Present { relative_path, .. } = sidecar {
+                companion_owners
+                    .entry(relative_path)
+                    .or_default()
+                    .push(&admission.source_rel);
+            }
+        }
+    }
+    for (sidecar, owners) in companion_owners
+        .into_iter()
+        .filter(|(_, owners)| owners.len() > 1)
+    {
+        for owner in owners {
+            let reason = issues.entry(owner.to_owned()).or_insert_with(String::new);
+            if !reason.is_empty() {
+                reason.push_str(". ");
+            }
+            reason.push_str(&format!(
+                "companion {sidecar:?} matches multiple selected sources"
+            ));
+        }
+    }
+    if !issues.is_empty() {
+        return Err(FailedRetryAdmissionBlocked { selected, issues }.into());
+    }
+    Ok(admissions)
 }
 
 fn verify_companion(
@@ -162,24 +233,31 @@ pub fn verify_failed_retry_admission(root: &Path, admission: &FailedRetryAdmissi
 /// verify retained companions without inventing a new live source observation.
 ///
 /// Missing XMP needs exact final-output custody; AAE has no implicit deletion permission.
+/// `tier2_cleanup_verified` requires fresh journal verification for this source.
 ///
 /// # Errors
 /// Rejects changed retained companions or a missing companion without bound custody evidence.
 pub fn verify_failed_retry_retained_companions(
     marker: &WorkingCopyMarker,
     admission: &FailedRetryAdmission,
+    tier2_cleanup_verified: bool,
 ) -> Result<()> {
     let root = &marker.src_dir;
     let source = root.join(relative(&admission.source_rel)?);
-    let missing_parent = if marker.primary_cleanup_journal {
+    let journal_verified_xmp = marker.tier2_cleanup_journal && tier2_cleanup_verified;
+    let missing_parent = if marker.primary_cleanup_journal || journal_verified_xmp {
         crate::pipeline::verification::validate_no_symlink_components(
             root,
             relative(&admission.source_rel)?,
-        ).map_err(anyhow::Error::msg)?;
+        )
+        .map_err(anyhow::Error::msg)?;
         let parent = source.parent().context("Admitted source has no parent")?;
         match std::fs::symlink_metadata(parent) {
             Ok(metadata) => {
-                ensure!(metadata.is_dir(), "Failed-only companion parent is not a directory");
+                ensure!(
+                    metadata.is_dir(),
+                    "Failed-only companion parent is not a directory"
+                );
                 false
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
@@ -191,9 +269,20 @@ pub fn verify_failed_retry_retained_companions(
     verify_companion(
         root,
         &admission.aae,
-        if missing_parent { None } else { crate::metadata::find_aae_sidecar(&source)? },
+        if missing_parent {
+            None
+        } else {
+            crate::metadata::find_aae_sidecar(&source)?
+        },
     )?;
-    let current = if missing_parent { None } else { crate::metadata::find_xmp_sidecar(&source)? };
+    if journal_verified_xmp {
+        return Ok(());
+    }
+    let current = if missing_parent {
+        None
+    } else {
+        crate::metadata::find_xmp_sidecar(&source)?
+    };
     if let (FailedRetrySidecar::Present { blake3, .. }, None) = (&admission.xmp, &current) {
         let entry = marker
             .blake3_log
@@ -240,6 +329,50 @@ pub fn verify_failed_retry_retained_companions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_only_capture_reports_each_blocked_source_without_returning_a_partial_set()
+    -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        for file in ["valid.jpg", "shared.jpg", "shared.png", "ambiguous.jpg"] {
+            std::fs::write(root.join(file), b"synthetic source")?;
+        }
+        for file in ["shared.xmp", "ambiguous.xmp", "ambiguous.jpg.xmp"] {
+            std::fs::write(root.join(file), b"<xmp/>")?;
+        }
+        let failed = [
+            "missing.jpg",
+            "shared.png",
+            "shared.jpg",
+            "ambiguous.jpg",
+            "valid.jpg",
+        ];
+        let old_hash = blake3::hash(b"historical source").to_hex().to_string();
+        let error = capture_set(
+            &root,
+            failed.len(),
+            failed.into_iter().map(|file| (file, old_hash.as_str())),
+        )
+        .unwrap_err()
+        .downcast::<FailedRetryAdmissionBlocked>()?;
+        assert_eq!(error.selected, failed.len());
+        assert_eq!(
+            error.issues.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["ambiguous.jpg", "missing.jpg", "shared.jpg", "shared.png"],
+        );
+        assert!(error.issues["ambiguous.jpg"].contains("ambiguous XMP"));
+        assert!(error.issues["missing.jpg"].contains("inspect failed-only source"));
+        for file in ["shared.jpg", "shared.png"] {
+            assert!(error.issues[file].contains("matches multiple selected sources"));
+        }
+        assert_eq!(
+            capture_set(&root, 1, [("valid.jpg", old_hash.as_str())].into_iter())?.len(),
+            1
+        );
+        assert_eq!(std::fs::read(root.join("shared.xmp"))?, b"<xmp/>");
+        Ok(())
+    }
 
     #[test]
     fn new_admission_records_changed_bytes_but_resume_never_recaptures_them() -> Result<()> {

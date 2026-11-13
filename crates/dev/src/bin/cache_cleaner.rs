@@ -894,10 +894,13 @@ fn add_fast_img_state_namespace(
               + COALESCE((SELECT SUM(length(source_json)) FROM fast_img_migrations),0)"
     };
     let mut payload_bytes = conn.query_row(payload_query, [], |row| nonnegative_column(row, 0))?;
-    if version >= 6 {
+    for (table, required_since) in [("fast_img_primary_cleanup", 6), ("fast_img_tier2_cleanup", 7)] {
+        if version < required_since {
+            continue;
+        }
         let cleanup_bytes = conn.query_row(
-            "SELECT COALESCE(SUM(length(CAST(entry_claim AS BLOB)) + length(evidence_blake3)),0)
-             FROM fast_img_primary_cleanup",
+            &format!("SELECT COALESCE(SUM(length(CAST(entry_claim AS BLOB)) + length(evidence_blake3)),0)
+                      FROM {table}"),
             [],
             |row| nonnegative_column(row, 0),
         )?;
@@ -2248,7 +2251,8 @@ mod tests {
         let (cache, conn, _marker) = fast_img_state_fixture(&root);
         // Reproduce the exact previous release shape using only disposable data.
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_cleanup;
+            "DROP TABLE fast_img_tier2_cleanup;
+             DROP TABLE fast_img_primary_cleanup;
              DROP TABLE fast_img_retry_sources;
              DROP TABLE fast_img_retry_tasks;
              ALTER TABLE fast_img_migrations DROP COLUMN directory_snapshot_blake3;
@@ -2367,6 +2371,16 @@ mod tests {
             [claim],
         )
         .unwrap();
+        let tier2_claim = "合成 original-format claim";
+        conn.execute(
+            "INSERT INTO fast_img_tier2_cleanup (
+                task_key,source_rel,entry_rel,kind,source_blake3,asset_blake3,library_blake3,
+                entry_blake3,entry_claim,state,evidence_blake3
+             ) SELECT task_key,'one.heic','one.heic','media','src','asset','library',
+                      'src',?1,'planned',zeroblob(32) FROM fast_img_tasks",
+            [tier2_claim],
+        )
+        .unwrap();
         // Storage accounting uses actual evidence bytes. Other tests exercise
         // durable receipt integrity independently from these synthetic columns.
         let header_bytes = conn
@@ -2380,12 +2394,13 @@ mod tests {
         add_fast_img_state_namespace(&conn, &mut namespaces, 8).unwrap();
         assert_eq!(
             namespaces[0].payload_bytes,
-            header_bytes + u64::try_from(claim.len() + 32).unwrap()
+            header_bytes + u64::try_from(claim.len() + tier2_claim.len() + 64).unwrap()
         );
         assert!(!namespaces[0].rebuildable);
 
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_cleanup;
+            "DROP TABLE fast_img_tier2_cleanup;
+             DROP TABLE fast_img_primary_cleanup;
              UPDATE store_metadata SET value=5 WHERE key='schema_version';",
         )
         .unwrap();

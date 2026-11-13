@@ -370,7 +370,7 @@ fn read_backups(conn: &Connection, origin: Option<&Path>) -> Result<Vec<Backup>>
     let version = crate::db::mfb_sqlite_store::inspect_store_schema_version(conn)?;
     let snapshot_columns = match version {
         Some(3) => "NULL,NULL",
-        Some(4..=6) => {
+        Some(4..=crate::mfb_sqlite_store::STORE_SCHEMA_VERSION) => {
             "CASE WHEN length(directory_snapshot)<=?1 THEN directory_snapshot ELSE NULL END,directory_snapshot_blake3"
         }
         _ => bail!("Legacy migration backup requires a recognized structured state schema"),

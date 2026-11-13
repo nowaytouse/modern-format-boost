@@ -9634,13 +9634,15 @@ private final class AppController: NSObject, NSWindowDelegate {
         let selectedInput = source + "/one.jpeg"
         let snapshot: [String: Any] = ["snapshot_blake3": String(repeating: "c", count: 64), "revision": 2,
             "manifest_blake3": String(repeating: "d", count: 64), "task_key": String(repeating: "e", count: 64),
-            "primary_cleanup_blake3": String(repeating: "f", count: 64)]
+            "primary_cleanup_blake3": String(repeating: "f", count: 64),
+            "tier2_cleanup_blake3": String(repeating: "a", count: 64)]
         var finalRequest = reference
         finalRequest["input_path"] = selectedInput; finalRequest["child_snapshot_before"] = snapshot
         let finishEvidence: [String: Any] = ["schema": 1, "task_key": String(repeating: "e", count: 64),
             "request_key": requestKey, "manifest_blake3": String(repeating: "d", count: 64),
             "verified_snapshot_blake3": String(repeating: "c", count: 64), "verified_revision": 2,
             "verified_primary_cleanup_blake3": String(repeating: "f", count: 64),
+            "verified_tier2_cleanup_blake3": String(repeating: "a", count: 64),
             "verified_stage": "gate1_passed", "verified_tier2_in_progress": false, "verified_error": NSNull(),
             "source_root_observation": "not_found", "verified_output_count": 3,
             "verified_primary_photos_count": 0, "verified_original_photos_count": 0,
@@ -9711,6 +9713,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let evidenceMutations: [(String, Any)] = [("verified_revision", 3), ("task_key", parentKey),
             ("manifest_blake3", parentKey), ("verified_snapshot_blake3", parentKey),
             ("verified_primary_cleanup_blake3", parentKey), ("verified_primary_cleanup_blake3", NSNull()),
+            ("verified_tier2_cleanup_blake3", requestKey), ("verified_tier2_cleanup_blake3", NSNull()),
             ("source_root_observation", "mfb_deleted"), ("verified_output_count", 0)]
         for (key, value) in evidenceMutations {
             var evidence = finishEvidence; evidence[key] = value

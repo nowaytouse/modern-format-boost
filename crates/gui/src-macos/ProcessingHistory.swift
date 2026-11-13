@@ -283,10 +283,11 @@ struct FastImgRetryReference: Decodable, Equatable {
         let manifestBlake3: String
         let taskKey: String
         let primaryCleanupBlake3: String?
+        let tier2CleanupBlake3: String?
 
         var valid: Bool {
             revision >= 0 && [snapshotBlake3, manifestBlake3, taskKey].allSatisfy(FastImgFailedRetryAvailable.hash)
-                && (primaryCleanupBlake3.map(FastImgFailedRetryAvailable.hash) ?? true)
+                && [primaryCleanupBlake3, tier2CleanupBlake3].compactMap { $0 }.allSatisfy(FastImgFailedRetryAvailable.hash)
         }
     }
     struct FinishEvidence: Decodable, Equatable {
@@ -296,6 +297,7 @@ struct FastImgRetryReference: Decodable, Equatable {
         let manifestBlake3: String
         let verifiedSnapshotBlake3: String
         let verifiedPrimaryCleanupBlake3: String?
+        let verifiedTier2CleanupBlake3: String?
         let verifiedRevision: Int64
         let verifiedStage: String
         let verifiedTier2InProgress: Bool
@@ -311,6 +313,7 @@ struct FastImgRetryReference: Decodable, Equatable {
                   schema == 1, taskKey == before.taskKey, requestKey == reference.requestKey,
                   manifestBlake3 == before.manifestBlake3, verifiedSnapshotBlake3 == before.snapshotBlake3,
                   verifiedPrimaryCleanupBlake3 == before.primaryCleanupBlake3,
+                  verifiedTier2CleanupBlake3 == before.tier2CleanupBlake3,
                   verifiedRevision == before.revision, sourceRootObservation == "not_found",
                   ["gate1_passed", "gate3_passed", "cleanup_complete"].contains(verifiedStage),
                   verifiedStage != "cleanup_complete" || verifiedTier2InProgress,
@@ -387,8 +390,8 @@ struct FastImgRetryReference: Decodable, Equatable {
         else { throw HostError(message: localized("retry.invalid")) }
         if let snapshot = object["child_snapshot_before"] as? [String: Any] {
             var keys = Set(snapshot.keys)
-            if keys.remove("primary_cleanup_blake3") != nil {
-                guard let digest = snapshot["primary_cleanup_blake3"] as? String, FastImgFailedRetryAvailable.hash(digest)
+            for field in ["primary_cleanup_blake3", "tier2_cleanup_blake3"] where keys.remove(field) != nil {
+                guard let digest = snapshot[field] as? String, FastImgFailedRetryAvailable.hash(digest)
                 else { throw HostError(message: localized("retry.invalid")) }
             }
             guard keys == ["snapshot_blake3", "revision", "manifest_blake3", "task_key"]
@@ -402,8 +405,8 @@ struct FastImgRetryReference: Decodable, Equatable {
             guard let evidence = object["evidence"] as? [String: Any]
             else { throw HostError(message: localized("retry.invalid")) }
             var keys = Set(evidence.keys)
-            if keys.remove("verified_primary_cleanup_blake3") != nil {
-                guard let digest = evidence["verified_primary_cleanup_blake3"] as? String, FastImgFailedRetryAvailable.hash(digest)
+            for field in ["verified_primary_cleanup_blake3", "verified_tier2_cleanup_blake3"] where keys.remove(field) != nil {
+                guard let digest = evidence[field] as? String, FastImgFailedRetryAvailable.hash(digest)
                 else { throw HostError(message: localized("retry.invalid")) }
             }
             guard keys == evidenceFields

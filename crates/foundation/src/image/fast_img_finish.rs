@@ -618,6 +618,7 @@ fn verify_with(
             manifest_blake3: snapshot.manifest_blake3().to_owned(),
             verified_snapshot_blake3: snapshot.snapshot_blake3().to_owned(),
             verified_primary_cleanup_blake3: snapshot.primary_cleanup_blake3().map(str::to_owned),
+            verified_tier2_cleanup_blake3: snapshot.tier2_cleanup_blake3().map(str::to_owned),
             verified_revision: snapshot.revision(),
             verified_stage: marker.stage.clone(),
             verified_tier2_in_progress: marker.tier2_in_progress,
@@ -790,6 +791,136 @@ mod tests {
             incloud: Some(true),
             ismissing: false,
         }
+    }
+
+    #[test]
+    fn finish_only_original_photos_requires_and_binds_tier2_cleanup_journal() -> Result<()> {
+        use super::super::{SourceUnlinkEvent, SourceUnlinkKind, Tier2CleanupObserver};
+        use crate::fast_img_store::{
+            Tier2CleanupJournal, capture_failed_retry_admissions, create_or_resume_failed_retry,
+            finalize_failed_retry_finish, inspect_failed_retry_finish, inspect_failed_retry_parent,
+        };
+
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        unsafe { std::env::remove_var("MFB_PHOTOS_LIBRARY_PATH") };
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().canonicalize()?;
+        let _state = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            root.join("state").to_str().unwrap(),
+        );
+        let source = root.join("source-original");
+        fs::create_dir(&source)?;
+        let input = source.join("original.jpg");
+        let bytes = b"synthetic original Photos resource";
+        fs::write(&input, bytes)?;
+        let hash = blake3::hash(bytes).to_hex().to_string();
+        let mut parent = WorkingCopyMarker::new(source.clone(), root.join("parent-original"), 1);
+        parent.stage = FastImgStageName::CleanupComplete;
+        parent.tier2_cleanup_journal = true;
+        parent.processing_contract = Some(FastImgProcessingContract {
+            schema: 1,
+            tool_policy: crate::runtime_config::ToolPolicy::Single,
+            fallback_policy: crate::runtime_config::FallbackPolicy::Strict,
+            encoding: FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: crate::runtime_config::JpegEffortSearch::Full,
+                archive: false,
+                allow_expert_options: false,
+            },
+        });
+        parent.failed_sources.insert(
+            "original.jpg".into(),
+            SkippedSourceEntry {
+                src: hash.clone(),
+                reason: "synthetic retained failure".into(),
+            },
+        );
+        write_marker_atomic(&parent)?;
+        let reference = inspect_failed_retry_parent(&parent.working_copy)?;
+        let admissions = capture_failed_retry_admissions(&reference)?;
+        let library = root.join("synthetic.photoslibrary");
+        fs::create_dir_all(library.join("database"))?;
+        fs::write(library.join("database/Photos.sqlite"), b"synthetic database")?;
+        let original = library.join("original.jpg");
+        fs::write(&original, bytes)?;
+        let delivery = FailedRetryDeliveryIntent::Photos {
+            library_path: Some(library.clone()),
+            naming_policy: super::super::current_photos_import_naming_policy(),
+        };
+        let mut child = create_or_resume_failed_retry(&reference, &admissions, &delivery, None)?;
+        let asset = LibraryAssetRecord {
+            rel_path: "original.jpg".into(),
+            blake3: hash.clone(),
+            sync_status: "photos_local".into(),
+            photos_uuid: Some(UUID.into()),
+            ..Default::default()
+        };
+        child.tier2_imported_assets.push(asset.clone());
+        child.stage = FastImgStageName::CleanupComplete;
+        child.tier2_in_progress = true;
+        write_marker_atomic(&child)?;
+
+        let inspect = || {
+            inspect_failed_retry_finish(&child.working_copy)?
+                .context("synthetic child is not a recoverable snapshot")
+        };
+        let verify = |snapshot: &FailedRetryFinishSnapshot| {
+            verify_with(
+                snapshot,
+                &mut |ids, target| {
+                    assert_eq!(ids, &[UUID]);
+                    assert_eq!(target, library);
+                    Ok(vec![FastImgLibraryAssetProbe {
+                        uuid: UUID.into(),
+                        path: original.clone(),
+                        iscloudasset: false,
+                        incloud: Some(true),
+                        ismissing: false,
+                    }])
+                },
+                &mut |_| Ok(()),
+                &mut |_, _| Ok(false),
+            )
+        };
+
+        let temporarily_moved = root.join("retained-original");
+        fs::rename(&source, &temporarily_moved)?;
+        let error = verify(&inspect()?).unwrap_err();
+        assert!(error.to_string().contains("missing required Tier 2 cleanup intent"));
+        fs::rename(&temporarily_moved, &source)?;
+
+        let mut journal = Tier2CleanupJournal::open(&child)?;
+        let mut observe =
+            |event| journal.observe(&asset, event, SourceUnlinkKind::Media, &input, &hash);
+        observe(SourceUnlinkEvent::Intent)?;
+        observe(SourceUnlinkEvent::Ready)?;
+        fs::remove_file(&input)?;
+        fs::remove_dir(&source)?;
+        let snapshot = inspect()?;
+        let proof = verify(&snapshot)?;
+        assert_eq!(proof.evidence().verified_original_photos_count, 1);
+        assert_eq!(
+            proof.evidence().verified_tier2_cleanup_blake3.as_deref(),
+            snapshot.tier2_cleanup_blake3()
+        );
+
+        fs::create_dir(&source)?;
+        observe(SourceUnlinkEvent::Removed)?;
+        fs::remove_dir(&source)?;
+        let error = finalize_failed_retry_finish(&snapshot, proof).unwrap_err();
+        assert!(error.to_string().contains("MFB_FINISH_STATE_CHANGED"), "{error}");
+        let current = inspect()?;
+        assert_eq!(current.revision(), snapshot.revision());
+        assert_ne!(current.tier2_cleanup_blake3(), snapshot.tier2_cleanup_blake3());
+        let completed = finalize_failed_retry_finish(&current, verify(&current)?)?;
+        assert_eq!(
+            crate::fast_img_store::read_marker(&child.working_copy)?,
+            completed
+        );
+        Ok(())
     }
 
     #[test]

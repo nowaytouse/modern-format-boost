@@ -676,11 +676,28 @@ pub enum SourceUnlinkEvent {
     Removed,
 }
 
-/// The role of an entry in one primary source cleanup.
+/// The role of an entry in one source cleanup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceUnlinkKind {
     Media,
     Xmp,
+}
+
+/// Persists Tier-2 unlink authority against the exact Photos delivery receipt.
+pub trait Tier2CleanupObserver {
+    /// Commit the proposed entries on `Ready` and record each confirmed unlink on `Removed`.
+    fn observe(
+        &mut self,
+        asset: &LibraryAssetRecord,
+        event: SourceUnlinkEvent,
+        kind: SourceUnlinkKind,
+        path: &Path,
+        hash: &str,
+    ) -> Result<()>;
+
+    /// Validate an absent source and its exact companion against saved intents.
+    /// Returns whether the media unlink was recorded and whether its saved XMP is still present.
+    fn observed_absent(&mut self, asset: &LibraryAssetRecord, source: &Path) -> Result<(bool, bool)>;
 }
 
 /// Verify and remove a source, recording only successful unlink operations.
@@ -1066,7 +1083,6 @@ fn delete_matching_xmp_sidecar_path(
 fn verified_tier2_sidecar_for_cleanup(
     source: &Path,
     expected_hash: Option<&str>,
-    allow_proven_absent: bool,
 ) -> Result<Option<VerifiedXmpCleanup>> {
     let matching = crate::metadata::find_xmp_sidecar(source)?;
     match (expected_hash, matching) {
@@ -1093,7 +1109,6 @@ fn verified_tier2_sidecar_for_cleanup(
             }
             Ok(Some(sidecar))
         }
-        (Some(_), None) if allow_proven_absent => Ok(None),
         (Some(_), None) => Err(ImgQualityError::AnalysisError(format!(
             "delete-gate 4 FAIL: proven XMP sidecar disappeared before cleanup for {}",
             source.display()
@@ -1106,14 +1121,17 @@ fn verified_tier2_sidecar_for_cleanup(
     }
 }
 
+#[cfg(test)]
 fn safe_delete_modern_lossy_static_source_after_reverify(
     source: &Path,
     import_proof: &crate::pipeline::verification::LibraryAssetRecord,
 ) -> Result<()> {
+    let targets = tier2_cleanup_targets(&[source.to_path_buf()])?;
     safe_delete_modern_lossy_static_source_after_reverify_recorded(
         source,
         import_proof,
         &mut Vec::new(),
+        &targets,
     )
 }
 
@@ -1121,8 +1139,25 @@ fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
     source: &Path,
     import_proof: &crate::pipeline::verification::LibraryAssetRecord,
     removed_files: &mut Vec<PathBuf>,
+    deletion_targets: &BTreeSet<PathBuf>,
 ) -> Result<()> {
-    use crate::common_utils::calculate_blake3_hash;
+    safe_delete_modern_lossy_static_source_after_reverify_observed(
+        source,
+        import_proof,
+        removed_files,
+        deletion_targets,
+        &mut |_, _, _, _| Ok(()),
+    )
+}
+
+fn safe_delete_modern_lossy_static_source_after_reverify_observed(
+    source: &Path,
+    import_proof: &LibraryAssetRecord,
+    removed_files: &mut Vec<PathBuf>,
+    deletion_targets: &BTreeSet<PathBuf>,
+    observer: &mut impl FnMut(SourceUnlinkEvent, SourceUnlinkKind, &Path, &str) -> Result<()>,
+) -> Result<()> {
+    use crate::pipeline::verification::FinalInputObservation;
 
     let claimed_blake3 = import_proof.blake3.as_str();
     let photos_uuid = import_proof
@@ -1191,9 +1226,10 @@ fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
         )));
     }
 
-    let current_source_hash = calculate_blake3_hash(source).map_err(|e| {
+    let source_observation = FinalInputObservation::capture(source).map_err(|e| {
         ImgQualityError::AnalysisError(format!("delete-gate 3 FAIL: BLAKE3(source) failed: {e}"))
     })?;
+    let current_source_hash = source_observation.blake3();
     if current_source_hash != claimed_blake3 {
         tracing::error!(
             target: "fast_img_delete",
@@ -1216,8 +1252,42 @@ fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
     let matching_xmp_sidecar = verified_tier2_sidecar_for_cleanup(
         source,
         import_proof.xmp_sidecar_blake3.as_deref(),
-        false,
     )?;
+    if let Some(sidecar) = &matching_xmp_sidecar {
+        if !deletion_targets.contains(&sidecar.path.canonicalize()?) {
+            return Err(ImgQualityError::AnalysisError(
+                "Tier-2 XMP was not included in the fresh Photos custody exclusion check; source and sidecar retained".into(),
+            ));
+        }
+        observer(
+            SourceUnlinkEvent::Intent,
+            SourceUnlinkKind::Xmp,
+            &sidecar.path,
+            sidecar.observation.blake3(),
+        )?;
+    }
+    observer(
+        SourceUnlinkEvent::Intent,
+        SourceUnlinkKind::Media,
+        source,
+        current_source_hash,
+    )?;
+    observer(
+        SourceUnlinkEvent::Ready,
+        SourceUnlinkKind::Media,
+        source,
+        current_source_hash,
+    )?;
+    let current_sidecar = crate::metadata::find_xmp_sidecar(source)?;
+    if current_sidecar.as_ref() != matching_xmp_sidecar.as_ref().map(|sidecar| &sidecar.path) {
+        return Err(ImgQualityError::AnalysisError(
+            "Tier-2 XMP identity changed before source unlink; originals retained".into(),
+        ));
+    }
+    if let Some(sidecar) = &matching_xmp_sidecar {
+        sidecar.verify_unchanged()?;
+    }
+    source_observation.verify_unchanged()?;
 
     tracing::info!(
         target: "fast_img_delete",
@@ -1233,13 +1303,21 @@ fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
         ))
     })?;
     removed_files.push(source.to_path_buf());
-    delete_matching_xmp_sidecar_path(
+    observer(
+        SourceUnlinkEvent::Removed,
+        SourceUnlinkKind::Media,
         source,
-        source,
-        matching_xmp_sidecar.as_ref(),
-        removed_files,
-        false,
+        current_source_hash,
     )?;
+    if let Some(sidecar) = &matching_xmp_sidecar {
+        delete_matching_xmp_sidecar_path(source, source, Some(sidecar), removed_files, true)?;
+        observer(
+            SourceUnlinkEvent::Removed,
+            SourceUnlinkKind::Xmp,
+            &sidecar.path,
+            sidecar.observation.blake3(),
+        )?;
+    }
     Ok(())
 }
 
@@ -1314,6 +1392,7 @@ fn tier2_cleanup_targets(sources: &[PathBuf]) -> Result<BTreeSet<PathBuf>> {
     }
     let index = crate::metadata::XmpSidecarIndex::capture(&present)?;
     let mut targets = BTreeSet::new();
+    let mut sidecars = BTreeSet::new();
     for source in &present {
         match source.canonicalize() {
             Ok(path) => { targets.insert(path); },
@@ -1321,22 +1400,58 @@ fn tier2_cleanup_targets(sources: &[PathBuf]) -> Result<BTreeSet<PathBuf>> {
             Err(error) => return Err(error.into()),
         }
         if let Some(sidecar) = index.find(source)? {
-            targets.insert(sidecar.canonicalize()?);
+            let canonical = sidecar.canonicalize()?;
+            if !sidecars.insert(canonical.clone()) {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "Tier-2 cleanup found an XMP associated with multiple sources: {}; originals retained",
+                    sidecar.display()
+                )));
+            }
+            targets.insert(canonical);
         }
     }
     index.verify_unchanged()?;
     Ok(targets)
 }
 
-fn require_tier2_cleanup_target(source: &Path, targets: &BTreeSet<PathBuf>) -> Result<()> {
+fn tier2_cleanup_source_present(source: &Path, targets: &BTreeSet<PathBuf>) -> Result<bool> {
     match std::fs::symlink_metadata(source) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink()
-            && targets.contains(&source.canonicalize()?) => Ok(()),
+            && targets.contains(&source.canonicalize()?) => Ok(true),
         Ok(_) => Err(ImgQualityError::AnalysisError(
             "tier-2 source appeared or changed location after cleanup preflight; source retained".into(),
         )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn check_absent_tier2_source_xmp(source: &Path) -> Result<()> {
+    let parent = crate::media_conversion_gate::path_parent_or_dot(source);
+    match std::fs::symlink_metadata(parent) {
+        Ok(metadata) if metadata.is_dir() => {
+            if let Some(sidecar) = crate::metadata::find_xmp_sidecar(source)? {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "Tier-2 source is absent and no durable XMP cleanup intent identifies {}; sidecar retained",
+                    sidecar.display()
+                )));
+            }
+        }
+        Ok(_) => {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Tier-2 cleanup parent changed or is not a directory: {}",
+                parent.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    match std::fs::symlink_metadata(source) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
+        Ok(_) => Err(ImgQualityError::AnalysisError(
+            "Tier-2 source appeared during cleanup inspection; source retained".into(),
+        )),
     }
 }
 
@@ -1518,14 +1633,17 @@ pub fn safe_delete_modern_lossy_static_source(
         photos_library_path: None,
     };
     let targets = tier2_cleanup_targets(&[source.to_path_buf()])?;
-    require_tier2_cleanup_target(source, &targets)?;
+    tier2_cleanup_source_present(source, &targets)?;
     reverify_modern_lossy_static_photos_custody_excluding(&library_handle, &targets)?;
-    safe_delete_modern_lossy_static_source_after_reverify(source, import_proof)
+    safe_delete_modern_lossy_static_source_after_reverify_recorded(
+        source, import_proof, &mut Vec::new(), &targets,
+    )
 }
 
 fn preflight_modern_lossy_static_source_deletion(
     src_dir: &Path,
     library_handle: &crate::pipeline::verification::LibraryHandle,
+    mut check_absent: impl FnMut(&LibraryAssetRecord, &Path) -> Result<()>,
 ) -> Result<()> {
     if library_handle.import_error_count != 0 {
         return Err(ImgQualityError::AnalysisError(format!(
@@ -1547,9 +1665,7 @@ fn preflight_modern_lossy_static_source_deletion(
             )));
         }
         let rel = Path::new(&asset.rel_path);
-        if rel
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        if crate::pipeline::verification::validate_marker_relative_path("Tier-2 source", &asset.rel_path).is_err()
             || !seen.insert(asset.rel_path.as_str())
         {
             return Err(ImgQualityError::AnalysisError(format!(
@@ -1558,31 +1674,33 @@ fn preflight_modern_lossy_static_source_deletion(
             )));
         }
         let source = src_dir.join(rel);
-        if source.exists() {
-            let metadata = std::fs::symlink_metadata(&source).map_err(|err| {
-                ImgQualityError::AnalysisError(format!(
-                    "tier-2 source delete preflight cannot stat {}: {err}",
-                    source.display()
-                ))
-            })?;
-            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() == 0 {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 source delete preflight requires a non-empty regular non-symlink file: {}",
-                    source.display()
-                )));
+        crate::pipeline::verification::validate_no_symlink_components(src_dir, rel)
+            .map_err(ImgQualityError::AnalysisError)?;
+        let metadata = match std::fs::symlink_metadata(&source) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                check_absent(asset, &source)?;
+                continue;
             }
-            let current = crate::common_utils::calculate_blake3_hash(&source).map_err(|err| {
-                ImgQualityError::AnalysisError(format!(
-                    "tier-2 source delete preflight BLAKE3 failed for {}: {err}",
-                    source.display()
-                ))
-            })?;
-            if current != asset.blake3 {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 source delete preflight detected source drift: {}",
-                    source.display()
-                )));
-            }
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.is_file() || metadata.len() == 0 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 source delete preflight requires a non-empty regular non-symlink file: {}",
+                source.display()
+            )));
+        }
+        let current = crate::common_utils::calculate_blake3_hash(&source).map_err(|err| {
+            ImgQualityError::AnalysisError(format!(
+                "tier-2 source delete preflight BLAKE3 failed for {}: {err}",
+                source.display()
+            ))
+        })?;
+        if current != asset.blake3 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 source delete preflight detected source drift: {}",
+                source.display()
+            )));
         }
     }
     Ok(())
@@ -1602,16 +1720,59 @@ pub fn delete_verified_modern_lossy_static_sources_recorded(
     library_handle: &crate::pipeline::verification::LibraryHandle,
     removed_files: &mut Vec<PathBuf>,
 ) -> Result<(usize, usize)> {
+    delete_verified_modern_lossy_static_sources_with(
+        src_dir,
+        library_handle,
+        removed_files,
+        None,
+        reverify_modern_lossy_static_photos_custody_excluding,
+    )
+}
+
+/// Clean up Tier-2 sources with durable intents and fresh Photos custody checks.
+///
+/// # Errors
+/// Returns an error if custody, filesystem identity, or cleanup evidence cannot be verified.
+/// A successfully removed path stays in `removed_files` if recording its unlink fails.
+pub fn delete_verified_modern_lossy_static_sources_observed(
+    src_dir: &Path,
+    library_handle: &LibraryHandle,
+    removed_files: &mut Vec<PathBuf>,
+    observer: &mut impl Tier2CleanupObserver,
+) -> Result<(usize, usize)> {
+    delete_verified_modern_lossy_static_sources_with(
+        src_dir,
+        library_handle,
+        removed_files,
+        Some(observer),
+        reverify_modern_lossy_static_photos_custody_excluding,
+    )
+}
+
+fn delete_verified_modern_lossy_static_sources_with(
+    src_dir: &Path,
+    library_handle: &LibraryHandle,
+    removed_files: &mut Vec<PathBuf>,
+    mut observer: Option<&mut dyn Tier2CleanupObserver>,
+    mut reverify: impl FnMut(&LibraryHandle, &BTreeSet<PathBuf>) -> Result<()>,
+) -> Result<(usize, usize)> {
     if library_handle.imported_assets.is_empty() {
         return Ok((0, 0));
     }
     let _uncached = crate::common_utils::UncachedVerificationScope::new()
         .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
-    preflight_modern_lossy_static_source_deletion(src_dir, library_handle)?;
+    preflight_modern_lossy_static_source_deletion(src_dir, library_handle, |asset, source| {
+        if let Some(observer) = observer.as_deref_mut() {
+            observer.observed_absent(asset, source)?;
+            Ok(())
+        } else {
+            check_absent_tier2_source_xmp(source)
+        }
+    })?;
     let sources = library_handle.imported_assets.iter()
         .map(|asset| src_dir.join(&asset.rel_path)).collect::<Vec<_>>();
     let targets = tier2_cleanup_targets(&sources)?;
-    reverify_modern_lossy_static_photos_custody_excluding(library_handle, &targets)?;
+    reverify(library_handle, &targets)?;
 
     let mut deleted = 0usize;
     let mut already_deleted = 0usize;
@@ -1622,34 +1783,41 @@ pub fn delete_verified_modern_lossy_static_sources_recorded(
             import_error_count: 0,
             photos_library_path: library_handle.photos_library_path.clone(),
         };
-        reverify_modern_lossy_static_photos_custody_excluding(&current, &targets)?;
-        require_tier2_cleanup_target(&source, &targets)?;
-        if !source.exists() {
-            if let Some(sidecar) = verified_tier2_sidecar_for_cleanup(
-                &source,
-                asset.xmp_sidecar_blake3.as_deref(),
-                true,
-            )? {
-                delete_matching_xmp_sidecar_path(
-                    &source,
-                    &source,
-                    Some(&sidecar),
-                    removed_files,
-                    false,
-                )?;
-            }
+        reverify(&current, &targets)?;
+        let rel = Path::new(&asset.rel_path);
+        crate::pipeline::verification::validate_no_symlink_components(src_dir, rel)
+            .map_err(ImgQualityError::AnalysisError)?;
+        if !tier2_cleanup_source_present(&source, &targets)? {
+            let observed = if let Some(observer) = observer.as_deref_mut() {
+                let (observed, pending) = observer.observed_absent(asset, &source)?;
+                if pending {
+                    delete_tier2_remaining_companion(&source, asset, removed_files, &targets, observer)?;
+                } else {
+                    check_absent_tier2_source_xmp(&source)?;
+                }
+                observed
+            } else {
+                check_absent_tier2_source_xmp(&source)?;
+                false
+            };
             already_deleted += 1;
             tracing::info!(
                 target: "fast_img_delete",
                 source = %source.display(),
-                "tier-2 verified source already absent"
+                recorded_unlink = observed,
+                "tier-2 source absent at verification"
             );
             continue;
         }
-        safe_delete_modern_lossy_static_source_after_reverify_recorded(
+        safe_delete_modern_lossy_static_source_after_reverify_observed(
             &source,
             asset,
             removed_files,
+            &targets,
+            &mut |event, kind, path, hash| match observer.as_deref_mut() {
+                Some(observer) => observer.observe(asset, event, kind, path, hash),
+                None => Ok(()),
+            },
         )
         .map_err(|err| {
             ImgQualityError::AnalysisError(format!(
@@ -1660,6 +1828,33 @@ pub fn delete_verified_modern_lossy_static_sources_recorded(
         deleted += 1;
     }
     Ok((deleted, already_deleted))
+}
+
+fn delete_tier2_remaining_companion(
+    source: &Path,
+    asset: &LibraryAssetRecord,
+    removed_files: &mut Vec<PathBuf>,
+    targets: &BTreeSet<PathBuf>,
+    observer: &mut dyn Tier2CleanupObserver,
+) -> Result<()> {
+    let sidecar = verified_tier2_sidecar_for_cleanup(source, asset.xmp_sidecar_blake3.as_deref())?
+        .ok_or_else(|| ImgQualityError::AnalysisError("Tier-2 saved XMP is no longer present".into()))?;
+    if !targets.contains(&sidecar.path.canonicalize()?) {
+        return Err(ImgQualityError::AnalysisError(
+            "Tier-2 XMP was not included in the fresh Photos custody exclusion check; sidecar retained".into(),
+        ));
+    }
+    let hash = sidecar.observation.blake3();
+    for event in [SourceUnlinkEvent::Intent, SourceUnlinkEvent::Ready] {
+        observer.observe(asset, event, SourceUnlinkKind::Xmp, &sidecar.path, hash)?;
+    }
+    if crate::metadata::find_xmp_sidecar(source)?.as_ref() != Some(&sidecar.path) {
+        return Err(ImgQualityError::AnalysisError(
+            "Tier-2 XMP identity changed before recovered companion unlink; sidecar retained".into(),
+        ));
+    }
+    delete_matching_xmp_sidecar_path(source, source, Some(&sidecar), removed_files, true)?;
+    observer.observe(asset, SourceUnlinkEvent::Removed, SourceUnlinkKind::Xmp, &sidecar.path, hash)
 }
 
 /// Persist tier-2 Photos import proof on the working-copy marker for resume/delete.
@@ -9661,7 +9856,7 @@ mod tests {
         let absent = tier2_cleanup_targets(&[later.clone()])?;
         std::fs::create_dir_all(later.parent().unwrap())?;
         std::fs::write(&later, b"newly appeared input")?;
-        assert!(require_tier2_cleanup_target(&later, &absent).is_err());
+        assert!(tier2_cleanup_source_present(&later, &absent).is_err());
         assert!(later.exists());
         Ok(())
     }
@@ -13226,6 +13421,223 @@ end mfbResolveAlbumComponent
         let error = delete_verified_modern_lossy_static_sources(src_dir.path(), &handle)
             .expect_err("unsafe relative path must fail before external verification");
         assert!(error.to_string().contains("unsafe or duplicate"));
+    }
+
+    #[test]
+    fn tier2_batch_delete_retains_same_hash_xmp_when_its_source_is_absent() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let nested = root.path().join("nested");
+        std::fs::create_dir(&nested)?;
+        let xmp = nested.join("photo.xmp");
+        let bytes = b"<x:xmpmeta/>";
+        std::fs::write(&xmp, bytes)?;
+        let rel = Path::new("nested").join("photo.webp");
+        let handle = LibraryHandle {
+            imported_assets: vec![crate::pipeline::verification::LibraryAssetRecord {
+                rel_path: rel.to_str().unwrap().into(),
+                blake3: blake3::hash(b"synthetic source").to_hex().to_string(),
+                sync_status: "local".into(),
+                quarantined: false,
+                photos_uuid: Some("synthetic-uuid".into()),
+                library_blake3: Some(blake3::hash(b"synthetic output").to_hex().to_string()),
+                xmp_sidecar_blake3: Some(blake3::hash(bytes).to_hex().to_string()),
+            }],
+            ..Default::default()
+        };
+        let error = delete_verified_modern_lossy_static_sources(root.path(), &handle).unwrap_err();
+        assert!(error.to_string().contains("no durable XMP cleanup intent"));
+        assert_eq!(std::fs::read(&xmp)?, bytes);
+
+        std::fs::remove_file(&xmp)?;
+        std::fs::remove_dir(&nested)?;
+        preflight_modern_lossy_static_source_deletion(root.path(), &handle, |_, source| {
+            check_absent_tier2_source_xmp(source)
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn tier2_observed_cleanup_preserves_receipt_boundary_and_recovers_the_saved_xmp() -> Result<()> {
+        use SourceUnlinkEvent::{Intent, Ready, Removed};
+        use SourceUnlinkKind::{Media, Xmp};
+
+        #[derive(Default)]
+        struct Observer {
+            events: Vec<(SourceUnlinkEvent, SourceUnlinkKind)>,
+            absent_checks: usize,
+            media_planned: bool,
+            companion_pending: bool,
+            reject: Option<(SourceUnlinkEvent, SourceUnlinkKind)>,
+        }
+
+        impl Tier2CleanupObserver for Observer {
+            fn observe(
+                &mut self,
+                asset: &LibraryAssetRecord,
+                event: SourceUnlinkEvent,
+                kind: SourceUnlinkKind,
+                path: &Path,
+                hash: &str,
+            ) -> Result<()> {
+                assert_eq!(asset.photos_uuid.as_deref(), Some("synthetic-uuid"));
+                match kind {
+                    Media => assert_eq!(hash, asset.blake3),
+                    Xmp => assert_eq!(Some(hash), asset.xmp_sidecar_blake3.as_deref()),
+                }
+                assert_eq!(path.is_file(), event != Removed);
+                self.events.push((event, kind));
+                if self.reject == Some((event, kind)) {
+                    return Err(ImgQualityError::AnalysisError("synthetic journal failure".into()));
+                }
+                if (event, kind) == (Ready, Media) {
+                    self.media_planned = true;
+                    self.companion_pending = true;
+                } else if (event, kind) == (Removed, Xmp) {
+                    self.companion_pending = false;
+                }
+                Ok(())
+            }
+
+            fn observed_absent(&mut self, _: &LibraryAssetRecord, source: &Path) -> Result<(bool, bool)> {
+                assert!(!source.exists());
+                self.absent_checks += 1;
+                if !self.media_planned {
+                    return Err(ImgQualityError::AnalysisError("synthetic missing media intent".into()));
+                }
+                Ok((false, self.companion_pending))
+            }
+        }
+
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("photo.webp");
+        let xmp = root.path().join("photo.xmp");
+        let xmp_bytes = b"<x:xmpmeta/>";
+        std::fs::write(&source, b"synthetic source")?;
+        std::fs::write(&xmp, xmp_bytes)?;
+        let canonical_xmp = xmp.canonicalize()?;
+        let handle = LibraryHandle {
+            imported_assets: vec![LibraryAssetRecord {
+                rel_path: "photo.webp".into(),
+                blake3: blake3::hash(b"synthetic source").to_hex().to_string(),
+                sync_status: "local".into(),
+                quarantined: false,
+                photos_uuid: Some("synthetic-uuid".into()),
+                library_blake3: Some(blake3::hash(b"synthetic Photos output").to_hex().to_string()),
+                xmp_sidecar_blake3: Some(blake3::hash(xmp_bytes).to_hex().to_string()),
+            }],
+            ..Default::default()
+        };
+        let mut removed = Vec::new();
+        let mut custody_checks = 0;
+        let mut attempt = |removed: &mut Vec<PathBuf>, observer: &mut Observer| {
+            delete_verified_modern_lossy_static_sources_with(
+                root.path(),
+                &handle,
+                removed,
+                Some(observer),
+                |proof, targets| {
+                    assert_eq!(proof.imported_assets, handle.imported_assets);
+                    assert!(targets.contains(&canonical_xmp));
+                    custody_checks += 1;
+                    Ok(())
+                },
+            )
+        };
+        let mut observer = Observer { reject: Some((Ready, Media)), ..Default::default() };
+        assert!(attempt(&mut removed, &mut observer).is_err());
+        assert_eq!(observer.events, [(Intent, Xmp), (Intent, Media), (Ready, Media)]);
+        assert!(removed.is_empty() && source.is_file() && xmp.is_file());
+
+        observer.events.clear();
+        observer.reject = Some((Removed, Media));
+        assert!(attempt(&mut removed, &mut observer).is_err());
+        assert_eq!(observer.events.last(), Some(&(Removed, Media)));
+        assert_eq!(removed, [source.clone()]);
+        assert!(!source.exists() && xmp.is_file());
+
+        observer.events.clear();
+        observer.reject = Some((Ready, Xmp));
+        assert!(attempt(&mut removed, &mut observer).is_err());
+        assert_eq!(observer.events, [(Intent, Xmp), (Ready, Xmp)]);
+        assert_eq!(std::fs::read(&xmp)?, xmp_bytes);
+
+        observer.events.clear();
+        observer.reject = None;
+        assert_eq!(attempt(&mut removed, &mut observer)?, (0, 1));
+        assert_eq!(observer.events, [(Intent, Xmp), (Ready, Xmp), (Removed, Xmp)]);
+        assert_eq!(observer.absent_checks, 4);
+        assert_eq!(custody_checks, 8);
+        assert_eq!(removed, [source, xmp.clone()]);
+        assert!(!xmp.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn tier2_cleanup_rejects_a_shared_xmp_before_any_unlink() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let a = root.path().join("photo.webp");
+        let b = root.path().join("photo.avif");
+        let xmp = root.path().join("photo.xmp");
+        for path in [&a, &b, &xmp] {
+            std::fs::write(path, b"synthetic")?;
+        }
+        let error = tier2_cleanup_targets(&[a.clone(), b.clone()]).unwrap_err();
+        assert!(error.to_string().contains("associated with multiple sources"));
+        assert!(a.is_file() && b.is_file() && xmp.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn tier2_cleanup_retains_xmp_added_after_the_custody_exclusion_set() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("photo.webp");
+        let xmp = root.path().join("photo.xmp");
+        std::fs::write(&source, b"synthetic source")?;
+        let targets = tier2_cleanup_targets(std::slice::from_ref(&source))?;
+        std::fs::write(&xmp, b"<x:xmpmeta/>")?;
+        let proof = crate::pipeline::verification::LibraryAssetRecord {
+            rel_path: "photo.webp".into(),
+            blake3: crate::common_utils::calculate_blake3_hash(&source)?,
+            sync_status: "local".into(),
+            quarantined: false,
+            photos_uuid: Some("synthetic-uuid".into()),
+            library_blake3: Some(blake3::hash(b"synthetic output").to_hex().to_string()),
+            xmp_sidecar_blake3: Some(crate::common_utils::calculate_blake3_hash(&xmp)?),
+        };
+        let mut removed = Vec::new();
+        let error = safe_delete_modern_lossy_static_source_after_reverify_recorded(
+            &source, &proof, &mut removed, &targets,
+        ).unwrap_err();
+        assert!(error.to_string().contains("fresh Photos custody exclusion check"));
+        assert!(removed.is_empty() && source.is_file() && xmp.is_file());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tier2_batch_delete_rejects_linked_source_ancestor_before_photos_query() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        let outside_source = outside.path().join("photo.webp");
+        let bytes = b"synthetic source";
+        std::fs::write(&outside_source, bytes)?;
+        std::os::unix::fs::symlink(outside.path(), root.path().join("linked"))?;
+        let handle = LibraryHandle {
+            imported_assets: vec![crate::pipeline::verification::LibraryAssetRecord {
+                rel_path: "linked/photo.webp".into(),
+                blake3: blake3::hash(bytes).to_hex().to_string(),
+                sync_status: "local".into(),
+                quarantined: false,
+                photos_uuid: Some("synthetic-uuid".into()),
+                library_blake3: None,
+                xmp_sidecar_blake3: None,
+            }],
+            ..Default::default()
+        };
+        let error = delete_verified_modern_lossy_static_sources(root.path(), &handle).unwrap_err();
+        assert!(error.to_string().contains("contains a symlink"));
+        assert_eq!(std::fs::read(outside_source)?, bytes);
+        Ok(())
     }
 
     #[test]

@@ -78,7 +78,7 @@ fn validate_child_entries(
     }
 }
 
-fn hash_is_valid(hash: &str) -> bool {
+pub(super) fn hash_is_valid(hash: &str) -> bool {
     hash.len() == 64
         && hash
             .bytes()
@@ -127,7 +127,7 @@ fn digest(key: &str, source: &str, entry: &Entry) -> Result<blake3::Hash> {
 
 fn read_entries(conn: &Connection, key: &str, marker: &WorkingCopyMarker) -> Result<Entries> {
     let mut entries = BTreeMap::new();
-    if inspect_store_schema_version(conn)? != Some(6) {
+    if !matches!(inspect_store_schema_version(conn)?, Some(6..)) {
         ensure!(
             !marker.primary_cleanup_journal,
             "Primary cleanup journal schema is unavailable"
@@ -228,7 +228,7 @@ pub(super) fn validate_rows(
 }
 
 pub(super) fn reject_missing_task_evidence(conn: &Connection, key: &str) -> Result<()> {
-    if inspect_store_schema_version(conn)? == Some(6) {
+    if matches!(inspect_store_schema_version(conn)?, Some(6..)) {
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM fast_img_primary_cleanup WHERE task_key=?1)",
             [key],
@@ -243,7 +243,7 @@ pub(super) fn reject_missing_task_evidence(conn: &Connection, key: &str) -> Resu
 }
 
 pub(super) fn row_count(conn: &Connection) -> Result<usize> {
-    if inspect_store_schema_version(conn)? != Some(6) {
+    if !matches!(inspect_store_schema_version(conn)?, Some(6..)) {
         return Ok(0);
     }
     let rows: i64 = conn.query_row("SELECT count(*) FROM fast_img_primary_cleanup", [], |row| {
@@ -252,18 +252,18 @@ pub(super) fn row_count(conn: &Connection) -> Result<usize> {
     Ok(usize::try_from(rows)?)
 }
 
-fn exists(root: &Path, rel: &str) -> Result<bool> {
+pub(super) fn exists(root: &Path, rel: &str) -> Result<bool> {
     validate_no_symlink_components(root, Path::new(rel)).map_err(anyhow::Error::msg)?;
     match std::fs::symlink_metadata(root.join(rel)) {
         Ok(metadata) => {
             ensure!(
                 metadata.is_file(),
-                "Primary cleanup entry is not a regular file: {rel}"
+                "Source cleanup entry is not a regular file: {rel}"
             );
             Ok(true)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("inspect primary cleanup entry {rel}")),
+        Err(error) => Err(error).with_context(|| format!("inspect source cleanup entry {rel}")),
     }
 }
 
@@ -576,7 +576,7 @@ impl<'a> PrimaryCleanupJournal<'a> {
     }
 }
 
-fn require_revision(conn: &Connection, key: &str, expected: i64) -> Result<()> {
+pub(super) fn require_revision(conn: &Connection, key: &str, expected: i64) -> Result<()> {
     let current: i64 = conn.query_row(
         "SELECT revision FROM fast_img_tasks WHERE task_key=?1",
         [key],
@@ -584,7 +584,7 @@ fn require_revision(conn: &Connection, key: &str, expected: i64) -> Result<()> {
     )?;
     ensure!(
         current == expected,
-        "Primary cleanup checkpoint changed during this attempt"
+        "Source cleanup checkpoint changed during this attempt"
     );
     super::retry::require_parent_unmodified(conn, key)
 }

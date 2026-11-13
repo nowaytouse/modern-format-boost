@@ -1632,30 +1632,39 @@ fn selected_failed_retry_parent(
     Ok(Some(parent))
 }
 
-fn fast_img_retry_before_scan(args: &Args) -> Result<bool> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FastImgRetryBeforeScan {
+    RecoverChild,
+    DiagnoseMissingSources,
+}
+
+fn fast_img_retry_before_scan(args: &Args) -> Result<Option<FastImgRetryBeforeScan>> {
     if args.mode != LaunchMode::FastImg || args.dry_run {
-        return Ok(false);
+        return Ok(None);
     }
     let Some(target) = args.inputs.first() else {
-        return Ok(false);
+        return Ok(None);
     };
     let Some(parent) = selected_failed_retry_parent(args, target)? else {
-        return Ok(false);
+        return Ok(None);
     };
-    let Some(child) = foundation::fast_img_store::find_failed_retry_child(
+    let child = foundation::fast_img_store::find_failed_retry_child(
         &parent,
         &failed_retry_delivery(args)?,
-    )?
-    else {
-        return Ok(false);
-    };
-    if child.is_terminal() {
-        return Ok(true);
+    )?;
+    if child.as_ref().is_some_and(|child| child.is_terminal()) {
+        return Ok(Some(FastImgRetryBeforeScan::RecoverChild));
     }
-    match fs::symlink_metadata(&child.src_dir) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+    match fs::symlink_metadata(&parent.marker().src_dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(if child.is_some() {
+            Some(FastImgRetryBeforeScan::RecoverChild)
+        } else if args.retry_failed {
+            Some(FastImgRetryBeforeScan::DiagnoseMissingSources)
+        } else {
+            None
+        }),
         Err(error) => Err(error.into()),
-        Ok(_) => Ok(false),
+        Ok(_) => Ok(None),
     }
 }
 
@@ -1722,9 +1731,20 @@ fn run_fast_img_task(
     args: &Args,
     project_root: &Path,
     session: &AppSession,
+    diagnose_missing_sources: bool,
 ) -> Result<FastImgTaskOutcome> {
     let target = args.inputs.first().context("input required")?;
     let (mut command, output) = fast_img_launch_command(args, project_root, target)?;
+    if diagnose_missing_sources {
+        command.args.push("--retry-failed-admission-diagnostic".into());
+        if args.retry_failed_parent.is_none() {
+            let parent = failed_retry_parent_for_run(args, target)?;
+            command.args.extend([
+                "--retry-failed-parent".into(),
+                parent.marker().working_copy.to_str().context("failed-only parent path is not UTF-8")?.to_owned(),
+            ]);
+        }
+    }
     if !args.dry_run && !args.retry && !args.resume && !args.retry_failed {
         match foundation::fast_img_store::read_marker(&output) {
             Ok(_) => {}
@@ -2326,7 +2346,7 @@ fn run_drag_drop(
         if !args.dry_run
             && args.mode == LaunchMode::FastImg
             && !args.retry_failed
-            && !fast_img_retry_before_scan(args)?
+            && fast_img_retry_before_scan(args)?.is_none()
         {
             for input in &args.inputs {
                 let source = fast_img_source_root_for_run(input)?;
@@ -2416,28 +2436,33 @@ fn run_drag_drop_inner(
 
     let (image_error_mode, video_error_mode) = standard_error_modes(args)?;
 
-    if fast_img_retry_before_scan(args)? {
-        let session = session.context("reused retry requires an application session")?;
+    if let Some(retry) = fast_img_retry_before_scan(args)? {
+        let session = session.context("failed-only retry requires an application session")?;
         let FastImgTaskOutcome {
             stats,
             retry_request,
             ..
-        } = run_fast_img_task(args, &root, session)?;
+        } = run_fast_img_task(args, &root, session, retry == FastImgRetryBeforeScan::DiagnoseMissingSources)?;
         let text = dev::infra::history_store::read_fast_img_finalization_since(
             session.log_dir(),
             session.stamp(),
             output_cursor.context("reused retry has no current output boundary")?,
         )?;
-        anyhow::ensure!(
-            session.record_fast_img_retry_outcome(&text, &stats, retry_request.as_ref())?,
-            "retry recovery did not return its required durable outcome receipt"
-        );
+        let confirmed = session.record_fast_img_retry_outcome(&text, &stats, retry_request.as_ref())?;
+        if retry == FastImgRetryBeforeScan::RecoverChild {
+            anyhow::ensure!(confirmed, "retry recovery did not return its required durable outcome receipt");
+        } else {
+            anyhow::ensure!(!confirmed && stats.exit_code != 0, "missing-source admission diagnostic returned an unexpected successful worker outcome");
+        }
         let summary = PipelineSummary {
             img: stats.clone(),
             ..PipelineSummary::default()
         };
         println!("{}", batch_result_line("img", &stats));
         session.finish_log(&summary, None)?;
+        if retry == FastImgRetryBeforeScan::DiagnoseMissingSources {
+            bail!("failed-only retry admission did not complete; see the recorded source diagnostics");
+        }
         return Ok(());
     }
 
@@ -2632,7 +2657,7 @@ fn run_drag_drop_inner(
             // The worker can delete the input before historical output cleanup.
             let source_root =
                 fast_img_source_root_for_run(args.inputs.first().context("input required")?)?;
-            match run_fast_img_task(args, &root, session.expect("session")) {
+            match run_fast_img_task(args, &root, session.expect("session"), false) {
                 Ok(FastImgTaskOutcome {
                     stats,
                     output,
@@ -6553,6 +6578,51 @@ mod tests {
     }
 
     #[test]
+    fn failed_retry_absent_root_selects_read_only_diagnostics_when_no_child_exists() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
+        use foundation::pipeline::verification::{
+            FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+            SkippedSourceEntry, WorkingCopyMarker,
+        };
+        let temp = tempfile::tempdir()?;
+        let _state = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            temp.path().join("state").to_str().unwrap(),
+        );
+        let root = temp.path().canonicalize()?;
+        let source = root.join("source");
+        let mut marker = WorkingCopyMarker::new(source.clone(), root.join("source_optimized"), 1);
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.processing_contract = Some(FastImgProcessingContract {
+            schema: 1,
+            tool_policy: foundation::runtime_config::ToolPolicy::Single,
+            fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
+            encoding: FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
+                archive: false,
+                allow_expert_options: false,
+            },
+        });
+        marker.failed_sources.insert(
+            "one.jpg".into(),
+            SkippedSourceEntry { src: blake3::hash(b"synthetic").to_hex().to_string(), reason: "synthetic".into() },
+        );
+        foundation::pipeline::verification::write_marker_atomic(&marker)?;
+        let mut args = Args::try_parse_from(["mfb", "--mode", "fast-img", "--retry-failed"])?;
+        args.inputs = vec![source.clone()];
+        args.retry_failed_parent = Some(marker.working_copy.clone());
+        assert_eq!(fast_img_retry_before_scan(&args)?, Some(FastImgRetryBeforeScan::DiagnoseMissingSources));
+        fs::create_dir(&source)?;
+        assert_eq!(fast_img_retry_before_scan(&args)?, None);
+        let parent = foundation::fast_img_store::inspect_failed_retry_parent(&marker.working_copy)?;
+        assert!(!foundation::fast_img_store::is_reserved(parent.child_working_copy())?);
+        Ok(())
+    }
+
+    #[test]
     fn reused_retry_receipt_requires_the_exact_completed_core_child_and_zero_current_work()
     -> Result<()> {
         if isolated_state_test() {
@@ -6640,7 +6710,7 @@ mod tests {
         ordinary.retry_failed_parent = None;
         ordinary.retry = true;
         ordinary.inputs = vec![source.clone()];
-        assert!(fast_img_retry_before_scan(&ordinary)?);
+        assert_eq!(fast_img_retry_before_scan(&ordinary)?, Some(FastImgRetryBeforeScan::RecoverChild));
         assert_eq!(
             resolve_fast_img_output_for_run(&ordinary, &source)?,
             child.working_copy

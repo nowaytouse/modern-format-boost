@@ -131,7 +131,7 @@ struct Relation {
 }
 
 fn has_schema(conn: &Connection) -> Result<bool> {
-    Ok(matches!(inspect_store_schema_version(conn)?, Some(5..=6)))
+    Ok(matches!(inspect_store_schema_version(conn)?, Some(5..=crate::mfb_sqlite_store::STORE_SCHEMA_VERSION)))
 }
 
 fn hash_text(value: &str) -> Result<()> {
@@ -427,16 +427,11 @@ fn manifest_hash(
         &child.tool_snapshot_manifest,
         &child.tool_snapshot_identity,
     );
-    // Keep historical manifests byte-identical while binding the explicit unpinned mode.
-    let version = if child.primary_cleanup_journal && child.tool_snapshot_disabled {
-        4u8
-    } else if child.primary_cleanup_journal {
-        3u8
-    } else if child.tool_snapshot_disabled {
-        2u8
-    } else {
-        1u8
-    };
+    // Append capability bits without changing the bytes of historical manifests.
+    let version = 1
+        + u8::from(child.tool_snapshot_disabled)
+        + (u8::from(child.primary_cleanup_journal) << 1)
+        + (u8::from(child.tier2_cleanup_journal) << 2);
     Ok(blake3::hash(&canonical_bytes(&(
         version,
         key,
@@ -860,6 +855,7 @@ pub fn create_or_resume_failed_retry(
         ensure!(read_snapshot(&tx,&key)?.is_none(),"Stable retry output is already reserved by another task");
         let mut child=WorkingCopyMarker::new(parent.marker.src_dir.clone(),parent.child.clone(),values.len()).with_strategy(parent.marker.strategy.clone());
         child.primary_cleanup_journal=parent.marker.primary_cleanup_journal;
+        child.tier2_cleanup_journal=parent.marker.tier2_cleanup_journal;
         child.processing_contract.clone_from(&parent.marker.processing_contract);
         child.metadata_policy_version=metadata_policy_version(&child)?;
         if let FailedRetryDeliveryIntent::Photos{library_path,naming_policy}=delivery {

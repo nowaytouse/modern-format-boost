@@ -4075,6 +4075,8 @@ pub struct FailedRetryFinishEvidence {
     pub verified_snapshot_blake3: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verified_primary_cleanup_blake3: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_tier2_cleanup_blake3: Option<String>,
     pub verified_revision: i64,
     pub verified_stage: FastImgStageName,
     pub verified_tier2_in_progress: bool,
@@ -4102,6 +4104,9 @@ impl FailedRetryFinishEvidence {
         if let Some(hash) = &self.verified_primary_cleanup_blake3 {
             validate_submission_blake3("finish primary cleanup", hash)?;
         }
+        if let Some(hash) = &self.verified_tier2_cleanup_blake3 {
+            validate_submission_blake3("finish Tier 2 cleanup", hash)?;
+        }
         chrono::DateTime::parse_from_rfc3339(&self.observed_at).map_err(|error| {
             format!("Invalid failed-only finalization observation time: {error}")
         })?;
@@ -4128,6 +4133,9 @@ pub struct WorkingCopyMarker {
     /// Present once this task has committed to durable primary unlink evidence.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub primary_cleanup_journal: bool,
+    /// Present once this task has committed to durable original-format unlink evidence.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tier2_cleanup_journal: bool,
     #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
     pub skipped_sources: SkippedSourceLog,
     #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
@@ -4302,6 +4310,7 @@ impl WorkingCopyMarker {
             gate3_checks: Gate3Checks::default(),
             blake3_log: Blake3Log::new(),
             primary_cleanup_journal: false,
+            tier2_cleanup_journal: false,
             skipped_sources: SkippedSourceLog::new(),
             failed_sources: FailedSourceLog::new(),
             tier2_imported_assets: Vec::new(),

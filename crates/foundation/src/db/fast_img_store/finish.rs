@@ -5,7 +5,7 @@ use super::{
     FailedRetryContext, FailedRetryDeliveryIntent, FailedRetryFinishEvidence,
     FailedRetrySourceRootObservation, as_io, cleanup, current_family, in_snapshot,
     key_for_canonical, matching_markers_in_snapshot, open_readonly, open_store_connection,
-    read_snapshot, read_snapshot_base, retry, snapshot_digest, text, validate_locator,
+    read_snapshot, read_snapshot_base, retry, snapshot_digest, text, tier2_cleanup, validate_locator,
     write_snapshot_at_with_finish,
 };
 use crate::image::fast_img::VerifiedFailedRetryFinish;
@@ -26,6 +26,7 @@ pub struct FailedRetryFinishSnapshot {
     request: String,
     manifest: String,
     primary_cleanup: Option<(String, bool)>,
+    tier2_cleanup: Option<(String, bool)>,
 }
 
 impl FailedRetryFinishSnapshot {
@@ -60,6 +61,12 @@ impl FailedRetryFinishSnapshot {
     #[must_use]
     pub fn primary_cleanup_blake3(&self) -> Option<&str> {
         self.primary_cleanup
+            .as_ref()
+            .map(|(digest, _)| digest.as_str())
+    }
+    #[must_use]
+    pub fn tier2_cleanup_blake3(&self) -> Option<&str> {
+        self.tier2_cleanup
             .as_ref()
             .map(|(digest, _)| digest.as_str())
     }
@@ -248,6 +255,13 @@ impl FailedRetryFinishSnapshot {
             ),
             "Finish-only snapshot is missing required primary cleanup intent"
         );
+        ensure!(
+            matches!(
+                (self.marker().tier2_cleanup_journal, &self.tier2_cleanup),
+                (false, None) | (true, Some((_, true)))
+            ),
+            "Finish-only snapshot is missing required Tier 2 cleanup intent"
+        );
         require_admission_coverage(self.marker(), self.context())
     }
 }
@@ -293,6 +307,7 @@ pub fn inspect_failed_retry_finish(
                 "Finish-only snapshot changed within its read transaction"
             );
             let primary_cleanup = cleanup::finish_digest(conn, &key, &marker)?;
+            let tier2_cleanup = tier2_cleanup::finish_digest(conn, &key, &marker)?;
             Ok(Some(FailedRetryFinishSnapshot {
                 manifest: marker
                     .failed_retry_manifest_blake3
@@ -305,6 +320,7 @@ pub fn inspect_failed_retry_finish(
                 revision,
                 request,
                 primary_cleanup,
+                tier2_cleanup,
             }))
         })
     })()
@@ -337,8 +353,7 @@ pub(super) fn validate_write(
                 == expected.snapshot_blake3(),
         "MFB_FINISH_STATE_CHANGED: saved task changed after verification; no finalization committed"
     );
-    require_eligible(old, expected.context().requested_delivery())?;
-    require_admission_coverage(old, expected.context())?;
+    expected.validate_eligibility()?;
     ensure!(
         evidence.schema == 1
             && evidence.task_key == expected.task_key()
@@ -347,6 +362,7 @@ pub(super) fn validate_write(
             && evidence.verified_snapshot_blake3 == expected.snapshot_blake3()
             && evidence.verified_primary_cleanup_blake3.as_deref()
                 == expected.primary_cleanup_blake3()
+            && evidence.verified_tier2_cleanup_blake3.as_deref() == expected.tier2_cleanup_blake3()
             && evidence.verified_revision == expected.revision()
             && evidence.verified_stage == old.stage
             && evidence.verified_tier2_in_progress == old.tier2_in_progress
@@ -389,6 +405,11 @@ pub fn finalize_failed_retry_finish(
             cleanup::finish_digest(&tx, expected.task_key(), expected.marker())?
                 == expected.primary_cleanup,
             "MFB_FINISH_STATE_CHANGED: primary cleanup journal changed after verification; no finalization committed"
+        );
+        ensure!(
+            tier2_cleanup::finish_digest(&tx, expected.task_key(), expected.marker())?
+                == expected.tier2_cleanup,
+            "MFB_FINISH_STATE_CHANGED: Tier 2 cleanup journal changed after verification; no finalization committed"
         );
         write_snapshot_at_with_finish(
             &tx,
@@ -456,6 +477,16 @@ pub(super) fn validate_persisted(
                 .as_deref()
                 .map(|digest| (digest, true)),
         "Saved finish-only observation no longer binds its primary cleanup journal"
+    );
+    ensure!(
+        tier2_cleanup::finish_digest(conn, key, &prior)?
+            .as_ref()
+            .map(|(digest, complete)| (digest.as_str(), *complete))
+            == evidence
+                .verified_tier2_cleanup_blake3
+                .as_deref()
+                .map(|digest| (digest, true)),
+        "Saved finish-only observation no longer binds its Tier 2 cleanup journal"
     );
     ensure!(
         snapshot_digest(text(&prior.working_copy)?, text(&prior.src_dir)?, &prior)?
