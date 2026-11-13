@@ -4277,8 +4277,7 @@ fn fast_img_report_completed_failed_retry(
         "[REUSED  ] previous attempt retained {} failure(s); its saved result is being shown, not a new custody verification",
         child.failed_sources.len()
     );
-    println!("[Summary] succeeded=0 failed=0 skipped=0 ignored=0");
-    println!("Unprocessed: 0");
+    fast_img_result::print_processor_counts(0, 0, 0, 0, 0);
     Ok(())
 }
 
@@ -4419,8 +4418,7 @@ fn fast_img_complete_missing_source_retry(
     println!(
         "[DONE    ] no new encoding, import, source creation, deletion or byte savings during this request"
     );
-    println!("[Summary] succeeded=0 failed=0 skipped=0 ignored=0");
-    println!("Unprocessed: 0");
+    fast_img_result::print_processor_counts(0, 0, 0, 0, 0);
     Ok(())
 }
 

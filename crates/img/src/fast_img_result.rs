@@ -381,9 +381,12 @@ pub(super) fn finish(
     report.record_execution(&execution, photos);
     report.ignored = ignored;
     println!("MFB_FAST_IMG_RESULT={}", serde_json::to_string(&report)?);
-    println!(
-        "Succeeded: {}\nSkipped: {}\nFailed: {}\nIgnored: {}\nUnprocessed: {}",
-        report.succeeded, report.skipped, report.failed, report.ignored, report.unprocessed
+    print_processor_counts(
+        report.succeeded,
+        report.skipped,
+        report.failed,
+        report.ignored,
+        report.unprocessed,
     );
     println!(
         "[RESULT  ] encoded={} Photos-verified={} unprocessed={} primary-cleanup-complete={}",
@@ -400,6 +403,18 @@ pub(super) fn finish(
         return Err(FileFailures::primary(report.failed).into());
     }
     Ok(())
+}
+
+pub(super) fn print_processor_counts(
+    succeeded: usize,
+    skipped: usize,
+    failed: usize,
+    ignored: usize,
+    unprocessed: usize,
+) {
+    println!(
+        "Succeeded: {succeeded}\nSkipped: {skipped}\nFailed: {failed}\nIgnored: {ignored}\nUnprocessed: {unprocessed}"
+    );
 }
 
 pub(super) fn finalize_sources<T, U>(

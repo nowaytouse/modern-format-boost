@@ -2413,9 +2413,6 @@ fn run_drag_drop_inner(
     let root = resolve_runtime_root()?;
     let started = Instant::now();
     draw_banner(env!("CARGO_PKG_VERSION"));
-    if !args.inputs.is_empty() {
-        print_runtime_panel(&build_runtime_dashboard(args));
-    }
 
     let (image_error_mode, video_error_mode) = standard_error_modes(args)?;
 
@@ -2444,6 +2441,9 @@ fn run_drag_drop_inner(
         return Ok(());
     }
 
+    if !args.inputs.is_empty() {
+        print_runtime_panel(&build_runtime_dashboard(args));
+    }
     for input in &args.inputs {
         safety_check(input)
             .with_context(|| format!("safety check failed for {}", input.display()))?;
