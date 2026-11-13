@@ -1615,6 +1615,8 @@ pub struct OutputCleanupReceipt {
     pub already_absent_files: Option<usize>,
     pub pruned_directories: Option<usize>,
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residual_inventory: Option<OutputResidualInventory>,
 }
 
 impl OutputCleanupReceipt {
@@ -1636,8 +1638,282 @@ impl OutputCleanupReceipt {
             already_absent_files: None,
             pruned_directories: None,
             error: None,
+            residual_inventory: None,
         }
     }
+}
+
+const RESIDUAL_SAMPLE_LIMIT: usize = 12;
+const RESIDUAL_SAMPLE_PATH_BYTES: usize = 512;
+const RESIDUAL_ENTRY_LIMIT: usize = 16_384;
+const RESIDUAL_DEPTH_LIMIT: usize = 32;
+
+/// Read-only metadata measured after a cleanup leaves its output directory behind.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct OutputResidualInventory {
+    state: &'static str,
+    regular_files: Option<u64>,
+    regular_bytes: Option<u64>,
+    directories: Option<u64>,
+    symlinks: Option<u64>,
+    other_entries: Option<u64>,
+    error: Option<&'static str>,
+    sample: Vec<OutputResidualEntry>,
+    sample_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct OutputResidualEntry {
+    relative_path: String,
+    kind: ResidualEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ResidualEntryKind {
+    RegularFile,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Default)]
+struct ResidualInventoryCounts {
+    entries: usize,
+    regular_files: u64,
+    regular_bytes: u64,
+    directories: u64,
+    symlinks: u64,
+    other_entries: u64,
+    sample: Vec<OutputResidualEntry>,
+    sample_truncated: bool,
+}
+
+impl ResidualInventoryCounts {
+    fn record(&mut self, path: &Path, kind: ResidualEntryKind, size: u64) -> Result<(), &'static str> {
+        self.entries += 1;
+        if self.entries > RESIDUAL_ENTRY_LIMIT {
+            return Err("entry_limit");
+        }
+        let count = match kind {
+            ResidualEntryKind::RegularFile => {
+                self.regular_bytes = self.regular_bytes.checked_add(size).ok_or("count_overflow")?;
+                &mut self.regular_files
+            }
+            ResidualEntryKind::Directory => &mut self.directories,
+            ResidualEntryKind::Symlink => &mut self.symlinks,
+            ResidualEntryKind::Other => &mut self.other_entries,
+        };
+        *count += 1; // Every category is bounded by RESIDUAL_ENTRY_LIMIT.
+        if let Some(relative_path) = path.to_str().filter(|value| value.len() <= RESIDUAL_SAMPLE_PATH_BYTES)
+            && self.sample.len() < RESIDUAL_SAMPLE_LIMIT
+        {
+            self.sample.push(OutputResidualEntry { relative_path: relative_path.to_owned(), kind });
+        } else {
+            self.sample_truncated = true;
+        }
+        Ok(())
+    }
+}
+
+fn output_residual_inventory(root: &Path, root_metadata: &fs::Metadata) -> OutputResidualInventory {
+    match observe_output_residuals(root, root_metadata) {
+        Ok(mut counts) => {
+            counts.sample.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
+            OutputResidualInventory {
+                state: "observed",
+                regular_files: Some(counts.regular_files),
+                regular_bytes: Some(counts.regular_bytes),
+                directories: Some(counts.directories),
+                symlinks: Some(counts.symlinks),
+                other_entries: Some(counts.other_entries),
+                error: None,
+                sample: counts.sample,
+                sample_truncated: counts.sample_truncated,
+            }
+        }
+        Err(error) => OutputResidualInventory {
+            state: "unknown",
+            regular_files: None,
+            regular_bytes: None,
+            directories: None,
+            symlinks: None,
+            other_entries: None,
+            error: Some(error),
+            sample: Vec::new(),
+            sample_truncated: false,
+        },
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn observe_output_residuals(root: &Path, root_metadata: &fs::Metadata) -> Result<ResidualInventoryCounts, &'static str> {
+    use std::ffi::{CStr, CString, OsStr};
+    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Component;
+
+    const DIR_FLAGS: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+
+    fn open_directory(parent: libc::c_int, name: &CStr) -> Result<fs::File, &'static str> {
+        // Match the repository Photos guard's lexical suffix check without
+        // resolving paths outside the already opened directory descriptor.
+        if name.to_str().ok().map(str::to_ascii_lowercase).is_some_and(|name| {
+            name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
+        }) {
+            return Err("inspection_failed");
+        }
+        // SAFETY: the descriptor belongs to the live parent and name is NUL-terminated.
+        let fd = unsafe { libc::openat(parent, name.as_ptr(), DIR_FLAGS) };
+        if fd < 0 {
+            return Err("inspection_failed");
+        }
+        // SAFETY: successful openat returns a new owned descriptor.
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
+    }
+
+    fn open_root(path: &Path) -> Result<fs::File, &'static str> {
+        let mut components = path.components();
+        if components.next() != Some(Component::RootDir) {
+            return Err("inspection_failed");
+        }
+        let mut parent = open_directory(libc::AT_FDCWD, c"/")?;
+        for component in components {
+            let Component::Normal(name) = component else { return Err("inspection_failed") };
+            let name = CString::new(name.as_bytes()).map_err(|_| "inspection_failed")?;
+            parent = open_directory(parent.as_raw_fd(), &name)?;
+        }
+        Ok(parent)
+    }
+
+    fn unchanged(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+        before.dev() == after.dev() && before.ino() == after.ino()
+            && before.mtime() == after.mtime() && before.mtime_nsec() == after.mtime_nsec()
+            && before.ctime() == after.ctime() && before.ctime_nsec() == after.ctime_nsec()
+    }
+
+    fn same_entry(before: &libc::stat, after: &libc::stat) -> bool {
+        before.st_dev == after.st_dev && before.st_ino == after.st_ino
+            && before.st_mode == after.st_mode && before.st_size == after.st_size
+            && before.st_mtime == after.st_mtime && before.st_mtime_nsec == after.st_mtime_nsec
+            && before.st_ctime == after.st_ctime && before.st_ctime_nsec == after.st_ctime_nsec
+    }
+
+    struct DirectoryStream(*mut libc::DIR);
+
+    impl Drop for DirectoryStream {
+        fn drop(&mut self) {
+            // SAFETY: a successful fdopendir transferred descriptor ownership to this stream.
+            unsafe { libc::closedir(self.0) };
+        }
+    }
+
+    fn entry_metadata(parent: &fs::File, name: &CStr) -> Result<libc::stat, &'static str> {
+        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: fstatat writes the stat buffer on success and never follows the final link.
+        if unsafe { libc::fstatat(parent.as_raw_fd(), name.as_ptr(), metadata.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            return Err("inspection_failed");
+        }
+        Ok(unsafe { metadata.assume_init() })
+    }
+
+    fn walk(
+        directory: &fs::File,
+        relative: &Path,
+        depth: usize,
+        counts: &mut ResidualInventoryCounts,
+    ) -> Result<(), &'static str> {
+        let before = directory.metadata().map_err(|_| "inspection_failed")?;
+        let listing = directory.try_clone().map_err(|_| "inspection_failed")?;
+        // SAFETY: listing is an owned directory descriptor and remains live on failure.
+        let stream = unsafe { libc::fdopendir(listing.as_raw_fd()) };
+        if stream.is_null() {
+            return Err("inspection_failed");
+        }
+        let _ = listing.into_raw_fd();
+        let stream = DirectoryStream(stream);
+        let mut entries_to_recheck = Vec::new();
+        loop {
+            #[cfg(target_os = "macos")]
+            let errno = unsafe { libc::__error() };
+            #[cfg(target_os = "linux")]
+            let errno = unsafe { libc::__errno_location() };
+            // SAFETY: errno is thread-local and readdir uses the exclusively owned live stream.
+            let entry = unsafe { *errno = 0; libc::readdir(stream.0) };
+            if entry.is_null() {
+                if unsafe { *errno } != 0 {
+                    return Err("inspection_failed");
+                }
+                break;
+            }
+            // SAFETY: readdir supplies a NUL-terminated name valid until the next call on this stream.
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+            if matches!(name.to_bytes(), b"." | b"..") {
+                continue;
+            }
+            let metadata = entry_metadata(directory, name)?;
+            let kind = match metadata.st_mode & libc::S_IFMT {
+                libc::S_IFREG => ResidualEntryKind::RegularFile,
+                libc::S_IFDIR => ResidualEntryKind::Directory,
+                libc::S_IFLNK => ResidualEntryKind::Symlink,
+                _ => ResidualEntryKind::Other,
+            };
+            let path = relative.join(OsStr::from_bytes(name.to_bytes()));
+            let size = if kind == ResidualEntryKind::RegularFile {
+                u64::try_from(metadata.st_size).map_err(|_| "count_overflow")?
+            } else {
+                0
+            };
+            counts.record(&path, kind, size)?;
+            if kind == ResidualEntryKind::RegularFile {
+                entries_to_recheck.push((name.to_owned(), metadata));
+            } else if kind == ResidualEntryKind::Directory {
+                if depth >= RESIDUAL_DEPTH_LIMIT {
+                    return Err("depth_limit");
+                }
+                let child = open_directory(directory.as_raw_fd(), name)?;
+                let opened = child.metadata().map_err(|_| "inspection_failed")?;
+                if opened.dev() != before.dev() {
+                    return Err("inspection_failed");
+                }
+                if !same_entry(&metadata, &entry_metadata(&child, c".")?) {
+                    return Err("directory_changed");
+                }
+                walk(&child, &path, depth + 1, counts)?;
+                entries_to_recheck.push((name.to_owned(), metadata));
+            }
+        }
+        for (name, before) in entries_to_recheck {
+            let after = entry_metadata(directory, &name)?;
+            if !same_entry(&before, &after) {
+                return Err("directory_changed");
+            }
+        }
+        let after = directory.metadata().map_err(|_| "inspection_failed")?;
+        if !unchanged(&before, &after) {
+            return Err("directory_changed");
+        }
+        Ok(())
+    }
+
+    let directory = open_root(root)?;
+    let before = directory.metadata().map_err(|_| "inspection_failed")?;
+    if !unchanged(root_metadata, &before) {
+        return Err("directory_changed");
+    }
+    let mut counts = ResidualInventoryCounts::default();
+    walk(&directory, Path::new(""), 0, &mut counts)?;
+    let after = open_root(root)?.metadata().map_err(|_| "inspection_failed")?;
+    if !unchanged(&before, &after) {
+        return Err("directory_changed");
+    }
+    Ok(counts)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn observe_output_residuals(_root: &Path, _root_metadata: &fs::Metadata) -> Result<ResidualInventoryCounts, &'static str> {
+    Err("inspection_failed")
 }
 
 fn fast_img_prune_empty_dirs(
@@ -1748,6 +2024,7 @@ pub fn prune_completed_fast_img_empty_outputs(source: &Path, strategy: &str) -> 
 pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> OutputCleanupReceipt {
     delete_fast_img_outputs_with(output_dir, |marker| {
         let custody = foundation::fast_img::verify_output_photos_custody(marker)?;
+        foundation::fast_img_store::verify_tier2_cleanup_complete(marker)?;
         Ok(move |target: &Path| custody.verify_before_removal(target))
     })
 }
@@ -1837,7 +2114,10 @@ where V: FnMut(&Path) -> Result<()> {
         receipt.pruned_directories = Some(pruned);
         match fs::symlink_metadata(output_dir) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
-            Ok(metadata) if metadata.file_type().is_dir() => Ok(false),
+            Ok(metadata) if metadata.file_type().is_dir() => {
+                receipt.residual_inventory = Some(output_residual_inventory(output_dir, &metadata));
+                Ok(false)
+            }
             Ok(_) => bail!(
                 "fast-img cleanup target was replaced with a non-directory: {}",
                 output_dir.display()
@@ -2106,6 +2386,67 @@ cat "$MFB_TEST_VERIFY_REPLY"
     }
 
     #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn output_residual_inventory_bounds_names_and_refuses_replacement_or_excess_depth() -> Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().canonicalize()?.join("output");
+        fs::create_dir(&root)?;
+        for index in 0..=RESIDUAL_SAMPLE_LIMIT {
+            fs::write(root.join(format!("synthetic-{index:02}")), b"a")?;
+        }
+        #[cfg(target_os = "linux")]
+        fs::write(root.join(std::ffi::OsStr::from_bytes(b"name-\xff")), b"abc")?;
+        #[cfg(target_os = "macos")]
+        fs::write(root.join(std::ffi::OsStr::from_bytes(b"synthetic-extra")), b"abc")?;
+        let observed = output_residual_inventory(&root, &fs::symlink_metadata(&root)?);
+        assert_eq!(observed.state, "observed");
+        assert_eq!(observed.regular_files, Some(14));
+        assert_eq!(observed.regular_bytes, Some(16));
+        assert_eq!(observed.sample.len(), RESIDUAL_SAMPLE_LIMIT);
+        assert!(observed.sample_truncated);
+
+        let original = fs::symlink_metadata(&root)?;
+        let archived = root.with_file_name("preserved-output");
+        fs::rename(&root, &archived)?;
+        fs::create_dir(&root)?;
+        let replaced = output_residual_inventory(&root, &original);
+        assert_eq!(replaced.state, "unknown");
+        assert_eq!(replaced.error, Some("directory_changed"));
+        assert!(replaced.regular_bytes.is_none() && replaced.sample.is_empty());
+        assert_eq!(fs::read(archived.join("synthetic-00"))?, b"a");
+
+        let nested = (0..=RESIDUAL_DEPTH_LIMIT).fold(root.clone(), |path, _| path.join("nested"));
+        fs::create_dir_all(nested)?;
+        let deep = output_residual_inventory(&root, &fs::symlink_metadata(&root)?);
+        assert_eq!(deep.state, "unknown");
+        assert_eq!(deep.error, Some("depth_limit"));
+        assert!(deep.directories.is_none() && deep.sample.is_empty() && !deep.sample_truncated);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn output_residual_inventory_does_not_descend_photos_packages() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().canonicalize()?;
+        for name in ["Archive.PhotosLibrary", "Older.PHOTOLIBRARY"] {
+            let output = root.join(name.replace('.', "-"));
+            let library = output.join("nested").join(name);
+            fs::create_dir_all(&library)?;
+            let protected = library.join("synthetic-private.txt");
+            fs::write(&protected, b"unread protected synthetic payload")?;
+            let observed = output_residual_inventory(&output, &fs::symlink_metadata(&output)?);
+            assert_eq!(observed.state, "unknown");
+            assert_eq!(observed.error, Some("inspection_failed"));
+            assert!(observed.regular_files.is_none() && observed.sample.is_empty());
+            assert_eq!(fs::read(&protected)?, b"unread protected synthetic payload");
+        }
+        Ok(())
+    }
+
+    #[test]
     #[serial_test::serial]
     fn output_cleanup_receipt_distinguishes_removed_residual_and_unmeasured_states() {
         use foundation::pipeline::verification::{
@@ -2131,6 +2472,7 @@ cat "$MFB_TEST_VERIFY_REPLY"
             assert!(receipt.already_absent_files.is_none());
             assert!(receipt.pruned_directories.is_none());
             assert!(receipt.error.is_none());
+            assert!(receipt.residual_inventory.is_none());
         }
 
         let source = root.path().join("source");
@@ -2138,10 +2480,16 @@ cat "$MFB_TEST_VERIFY_REPLY"
         fs::create_dir(&source).unwrap();
         fs::create_dir(&output).unwrap();
         let unknown = output.join("user.txt");
-        fs::write(&unknown, b"preserve user data").unwrap();
+        let unknown_bytes = b"preserve user data";
+        fs::write(&unknown, unknown_bytes).unwrap();
         let finder_metadata = output.join(".DS_Store");
         let finder_bytes = b"\x00\x00\x00\x01Bud1";
         fs::write(&finder_metadata, finder_bytes).unwrap();
+        let nested = output.join("nested");
+        fs::create_dir(&nested).unwrap();
+        let nested_file = nested.join("留存.txt");
+        let nested_bytes = b"nested synthetic file";
+        fs::write(&nested_file, nested_bytes).unwrap();
         let source = source.canonicalize().unwrap();
         let output = output.canonicalize().unwrap();
         let mut marker = WorkingCopyMarker::new(source, output.clone(), 0);
@@ -2183,8 +2531,28 @@ cat "$MFB_TEST_VERIFY_REPLY"
         assert_eq!(residual.removed_files, Some(0));
         assert_eq!(residual.already_absent_files, Some(0));
         assert_eq!(residual.pruned_directories, Some(0));
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            let inventory = residual.residual_inventory.unwrap();
+            assert_eq!(inventory.state, "observed");
+            assert_eq!(inventory.regular_files, Some(3));
+            assert_eq!(inventory.regular_bytes,
+                Some((unknown_bytes.len() + finder_bytes.len() + nested_bytes.len()) as u64));
+            assert_eq!(inventory.directories, Some(1));
+            assert_eq!(inventory.symlinks, Some(1));
+            assert_eq!(inventory.other_entries, Some(0));
+            assert!(inventory.error.is_none());
+            assert!(!inventory.sample_truncated);
+            assert!(inventory.sample.iter().any(|entry| entry.relative_path == "nested/留存.txt"
+                && entry.kind == ResidualEntryKind::RegularFile));
+            assert!(inventory.sample.iter().any(|entry| entry.relative_path == "linked-directory"
+                && entry.kind == ResidualEntryKind::Symlink));
+        }
         assert_eq!(fs::read(&unknown).unwrap(), b"preserve user data");
         assert_eq!(fs::read(&finder_metadata).unwrap(), finder_bytes);
+        assert_eq!(fs::read(&nested_file).unwrap(), b"nested synthetic file");
+        fs::remove_file(nested_file).unwrap();
+        fs::remove_dir(nested).unwrap();
         #[cfg(unix)]
         {
             assert!(outside.is_dir());

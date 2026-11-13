@@ -437,7 +437,7 @@ fn run_fast_img_delivery_check_with(
     let (marker_opt, _path_opt, marker_error) = load_fast_img_marker_for_optimized(&optimized_dir);
     let failed_retry = foundation::fast_img_store::failed_retry_context(&optimized_dir)
         .context(IntegrityUnavailableReason::Checkpoint)?;
-    if let Some(context) = &failed_retry {
+    let routed_child = if let Some(context) = &failed_retry {
         let typed = foundation::pipeline::verification::read_marker(&optimized_dir)
             .context(IntegrityUnavailableReason::Checkpoint)?;
         anyhow::ensure!(
@@ -455,7 +455,10 @@ fn run_fast_img_delivery_check_with(
             marker_error.is_none() && marker_opt.as_ref() == Some(&marker_value),
             IntegrityUnavailableReason::Checkpoint
         );
-    }
+        typed.failed_retry_primary_source_count.is_some().then_some(typed)
+    } else {
+        None
+    };
 
     report.push_str("── FAST-IMG DELIVERY VERIFICATION ─────────────────────────────\n");
     report.push_str(&format!("Source:    {}\n", source_dir.display()));
@@ -466,7 +469,9 @@ fn run_fast_img_delivery_check_with(
         optimized: optimized_dir.to_string_lossy().to_string(),
         scope: processing_mode.to_string(),
         optimized_path_label: "Optimized".to_string(),
-        source_files_label: if strategy == "avif" {
+        source_files_label: if routed_child.is_some() {
+            "Recorded failed-only admissions".to_string()
+        } else if strategy == "avif" {
             "Recorded source static images".to_string()
         } else {
             "Recorded JPEG-derived sources".to_string()
@@ -567,6 +572,9 @@ fn run_fast_img_delivery_check_with(
     let mut tier2_verified_deleted = 0;
     let mut tier2_unexpected_remaining = Vec::new();
     let mut tier2_missing_proof = Vec::new();
+    let mut tier2_unresolved = Vec::new();
+    let mut tier2_retained = 0;
+    let mut tier2_failed_count = 0;
 
     if let Some(ref m) = marker_opt {
         recorded_source_jpegs = m
@@ -606,6 +614,77 @@ fn run_fast_img_delivery_check_with(
                     tier2_missing_proof.push(rel.to_string());
                 }
             }
+        }
+        if let Some(failed) = m.get("tier2_failed_sources").and_then(|value| value.as_object()) {
+            tier2_failed_count = failed.len();
+            if routed_child.is_none() {
+                for (rel, failure) in failed {
+                    let verification = (|| -> Result<()> {
+                        foundation::pipeline::verification::validate_no_symlink_components(&source_dir, Path::new(rel))
+                            .map_err(anyhow::Error::msg)?;
+                        let source = source_dir.join(rel);
+                        let expected = failure.get("src").and_then(serde_json::Value::as_str)
+                            .context("retained original failure has no recorded hash")?;
+                        anyhow::ensure!(fs::symlink_metadata(&source)?.is_file(), "retained original is not a regular file");
+                        anyhow::ensure!(calculate_blake3_hash(&source)? == expected, "retained original differs from its recorded hash");
+                        Ok(())
+                    })();
+                    match verification {
+                        Ok(()) => tier2_retained += 1,
+                        Err(error) => tier2_unresolved.push((rel.as_str(), format!("{error:#}"))),
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((context, typed)) = failed_retry.as_ref().zip(routed_child.as_ref()) {
+        use foundation::fast_img_store::{
+            FailedRetrySidecar, FailedRetrySourceRoute, verify_failed_retry_admission,
+            verify_failed_retry_retained_companions,
+        };
+
+        recorded_source_jpegs = u64::try_from(typed.primary_source_count())?;
+        let receipts = typed.tier2_imported_assets.iter().map(|asset| asset.rel_path.as_str()).collect::<HashSet<_>>();
+        let originals_still_present = tier2_unexpected_remaining.iter().map(String::as_str).collect::<HashSet<_>>();
+        let absent = foundation::fast_img_store::validate_tier2_cleanup_resume(typed)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
+        for admission in context.admissions().values().filter(|admission| {
+            admission.route == Some(FailedRetrySourceRoute::Original)
+        }) {
+            let rel = &admission.source_rel;
+            match (receipts.contains(rel.as_str()), typed.tier2_failed_sources.get(rel)) {
+                (true, None) if absent.contains(rel) => {
+                    let verification = (|| -> Result<()> {
+                        if let FailedRetrySidecar::Present { relative_path, .. } = &admission.xmp {
+                            match fs::symlink_metadata(source_dir.join(relative_path)) {
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                                Err(error) => return Err(error).context("inspect saved original-format XMP companion"),
+                                Ok(_) => anyhow::bail!("saved original-format XMP companion still awaits cleanup"),
+                            }
+                        }
+                        verify_failed_retry_retained_companions(typed, admission, true)
+                    })();
+                    if let Err(error) = verification {
+                        tier2_unresolved.push((rel.as_str(), format!("{error:#}")));
+                    }
+                }
+                (true, None) if originals_still_present.contains(rel.as_str()) => {}
+                (false, Some(failure)) => {
+                    if failure.src != admission.admitted_source_blake3 {
+                        tier2_unresolved.push((rel.as_str(), "retained failure identity differs from its admission".into()));
+                        continue;
+                    }
+                    match verify_failed_retry_admission(&source_dir, admission) {
+                        Ok(()) => tier2_retained += 1,
+                        Err(error) => tier2_unresolved.push((rel.as_str(), format!("{error:#}"))),
+                    }
+                }
+                _ => tier2_unresolved.push((rel.as_str(), "missing exact delivery or retained failure evidence".into())),
+            }
+        }
+        if !typed.is_terminal() && tier2_unresolved.is_empty() {
+            report.push_str("  - The failed-only child still has pending delivery or source cleanup\n");
         }
     }
 
@@ -685,17 +764,17 @@ fn run_fast_img_delivery_check_with(
         }
     }
 
-    stats.source_files = recorded_source_jpegs as usize;
+    stats.source_files = routed_child.as_ref().map_or(recorded_source_jpegs as usize, |marker| marker.src_jpeg_count);
     stats.optimized_files = optimized_outputs.len();
     stats.skipped_sources = skipped_source_rels.len();
-    stats.failed_sources = failed_source_rels.len();
-    stats.source_remaining_files = source_true_jpegs.len();
+    stats.failed_sources = failed_source_rels.len() + tier2_failed_count;
+    stats.source_remaining_files = source_true_jpegs.len() + tier2_retained;
     stats.source_probe_errors = source_probe_errors.len();
     stats.optimized_probe_errors = optimized_probe_errors.len();
     stats.extra = unexpected_outputs.len() + optimized_probe_errors.len();
     stats.count_delta = (optimized_outputs.len() as isize) - (expected_delivery_count as isize);
     stats.matched = optimized_outputs.len();
-    stats.explained_gaps = skipped_source_rels.len() + failed_source_rels.len();
+    stats.explained_gaps = skipped_source_rels.len() + failed_source_rels.len() + tier2_retained;
     stats.optimized_total_size = optimized_size;
     stats.tier2_recorded = tier2_recorded;
     stats.tier2_verified_deleted = tier2_verified_deleted;
@@ -727,6 +806,10 @@ fn run_fast_img_delivery_check_with(
     }
     if !tier2_unexpected_remaining.is_empty() {
         integrity_failures += tier2_unexpected_remaining.len();
+    }
+    integrity_failures += tier2_unresolved.len();
+    if routed_child.as_ref().is_some_and(|marker| !marker.is_terminal()) {
+        integrity_failures += 1;
     }
     integrity_failures += source_probe_errors.len() + optimized_probe_errors.len();
 
@@ -785,7 +868,7 @@ fn run_fast_img_delivery_check_with(
     ));
     report.push_str(&format!(
         "Recorded failed sources:     {}\n",
-        failed_source_rels.len()
+        stats.failed_sources
     ));
     let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
     report.push_str(&format!(
@@ -816,6 +899,9 @@ fn run_fast_img_delivery_check_with(
             "Verified tier-2 deleted:     {}\n",
             tier2_verified_deleted
         ));
+    }
+    if tier2_failed_count > 0 || routed_child.is_some() {
+        report.push_str(&format!("Verified retained original-format failures: {tier2_retained}\n"));
     }
     report.push('\n');
 
@@ -930,6 +1016,12 @@ fn run_fast_img_delivery_check_with(
                 report.push_str(&format!("      - {}\n", rel));
             }
         }
+        if !tier2_unresolved.is_empty() {
+            report.push_str(&format!("  - {} original-format file(s) have no confirmed delivery or retained failure proof:\n", tier2_unresolved.len()));
+            for (rel, reason) in &tier2_unresolved {
+                report.push_str(&format!("      - {rel:?}: {}\n", reason.escape_debug()));
+            }
+        }
     } else {
         let typed = foundation::pipeline::verification::read_marker(&optimized_dir)
             .context(IntegrityUnavailableReason::Checkpoint)?;
@@ -944,6 +1036,8 @@ fn run_fast_img_delivery_check_with(
             verify_photos(&typed).context(IntegrityUnavailableReason::PhotosCustody)?;
             report.push_str("  - Current Photos UUIDs and complete original-resource bytes were freshly verified\n");
         }
+        foundation::fast_img_store::verify_tier2_cleanup_complete(&typed)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
         report.push_str(&format!(
             "{} FAST-IMG DELIVERY INVARIANTS PASS\n",
             pick_symbol("✓", "[OK]")
@@ -2440,7 +2534,7 @@ fn main() -> Result<()> {
             if stats.failed_sources > 0 {
                 println!(
                     "   {:<34}{}",
-                    "Recorded failed JPEGs:", stats.failed_sources
+                    "Recorded failed sources:", stats.failed_sources
                 );
             }
             if stats.source_remaining_files > 0 {
@@ -3167,6 +3261,79 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.source_remaining_files, 2);
         assert_eq!(stats.failed_sources, 2);
         assert_eq!(stats.integrity_failures, 0);
+    }
+
+    #[test]
+    #[serial]
+    fn routed_original_only_child_verifies_retained_failure_and_detects_companion_drift()
+    -> Result<()> {
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        use foundation::fast_img_store::{
+            FailedRetryDeliveryIntent, FailedRetrySourceRoute, capture_failed_retry_admissions,
+            create_or_resume_failed_retry, inspect_failed_retry_parent,
+        };
+        use foundation::pipeline::verification::{
+            FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName, SkippedSourceEntry,
+            WorkingCopyMarker, write_marker_atomic,
+        };
+        let temporary = tempfile::tempdir()?;
+        let _state = marker_test_state(temporary.path());
+        let root = temporary.path().canonicalize()?;
+        let source = root.join("source");
+        fs::create_dir(&source)?;
+        let media = source.join("retained.heic");
+        fs::write(&media, b"synthetic original-format source")?;
+        let failure = SkippedSourceEntry {
+            src: calculate_blake3_hash(&media)?,
+            reason: "synthetic pre-submission rejection".into(),
+        };
+        let mut parent = WorkingCopyMarker::new(source.clone(), root.join("source_optimized"), 1);
+        parent.stage = FastImgStageName::CleanupComplete;
+        parent.processing_contract = Some(FastImgProcessingContract {
+            schema: 1,
+            tool_policy: foundation::runtime_config::ToolPolicy::Single,
+            fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
+            encoding: FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
+                archive: false,
+                allow_expert_options: false,
+            },
+        });
+        parent.failed_sources.insert("retained.heic".into(), failure.clone());
+        write_marker_atomic(&parent)?;
+        let reference = inspect_failed_retry_parent(&parent.working_copy)?;
+        let mut admissions = capture_failed_retry_admissions(&reference)?;
+        admissions[0].route = Some(FailedRetrySourceRoute::Original);
+        let naming_policy = foundation::fast_img::photos_import_naming_policy_for(
+            &foundation::runtime_config::RuntimeConfig::default().photos,
+        );
+        let mut child = create_or_resume_failed_retry(
+            &reference, &admissions,
+            &FailedRetryDeliveryIntent::Photos { library_path: None, naming_policy }, None,
+        )?;
+        fs::create_dir(&child.working_copy)?;
+        let check = |report: &mut String| {
+            delivery_inventory_fixture(&source, &child.working_copy, report, "images_only", "jxl")
+        };
+        let mut report = String::new();
+        let pending = check(&mut report)?;
+        assert!(pending.has_warnings && report.contains("no confirmed delivery or retained failure proof"));
+
+        child.stage = FastImgStageName::CleanupComplete;
+        child.tier2_failed_sources.insert("retained.heic".into(), failure);
+        write_marker_atomic(&child)?;
+        let mut report = String::new();
+        let settled = check(&mut report)?;
+        assert!(!settled.has_warnings);
+        assert_eq!((settled.source_files, settled.optimized_files, settled.failed_sources, settled.source_remaining_files), (1, 0, 1, 1));
+        fs::write(source.join("retained.xmp"), b"unexpected companion")?;
+        let mut report = String::new();
+        assert!(check(&mut report)?.has_warnings);
+        assert!(report.contains("companion presence changed"));
+        Ok(())
     }
 
     #[test]
@@ -3921,6 +4088,79 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert!(stats.integrity_failures >= 2);
         assert!(report.contains("Source format probe errors"));
         assert!(report.contains("Optimized format probe errors"));
+    }
+
+    #[test]
+    #[serial]
+    fn ordinary_journaled_original_delivery_rechecks_absence_of_xmp_after_photos() -> Result<()> {
+        use foundation::fast_img::{SourceUnlinkEvent, SourceUnlinkKind, Tier2CleanupObserver};
+        use foundation::fast_img_store::Tier2CleanupJournal;
+        use foundation::pipeline::verification::{
+            FastImgStageName, LibraryAssetRecord, WorkingCopyMarker, write_marker_atomic,
+        };
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().canonicalize()?;
+        let _state = marker_test_state(&root);
+        let source = root.join("source");
+        let output = root.join("source_optimized");
+        fs::create_dir(&source)?;
+        fs::create_dir(&output)?;
+        let media = source.join("original.webp");
+        let xmp = source.join("original.xmp");
+        fs::write(&media, b"synthetic original")?;
+        fs::write(&xmp, b"<xmp/>")?;
+        let hash = calculate_blake3_hash(&media)?;
+        let xmp_hash = calculate_blake3_hash(&xmp)?;
+        let asset = LibraryAssetRecord {
+            rel_path: "original.webp".into(),
+            blake3: hash.clone(),
+            photos_uuid: Some("synthetic-original-uuid".into()),
+            library_blake3: Some(blake3::hash(b"synthetic merged original").to_hex().to_string()),
+            xmp_sidecar_blake3: Some(xmp_hash.clone()),
+            ..Default::default()
+        };
+        let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 0);
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.tier2_in_progress = true;
+        marker.tier2_cleanup_journal = true;
+        marker.tier2_imported_assets.push(asset.clone());
+        marker.photos_library_path = Some(root.join("Synthetic.photoslibrary"));
+        write_marker_atomic(&marker)?;
+        {
+            use SourceUnlinkEvent::{Intent, Ready, Removed};
+            use SourceUnlinkKind::{Media, Xmp};
+            let mut journal = Tier2CleanupJournal::open(&marker)?;
+            journal.observe(&asset, Intent, Xmp, &xmp, &xmp_hash)?;
+            journal.observe(&asset, Intent, Media, &media, &hash)?;
+            journal.observe(&asset, Ready, Media, &media, &hash)?;
+            fs::remove_file(&media)?;
+            journal.observe(&asset, Removed, Media, &media, &hash)?;
+            fs::remove_file(&xmp)?;
+            journal.observe(&asset, Removed, Xmp, &xmp, &xmp_hash)?;
+        }
+        marker.tier2_in_progress = false;
+        write_marker_atomic(&marker)?;
+        let clean = delivery_inventory_fixture(
+            &source, &output, &mut String::new(), "images_only", "jxl",
+        )?;
+        assert!(!clean.has_warnings);
+
+        let mut report = String::new();
+        let error = run_fast_img_delivery_check_with(
+            &source, &output, &mut report, "images_only", "jxl",
+            |_| {
+                fs::write(&xmp, b"<xmp/>")?;
+                Ok(())
+            },
+        ).err().expect("restored XMP must fail final delivery verification");
+        assert!(format!("{error:#}").contains("XMP changed or reappeared"));
+        assert!(!report.contains("FAST-IMG DELIVERY INVARIANTS PASS"));
+        assert_eq!(fs::read(&xmp)?, b"<xmp/>");
+        assert!(output.is_dir());
+        Ok(())
     }
 
     #[test]

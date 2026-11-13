@@ -5887,10 +5887,10 @@ private struct BatchResults {
         return true
     }
 
-    func outputCleanupText(detailed: Bool) -> String {
+    func outputCleanupText(detailed: Bool, privacy: Bool) -> String {
         if outputCleanupInvalid { return localized("cleanup.invalid") }
         if outputCleanups.isEmpty { return localized("cleanup.not_recorded") }
-        return outputCleanups.map { detailed ? $0.detailText : $0.statusText }.joined(separator: "\n")
+        return outputCleanups.map { detailed ? $0.detailText(privacy: privacy) : $0.statusText }.joined(separator: "\n")
     }
 
     func fastDeliveryCount(_ key: KeyPath<FastDelivery, Int>) -> Int? {
@@ -10136,7 +10136,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 && batchResults.fastDeliveries.allSatisfy { $0.primaryCleanupComplete && $0.finalizationError == nil }
             let primary = logDetailsExpanded && photos && cleanup ? localized("result.cleanup_primary") + "\n" : ""
             batchOverviewCleanup.stringValue = primary
-                + batchResults.outputCleanupText(detailed: logDetailsExpanded)
+                + batchResults.outputCleanupText(detailed: logDetailsExpanded, privacy: privacyEnabled)
             batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .labelColor
             if retainedOnly && !cleanupNeedsAttention { batchOverviewCleanup.isHidden = true }
             if deferred {

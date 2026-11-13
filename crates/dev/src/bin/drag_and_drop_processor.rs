@@ -1580,8 +1580,8 @@ fn validate_failed_retry_input(
                 "missing retry input must use its exact absolute saved path"
             );
             let saved = parent.marker();
-            let sole_failure = (saved.failed_sources.len() == 1)
-                .then(|| saved.failed_sources.keys().next())
+            let sole_failure = (saved.failed_source_count() == 1)
+                .then(|| saved.all_failed_sources().next().map(|(rel, _)| rel))
                 .flatten()
                 .map(|relative| saved.src_dir.join(relative));
             anyhow::ensure!(

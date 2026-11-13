@@ -413,6 +413,16 @@ where
         })?;
         crate::db::fast_img_store::verify_failed_retry_admission(&marker.src_dir, admission)
             .map_err(unresolved)?;
+        if admission.route == Some(crate::db::fast_img_store::FailedRetrySourceRoute::Original) {
+            let staged_xmp = enriched.get(&entry.source_rel).map(|(_, _, xmp)| xmp);
+            let admitted_xmp = match &admission.xmp {
+                crate::db::fast_img_store::FailedRetrySidecar::Absent => None,
+                crate::db::fast_img_store::FailedRetrySidecar::Present { blake3, .. } => Some(blake3),
+            };
+            if kind != PhotosSubmissionKind::Original || staged_xmp != admitted_xmp {
+                return Err(unresolved("original Photos submission differs from its admitted route or XMP"));
+            }
+        }
         if crate::common_utils::calculate_blake3_hash(&entry.path).map_err(unresolved)?
             != entry.blake3_entry.out
         {

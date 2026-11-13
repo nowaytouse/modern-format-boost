@@ -908,6 +908,16 @@ fn add_fast_img_state_namespace(
             .checked_add(cleanup_bytes)
             .context("Fast IMG namespace payload byte count overflow")?;
     }
+    if version >= 8 {
+        let retry_bytes = conn.query_row(
+            "SELECT COALESCE((SELECT SUM(length(CAST(route AS BLOB))) FROM fast_img_retry_sources),0)
+                  + COALESCE((SELECT SUM(length(CAST(source_blake3 AS BLOB)) + length(CAST(reason AS BLOB))) FROM fast_img_tier2_failures),0)",
+            [],
+            |row| nonnegative_column(row, 0),
+        )?;
+        payload_bytes = payload_bytes.checked_add(retry_bytes)
+            .context("Fast IMG original-format retry payload byte count overflow")?;
+    }
     if let Some(existing) = namespaces
         .iter_mut()
         .find(|namespace| namespace.name == "fast_img_state")
@@ -2251,7 +2261,8 @@ mod tests {
         let (cache, conn, _marker) = fast_img_state_fixture(&root);
         // Reproduce the exact previous release shape using only disposable data.
         conn.execute_batch(
-            "DROP TABLE fast_img_tier2_cleanup;
+            "DROP TABLE fast_img_tier2_failures;
+             DROP TABLE fast_img_tier2_cleanup;
              DROP TABLE fast_img_primary_cleanup;
              DROP TABLE fast_img_retry_sources;
              DROP TABLE fast_img_retry_tasks;
@@ -2399,8 +2410,10 @@ mod tests {
         assert!(!namespaces[0].rebuildable);
 
         conn.execute_batch(
-            "DROP TABLE fast_img_tier2_cleanup;
+            "DROP TABLE fast_img_tier2_failures;
+             DROP TABLE fast_img_tier2_cleanup;
              DROP TABLE fast_img_primary_cleanup;
+             ALTER TABLE fast_img_retry_sources DROP COLUMN route;
              UPDATE store_metadata SET value=5 WHERE key='schema_version';",
         )
         .unwrap();

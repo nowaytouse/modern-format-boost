@@ -388,6 +388,37 @@ pub fn validate_tier2_cleanup_resume(marker: &WorkingCopyMarker) -> Result<BTree
     Ok(absent)
 }
 
+/// Recheck source and companion absence for completed journaled original delivery.
+///
+/// # Errors
+/// Rejects changed checkpoints, missing intents, remaining originals or XMP, and inspection errors.
+pub fn verify_tier2_cleanup_complete(marker: &WorkingCopyMarker) -> Result<()> {
+    if !marker.tier2_cleanup_journal || marker.tier2_imported_assets.is_empty() {
+        return Ok(());
+    }
+    ensure!(marker.is_terminal(), "Tier-2 original cleanup is still pending");
+    let conn = open_readonly()?.context("Tier-2 cleanup store is unavailable")?;
+    let key = key_for_canonical(&canonical_text(&marker.working_copy)?);
+    in_snapshot(&conn, |conn| {
+        let saved =
+            read_snapshot(conn, &key)?.context("Tier-2 cleanup checkpoint is missing")?;
+        ensure!(
+            &saved == marker,
+            "Tier-2 cleanup checkpoint changed during verification"
+        );
+        let entries = read_entries(conn, &key, marker)?;
+        for asset in &marker.tier2_imported_assets {
+            let rel = &asset.rel_path;
+            let intent = entries
+                .get(rel)
+                .context("Tier-2 source has no durable cleanup intent")?;
+            let (_, xmp_remaining) = inspect_absence(&marker.src_dir, rel, intent)?;
+            ensure!(!xmp_remaining, "Tier-2 XMP still awaits cleanup: {rel}");
+        }
+        Ok(())
+    })
+}
+
 /// A Tier-2 cleanup attempt bound to a committed marker and its Photos receipts.
 pub struct Tier2CleanupJournal<'a> {
     conn: Connection,
@@ -723,8 +754,10 @@ mod tests {
         );
         assert!(finish_digest(&conn, &key, &saved)?.unwrap().1);
         write_marker(&terminal)?;
+        verify_tier2_cleanup_complete(&terminal)?;
         fs::write(&sidecar, b"<xmp/>")?;
         assert!(validate_tier2_cleanup_resume(&terminal).is_err());
+        assert!(verify_tier2_cleanup_complete(&terminal).is_err());
         assert_eq!(fs::read(&sidecar)?, b"<xmp/>");
         fs::remove_file(&sidecar)?;
         fs::remove_dir(media.parent().unwrap())?;
@@ -732,6 +765,7 @@ mod tests {
             validate_tier2_cleanup_resume(&terminal)?,
             BTreeSet::from([rel.to_owned()])
         );
+        verify_tier2_cleanup_complete(&terminal)?;
         let mut changed = terminal;
         changed.tier2_imported_assets[0].photos_uuid = Some("different-uuid".into());
         assert!(write_marker(&changed).is_err());

@@ -141,7 +141,7 @@ fn require_eligible(
         "Finish-only recovery requires an unfinished manifest-bound child"
     );
     ensure!(
-        marker.failed_sources.is_empty() && marker.skipped_sources.is_empty(),
+        marker.failed_source_count() == 0 && marker.skipped_sources.is_empty(),
         "Finish-only recovery cannot confirm missing failed or retained sources"
     );
     let converted = marker.blake3_log.keys().collect::<BTreeSet<_>>();

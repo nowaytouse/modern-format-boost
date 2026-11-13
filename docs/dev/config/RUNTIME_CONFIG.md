@@ -413,6 +413,14 @@ or status. In checkpoint-owned output directories, cleanup can remove a
 recognized Finder `.DS_Store` when it is the only remaining entry. This
 requires the same fresh Photos custody checks as other output cleanup.
 
+If an attempted output cleanup leaves the folder, its receipt can record a
+bounded read-only inventory of the remaining regular files and their logical
+bytes, subdirectories, symbolic links, and other entries. The inventory
+ignores link targets. Unavailable or incomplete observations have unknown
+counts. A bounded relative-path sample is available in full History details
+and hidden under display privacy. The record describes what was observed
+during cleanup and carries no ownership or deletion authority.
+
 During cleanup, the indexed Photos lookup can reuse its read-only database
 connection and prepared statements. Each removal still starts a fresh
 transaction for the exact UUID, checks the database identity and schema,
@@ -734,8 +742,10 @@ UUID rather than filename; explicit Native failures never silently fall back.
 Fast IMG reports `MFB_FAST_IMG_RESULT` before propagating delivery/finalization
 errors. Known success/failure/skip/ignored counts survive a nonzero exit;
 unprocessed entries and unknown retention have explicit fields. Primary cleanup
-completion is persisted before the independent original import begins. Retained
-primary failures remain eligible for `--retry` even with pending original imports.
+completion is persisted before the independent original import begins. For a
+journaled task with pending originals, `--retry` can continue original delivery
+while retaining primary failures. Once the task settles, those failures are
+eligible for a separate `--retry-failed` attempt.
 
 ### Deferred Photos Delivery
 
@@ -1231,16 +1241,26 @@ retain their read-only restrictions. These contracts do not establish real
 Photos or iCloud acceptance, a complete execution manifest, or cross-filesystem/
 SQLite crash atomicity.
 
-This closes the manifest-bound converted-artifact finish path, not every missing
-source case. Older ordinary tasks without durable admissions remain blocked.
-The ordinary failed-source admission/count model does not yet provide a complete
-original-format-only child execution path; injected Photos verifier fixtures do
-not establish that production route or real Photos acceptance.
+New failed-only children bind every source to the primary conversion or
+original-format Photos route during content-based admission. The complete work
+set supplies the overall count, while the primary share alone supplies the
+converted-output gates. Original-format delivery requires a Photos target.
+Resume validates each saved route and the admitted source and companion bytes.
+Older checkpoints without original-format route evidence cannot submit more
+originals. Finish-only recovery still requires immutable source admissions
+and exact verified delivery and cleanup evidence.
+
+The original-format phase records individually confirmed pre-submission
+preparation failures. It retains those inputs and their companions for an
+explicit failed-only child. Uncertain or previously sent outcomes remain
+pending until the existing Photos reconciliation establishes their status.
+Verified originals still require fresh custody and journaled cleanup. A routed
+child can settle only when every admitted source has an exact outcome.
 
 ## Canonical Fast IMG State
 
 Fast IMG task headers, source outcomes, Photos request/entry references and
-verified receipt records use the existing Core SQLite store, schema 7. Large
+verified receipt records use the existing Core SQLite store, schema 8. Large
 per-file collections are normalized rows, not a second authoritative JSON blob.
 One IMMEDIATE transaction publishes a logical snapshot; failed writes and commits
 preserve the last committed snapshot. The writer validates the saved state first,
@@ -1358,6 +1378,11 @@ can finish a remaining XMP only if its original native identity, complete
 bytes, and fresh Photos custody still match. Failed-only recovery checks the
 original admission and binds the Tier-2 journal digest to any missing-root
 finalization receipt.
+
+Independent delivery verification checks the exact saved journal and confirms
+the originals and their recorded XMP companions are still absent after fresh
+Photos custody verification. The launcher repeats this check before output
+cleanup. A reappearing entry or an incomplete journal blocks that cleanup.
 
 Older tasks retain XMP when the media is already absent. An XMP selected for
 more than one source blocks cleanup before any unlink. The worker commits

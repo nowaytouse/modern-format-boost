@@ -4140,6 +4140,8 @@ pub struct WorkingCopyMarker {
     pub skipped_sources: SkippedSourceLog,
     #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
     pub failed_sources: FailedSourceLog,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "deserialize_unique_marker_map")]
+    pub tier2_failed_sources: FailedSourceLog,
     /// Tier-2 lossy modern static assets imported directly into Photos.
     #[serde(default)]
     pub tier2_imported_assets: Vec<LibraryAssetRecord>,
@@ -4174,6 +4176,9 @@ pub struct WorkingCopyMarker {
     /// A missing relation must not turn this child into an ordinary task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_retry_manifest_blake3: Option<String>,
+    /// The primary share of a routed retry's total admitted source count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_retry_primary_source_count: Option<usize>,
     /// Only the compare-and-finalize operation can establish this observation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) failed_retry_finish_evidence: Option<FailedRetryFinishEvidence>,
@@ -4313,6 +4318,7 @@ impl WorkingCopyMarker {
             tier2_cleanup_journal: false,
             skipped_sources: SkippedSourceLog::new(),
             failed_sources: FailedSourceLog::new(),
+            tier2_failed_sources: FailedSourceLog::new(),
             tier2_imported_assets: Vec::new(),
             tier2_in_progress: false,
             photos_imported_assets: Vec::new(),
@@ -4328,6 +4334,7 @@ impl WorkingCopyMarker {
             metadata_policy_version: 0,
             processing_contract: None,
             failed_retry_manifest_blake3: None,
+            failed_retry_primary_source_count: None,
             failed_retry_finish_evidence: None,
             tool_snapshot_manifest: crate::common_utils::active_tool_snapshot()
                 .map(|snapshot| snapshot.manifest_path.clone()),
@@ -4419,8 +4426,25 @@ impl WorkingCopyMarker {
     }
 
     #[must_use]
+    pub const fn primary_source_count(&self) -> usize {
+        match self.failed_retry_primary_source_count {
+            Some(count) => count,
+            None => self.src_jpeg_count,
+        }
+    }
+
+    pub fn all_failed_sources(&self) -> impl Iterator<Item = (&String, &SkippedSourceEntry)> {
+        self.failed_sources.iter().chain(&self.tier2_failed_sources)
+    }
+
+    #[must_use]
+    pub fn failed_source_count(&self) -> usize {
+        self.failed_sources.len().saturating_add(self.tier2_failed_sources.len())
+    }
+
+    #[must_use]
     pub fn expected_output_count(&self) -> usize {
-        self.src_jpeg_count
+        self.primary_source_count()
             .saturating_sub(self.skipped_sources.len())
             .saturating_sub(self.failed_sources.len())
     }
@@ -4435,12 +4459,12 @@ impl WorkingCopyMarker {
 
     #[must_use]
     pub fn source_disposition_is_complete(&self) -> bool {
-        self.recorded_source_count() == self.src_jpeg_count
+        self.recorded_source_count() == self.primary_source_count()
     }
 
     #[must_use]
     pub fn source_disposition_over_recorded(&self) -> bool {
-        self.recorded_source_count() > self.src_jpeg_count
+        self.recorded_source_count() > self.primary_source_count()
     }
 
     pub fn validate_source_disposition_disjoint(&self) -> Result<(), String> {
@@ -4455,6 +4479,32 @@ impl WorkingCopyMarker {
         for rel in self.skipped_sources.keys() {
             if self.failed_sources.contains_key(rel) {
                 return Err(format!("{rel} recorded as both skipped and failed"));
+            }
+        }
+        for (rel, failure) in &self.tier2_failed_sources {
+            if self.blake3_log.contains_key(rel)
+                || self.skipped_sources.contains_key(rel)
+                || self.failed_sources.contains_key(rel)
+            {
+                return Err(format!("Original-format failure {rel} overlaps a primary outcome"));
+            }
+            validate_submission_blake3("original-format failure", &failure.src)?;
+            if failure.reason.trim().is_empty() {
+                return Err(format!("Original-format failure {rel} has no reason"));
+            }
+        }
+        for asset in &self.tier2_imported_assets {
+            if self.tier2_failed_sources.contains_key(&asset.rel_path) {
+                return Err(format!("{} has both an original-format failure and a delivery receipt", asset.rel_path));
+            }
+        }
+        if let Some(history) = self.photos_submission_history() {
+            for intent in &history.intents {
+                if intent.kind == PhotosSubmissionKind::Original
+                    && self.tier2_failed_sources.contains_key(&intent.source_rel)
+                {
+                    return Err(format!("{} has both a pre-submission failure and a Photos submission", intent.source_rel));
+                }
             }
         }
         Ok(())
@@ -4504,6 +4554,7 @@ impl WorkingCopyMarker {
             .keys()
             .chain(self.skipped_sources.keys())
             .chain(self.failed_sources.keys())
+            .chain(self.tier2_failed_sources.keys())
         {
             validate_marker_relative_path("source path", rel)?;
         }
@@ -4744,6 +4795,11 @@ pub(crate) fn validate_marker_structure(marker: &WorkingCopyMarker) -> std::io::
     }
     if let Some(hash) = &marker.failed_retry_manifest_blake3 {
         validate_submission_blake3("failed-only manifest", hash).map_err(std::io::Error::other)?;
+    }
+    if marker.failed_retry_primary_source_count.is_some_and(|count| {
+        marker.failed_retry_manifest_blake3.is_none() || count > marker.src_jpeg_count
+    }) {
+        return Err(std::io::Error::other("Invalid routed failed-only source count"));
     }
     if let Some(evidence) = &marker.failed_retry_finish_evidence {
         evidence.validate().map_err(std::io::Error::other)?;

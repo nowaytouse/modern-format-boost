@@ -6,12 +6,15 @@
 use foundation::ModernLossyStaticCandidate;
 use foundation::common_utils::calculate_blake3_hash;
 use foundation::fast_img::PhotosQuarantineLocations;
+use foundation::fast_img_store::{
+    FailedRetryAdmission, FailedRetryContext, FailedRetrySourceRoute, verify_failed_retry_admission,
+};
 use foundation::pipeline::verification::{
     FastImgStageName, GateResult, WorkingCopyMarker, gate1_complete_or_later,
     gate3_complete_or_later, write_marker_atomic,
 };
 use foundation::unified_error::PhotosDeliveryDeferred;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug)]
 pub(super) struct FileFailures {
@@ -107,6 +110,8 @@ struct Report {
     primary_cleanup_complete: bool,
     retained_only_complete: bool,
     finalization_error: Option<String>,
+    #[serde(skip)]
+    settled_original_failures: Option<usize>,
 }
 
 fn verify_retained_source(root: &std::path::Path, rel: &str, hash: &str) -> anyhow::Result<()> {
@@ -134,8 +139,27 @@ fn verify_retained_source(root: &std::path::Path, rel: &str, hash: &str) -> anyh
 }
 
 impl Report {
+    #[cfg(test)]
     fn from_marker(
         marker: &WorkingCopyMarker,
+        photos: bool,
+        originals: &[ModernLossyStaticCandidate],
+        probe_failures: usize,
+        recorded_failures: Option<&FileFailures>,
+    ) -> anyhow::Result<Self> {
+        Self::from_execution(
+            marker,
+            None,
+            photos,
+            originals,
+            probe_failures,
+            recorded_failures,
+        )
+    }
+
+    fn from_execution(
+        marker: &WorkingCopyMarker,
+        admissions: Option<&BTreeMap<String, FailedRetryAdmission>>,
         photos: bool,
         originals: &[ModernLossyStaticCandidate],
         probe_failures: usize,
@@ -154,6 +178,26 @@ impl Report {
             left.checked_add(right)
                 .ok_or_else(|| anyhow::anyhow!("fast-img {count} count overflow"))
         };
+        let routed = admissions.filter(|_| marker.failed_retry_primary_source_count.is_some());
+        anyhow::ensure!(
+            marker.failed_retry_primary_source_count.is_none() || routed.is_some(),
+            "fast-img result has no immutable retry inventory"
+        );
+        if let Some(admissions) = routed {
+            anyhow::ensure!(
+                admissions.len() == marker.src_jpeg_count,
+                "fast-img result lost its immutable retry inventory"
+            );
+            for (relative, hash) in originals.iter().map(|item| (&item.rel_path, &item.blake3)) {
+                anyhow::ensure!(
+                    admissions.get(relative).is_some_and(|admission| {
+                        admission.route == Some(FailedRetrySourceRoute::Original)
+                            && &admission.admitted_source_blake3 == hash
+                    }),
+                    "fast-img original result candidate falls outside the exact retry admission: {relative}"
+                );
+            }
+        }
         let tier2 = originals
             .iter()
             .map(|c| c.rel_path.as_str())
@@ -163,6 +207,13 @@ impl Report {
                     .iter()
                     .map(|a| a.rel_path.as_str()),
             )
+            .chain(marker.tier2_failed_sources.keys().map(String::as_str))
+            .chain(marker.photos_submission_history().into_iter().flat_map(|history| {
+                history.intents.iter().filter_map(|intent| {
+                    (intent.kind == foundation::pipeline::verification::PhotosSubmissionKind::Original)
+                        .then_some(intent.source_rel.as_str())
+                })
+            }))
             .collect::<BTreeSet<_>>();
         let delivered = if photos {
             gate3_complete_or_later(&marker.stage)
@@ -180,16 +231,29 @@ impl Report {
             "succeeded",
         )?;
         // Count only explicit file failures; unresolved originals stay unprocessed.
-        let failed = recorded_failures.into_iter().try_fold(
-            checked_add(marker.failed_sources.len(), probe_failures, "failed")?,
-            |total, failures| checked_add(total, failures.originals, "failed"),
+        let anonymous_original_failures = if routed.is_some() {
+            0
+        } else {
+            recorded_failures
+                .map_or(0, |failures| failures.originals)
+                .saturating_sub(marker.tier2_failed_sources.len())
+        };
+        let unbound_failures = if routed.is_some() { 0 } else { probe_failures };
+        let failed = checked_add(
+            checked_add(marker.failed_source_count(), unbound_failures, "failed")?,
+            anonymous_original_failures,
+            "failed",
         )?;
         let skipped = marker.skipped_sources.len();
-        let total = checked_add(
-            checked_add(marker.src_jpeg_count, tier2.len(), "inventory")?,
-            probe_failures,
-            "inventory",
-        )?;
+        let total = if routed.is_some() {
+            marker.src_jpeg_count
+        } else {
+            checked_add(
+                checked_add(marker.src_jpeg_count, tier2.len(), "inventory")?,
+                probe_failures,
+                "inventory",
+            )?
+        };
         let dispositions = checked_add(
             checked_add(succeeded, failed, "disposition")?,
             skipped,
@@ -210,22 +274,27 @@ impl Report {
             .chain(marker.failed_sources.keys().map(String::as_str))
             .chain(marker.skipped_sources.keys().map(String::as_str))
             .chain(tier2)
+            .chain(
+                routed
+                    .into_iter()
+                    .flat_map(|admissions| admissions.keys().map(String::as_str)),
+            )
             .collect::<BTreeSet<_>>();
+        let is_failed = |rel: &str| {
+            marker.failed_sources.contains_key(rel) || marker.tier2_failed_sources.contains_key(rel)
+        };
         let retention = sources
             .iter()
             .try_fold((0usize, 0usize), |(count, failures), rel| {
                 marker.src_dir.join(rel).try_exists().map(|exists| {
                     (
                         count + usize::from(exists),
-                        failures + usize::from(exists && marker.failed_sources.contains_key(*rel)),
+                        failures + usize::from(exists && is_failed(rel)),
                     )
                 })
             });
         let failed_sources_retained = match &retention {
-            Ok((_, count))
-                if probe_failures == 0
-                    && recorded_failures.is_none_or(|failures| failures.originals == 0) =>
-            {
+            Ok((_, count)) if unbound_failures == 0 && anonymous_original_failures == 0 => {
                 Some(*count)
             }
             _ => None,
@@ -235,22 +304,39 @@ impl Report {
                 None,
                 Some(format!("source existence inspection failed: {error}")),
             ),
-            Ok(_) if probe_failures > 0 || !marker.source_disposition_is_complete() => (
-                None,
-                Some("source inventory has unclassified or unaccounted entries".into()),
-            ),
+            Ok(_)
+                if probe_failures > 0
+                    || (routed.is_none() && !marker.source_disposition_is_complete()) =>
+            {
+                (
+                    None,
+                    Some("source inventory has unclassified or unaccounted entries".into()),
+                )
+            }
             Ok((count, _)) => (Some(count), None),
         };
         let failed_verification = (|| -> anyhow::Result<usize> {
             anyhow::ensure!(
-                probe_failures == 0
-                    && recorded_failures.is_none_or(|failures| failures.originals == 0),
+                unbound_failures == 0 && anonymous_original_failures == 0,
                 "failed sources are not all bound to recorded source hashes"
             );
-            for (rel, entry) in &marker.failed_sources {
-                verify_retained_source(&marker.src_dir, rel, &entry.src)?;
+            for (rel, entry) in marker.all_failed_sources() {
+                if let Some(admissions) = routed {
+                    let admission = admissions.get(rel).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "fast-img retained failure escaped its retry admission: {rel}"
+                        )
+                    })?;
+                    anyhow::ensure!(
+                        admission.admitted_source_blake3 == entry.src,
+                        "fast-img retained failure changed its retry identity: {rel}"
+                    );
+                    verify_failed_retry_admission(&marker.src_dir, admission)?;
+                } else {
+                    verify_retained_source(&marker.src_dir, rel, &entry.src)?;
+                }
             }
-            Ok(marker.failed_sources.len())
+            Ok(marker.failed_source_count())
         })();
         let (failed_sources_verified, failed_source_verification_error) = match failed_verification
         {
@@ -305,6 +391,8 @@ impl Report {
             primary_cleanup_complete: marker.stage == FastImgStageName::CleanupComplete,
             retained_only_complete,
             finalization_error: None,
+            settled_original_failures: (marker.is_terminal() && anonymous_original_failures == 0)
+                .then_some(marker.tier2_failed_sources.len()),
         })
     }
 
@@ -347,7 +435,9 @@ impl Report {
                     .downcast_ref::<FileFailures>()
                     .is_some_and(|failures| {
                         error.chain().count() == 1
-                            && failures.total == self.failed
+                            && (failures.total == self.failed
+                                || (failures.originals > 0
+                                    && self.settled_original_failures == Some(failures.originals)))
                             && self.unprocessed == 0
                             && (self.primary_cleanup_complete || self.retained_only_complete)
                             && self.failed_sources_verified == Some(self.failed)
@@ -361,23 +451,36 @@ impl Report {
 
 pub(super) fn finish(
     marker: &WorkingCopyMarker,
+    retry: Option<&FailedRetryContext>,
     photos: bool,
     originals: &[ModernLossyStaticCandidate],
     probe_failures: usize,
     ignored: usize,
     execution: anyhow::Result<()>,
 ) -> anyhow::Result<()> {
+    let execution = execution.and_then(|()| {
+        anyhow::ensure!(
+            !marker.tier2_in_progress,
+            "fast-img original-format delivery or source cleanup remains pending"
+        );
+        Ok(())
+    });
     let recorded_failures = execution
         .as_ref()
         .err()
         .and_then(|error| error.downcast_ref::<FileFailures>());
-    let mut report =
-        Report::from_marker(marker, photos, originals, probe_failures, recorded_failures).map_err(
-            |error| match execution.as_ref() {
-                Ok(()) => error,
-                Err(execution) => error.context(format!("execution also failed: {execution:#}")),
-            },
-        )?;
+    let mut report = Report::from_execution(
+        marker,
+        retry.map(FailedRetryContext::admissions),
+        photos,
+        originals,
+        probe_failures,
+        recorded_failures,
+    )
+    .map_err(|error| match execution.as_ref() {
+        Ok(()) => error,
+        Err(execution) => error.context(format!("execution also failed: {execution:#}")),
+    })?;
     report.record_execution(&execution, photos);
     report.ignored = ignored;
     println!("MFB_FAST_IMG_RESULT={}", serde_json::to_string(&report)?);
@@ -478,12 +581,13 @@ mod tests {
                 ),
                 (successes, 0, 1, 0)
             );
-            let per_file = finish(&marker, true, &[], 0, 0, Ok(()))
+            let per_file = finish(&marker, None, true, &[], 0, 0, Ok(()))
                 .err()
                 .ok_or_else(|| anyhow::anyhow!("file failure must produce an error"))?;
             assert!(per_file.is::<FileFailures>());
             let infrastructure = finish(
                 &marker,
+                None,
                 true,
                 &[],
                 0,
@@ -627,7 +731,7 @@ mod tests {
         report.record_execution(&failure, false);
         assert_eq!(report.finalization_error, None);
         assert!(
-            finish(&marker, false, &[], 0, 0, failure)
+            finish(&marker, None, false, &[], 0, 0, failure)
                 .err()
                 .context("file failure exit")?
                 .is::<FileFailures>()
@@ -914,6 +1018,78 @@ mod tests {
             (failed.succeeded, failed.failed, failed.unprocessed),
             (3, 20, 0)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn routed_retry_counts_exact_original_failures_and_pending_once() -> anyhow::Result<()> {
+        use foundation::batch::{DiscoveredSource, planned_source::PlannedSource};
+        use foundation::fast_img_store::FailedRetrySidecar;
+        use foundation::pipeline::verification::SkippedSourceEntry;
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?;
+        let src = root.join("source");
+        std::fs::create_dir(&src)?;
+        let mut admissions = BTreeMap::new();
+        for (relative, route) in [
+            ("primary.jpg", FailedRetrySourceRoute::Primary),
+            ("retained.heic", FailedRetrySourceRoute::Original),
+            ("pending.heic", FailedRetrySourceRoute::Original),
+        ] {
+            let path = src.join(relative);
+            std::fs::write(&path, relative.as_bytes())?;
+            let observed = DiscoveredSource::from_metadata(&path, &std::fs::metadata(&path)?)?;
+            let hash = observed.content_blake3();
+            admissions.insert(
+                relative.to_owned(),
+                FailedRetryAdmission {
+                    route: Some(route),
+                    source_rel: relative.into(),
+                    parent_source_blake3: hash.clone(),
+                    admitted_source_blake3: hash,
+                    claim: PlannedSource::encode(&observed)?,
+                    xmp: FailedRetrySidecar::Absent,
+                    aae: FailedRetrySidecar::Absent,
+                },
+            );
+        }
+        let mut marker = WorkingCopyMarker::new(src.clone(), root.join("output"), 3);
+        marker.failed_retry_primary_source_count = Some(1);
+        for (relative, failures) in [
+            ("primary.jpg", &mut marker.failed_sources),
+            ("retained.heic", &mut marker.tier2_failed_sources),
+        ] {
+            failures.insert(
+                relative.into(),
+                SkippedSourceEntry {
+                    src: admissions[relative].admitted_source_blake3.clone(),
+                    reason: "synthetic failure".into(),
+                },
+            );
+        }
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.tier2_in_progress = true;
+        let build = |marker: &WorkingCopyMarker| {
+            Report::from_execution(
+                marker,
+                Some(&admissions),
+                true,
+                &[],
+                0,
+                Some(&FileFailures::originals(1)),
+            )
+        };
+        let report = build(&marker)?;
+        assert_eq!(
+            (report.succeeded, report.failed, report.unprocessed),
+            (0, 2, 1)
+        );
+        assert_eq!(report.source_retained, Some(3));
+        assert_eq!(report.failed_sources_verified, Some(2));
+        std::fs::write(src.join("retained.xmp"), b"unexpected companion")?;
+        assert_eq!(build(&marker)?.failed_sources_verified, None);
+        assert!(Report::from_execution(&marker, None, true, &[], 0, None).is_err());
         Ok(())
     }
 

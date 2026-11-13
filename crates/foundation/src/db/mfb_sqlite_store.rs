@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::runtime_config::CachePolicy;
 
-pub const STORE_SCHEMA_VERSION: i32 = 7;
+pub const STORE_SCHEMA_VERSION: i32 = 8;
 pub const NS_PATH_TREE: &str = "path_tree";
 pub const NS_GATE1_PROOF: &str = "gate1_verified_file";
 pub const NS_CHECKPOINT: &str = "checkpoint";
@@ -192,6 +192,16 @@ const FAST_IMG_TIER2_CLEANUP_SCHEMA: &str = "CREATE TABLE fast_img_tier2_cleanup
         PRIMARY KEY(task_key, source_rel, entry_rel),
         UNIQUE(task_key, entry_rel)
     ) STRICT";
+
+const FAST_IMG_TIER2_FAILURE_SCHEMA: &str = "CREATE TABLE fast_img_tier2_failures (
+        task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE RESTRICT,
+        source_rel TEXT NOT NULL,
+        source_blake3 TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        PRIMARY KEY(task_key, source_rel)
+    ) STRICT";
+
+const RETRY_ROUTE_COLUMN: &str = "route TEXT CHECK(route IN ('primary','original'))";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PathTreeMissReason {
@@ -921,8 +931,9 @@ fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()>
                 [table], |row| row.get(0),
             ).optional()?;
             let statement = conn.prepare(&format!("SELECT * FROM {table} LIMIT 0"))?;
+            let expected_route = (table == "fast_img_retry_sources" && version >= 8).then_some("route");
             anyhow::ensure!(
-                strict == Some(true) && statement.column_names().eq(expected.iter().copied()),
+                strict == Some(true) && statement.column_names().eq(expected.iter().copied().chain(expected_route)),
                 "SQLite retry table {table} is missing or incomplete; state retained without repair"
             );
         }
@@ -976,6 +987,14 @@ fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()>
             &[("task_key", "task_key")],
             "RESTRICT",
         )?;
+        if version >= 8 {
+            let sql: String = conn.query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='fast_img_retry_sources'",
+                [],
+                |row| row.get(0),
+            )?;
+            anyhow::ensure!(sql.contains(RETRY_ROUTE_COLUMN), "SQLite retry route constraint is missing");
+        }
     } else {
         let reserved: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name IN ('fast_img_retry_tasks','fast_img_retry_sources','idx_fast_img_retry_parent'))", [], |row| row.get(0))?;
@@ -991,6 +1010,7 @@ fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()>
             FAST_IMG_PRIMARY_CLEANUP_SCHEMA,
         ),
         ("fast_img_tier2_cleanup", 7, FAST_IMG_TIER2_CLEANUP_SCHEMA),
+        ("fast_img_tier2_failures", 8, FAST_IMG_TIER2_FAILURE_SCHEMA),
     ] {
         let cleanup_sql: Option<String> = conn
             .query_row(
@@ -1253,9 +1273,16 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
         tx.execute_batch(FAST_IMG_TIER2_CLEANUP_SCHEMA)
             .context("Failed to create Tier-2 cleanup evidence; state retained")?;
         tx.execute(
-            "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
-            [STORE_SCHEMA_VERSION],
+            "UPDATE store_metadata SET value=7 WHERE key='schema_version'",
+            [],
         )?;
+        version = 7;
+    }
+    if version == 7 {
+        anyhow::ensure!(schema_version(&tx)? == Some(7), "SQLite v7 migration precondition changed");
+        tx.execute_batch(&format!("ALTER TABLE fast_img_retry_sources ADD COLUMN {RETRY_ROUTE_COLUMN}; {FAST_IMG_TIER2_FAILURE_SCHEMA}"))
+            .context("Failed to create original-format retry evidence; state retained")?;
+        tx.execute("UPDATE store_metadata SET value=?1 WHERE key='schema_version'", [STORE_SCHEMA_VERSION])?;
     }
     validate_current_store_schema(&tx)?;
     tx.commit()
@@ -2800,7 +2827,7 @@ mod tests {
 
         let _guard = set_test_store_path_for_tests(store);
         let mut conn = open_connection()?;
-        assert_eq!(inspect_store_schema_version(&conn)?, Some(7));
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(STORE_SCHEMA_VERSION));
         let (claim, state): (String, String) = conn.query_row(
             "SELECT entry_claim,state FROM fast_img_primary_cleanup WHERE task_key='task'",
             [],
@@ -2881,6 +2908,48 @@ mod tests {
         let before = std::fs::read(&store)?;
         assert!(open_connection().is_err());
         assert_eq!(std::fs::read(&store)?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn schema8_rolls_back_routing_migration_without_rewriting_old_admissions() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v6_store(&store)?;
+        let conn = Connection::open(&store)?;
+        conn.execute_batch(FAST_IMG_TIER2_CLEANUP_SCHEMA)?;
+        conn.execute_batch(
+            "INSERT INTO fast_img_tasks VALUES
+               ('parent','/synthetic/out','/synthetic/in',X'7B7D',zeroblob(32),zeroblob(32),0,1),
+               ('child','/synthetic/retry','/synthetic/in',X'7B7D',zeroblob(32),zeroblob(32),0,1);
+             INSERT INTO fast_img_retry_tasks VALUES
+               ('child','parent',0,zeroblob(32),'synthetic time','parent','request',zeroblob(32),1,'local');
+             INSERT INTO fast_img_retry_sources VALUES
+               ('child','retained.webp','parent hash','source hash','claim',NULL,NULL,NULL,NULL,NULL,NULL);
+             UPDATE store_metadata SET value=7 WHERE key='schema_version';
+             CREATE TRIGGER reject_routes BEFORE UPDATE OF value ON store_metadata
+             WHEN NEW.value=8 BEGIN SELECT RAISE(ABORT,'synthetic routing migration failure'); END",
+        )?;
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(7));
+        drop(conn);
+
+        let _guard = set_test_store_path_for_tests(store.clone());
+        assert!(format!("{:#}", open_connection().unwrap_err()).contains("synthetic routing migration failure"));
+        let conn = Connection::open(&store)?;
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(7));
+        assert!(conn.prepare("SELECT route FROM fast_img_retry_sources").is_err());
+        assert!(conn.prepare("SELECT * FROM fast_img_tier2_failures").is_err());
+        conn.execute_batch("DROP TRIGGER reject_routes")?;
+        drop(conn);
+        let conn = open_connection()?;
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(8));
+        assert_eq!(conn.query_row("SELECT count(*) FROM fast_img_tier2_failures", [], |row| row.get::<_, i64>(0))?, 0);
+        let (claim, route): (String, Option<String>) = conn.query_row(
+            "SELECT source_claim,route FROM fast_img_retry_sources WHERE task_key='child'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!((claim.as_str(), route), ("claim", None));
         Ok(())
     }
 

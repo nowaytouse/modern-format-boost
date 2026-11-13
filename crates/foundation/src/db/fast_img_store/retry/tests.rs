@@ -28,6 +28,7 @@ fn fixture_with(
         claim: PlannedSource::encode(&observed)?,
         xmp: FailedRetrySidecar::Absent,
         aae: FailedRetrySidecar::Absent,
+        route: None,
     };
     let mut marker = WorkingCopyMarker::new(source, root.join("source_optimized"), 2);
     marker.stage = FastImgStageName::CleanupComplete;
@@ -526,5 +527,49 @@ fn failed_retry_new_avif_attempt_derives_metadata_version_without_rewriting_fail
     assert_eq!(read_marker(&child.working_copy)?, child);
     assert_eq!(read_marker(&original.working_copy)?, original);
     assert_eq!(original.metadata_policy_version, 0);
+    Ok(())
+}
+
+#[test]
+fn routed_original_retry_requires_exact_settlement_and_preserves_parent() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(
+        root.path().join("state.sqlite"),
+    );
+    let (parent_marker, parent, mut admission) = fixture_with(root.path(), |marker| {
+        marker.src_jpeg_count = 0;
+        marker.blake3_log.clear();
+        marker.tier2_failed_sources = std::mem::take(&mut marker.failed_sources);
+    })?;
+    let captured = super::super::capture_failed_retry_admissions(&parent)?;
+    assert_eq!(captured, [admission.clone()]);
+    assert!(create_or_resume_failed_retry(&parent, &captured, &FailedRetryDeliveryIntent::Local, None).is_err());
+    admission.route = Some(FailedRetrySourceRoute::Original);
+    let admissions = std::slice::from_ref(&admission);
+    assert!(create_or_resume_failed_retry(&parent, admissions, &FailedRetryDeliveryIntent::Local, None).is_err());
+    let delivery = FailedRetryDeliveryIntent::Photos {
+        library_path: Some(root.path().canonicalize()?.join("Synthetic.photoslibrary")),
+        naming_policy: "[null,null,false]".into(),
+    };
+    let mut child = create_or_resume_failed_retry(&parent, admissions, &delivery, None)?;
+    assert_eq!(child.src_jpeg_count, 1);
+    assert_eq!(child.primary_source_count(), 0);
+    assert!(child.tier2_cleanup_journal);
+    assert_eq!(
+        failed_retry_context(&child.working_copy)?.unwrap().admissions().get(&admission.source_rel),
+        Some(&admission)
+    );
+    child.stage = FastImgStageName::CleanupComplete;
+    assert!(write_marker(&child).is_err(), "missing original outcome must block completion");
+    child.tier2_failed_sources.insert(admission.source_rel.clone(), SkippedSourceEntry {
+        src: blake3::hash(b"wrong original").to_hex().to_string(),
+        reason: "synthetic pre-submit failure".into(),
+    });
+    assert!(write_marker(&child).is_err(), "wrong original hash must block completion");
+    child.tier2_failed_sources.get_mut(&admission.source_rel).unwrap().src.clone_from(&admission.admitted_source_blake3);
+    write_marker(&child)?;
+    assert_eq!(read_marker(&child.working_copy)?, child);
+    assert_eq!(read_marker(&parent_marker.working_copy)?, parent_marker);
+    assert_eq!(inspect_failed_retry_parent(&child.working_copy)?.marker().failed_source_count(), 1);
     Ok(())
 }

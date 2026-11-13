@@ -24,7 +24,8 @@ mod photos_original_lookup;
 
 use crate::infra::runtime_config::AvifMetadataPolicy;
 use crate::pipeline::verification::{
-    Blake3Entry, LibraryAssetRecord, LibraryHandle, WorkingCopyMarker, write_marker_atomic,
+    Blake3Entry, FailedSourceLog, LibraryAssetRecord, LibraryHandle, SkippedSourceEntry,
+    WorkingCopyMarker, write_marker_atomic,
 };
 use crate::unified_error::{BatchErrorMode, ImgQualityError, Result};
 use serde::Deserialize;
@@ -2918,6 +2919,7 @@ pub fn import_modern_lossy_static_tier_in_library(
     }
     #[cfg(not(target_os = "macos"))]
     import_modern_lossy_static_tier_with_checkpoint(src_dir, candidates, bound_library, None)
+        .map(|report| report.library)
 }
 
 /// Import originals using the same durable native receipts as converted outputs.
@@ -2925,6 +2927,28 @@ pub fn import_modern_lossy_static_tier_checkpointed(
     marker: &mut WorkingCopyMarker,
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
 ) -> Result<LibraryHandle> {
+    import_modern_lossy_static_tier_checkpointed_with_failures(marker, candidates)
+        .map(|report| report.library)
+}
+
+/// Verified custody and exact failures from preparing original-format delivery.
+#[derive(Debug, Default)]
+pub struct Tier2ImportReport {
+    pub library: LibraryHandle,
+    /// Failures proven against the original input before any submission in this attempt.
+    /// The library's error count also covers outcomes without exact failure evidence.
+    pub failures: FailedSourceLog,
+}
+
+/// Import originals and identify exact pre-submission preparation failures.
+///
+/// # Errors
+/// Propagates interrupted or unverified backend attempts so the existing checkpoint
+/// remains responsible for submission reconciliation.
+pub fn import_modern_lossy_static_tier_checkpointed_with_failures(
+    marker: &mut WorkingCopyMarker,
+    candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
+) -> Result<Tier2ImportReport> {
     if marker.failed_retry_manifest_blake3.is_some() && !candidates.is_empty() {
         bind_marker_to_selected_photos_library(marker)?;
     }
@@ -2943,13 +2967,16 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
     bound_library: Option<&Path>,
     checkpoint: Option<&mut WorkingCopyMarker>,
-) -> Result<LibraryHandle> {
+) -> Result<Tier2ImportReport> {
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(bound_library)?;
     if candidates.is_empty() {
-        return Ok(LibraryHandle {
-            photos_library_path: selected,
-            ..LibraryHandle::default()
+        return Ok(Tier2ImportReport {
+            library: LibraryHandle {
+                photos_library_path: selected,
+                ..LibraryHandle::default()
+            },
+            ..Tier2ImportReport::default()
         });
     }
     require_active_photos_library(selected.as_deref())?;
@@ -2962,8 +2989,22 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     let mut import_candidates = Vec::with_capacity(base_candidates.len());
     let mut enriched_proofs = BTreeMap::new();
     let mut metadata_failures = 0usize;
+    let mut failures = FailedSourceLog::new();
+    let mut seen = BTreeSet::new();
+    let previous = previous_tier2_preparation_submissions(checkpoint.as_deref());
 
     for candidate in base_candidates {
+        let relative = crate::pipeline::verification::fast_img_relative_key(
+            &candidate.path,
+            src_dir,
+            "Tier-2 Photos source",
+        )
+        .map_err(ImgQualityError::AnalysisError)?;
+        if relative != candidate.rel_path || !seen.insert(relative) {
+            return Err(ImgQualityError::AnalysisError(
+                "Tier-2 Photos preparation found an inconsistent or duplicate source path; sources retained".into(),
+            ));
+        }
         let xmp_path = match crate::metadata::find_xmp_sidecar(&candidate.path) {
             Ok(Some(path)) => path,
             Ok(None) => {
@@ -2972,6 +3013,12 @@ fn import_modern_lossy_static_tier_with_checkpoint(
             }
             Err(error) => {
                 metadata_failures += 1;
+                record_tier2_preparation_failure(
+                    &mut failures,
+                    previous.as_ref(),
+                    &candidate,
+                    "Original-media XMP discovery failed",
+                );
                 tracing::error!(target: "photos_import", path = %candidate.path.display(), %error,
                     "tier-2 XMP discovery failed; source and sidecars retained");
                 println!(
@@ -2982,24 +3029,7 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                 continue;
             }
         };
-        let relative = Path::new(&candidate.rel_path);
-        if relative
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-        {
-            metadata_failures += 1;
-            tracing::error!(
-                target: "photos_import",
-                rel_path = %candidate.rel_path,
-                "tier-2 XMP delivery rejected unsafe relative path; source and sidecar retained"
-            );
-            println!(
-                "[FAIL    ]   {}: original-media XMP delivery rejected unsafe relative path; source and sidecar retained",
-                candidate.rel_path.replace(['\r', '\n'], " ")
-            );
-            continue;
-        }
-        let staged_path = staging.path().join(relative);
+        let staged_path = staging.path().join(&candidate.rel_path);
         let prepare = (|| -> Result<(String, String)> {
             let source_metadata = std::fs::symlink_metadata(&candidate.path).map_err(|error| {
                 ImgQualityError::AnalysisError(format!(
@@ -3182,6 +3212,12 @@ fn import_modern_lossy_static_tier_with_checkpoint(
             }
             Err(error) => {
                 metadata_failures += 1;
+                record_tier2_preparation_failure(
+                    &mut failures,
+                    previous.as_ref(),
+                    &candidate,
+                    "Original-media XMP delivery verification failed",
+                );
                 tracing::error!(
                     target: "photos_import",
                     rel_path = %candidate.rel_path,
@@ -3200,27 +3236,91 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     let checkpoint = {
         let mut checkpoint = checkpoint;
         if let Some(marker) = checkpoint.as_deref_mut()
-            && let Some(mut handle) = native_checkpoint::try_import_originals(
+            && let Some(handle) = native_checkpoint::try_import_originals(
                 marker,
                 &import_candidates,
                 &enriched_proofs,
                 selected.as_deref(),
             )?
         {
-            apply_tier2_enriched_delivery_proofs(&mut handle, &enriched_proofs)?;
-            handle.import_error_count = metadata_failures;
-            return Ok(handle);
+            return finish_tier2_import_report(
+                handle,
+                &enriched_proofs,
+                failures,
+                metadata_failures,
+                candidates.len(),
+            );
         }
         checkpoint
     };
-    let mut handle = import_or_reconcile_modern_lossy_static_candidates(
+    let handle = import_or_reconcile_modern_lossy_static_candidates(
         &import_candidates,
         selected.as_deref(),
         checkpoint,
         &enriched_proofs,
     )?;
-    apply_tier2_enriched_delivery_proofs(&mut handle, &enriched_proofs)?;
-    handle.import_error_count = handle
+    finish_tier2_import_report(
+        handle,
+        &enriched_proofs,
+        failures,
+        metadata_failures,
+        candidates.len(),
+    )
+}
+
+fn previous_tier2_preparation_submissions(
+    checkpoint: Option<&WorkingCopyMarker>,
+) -> Option<BTreeSet<&str>> {
+    let Some(marker) = checkpoint else {
+        return Some(BTreeSet::new());
+    };
+    let history = marker.photos_submission_history()?;
+    if !history.complete_from_creation {
+        return None;
+    }
+    Some(
+        history
+            .intents
+            .iter()
+            .map(|intent| intent.source_rel.as_str())
+            .chain(marker.tier2_imported_assets.iter().map(|asset| asset.rel_path.as_str()))
+            .collect(),
+    )
+}
+
+fn record_tier2_preparation_failure(
+    failures: &mut FailedSourceLog,
+    previous_submissions: Option<&BTreeSet<&str>>,
+    candidate: &PhotosImportCandidate,
+    reason: &str,
+) {
+    if previous_submissions.is_none_or(|previous| previous.contains(candidate.rel_path.as_str())) {
+        return;
+    }
+    match crate::pipeline::verification::FinalInputObservation::capture(&candidate.path) {
+        Ok(observation) if observation.blake3() == candidate.blake3 => {
+            failures.insert(
+                candidate.rel_path.clone(),
+                SkippedSourceEntry {
+                    src: candidate.blake3.clone(),
+                    reason: reason.to_owned(),
+                },
+            );
+        }
+        _ => tracing::warn!(target: "photos_import", rel_path = %candidate.rel_path,
+            "Tier-2 preparation failure could not be bound to the admitted source; source retained"),
+    }
+}
+
+fn finish_tier2_import_report(
+    mut library: LibraryHandle,
+    enriched_proofs: &BTreeMap<String, (String, String, String)>,
+    failures: FailedSourceLog,
+    metadata_failures: usize,
+    expected: usize,
+) -> Result<Tier2ImportReport> {
+    apply_tier2_enriched_delivery_proofs(&mut library, enriched_proofs)?;
+    library.import_error_count = library
         .import_error_count
         .checked_add(metadata_failures)
         .ok_or_else(|| {
@@ -3228,7 +3328,15 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                 "tier-2 metadata failure count overflowed usize".to_string(),
             )
         })?;
-    Ok(handle)
+    if failures.len() > metadata_failures
+        || library.imported_assets.len().checked_add(library.import_error_count) != Some(expected)
+        || library.imported_assets.iter().any(|asset| failures.contains_key(&asset.rel_path))
+    {
+        return Err(ImgQualityError::AnalysisError(
+            "Tier-2 import report does not match the admitted media; sources retained".into(),
+        ));
+    }
+    Ok(Tier2ImportReport { library, failures })
 }
 
 fn apply_tier2_enriched_delivery_proofs(
@@ -6210,6 +6318,8 @@ fn fast_img_pairs_from_photos_import_ids(
     let stdout = std::str::from_utf8(stdout).map_err(|e| {
         ImgQualityError::AnalysisError(format!("parse Photos AppleScript import IDs failed: {e}"))
     })?;
+    // An empty AppleScript result is printed as a newline.
+    let stdout = if stdout.trim().is_empty() { "" } else { stdout };
     let ids: Vec<String> = stdout.lines().map(str::trim).map(ToOwned::to_owned).collect();
     if ids.len() != output_paths.len() {
         return Err(ImgQualityError::AnalysisError(format!(
@@ -8183,6 +8293,76 @@ mod tests {
             assert_eq!(proof.imported_assets[0].blake3, candidates[0].blake3);
             assert!(proof.imported_assets[0].library_blake3.is_none());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn tier2_preparation_report_keeps_exact_and_unresolved_failures_distinct() -> Result<()> {
+        use crate::pipeline::verification::{
+            PhotosSubmissionBackend, PhotosSubmissionIntent, PhotosSubmissionKind,
+        };
+
+        let root = tempfile::tempdir()?;
+        let input = root.path().join("input");
+        std::fs::create_dir(&input)?;
+        let bytes = b"synthetic original media";
+        let source_hash = blake3::hash(bytes).to_hex().to_string();
+        let candidate = |rel: &str| -> Result<PhotosImportCandidate> {
+            let path = input.join(rel);
+            std::fs::write(&path, bytes)?;
+            Ok(PhotosImportCandidate {
+                rel_path: rel.to_owned(),
+                path,
+                blake3: source_hash.clone(),
+                album_name: "Synthetic".into(),
+            })
+        };
+        let exact = candidate("exact.webp")?;
+        let pending = candidate("pending.webp")?;
+        let drifted = candidate("drifted.webp")?;
+        std::fs::write(&drifted.path, b"different synthetic original")?;
+        let mut marker = WorkingCopyMarker::new(input, root.path().join("output"), 0);
+        marker
+            .record_photos_submissions(&[PhotosSubmissionIntent {
+                kind: PhotosSubmissionKind::Original,
+                source_rel: pending.rel_path.clone(),
+                source_blake3: pending.blake3.clone(),
+                output_rel: pending.rel_path.clone(),
+                output_blake3: pending.blake3.clone(),
+                album_name: pending.album_name.clone(),
+                photos_library_path: None,
+                backend: PhotosSubmissionBackend::Applescript {
+                    request_id: "a".repeat(64),
+                },
+            }])
+            .map_err(ImgQualityError::AnalysisError)?;
+        let history = previous_tier2_preparation_submissions(Some(&marker));
+        let mut failures = FailedSourceLog::new();
+        for media in [&exact, &pending, &drifted] {
+            record_tier2_preparation_failure(
+                &mut failures,
+                history.as_ref(),
+                media,
+                "synthetic XMP failure",
+            );
+        }
+        let report = finish_tier2_import_report(
+            LibraryHandle {
+                import_error_count: 1,
+                ..LibraryHandle::default()
+            },
+            &BTreeMap::new(),
+            failures,
+            3,
+            4,
+        )?;
+        assert_eq!(report.library.import_error_count, 4);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[&exact.rel_path].src, source_hash);
+        assert_eq!(
+            report.failures[&exact.rel_path].reason,
+            "synthetic XMP failure"
+        );
         Ok(())
     }
 

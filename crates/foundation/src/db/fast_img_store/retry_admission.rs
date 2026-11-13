@@ -106,6 +106,7 @@ fn capture(root: &Path, rel: &str, parent_hash: &str) -> Result<FailedRetryAdmis
         claim,
         xmp: sidecar_observation(root, crate::metadata::find_xmp_sidecar(&source)?)?,
         aae: sidecar_observation(root, crate::metadata::find_aae_sidecar(&source)?)?,
+        route: None,
     };
     // Bind all observations to the same admission, rather than letting sidecar
     // discovery silently replace the earlier source observation.
@@ -124,10 +125,9 @@ pub fn capture_failed_retry_admissions(
     let marker = parent.marker();
     capture_set(
         &marker.src_dir,
-        marker.failed_sources.len(),
+        marker.failed_source_count(),
         marker
-            .failed_sources
-            .iter()
+            .all_failed_sources()
             .map(|(rel, failure)| (rel.as_str(), failure.src.as_str())),
     )
 }

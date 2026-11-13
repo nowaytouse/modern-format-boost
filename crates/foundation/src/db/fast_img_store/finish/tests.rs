@@ -65,6 +65,7 @@ fn fixture(root: &Path, journaled: bool) -> Result<(WorkingCopyMarker, WorkingCo
             claim: PlannedSource::encode(&observed)?,
             xmp,
             aae: FailedRetrySidecar::Absent,
+            route: None,
         }],
         &FailedRetryDeliveryIntent::Local,
         None,

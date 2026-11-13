@@ -28,14 +28,16 @@ mod retry;
 mod retry_admission;
 mod tier2_cleanup;
 pub use cleanup::{PrimaryCleanupJournal, PrimaryCleanupScope, validate_primary_cleanup_resume};
-pub use tier2_cleanup::{Tier2CleanupJournal, validate_tier2_cleanup_resume};
+pub use tier2_cleanup::{
+    Tier2CleanupJournal, validate_tier2_cleanup_resume, verify_tier2_cleanup_complete,
+};
 pub use finish::{
     FailedRetryFinishSnapshot, finalize_failed_retry_finish, inspect_failed_retry_finish,
     resolve_failed_retry_child_for_source,
 };
 pub use retry::{
     FailedRetryAdmission, FailedRetryContext, FailedRetryDeliveryIntent, FailedRetryParent,
-    FailedRetrySidecar, FailedRetryToolAuthority, create_or_resume_failed_retry,
+    FailedRetrySidecar, FailedRetrySourceRoute, FailedRetryToolAuthority, create_or_resume_failed_retry,
     failed_retry_context, find_failed_retry_child, inspect_failed_retry_parent,
 };
 pub use retry_admission::{
@@ -117,6 +119,9 @@ fn snapshot_digest(wc: &str, source: &str, marker: &WorkingCopyMarker) -> Result
 
 fn small_header(marker: &WorkingCopyMarker) -> Result<Vec<u8>> {
     let mut value = serde_json::to_value(marker)?;
+    if let Some(fields) = value.as_object_mut() {
+        fields.remove("tier2_failed_sources");
+    }
     for name in ["blake3_log", "skipped_sources", "failed_sources"] {
         value[name] = serde_json::json!({});
     }
@@ -194,6 +199,14 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
         retry::reject_missing_task_evidence(conn, key)?;
         cleanup::reject_missing_task_evidence(conn, key)?;
         tier2_cleanup::reject_missing_task_evidence(conn, key)?;
+        if inspect_store_schema_version(conn)?.is_some_and(|version| version >= 8) {
+            let has_failures: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM fast_img_tier2_failures WHERE task_key=?1)",
+                [key],
+                |row| row.get(0),
+            )?;
+            ensure!(!has_failures, "Missing Fast IMG task still has protected original-format failures");
+        }
         return Ok(None);
     };
     validate_locator(&header.wc)?;
@@ -218,6 +231,7 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
         parsed.blake3_log.is_empty()
             && parsed.skipped_sources.is_empty()
             && parsed.failed_sources.is_empty()
+            && parsed.tier2_failed_sources.is_empty()
             && parsed.photos_imported_assets.is_empty()
             && parsed.tier2_imported_assets.is_empty()
             && parsed
@@ -279,6 +293,17 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
     value["blake3_log"] = serde_json::to_value(converted)?;
     value["skipped_sources"] = serde_json::to_value(skipped)?;
     value["failed_sources"] = serde_json::to_value(failed)?;
+    if inspect_store_schema_version(conn)?.is_some_and(|version| version >= 8) {
+        let mut statement = conn.prepare(
+            "SELECT source_rel,source_blake3,reason FROM fast_img_tier2_failures WHERE task_key=?1 ORDER BY source_rel",
+        )?;
+        let failures = statement.query_map([key], |row| {
+            Ok((row.get::<_, String>(0)?, SkippedSourceEntry { src: row.get(1)?, reason: row.get(2)? }))
+        })?.collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+        if !failures.is_empty() {
+            value["tier2_failed_sources"] = serde_json::to_value(failures)?;
+        }
+    }
 
     let mut requests = BTreeMap::new();
     let mut statement = conn.prepare(
@@ -844,6 +869,7 @@ fn write_snapshot_at_with_finish(
                 && marker.blake3_log.is_empty()
                 && marker.skipped_sources.is_empty()
                 && marker.failed_sources.is_empty()
+                && marker.tier2_failed_sources.is_empty()
                 && marker.photos_imported_assets.is_empty()
                 && marker.tier2_imported_assets.is_empty()
                 && marker
@@ -884,6 +910,10 @@ fn write_snapshot_at_with_finish(
         );
         finish::validate_write(old, marker, revision, finalization)?;
         preserve_history(old, marker)?;
+        ensure!(
+            old.tier2_failed_sources.iter().all(|(rel, failure)| marker.tier2_failed_sources.get(rel) == Some(failure)),
+            "Saved original-format failure evidence cannot be removed or replaced"
+        );
         ensure!(
             !old.primary_cleanup_journal || marker.primary_cleanup_journal,
             "Fast IMG primary cleanup journal cannot be disabled"
@@ -934,6 +964,15 @@ fn write_snapshot_at_with_finish(
         ],
     )?;
     write_sources(conn, &key, previous.as_ref(), marker)?;
+    for (rel, failure) in &marker.tier2_failed_sources {
+        if previous.as_ref().is_some_and(|old| old.tier2_failed_sources.contains_key(rel)) {
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO fast_img_tier2_failures(task_key,source_rel,source_blake3,reason) VALUES(?1,?2,?3,?4)",
+            params![key, rel, failure.src, failure.reason],
+        )?;
+    }
     append_submissions(conn, &key, previous.as_ref(), marker)?;
     write_receipts(
         conn,
@@ -1004,6 +1043,10 @@ fn row_count(conn: &Connection) -> Result<usize> {
     count = count
         .checked_add(tier2_cleanup::row_count(conn)?)
         .context("Fast IMG original-format cleanup row count overflow")?;
+    if inspect_store_schema_version(conn)?.is_some_and(|version| version >= 8) {
+        let rows: i64 = conn.query_row("SELECT count(*) FROM fast_img_tier2_failures", [], |row| row.get(0))?;
+        count = count.checked_add(usize::try_from(rows)?).context("Fast IMG original-format failure row count overflow")?;
+    }
     Ok(count)
 }
 

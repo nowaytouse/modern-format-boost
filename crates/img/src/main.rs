@@ -14,6 +14,9 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use foundation::ToolBuilder;
 use foundation::analysis_cache::AnalysisCache;
 use foundation::batch::AdmittedImageFile;
+use foundation::fast_img_store::{
+    FailedRetryAdmission, FailedRetryContext, FailedRetryDeliveryIntent, FailedRetrySourceRoute,
+};
 use foundation::batch::fast_img_scope::FastImgInputScope;
 use foundation::batch::history_source_set::{HISTORY_SOURCE_SET_PREFIX, HistorySourceSet};
 use foundation::common_utils::calculate_blake3_hash;
@@ -4144,8 +4147,8 @@ fn fast_img_validate_failed_retry_input(
         }
         return Ok(());
     }
-    let only_failure = (parent.failed_sources.len() == 1)
-        .then(|| parent.failed_sources.keys().next())
+    let only_failure = (parent.failed_source_count() == 1)
+        .then(|| parent.all_failed_sources().next().map(|(rel, _)| rel))
         .flatten()
         .map(|rel| fast_img_checked_rel_path(rel).map(|rel| parent.src_dir.join(rel)))
         .transpose()?;
@@ -4192,12 +4195,11 @@ fn fast_img_failed_retry_source_root(
                     candidate, strategy,
                 )? {
                     if selected == marker.src_dir
-                        || (marker.failed_sources.len() == 1
+                        || (marker.failed_source_count() == 1
                             && marker
-                                .failed_sources
-                                .keys()
+                                .all_failed_sources()
                                 .next()
-                                .is_some_and(|rel| marker.src_dir.join(rel) == selected))
+                                .is_some_and(|(rel, _)| marker.src_dir.join(rel) == selected))
                     {
                         roots.insert(marker.src_dir);
                     }
@@ -4290,7 +4292,7 @@ fn fast_img_report_completed_failed_retry(
     );
     println!(
         "[REUSED  ] previous attempt retained {} failure(s); its saved result is being shown, not a new custody verification",
-        child.failed_sources.len()
+        child.failed_source_count()
     );
     fast_img_result::print_processor_counts(0, 0, 0, 0, 0);
     Ok(())
@@ -4467,7 +4469,8 @@ fn fast_img_validate_failed_retry_target(
                 "saved retry Photos custody belongs to a different selected library"
             );
             anyhow::ensure!(
-                bound.is_some() || child.photos_imported_assets.is_empty(),
+                bound.is_some()
+                    || (child.photos_imported_assets.is_empty() && child.tier2_imported_assets.is_empty()),
                 "saved retry Photos receipts have no bound library for this explicit target"
             );
         }
@@ -4491,7 +4494,7 @@ fn fast_img_emit_failed_retry_available(
         serde_json::json!({
             "schema_version":1,"source_directory":marker.src_dir,
             "parent_working_copy":marker.working_copy,"parent_task_key":parent.task_key(),
-            "failed_count":marker.failed_sources.len(),"strategy":marker.strategy,
+            "failed_count":marker.failed_source_count(),"strategy":marker.strategy,
             "existing_child_complete":existing_child.as_ref().is_some_and(WorkingCopyMarker::is_terminal),
             "existing_child_working_copy":existing_child.as_ref().map(|child| &child.working_copy)
         })
@@ -4523,7 +4526,7 @@ fn fast_img_prepare_failed_retry_child(
                 .context("inspect stable failed-only output before assigning ownership");
         }
     }
-    let admissions = fast_img_capture_failed_retry_admissions(parent)?;
+    let admissions = fast_img_capture_routed_retry_admissions(parent, delivery)?;
     Ok(foundation::fast_img_store::create_or_resume_failed_retry(
         parent,
         &admissions,
@@ -4563,6 +4566,62 @@ fn fast_img_capture_failed_retry_admissions(
             fast_img_report_blocked_admissions(&parent.marker().src_dir, blocked);
         }
     })
+}
+
+fn fast_img_capture_routed_retry_admissions(
+    parent: &foundation::fast_img_store::FailedRetryParent,
+    delivery: &FailedRetryDeliveryIntent,
+) -> anyhow::Result<Vec<FailedRetryAdmission>> {
+    let marker = parent.marker();
+    let mut admissions = fast_img_capture_failed_retry_admissions(parent)?;
+    let observed = admissions
+        .iter()
+        .map(|admission| {
+            let source = marker.src_dir.join(fast_img_checked_rel_path(&admission.source_rel)?);
+            Ok(AdmittedImageFile::from_metadata(&source, &std::fs::symlink_metadata(&source)?)?)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let inventory = scan_fast_img_sources_with(observed, &marker.src_dir, &marker.strategy, |paths| {
+        Ok(foundation::image::format_identity::resolve_format_identities(paths)?)
+    })?;
+    let routes = inventory.failed_retry_routes();
+    let mut issues = BTreeMap::new();
+    for admission in &mut admissions {
+        let rel = admission.source_rel.as_str();
+        let result = match routes.get(rel) {
+            Some((_, hash)) if *hash != admission.admitted_source_blake3.as_str() => {
+                Err("source bytes changed during retry route admission".to_owned())
+            }
+            Some((FailedRetrySourceRoute::Original, _))
+                if matches!(delivery, FailedRetryDeliveryIntent::Local) =>
+            {
+                Err("original-format delivery requires selecting Photos".to_owned())
+            }
+            Some((route, _)) => Ok(*route),
+            None => Err("no supported delivery route could be verified for the admitted source".to_owned()),
+        };
+        match result {
+            Ok(route) => admission.route = Some(route),
+            Err(reason) => {
+                issues.insert(rel.to_owned(), reason);
+            }
+        }
+    }
+    ensure_fast_img_retry_admission_issues(&marker.src_dir, admissions.len(), issues)?;
+    Ok(admissions)
+}
+
+fn ensure_fast_img_retry_admission_issues(
+    source_root: &Path,
+    selected: usize,
+    issues: BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    if issues.is_empty() {
+        return Ok(());
+    }
+    let blocked = foundation::fast_img_store::FailedRetryAdmissionBlocked { selected, issues };
+    fast_img_report_blocked_admissions(source_root, &blocked);
+    Err(blocked.into())
 }
 
 fn run_fast_img_failed_retry(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
@@ -4628,7 +4687,7 @@ fn run_fast_img_failed_retry(options: FastImgRunOptions<'_>) -> anyhow::Result<(
             child
         } else {
             if options.dry_run.0 {
-                let admissions = fast_img_capture_failed_retry_admissions(&parent)?;
+                let admissions = fast_img_capture_routed_retry_admissions(&parent, &delivery)?;
                 println!(
                     "[DRY-RUN ] would create an isolated failed-only attempt for {} retained source(s); parent results were not changed",
                     admissions.len()
@@ -4699,15 +4758,51 @@ fn fast_img_failed_retry_input_plan(
             }
         }
     }
-    if !issues.is_empty() {
-        let blocked = foundation::fast_img_store::FailedRetryAdmissionBlocked {
-            selected: context.admissions().len(),
-            issues,
-        };
-        fast_img_report_blocked_admissions(&marker.src_dir, &blocked);
-        return Err(blocked.into());
-    }
+    ensure_fast_img_retry_admission_issues(&marker.src_dir, context.admissions().len(), issues)?;
     Ok(candidates)
+}
+
+fn fast_img_validate_failed_retry_routes(
+    marker: &WorkingCopyMarker,
+    context: &FailedRetryContext,
+    observed: &BTreeSet<String>,
+    inventory: &FastImgSourceInventory,
+) -> anyhow::Result<()> {
+    let routes = inventory.failed_retry_routes();
+    let original_receipts = marker
+        .tier2_imported_assets
+        .iter()
+        .map(|asset| (asset.rel_path.as_str(), asset.blake3.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut issues = BTreeMap::new();
+    for (rel, admission) in context.admissions() {
+        let Some(expected) = admission.route else {
+            if routes.get(rel.as_str()).is_some_and(|(route, _)| *route == FailedRetrySourceRoute::Original)
+                || original_receipts.contains_key(rel.as_str())
+            {
+                issues.insert(rel.clone(), "saved retry has no durable original-format route; original delivery cannot resume".into());
+            }
+            continue;
+        };
+        let expected_hash = admission.admitted_source_blake3.as_str();
+        let matches = if observed.contains(rel) {
+            routes.get(rel.as_str()) == Some(&(expected, expected_hash))
+        } else {
+            match expected {
+                FailedRetrySourceRoute::Primary => marker
+                    .blake3_log
+                    .get(rel)
+                    .is_some_and(|entry| entry.src == expected_hash),
+                FailedRetrySourceRoute::Original => {
+                    original_receipts.get(rel.as_str()) == Some(&expected_hash)
+                }
+            }
+        };
+        if !matches {
+            issues.insert(rel.clone(), "source does not match its saved delivery route and admitted bytes".into());
+        }
+    }
+    ensure_fast_img_retry_admission_issues(&marker.src_dir, context.admissions().len(), issues)
 }
 
 fn fast_img_validate_processing_contract(
@@ -4826,6 +4921,16 @@ struct FastImgSourceInventory {
 }
 
 impl FastImgSourceInventory {
+    fn failed_retry_routes(&self) -> BTreeMap<&str, (FailedRetrySourceRoute, &str)> {
+        self.source_hashes
+            .iter()
+            .map(|(rel, hash)| (rel.as_str(), (FailedRetrySourceRoute::Primary, hash.as_str())))
+            .chain(self.modern_lossy_candidates.iter().map(|candidate| {
+                (candidate.rel_path.as_str(), (FailedRetrySourceRoute::Original, candidate.blake3.as_str()))
+            }))
+            .collect()
+    }
+
     fn history_source_set(&self, root: &Path, import_to_photos: bool) -> Option<HistorySourceSet> {
         if !self.scan_failures.is_empty() || self.modern_probe_failure_count != 0 {
             return None;
@@ -5060,7 +5165,6 @@ fn scan_fast_img_sources_with(
         source.verify_regular_file_unchanged()?;
     }
     live_photos.verify_unchanged()?;
-    ignored.emit_markers_from_environment()?;
     let planned_encode_count = source_files.len().saturating_sub(scan_failures.len());
     if strategy == "avif" {
         println!(
@@ -5153,7 +5257,7 @@ fn fast_img_reconcile_saved_marker(
                     stage = %marker.stage.as_str(),
                     working_copy = %context.working_copy.display(),
                     archived = %archived.display(),
-                    marker_count = marker.src_jpeg_count,
+                    marker_count = marker.primary_source_count(),
                     source_count = context.source_jpegs.len(),
                     "fast-img stale marker was archived before rebuilding from current sources"
                 );
@@ -5166,7 +5270,7 @@ fn fast_img_reconcile_saved_marker(
                     target: "fast_img",
                     stage = %marker.stage.as_str(),
                     working_copy = %context.working_copy.display(),
-                    marker_count = marker.src_jpeg_count,
+                    marker_count = marker.primary_source_count(),
                     source_count = context.source_jpegs.len(),
                     "fast-img stale marker had no working copy; rebuilding from current sources"
                 );
@@ -5307,19 +5411,25 @@ fn fast_img_try_finish_tier2_delivery(
     let tier2_pending = (existing_marker
         .as_ref()
         .is_some_and(|marker| marker.tier2_in_progress)
-        || !context.modern_lossy_candidates.is_empty())
+        || existing_marker.as_ref().is_some_and(|marker| {
+            fast_img_new_original_count(marker, context.modern_lossy_candidates) != 0
+        }))
         && existing_marker
             .as_ref()
             .is_some_and(|marker| marker.stage == FastImgStageName::CleanupComplete);
     if !tier2_pending {
         return Ok(false);
     }
-    if retry_requested
-        && existing_marker
-            .as_ref()
-            .is_some_and(|marker| !marker.failed_sources.is_empty())
+    if existing_marker
+        .as_ref()
+        .is_some_and(|marker| marker.is_terminal() && marker.failed_source_count() > 0)
+        || (retry_requested
+            && existing_marker.as_ref().is_some_and(|marker| {
+                !marker.tier2_cleanup_journal && !marker.failed_sources.is_empty()
+            }))
     {
-        // Retry retained encodes first; their delivery pipeline also resumes Tier 2.
+        // A completed task's failures belong to a separate failed-only attempt.
+        // Legacy interrupted tasks still retry primary encodes first.
         return Ok(false);
     }
     if dry_run.0 {
@@ -5367,11 +5477,11 @@ fn fast_img_prepare_retry_plan(
 ) -> anyhow::Result<Option<FastImgRetryPlan>> {
     if let Some(marker) = existing_marker.as_ref()
         && marker.is_terminal()
-        && !marker.failed_sources.is_empty()
+        && marker.failed_source_count() > 0
     {
         anyhow::bail!(
             "MFB_FAILED_RETRY_REQUIRED: this completed task retained {} failure(s); use --retry-failed for an independent attempt. The completed parent and its delivery evidence were retained",
-            marker.failed_sources.len()
+            marker.failed_source_count()
         );
     }
     let failed_from_cleanup = false;
@@ -5573,7 +5683,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 foundation::common_utils::emit_tool_runtime_status("blocked", Some(&shared))?;
                 return Err(shared.into());
             }
-            if marker.is_terminal() && !marker.failed_sources.is_empty() {
+            if marker.is_terminal() && marker.failed_source_count() > 0 {
                 fast_img_emit_failed_retry_available(marker, shortest_path)?;
                 if retry_requested {
                     anyhow::bail!(
@@ -5624,9 +5734,23 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         );
         (scope.candidates, scope.selected_is_directory)
     };
+    let observed_retry_paths = failed_retry_context.as_ref().map(|_| {
+        candidates
+            .iter()
+            .map(|candidate| foundation::pipeline::verification::fast_img_relative_key(
+                candidate.path(), &src_dir, "failed-only source",
+            ).map_err(anyhow::Error::msg))
+            .collect::<anyhow::Result<BTreeSet<_>>>()
+    }).transpose()?;
     let inventory = scan_fast_img_sources_with(candidates, &src_dir, strategy, |paths| {
         Ok(foundation::image::format_identity::resolve_format_identities(paths)?)
     })?;
+    if let (Some(context), Some(marker), Some(observed)) =
+        (&failed_retry_context, &existing_marker, &observed_retry_paths)
+    {
+        fast_img_validate_failed_retry_routes(marker, context, observed, &inventory)?;
+    }
+    inventory.ignored.emit_markers_from_environment()?;
     runtime_cli::check_tool_runtime_after_failure()?;
     if !dry_run.0
         && !retry_requested
@@ -5713,7 +5837,9 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
 
         fast_img_confirm_resume_if_needed(
             existing_marker.as_ref(),
-            modern_lossy_candidates.len(),
+            existing_marker.as_ref().map_or(0, |marker| {
+                fast_img_new_original_count(marker, &modern_lossy_candidates)
+            }),
             dry_run,
             shortest_path,
             &mut retry_requested,
@@ -5895,6 +6021,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             }
             if !resume_local_delivery_for_shortest_path
                 && !retry_failed_sources_from_cleanup
+                && failed_retry_context.is_none()
                 && !fast_img_cleanup_resume_source_subset_matches(&marker, &current_source_hashes)?
             {
                 marker.src_jpeg_count = source_jpegs.len();
@@ -6011,6 +6138,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         .unwrap_or_else(|| WorkingCopyMarker::new(src_dir, working_copy, source_jpegs.len()));
     fast_img_result::finish(
         &marker,
+        failed_retry_context.as_ref(),
         shortest_path.0,
         &modern_lossy_candidates,
         modern_probe_failure_count,
@@ -6039,7 +6167,7 @@ fn fast_img_requires_resume_decision(
     shortest_path: ShortestPathFlag,
 ) -> bool {
     !marker.is_terminal()
-        || !marker.failed_sources.is_empty()
+        || marker.failed_source_count() > 0
         || fast_img_cleanup_complete_should_resume_shortest_path_import(marker, shortest_path)
 }
 
@@ -6061,6 +6189,16 @@ const fn fast_img_completed_marker_has_new_tier2_work(
     modern_lossy_candidate_count: usize,
 ) -> bool {
     marker.is_terminal() && modern_lossy_candidate_count != 0
+}
+
+fn fast_img_new_original_count(
+    marker: &WorkingCopyMarker,
+    candidates: &[ModernLossyStaticCandidate],
+) -> usize {
+    candidates
+        .iter()
+        .filter(|candidate| !marker.tier2_failed_sources.contains_key(&candidate.rel_path))
+        .count()
 }
 
 fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool {
@@ -8019,7 +8157,7 @@ fn fast_img_validate_source_delete_disposition(marker: &WorkingCopyMarker) -> an
     if marker.source_disposition_over_recorded() {
         anyhow::bail!(
             "fast-img source delete gate over-recorded disposition: marker_count={} converted={} skipped={} failed={}",
-            marker.src_jpeg_count,
+            marker.primary_source_count(),
             marker.blake3_log.len(),
             marker.skipped_sources.len(),
             marker.failed_sources.len()
@@ -8029,12 +8167,12 @@ fn fast_img_validate_source_delete_disposition(marker: &WorkingCopyMarker) -> an
     if !complete {
         tracing::warn!(
             target: "fast_img_delete",
-            marker_count = marker.src_jpeg_count,
+            marker_count = marker.primary_source_count(),
             converted = marker.blake3_log.len(),
             skipped = marker.skipped_sources.len(),
             failed = marker.failed_sources.len(),
             unaccounted = marker
-                .src_jpeg_count
+                .primary_source_count()
                 .saturating_sub(marker.recorded_source_count()),
             "fast-img source delete gate proceeding with incomplete disposition; only blake3_log sources are eligible for deletion"
         );
@@ -8092,12 +8230,12 @@ fn fast_img_validate_jxl_only_delivery_exit(
     } else {
         "JXL-only"
     };
-    if marker.src_jpeg_count != current_count
+    if marker.primary_source_count() != current_count
         && !fast_img_cleanup_resume_source_subset_matches(marker, current_source_hashes)?
     {
         anyhow::bail!(
             "fast-img source count changed before {mode_name} delivery: marker={} current={current_count}",
-            marker.src_jpeg_count
+            marker.primary_source_count()
         );
     }
     fast_img_validate_source_delete_disposition(marker)?;
@@ -8131,7 +8269,7 @@ fn fast_img_validate_cleanup_retry_jxl_only_delivery_exit(
             current_source_hashes.len()
         );
     }
-    if marker.recorded_source_count() != marker.src_jpeg_count {
+    if !marker.source_disposition_is_complete() {
         fast_img_validate_source_delete_disposition(marker)?;
     }
     let marker_source_hashes = fast_img_marker_recorded_source_hashes(marker)?;
@@ -11064,7 +11202,7 @@ enum FastImgCleanupCompleteSourceState {
 }
 
 fn fast_img_marker_has_empty_primary_inventory(marker: &WorkingCopyMarker) -> bool {
-    marker.src_jpeg_count == 0
+    marker.primary_source_count() == 0
         && marker.blake3_log.is_empty()
         && marker.skipped_sources.is_empty()
         && marker.failed_sources.is_empty()
@@ -11077,10 +11215,10 @@ fn fast_img_cleanup_complete_source_state(
     current_count: usize,
     current_source_hashes: &BTreeMap<String, String>,
 ) -> anyhow::Result<FastImgCleanupCompleteSourceState> {
-    if marker.recorded_source_count() != marker.src_jpeg_count {
+    if !marker.source_disposition_is_complete() {
         anyhow::bail!(
             "fast-img cleanup marker requires complete source disposition: marker_count={} converted={} skipped={} failed={}",
-            marker.src_jpeg_count,
+            marker.primary_source_count(),
             marker.blake3_log.len(),
             marker.skipped_sources.len(),
             marker.failed_sources.len()
@@ -11098,7 +11236,7 @@ fn fast_img_cleanup_complete_source_state(
         .checked_add(marker.failed_sources.len())
         .context("fast-img retained source count overflowed usize")?;
     let marker_hashes = fast_img_marker_recorded_source_hashes(marker)?;
-    if current_count == marker.src_jpeg_count
+    if current_count == marker.primary_source_count()
         && marker_hashes == *current_source_hashes
         && !fast_img_marker_has_empty_primary_inventory(marker)
     {
@@ -11159,10 +11297,10 @@ fn validate_cleanup_retry_marker_source_state(
     if retained_hashes.len() != current_count || retained_hashes != *current_source_hashes {
         anyhow::bail!("fast-img failed-source retry retained source set changed");
     }
-    if marker.recorded_source_count() != marker.src_jpeg_count {
+    if !marker.source_disposition_is_complete() {
         anyhow::bail!(
             "fast-img failed-source retry marker requires complete source disposition: marker_count={} converted={} skipped={} failed={}",
-            marker.src_jpeg_count,
+            marker.primary_source_count(),
             marker.blake3_log.len(),
             marker.skipped_sources.len(),
             marker.failed_sources.len()
@@ -11289,10 +11427,10 @@ fn validate_fast_img_marker_source_state(
     }
     let cleanup_resume_subset =
         fast_img_cleanup_resume_source_subset_matches(marker, current_source_hashes)?;
-    if marker.src_jpeg_count != current_count && !cleanup_resume_subset {
+    if marker.primary_source_count() != current_count && !cleanup_resume_subset {
         anyhow::bail!(
             "fast-img marker source count changed: marker={} current={current_count}",
-            marker.src_jpeg_count
+            marker.primary_source_count()
         );
     }
     let marker_hashes = fast_img_marker_recorded_source_hashes(marker)?;
@@ -11340,7 +11478,7 @@ fn fast_img_marker_input_state_is_stale(
     }
 
     let marker_hashes = fast_img_marker_recorded_source_hashes(marker)?;
-    if marker.src_jpeg_count != current_count {
+    if marker.primary_source_count() != current_count {
         return Ok(!fast_img_cleanup_resume_source_subset_matches(
             marker,
             current_source_hashes,
@@ -11623,8 +11761,9 @@ impl FastImgEncodeContext<'_> {
                     .get(&rel_key)
                     .context("encode source is outside the immutable failed-only attempt")?;
                 anyhow::ensure!(
-                    current_source_hashes.get(&rel_key) == Some(&admission.admitted_source_blake3),
-                    "admitted failed-only source changed between scan and encoding"
+                    admission.route != Some(FailedRetrySourceRoute::Original)
+                        && current_source_hashes.get(&rel_key) == Some(&admission.admitted_source_blake3),
+                    "admitted failed-only source route or bytes changed before encoding"
                 );
                 foundation::fast_img_store::verify_failed_retry_admission(src_dir, admission)?;
             }
@@ -12185,7 +12324,18 @@ fn fast_img_deliver_modern_lossy_static_tier(
         "[TIER 2  ] reconciling/importing {} modern lossy static source(s) with Photos",
         candidates.len()
     );
-    let library_handle = if candidates.is_empty() {
+    let retry = if marker.failed_retry_primary_source_count.is_some() {
+        Some(
+            foundation::fast_img_store::failed_retry_context(&marker.working_copy)?
+                .context("routed failed-only original delivery lost its immutable admissions")?,
+        )
+    } else {
+        None
+    };
+    let exact_failures = marker.tier2_cleanup_journal;
+    let library_handle = if exact_failures {
+        fast_img_import_originals_with_failures(marker, src_dir, candidates, retry.as_ref())?
+    } else if candidates.is_empty() {
         foundation::pipeline::verification::LibraryHandle {
             photos_library_path: marker.photos_library_path.clone(),
             ..Default::default()
@@ -12198,7 +12348,7 @@ fn fast_img_deliver_modern_lossy_static_tier(
     apply_tier2_library_assets_to_marker(marker, &library_handle)
         .map_err(|err| anyhow::anyhow!("fast-img modern lossy marker proof failed: {err}"))?;
     write_marker_atomic(marker)?;
-    if marker.tier2_imported_assets.is_empty() {
+    if marker.tier2_imported_assets.is_empty() && !exact_failures {
         if library_handle.import_error_count == candidates.len() && !candidates.is_empty() {
             return Err(fast_img_result::FileFailures::originals(candidates.len()).into());
         }
@@ -12211,7 +12361,9 @@ fn fast_img_deliver_modern_lossy_static_tier(
         import_error_count: 0,
         photos_library_path: marker.photos_library_path.clone(),
     };
-    let (deleted, already_deleted) = if marker.tier2_cleanup_journal {
+    let (deleted, already_deleted) = if complete_library_handle.imported_assets.is_empty() {
+        Ok((0, 0))
+    } else if marker.tier2_cleanup_journal {
         let mut journal = foundation::fast_img_store::Tier2CleanupJournal::open(marker)?;
         foundation::fast_img::delete_verified_modern_lossy_static_sources_observed(
             src_dir, &complete_library_handle, removed_files, &mut journal,
@@ -12222,7 +12374,7 @@ fn fast_img_deliver_modern_lossy_static_tier(
         )
     }
     .map_err(|err| anyhow::anyhow!("fast-img modern lossy source delete gate failed: {err}"))?;
-    let pruned = fast_img_finish_tier2_cleanup(marker, &library_handle, candidates.len(), |complete| {
+    let prune = |complete| {
         if complete {
             return if remove_selected_root {
                 foundation::io_utils::prune_delivered_directories_within(src_dir, &[])
@@ -12233,8 +12385,138 @@ fn fast_img_deliver_modern_lossy_static_tier(
         }
         prune_empty_source_dirs_for_tier2_assets(src_dir, &complete_library_handle.imported_assets, false)
             .context("prune verified Tier-2 source subdirectories")
-    })?;
+    };
+    let pruned = if exact_failures {
+        let expected = if let Some(retry) = &retry {
+            retry.admissions().values()
+                .filter(|admission| admission.route == Some(FailedRetrySourceRoute::Original))
+                .count()
+        } else {
+            candidates.iter().map(|candidate| candidate.rel_path.as_str())
+                .chain(marker.tier2_imported_assets.iter().map(|asset| asset.rel_path.as_str()))
+                .chain(marker.tier2_failed_sources.keys().map(String::as_str))
+                .chain(marker.photos_submission_history().into_iter().flat_map(|history| {
+                    history.intents.iter().filter_map(|intent| {
+                        (intent.kind == foundation::pipeline::verification::PhotosSubmissionKind::Original)
+                            .then_some(intent.source_rel.as_str())
+                    })
+                }))
+                .collect::<BTreeSet<_>>().len()
+        };
+        let settled = marker
+            .tier2_imported_assets
+            .len()
+            .checked_add(marker.tier2_failed_sources.len())
+            .context("original disposition count overflow")?;
+        let pruned = prune(false)?;
+        anyhow::ensure!(
+            settled == expected,
+            "original delivery remains unresolved: settled={settled} expected={expected}; verified sources cleaned, unverified sources retained"
+        );
+        for (rel, failure) in &marker.tier2_failed_sources {
+            fast_img_verify_retained_original(src_dir, rel, &failure.src, retry.as_ref())?;
+        }
+        pruned + fast_img_persist_tier2_completion(marker, prune)?
+    } else {
+        fast_img_finish_tier2_cleanup(marker, &library_handle, candidates.len(), prune)?
+    };
     Ok((deleted, already_deleted, pruned))
+}
+
+fn fast_img_import_originals_with_failures(
+    marker: &mut WorkingCopyMarker,
+    source_root: &Path,
+    candidates: &[ModernLossyStaticCandidate],
+    retry: Option<&FailedRetryContext>,
+) -> anyhow::Result<LibraryHandle> {
+    let saved = marker
+        .tier2_imported_assets
+        .iter()
+        .map(|asset| asset.rel_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut pending = Vec::new();
+    let mut expected = BTreeMap::new();
+    for candidate in candidates {
+        let rel = candidate.rel_path.as_str();
+        anyhow::ensure!(
+            candidate.path == source_root.join(fast_img_checked_rel_path(rel)?),
+            "original candidate escaped its scanned source path"
+        );
+        if retry.is_some() {
+            fast_img_verify_retained_original(source_root, rel, &candidate.blake3, retry)?;
+        }
+        if !saved.contains(rel) && !marker.tier2_failed_sources.contains_key(rel) {
+            anyhow::ensure!(
+                expected.insert(rel, candidate.blake3.as_str()).is_none(),
+                "duplicate original candidate"
+            );
+            pending.push(candidate.clone());
+        }
+    }
+    if pending.is_empty() {
+        return Ok(LibraryHandle {
+            photos_library_path: marker.photos_library_path.clone(),
+            ..Default::default()
+        });
+    }
+    let report =
+        foundation::fast_img::import_modern_lossy_static_tier_checkpointed_with_failures(marker, &pending)
+            .map_err(|error| anyhow::anyhow!("fast-img original Photos delivery failed: {error}"))?;
+    let mut returned = BTreeSet::new();
+    for asset in &report.library.imported_assets {
+        let rel = asset.rel_path.as_str();
+        anyhow::ensure!(
+            expected.get(rel) == Some(&asset.blake3.as_str()) && returned.insert(rel),
+            "original Photos receipt is outside the exact import inventory"
+        );
+    }
+    for (rel, failure) in &report.failures {
+        let rel = rel.as_str();
+        anyhow::ensure!(
+            expected.get(rel) == Some(&failure.src.as_str()) && returned.insert(rel),
+            "original Photos failure is outside the exact import inventory"
+        );
+        fast_img_verify_retained_original(source_root, rel, &failure.src, retry)?;
+    }
+    anyhow::ensure!(
+        report.failures.len() <= report.library.import_error_count
+            && report.library.imported_assets.len().checked_add(report.library.import_error_count)
+                == Some(expected.len()),
+        "original Photos import returned inconsistent candidate counts"
+    );
+    marker.tier2_failed_sources.extend(report.failures);
+    Ok(report.library)
+}
+
+fn fast_img_verify_retained_original(
+    source_root: &Path,
+    rel: &str,
+    hash: &str,
+    retry: Option<&FailedRetryContext>,
+) -> anyhow::Result<()> {
+    if let Some(retry) = retry {
+        let admission = retry.admissions().get(rel)
+            .context("original source is outside the immutable failed-only attempt")?;
+        anyhow::ensure!(
+            admission.route == Some(FailedRetrySourceRoute::Original)
+                && admission.admitted_source_blake3 == hash,
+            "admitted original source route or bytes changed"
+        );
+        return foundation::fast_img_store::verify_failed_retry_admission(source_root, admission);
+    }
+    let relative = fast_img_checked_rel_path(rel)?;
+    foundation::pipeline::verification::validate_no_symlink_components(source_root, &relative)
+        .map_err(anyhow::Error::msg)?;
+    let source = source_root.join(relative);
+    let observed = foundation::batch::DiscoveredSource::from_metadata(
+        &source, &std::fs::symlink_metadata(&source)?,
+    )?;
+    anyhow::ensure!(
+        observed.content_blake3() == hash,
+        "retained original source bytes changed"
+    );
+    observed.verify_unchanged()?;
+    Ok(())
 }
 
 fn fast_img_finish_tier2_cleanup(
@@ -12254,12 +12536,19 @@ fn fast_img_finish_tier2_cleanup(
             "fast-img modern lossy Photos delivery incomplete: verified={verified} failed={failed} expected={expected}; verified sources cleaned, unverified sources retained"
         );
     }
+    Ok(pruned + fast_img_persist_tier2_completion(marker, prune)?)
+}
+
+fn fast_img_persist_tier2_completion(
+    marker: &mut WorkingCopyMarker,
+    mut prune: impl FnMut(bool) -> anyhow::Result<usize>,
+) -> anyhow::Result<usize> {
     marker.tier2_in_progress = false;
     if let Err(error) = write_marker_atomic(marker) {
         marker.tier2_in_progress = true;
         return Err(error).context("persist Tier-2 completion before pruning source directories");
     }
-    Ok(pruned + prune(true)?)
+    prune(true)
 }
 
 fn fast_img_finalize_sources(
@@ -12276,7 +12565,8 @@ fn fast_img_finalize_sources(
     let photos = prepared_sources.is_some();
     let ((deleted, absent, mut pruned), tier2) = fast_img_result::finalize_sources(
         marker,
-        !modern_lossy_candidates.is_empty(),
+        !modern_lossy_candidates.is_empty()
+            || marker.src_jpeg_count > marker.primary_source_count(),
         |marker| {
             let prepared = if let Some(prepared) = prepared_sources {
                 anyhow::ensure!(
@@ -15145,6 +15435,79 @@ mod fast_img_hardening_tests {
         let tools = failed_retry_test_tools(root, "finish-only-tool-state")?;
         let child = super::fast_img_prepare_failed_retry_child(&reference, delivery, Some(&tools))?;
         Ok((parent, reference, child, source))
+    }
+
+    #[test]
+    fn failed_retry_mixed_sources_bind_scanned_routes_before_child_reservation() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        let temporary = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(temporary.path());
+        let root = temporary.path().canonicalize()?;
+        let source = root.join("source");
+        std::fs::create_dir(&source)?;
+        let jpeg = source.join("primary.jpg");
+        write_real_jpeg(&jpeg, [23, 43, 97])?;
+        let original = source.join("original.jpg");
+        write_real_jpeg(&original, [11, 21, 31])?;
+        let mut parent = WorkingCopyMarker::new(source.clone(), root.join("source_optimized"), 2);
+        parent.stage = FastImgStageName::CleanupComplete;
+        parent.processing_contract = Some(super::fast_img_processing_contract(
+            &foundation::runtime_config::RuntimeConfig::default(), "jxl", false, false,
+        )?);
+        for (rel, path) in [("primary.jpg", &jpeg), ("original.jpg", &original)] {
+            parent.failed_sources.insert(rel.into(), SkippedSourceEntry {
+                src: calculate_blake3_hash(path)?,
+                reason: "synthetic earlier failure".into(),
+            });
+        }
+        foundation::pipeline::verification::write_marker_atomic(&parent)?;
+        let reference = foundation::fast_img_store::inspect_failed_retry_parent(&parent.working_copy)?;
+        let webp = root.join("synthetic.webp");
+        let magick = foundation::common_utils::resolve_tool_path("magick").context("resolve synthetic WebP fixture encoder")?;
+        anyhow::ensure!(std::process::Command::new(magick)
+            .args(["-size", "16x16", "gradient:#123456-#abcdef", "-quality", "67"])
+            .arg(&webp).status()?.success(), "synthetic lossy WebP generation failed");
+        std::fs::copy(&webp, &original)?;
+        let local_error = super::fast_img_capture_routed_retry_admissions(
+            &reference, &super::FailedRetryDeliveryIntent::Local,
+        ).unwrap_err();
+        assert!(local_error
+            .downcast_ref::<foundation::fast_img_store::FailedRetryAdmissionBlocked>()
+            .is_some_and(|blocked| blocked.issues.contains_key("original.jpg")));
+        assert!(foundation::fast_img_store::failed_retry_context(reference.child_working_copy())?.is_none());
+
+        let delivery = super::FailedRetryDeliveryIntent::Photos {
+            library_path: None,
+            naming_policy: foundation::fast_img::current_photos_import_naming_policy(),
+        };
+        let tools = failed_retry_test_tools(&root, "mixed-route-tool-state")?;
+        let child = super::fast_img_prepare_failed_retry_child(&reference, &delivery, Some(&tools))?;
+        let context = foundation::fast_img_store::failed_retry_context(&child.working_copy)?
+            .context("mixed retry did not retain its immutable admissions")?;
+        assert_eq!(child.src_jpeg_count, 2);
+        assert_eq!(child.primary_source_count(), 1);
+        assert_eq!(child.expected_output_count(), 1);
+        assert_eq!(context.admissions()["primary.jpg"].route, Some(super::FailedRetrySourceRoute::Primary));
+        assert_eq!(context.admissions()["original.jpg"].route, Some(super::FailedRetrySourceRoute::Original));
+        assert_ne!(context.admissions()["original.jpg"].admitted_source_blake3, parent.failed_sources["original.jpg"].src);
+        assert!(!child.working_copy.exists());
+        assert_eq!(super::read_marker(&parent.working_copy)?, parent);
+
+        let files = super::fast_img_failed_retry_input_plan(&child, &context)?;
+        let observed = context.admissions().keys().cloned().collect();
+        let inventory = super::scan_fast_img_sources_with(files, &source, "jxl", |paths| {
+            Ok(foundation::image::format_identity::resolve_format_identities(paths)?)
+        })?;
+        super::fast_img_validate_failed_retry_routes(&child, &context, &observed, &inventory)?;
+        super::validate_fast_img_marker_source_state(
+            &child, &source, inventory.source_files.len(), &inventory.source_hashes,
+        )?;
+        let mut drifted = inventory;
+        drifted.modern_lossy_candidates.clear();
+        assert!(super::fast_img_validate_failed_retry_routes(&child, &context, &observed, &drifted).is_err());
+        Ok(())
     }
 
     #[test]
@@ -18147,6 +18510,43 @@ mod fast_img_hardening_tests {
                 &mut Vec::new(),
             )?,
             "pending original delivery must not bypass failed primary retries"
+        );
+        let journaled = saved.as_mut().context("synthetic marker disappeared")?;
+        journaled.tier2_cleanup_journal = true;
+        assert!(
+            super::fast_img_try_finish_tier2_delivery(
+                &mut saved,
+                &context,
+                super::DryRunFlag(true),
+                true,
+                &mut Vec::new(),
+            )?,
+            "journaled original delivery must resume independently of retained primary failures"
+        );
+        assert!(source.join("C.jpg").is_file());
+        let completed = saved.as_mut().context("synthetic marker disappeared")?;
+        completed.tier2_in_progress = false;
+        let new_original = source.join("new.webp");
+        std::fs::write(&new_original, b"synthetic new original")?;
+        let new_originals = [super::ModernLossyStaticCandidate {
+            blake3: calculate_blake3_hash(&new_original)?,
+            path: new_original,
+            rel_path: "new.webp".into(),
+            format: FormatKind::WebP,
+        }];
+        let context = super::FastImgMarkerContext {
+            modern_lossy_candidates: &new_originals,
+            ..context
+        };
+        assert!(
+            !super::fast_img_try_finish_tier2_delivery(
+                &mut saved,
+                &context,
+                super::DryRunFlag(true),
+                true,
+                &mut Vec::new(),
+            )?,
+            "terminal tasks must retain their failures for a separate retry"
         );
         Ok(())
     }

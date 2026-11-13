@@ -576,6 +576,75 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
 }
 
 struct OutputCleanupReceipt: Decodable, Equatable {
+    struct ResidualInventory: Decodable, Equatable {
+        struct Entry: Decodable, Equatable {
+            let relative_path: String
+            let kind: String
+
+            var valid: Bool {
+                let parts = relative_path.split(separator: "/", omittingEmptySubsequences: false)
+                return !relative_path.isEmpty && relative_path.utf8.count <= 512
+                    && !relative_path.utf8.contains(0)
+                    && parts.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+                    && ["regular_file", "directory", "symlink", "other"].contains(kind)
+            }
+        }
+
+        let state: String
+        let regular_files: Int?
+        let regular_bytes: UInt64?
+        let directories: Int?
+        let symlinks: Int?
+        let other_entries: Int?
+        let error: String?
+        let sample: [Entry]
+        let sample_truncated: Bool
+
+        static func hasKnownFields(_ object: Any) -> Bool {
+            guard let fields = object as? [String: Any],
+                  Set(fields.keys) == ["state", "regular_files", "regular_bytes", "directories",
+                    "symlinks", "other_entries", "error", "sample", "sample_truncated"],
+                  let entries = fields["sample"] as? [[String: Any]] else { return false }
+            return entries.allSatisfy { Set($0.keys) == ["relative_path", "kind"] }
+        }
+
+        var valid: Bool {
+            let counts = [regular_files, directories, symlinks, other_entries]
+            switch state {
+            case "unknown":
+                return counts.allSatisfy { $0 == nil } && regular_bytes == nil
+                    && sample.isEmpty && !sample_truncated
+                    && error.map { ["entry_limit", "depth_limit", "inspection_failed", "directory_changed", "count_overflow"].contains($0) } == true
+            case "observed":
+                guard error == nil, regular_bytes != nil, counts.allSatisfy({ ($0 ?? -1) >= 0 }),
+                      let total = processingCountTotal(counts), total <= 16_384,
+                      sample.count <= 12, sample.allSatisfy(\.valid),
+                      Set(sample.map { Data($0.relative_path.utf8) }).count == sample.count,
+                      sample_truncated == (sample.count < total),
+                      regular_files != 0 || regular_bytes == 0 else { return false }
+                return zip(["regular_file", "directory", "symlink", "other"], counts).allSatisfy { kind, count in
+                    sample.filter { $0.kind == kind }.count <= (count ?? 0)
+                }
+            default: return false
+            }
+        }
+
+        func detail(privacy: Bool) -> [String] {
+            guard state == "observed", let files = regular_files, let bytes = regular_bytes,
+                  let directories, let symlinks, let other = other_entries else {
+                return [localized("cleanup.residual.unknown")]
+            }
+            var lines = [localized("cleanup.residual.counts", String(files), String(bytes),
+                String(directories), String(symlinks), String(other))]
+            if !privacy {
+                lines += sample.map { localized("cleanup.residual.entry", localized("cleanup.residual.kind.\($0.kind)"),
+                    String(reflecting: $0.relative_path)) }
+                if sample_truncated { lines.append(localized("cleanup.residual.sample_truncated")) }
+            }
+            return lines
+        }
+    }
+
     static let prefix = "MFB_OUTPUT_CLEANUP="
     static let historyPrefix = "MFB_HISTORY_OUTPUT_CLEANUP="
     let schema_version: Int
@@ -586,16 +655,18 @@ struct OutputCleanupReceipt: Decodable, Equatable {
     let already_absent_files: Int?
     let pruned_directories: Int?
     let error: String?
+    var residual_inventory: ResidualInventory? = nil
 
     static func decode(_ line: String, prefix: String = OutputCleanupReceipt.prefix) throws -> Self? {
         guard line.hasPrefix(prefix) else { return nil }
         let data = Data(line.dropFirst(prefix.count).utf8)
         let fields: Set<String> = ["schema_version", "run_id", "output_path", "outcome",
-            "removed_files", "already_absent_files", "pruned_directories", "error"]
+            "removed_files", "already_absent_files", "pruned_directories", "error", "residual_inventory"]
         guard line.utf8.count < 64 * 1_024,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys).isSubset(of: fields),
-              ["schema_version", "output_path", "outcome", "error"].allSatisfy({ object[$0] != nil })
+              ["schema_version", "output_path", "outcome", "error"].allSatisfy({ object[$0] != nil }),
+              object["residual_inventory"].map(ResidualInventory.hasKnownFields) ?? true
         else { throw HostError(message: localized("cleanup.invalid")) }
         let receipt = try JSONDecoder().decode(Self.self, from: data)
         guard receipt.valid else { throw HostError(message: localized("cleanup.invalid")) }
@@ -604,7 +675,8 @@ struct OutputCleanupReceipt: Decodable, Equatable {
 
     var valid: Bool {
         guard schema_version == 1, output_path.hasPrefix("/"), !output_path.utf8.contains(0),
-              run_id.map(validHistoryIdentity) ?? true else { return false }
+              run_id.map(validHistoryIdentity) ?? true,
+              residual_inventory.map({ outcome == "residual" && $0.valid }) ?? true else { return false }
         let counts = [removed_files, already_absent_files, pruned_directories]
         let measured = counts.compactMap { $0 }
         guard measured.allSatisfy({ $0 >= 0 }),
@@ -620,21 +692,44 @@ struct OutputCleanupReceipt: Decodable, Equatable {
 
     var needsAttention: Bool { ["residual", "failed", "verification_blocked"].contains(outcome) }
     var statusText: String { localized("cleanup.outcome.\(outcome)") }
-    var detailText: String {
+    var detailText: String { detailText(privacy: false) }
+
+    static func privateLogDetail(_ line: String) -> String? {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(prefix) else { return nil }
+        return (try? decode(raw))?.detailText(privacy: true) ?? localized("cleanup.invalid")
+    }
+
+    func detailText(privacy: Bool) -> String {
         let unknown = localized("cleanup.not_measured")
         var lines = [statusText, output_path,
             localized("cleanup.counts", removed_files.map(String.init) ?? unknown,
                 already_absent_files.map(String.init) ?? unknown, pruned_directories.map(String.init) ?? unknown)]
         if let error { lines.append(error) }
+        if outcome == "residual" {
+            lines += residual_inventory?.detail(privacy: privacy) ?? [localized("cleanup.residual.not_recorded")]
+        }
         lines.append(localized("cleanup.scope"))
         return lines.joined(separator: "\n")
     }
 
     var recordedObject: [String: Any] {
-        ["schema_version": schema_version, "run_id": run_id as Any? ?? NSNull(),
+        var object: [String: Any] = ["schema_version": schema_version, "run_id": run_id as Any? ?? NSNull(),
          "output_path": output_path, "outcome": outcome, "removed_files": removed_files as Any? ?? NSNull(),
          "already_absent_files": already_absent_files as Any? ?? NSNull(),
          "pruned_directories": pruned_directories as Any? ?? NSNull(), "error": error as Any? ?? NSNull()]
+        if let inventory = residual_inventory {
+            object["residual_inventory"] = ["state": inventory.state,
+                "regular_files": inventory.regular_files as Any? ?? NSNull(),
+                "regular_bytes": inventory.regular_bytes as Any? ?? NSNull(),
+                "directories": inventory.directories as Any? ?? NSNull(),
+                "symlinks": inventory.symlinks as Any? ?? NSNull(),
+                "other_entries": inventory.other_entries as Any? ?? NSNull(),
+                "error": inventory.error as Any? ?? NSNull(),
+                "sample": inventory.sample.map { ["relative_path": $0.relative_path, "kind": $0.kind] },
+                "sample_truncated": inventory.sample_truncated]
+        }
+        return object
     }
 }
 
@@ -3916,7 +4011,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         if let error = entry.finished?.error { lines += ["", row("error", error)] }
         lines += entry.issues
         if let summary = entry.summary, !summary.failed_files.isEmpty { lines += ["", localized("history.failed_files")] + summary.failed_files }
-        for receipt in entry.outputCleanups where receipt.needsAttention { lines += ["", receipt.detailText] }
+        for receipt in entry.outputCleanups where receipt.needsAttention { lines += ["", receipt.detailText(privacy: true)] }
         for receipt in entry.fastDeliveries where receipt.isDeferred { lines += ["", receipt.deferredDetails] }
         for invocation in entry.invocations {
             if let error = invocation.binary.diagnostic { lines += ["", row("worker_observation_error", error)] }
@@ -4587,7 +4682,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private static func cleanupDetailText(for entry: HistoryEntry, privacy: Bool = false) throws -> String {
         if privacy {
             return ([localized("cleanup.history_title"), localized("privacy.display.scope")]
-                + entry.outputCleanups.filter(\.needsAttention).map(\.detailText)
+                + entry.outputCleanups.filter(\.needsAttention).map { $0.detailText(privacy: true) }
                 + (entry.outputCleanupInvalid ? [localized("cleanup.invalid")] : [])).joined(separator: "\n\n")
         }
         let state = entry.outputCleanupInvalid ? "inconsistent" : entry.outputCleanups.isEmpty ? "unavailable" : "recorded"
@@ -4626,7 +4721,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             scroll.documentView = textView
             alert.accessoryView = scroll
             alert.addButton(withTitle: localized("history.file_failure.detail.close"))
-            alert.addButton(withTitle: localized("cleanup.inspect.copy"))
+            alert.addButton(withTitle: localized(privacyEnabled ? "privacy.display.copy_visible" : "cleanup.inspect.copy"))
             let reveal = alert.addButton(withTitle: localized("cleanup.inspect.reveal"))
             reveal.isEnabled = !Self.cleanupDirectories(for: entry, privacy: privacyEnabled).isEmpty
             if !reveal.isEnabled { reveal.toolTip = localized("cleanup.inspect.unavailable") }
@@ -4644,8 +4739,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 self.cleanupDetailAlert = nil
                 if response == .alertSecondButtonReturn {
                     NSPasteboard.general.clearContents()
-                    self.status.stringValue = localized(NSPasteboard.general.setString(text, forType: .string)
-                        ? "cleanup.inspect.copied" : "cleanup.inspect.copy_failed")
+                    let copied = NSPasteboard.general.setString(text, forType: .string)
+                    self.status.stringValue = localized(copied
+                        ? (self.privacyEnabled ? "history.copied" : "cleanup.inspect.copied")
+                        : "cleanup.inspect.copy_failed")
                 } else if response == .alertThirdButtonReturn {
                     let urls = Self.cleanupDirectories(for: entry, privacy: self.privacyEnabled)
                     guard !urls.isEmpty else {
@@ -4819,7 +4916,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 row.line.map { DisplayPrivacy.problemTone($0) != nil } ?? true
             }
             detail.string = label + "\n" + localized("privacy.display.output_notice") + "\n\n"
-                + rows.map(\.text).joined(separator: "\n")
+                + rows.map { $0.line.flatMap(OutputCleanupReceipt.privateLogDetail) ?? $0.text }.joined(separator: "\n")
         } else if outputFilter.selectedSegment == 1 {
             let groups = page.diagnosticGroups
             let count = groups.reduce(0) { $0 + $1.count }
@@ -4979,7 +5076,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             var section = localized("history.output.diagnostic_group", group.pipeline ?? localized("result.unknown"),
                 group.phase.map { localized("log.phase.\($0)") } ?? localized("history.batch_issues.phase_unknown"),
                 localized("history.output.severity.\(group.severity)"), group.count, group.count - 1,
-                group.firstSequence, group.lastSequence) + "\n" + group.message
+                group.firstSequence, group.lastSequence) + "\n"
+            if privacyEnabled, let cleanup = OutputCleanupReceipt.privateLogDetail(group.message) {
+                return section + cleanup
+            }
+            section += group.message
             section += "\n" + localized("history.batch_issues.original_first") + "\n" + group.firstOriginal
             if group.lastSequence != group.firstSequence {
                 section += "\n" + localized("history.batch_issues.original_last") + "\n" + group.lastOriginal
@@ -6851,6 +6952,47 @@ func runProcessingHistorySelfTests() throws {
                     && entry.outputCleanups[0].removed_files == 2
                     && ProcessingHistoryPanel.render(entry).contains(localized("cleanup.outcome.residual")),
                     "Output cleanup observations inflated counts or lost their separate historical status")
+        let observed: [String: Any] = ["state": "observed", "regular_files": 1, "regular_bytes": 41,
+            "directories": 1, "symlinks": 0, "other_entries": 0, "error": NSNull(),
+            "sample": [["relative_path": "folder/private-residual.fixture", "kind": "regular_file"]],
+            "sample_truncated": true]
+        var measured = cleanup
+        measured["residual_inventory"] = observed
+        let measuredEntry = try parsed([cleanupContext, try bound("MFB_HISTORY_OUTPUT_CLEANUP", measured), end]).entries[0]
+        let measuredReceipt = measuredEntry.outputCleanups.first
+        let full = measuredReceipt?.detailText ?? ""
+        let privateText = measuredReceipt?.detailText(privacy: true) ?? ""
+        let cleanupLog = "ERR: " + (try payload("MFB_OUTPUT_CLEANUP", measured))
+        try require(!measuredEntry.outputCleanupInvalid
+                    && full.contains("private-residual.fixture") && full.contains(localized("cleanup.residual.sample_truncated"))
+                    && privateText.contains(localized("cleanup.residual.counts", "1", "41", "1", "0", "0"))
+                    && !privateText.contains("private-residual.fixture")
+                    && OutputCleanupReceipt.privateLogDetail(cleanupLog) == privateText
+                    && measuredReceipt?.recordedObject["residual_inventory"] != nil,
+                    "Residual inventory was lost or exposed outside the full cleanup detail")
+        var unknown = observed
+        unknown["state"] = "unknown"
+        for key in ["regular_files", "regular_bytes", "directories", "symlinks", "other_entries"] {
+            unknown[key] = NSNull()
+        }
+        unknown["sample"] = []
+        unknown["sample_truncated"] = false
+        unknown["error"] = "inspection_failed"
+        measured["residual_inventory"] = unknown
+        let unknownEntry = try parsed([cleanupContext, try bound("MFB_HISTORY_OUTPUT_CLEANUP", measured), end]).entries[0]
+        try require(unknownEntry.outputCleanups.first?.detailText.contains(localized("cleanup.residual.unknown")) == true,
+                    "Unknown residual inventory invented a measurement")
+        var invalidInventory = observed
+        invalidInventory["sample"] = [["relative_path": "../outside", "kind": "regular_file"]]
+        measured["residual_inventory"] = invalidInventory
+        let invalidInventoryEntry = try parsed([cleanupContext, try bound("MFB_HISTORY_OUTPUT_CLEANUP", measured), end]).entries[0]
+        try require(invalidInventoryEntry.outputCleanupInvalid && invalidInventoryEntry.outputCleanups.isEmpty,
+                    "Residual inventory accepted an unsafe sample path")
+        measured["residual_inventory"] = observed
+        measured["outcome"] = "removed"
+        let inconsistentInventory = try parsed([cleanupContext, try bound("MFB_HISTORY_OUTPUT_CLEANUP", measured), end]).entries[0]
+        try require(inconsistentInventory.outputCleanupInvalid && inconsistentInventory.outputCleanups.isEmpty,
+                    "A removed directory accepted a residual inventory")
         let noFailures = try parsed([cleanupContext, event, try bound("MFB_HISTORY_SUMMARY", summaryValue), end]).entries[0]
         try require(noFailures.statusKey == "history.status.completed" && noFailures.needsAttention
                     && noFailures.succeededLabel == "2" && noFailures.statusLabel.contains(localized("cleanup.attention.short"))

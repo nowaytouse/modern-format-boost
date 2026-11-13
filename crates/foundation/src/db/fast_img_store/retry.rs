@@ -25,6 +25,22 @@ pub enum FailedRetrySidecar {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailedRetrySourceRoute {
+    Primary,
+    Original,
+}
+
+impl FailedRetrySourceRoute {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Original => "original",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FailedRetryAdmission {
@@ -34,6 +50,8 @@ pub struct FailedRetryAdmission {
     pub claim: String,
     pub xmp: FailedRetrySidecar,
     pub aae: FailedRetrySidecar,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<FailedRetrySourceRoute>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,18 +216,18 @@ fn relative(value: &str) -> Result<&Path> {
 
 fn validate_parent(marker: &WorkingCopyMarker) -> Result<()> {
     ensure!(
-        marker.is_terminal() && !marker.failed_sources.is_empty(),
+        marker.is_terminal() && marker.failed_source_count() > 0,
         "Only a completed task with retained failures can create a failed-only child"
     );
     ensure!(
-        marker.recorded_source_count() == marker.src_jpeg_count,
+        marker.source_disposition_is_complete(),
         "Failed-only retry requires complete parent source dispositions"
     );
     ensure!(
         marker.processing_contract.is_some(),
         "Failed-only retry requires the parent's recorded processing intent; old defaults were not guessed"
     );
-    for (rel, failure) in &marker.failed_sources {
+    for (rel, failure) in marker.all_failed_sources() {
         relative(rel)?;
         hash_text(&failure.src)?;
     }
@@ -334,10 +352,21 @@ fn sidecar_from_row(
 }
 
 pub(super) fn admissions(conn: &Connection, key: &str) -> Result<BTreeMap<String, FailedRetryAdmission>> {
-    let values = conn.prepare("SELECT source_rel,parent_source_blake3,admitted_source_blake3,source_claim,
-        xmp_rel,xmp_blake3,xmp_claim,aae_rel,aae_blake3,aae_claim FROM fast_img_retry_sources WHERE task_key=?1 ORDER BY source_rel")?
+    let route_column = if inspect_store_schema_version(conn)?.is_some_and(|version| version >= 8) {
+        "route"
+    } else {
+        "NULL"
+    };
+    let values = conn.prepare(&format!("SELECT source_rel,parent_source_blake3,admitted_source_blake3,source_claim,
+        xmp_rel,xmp_blake3,xmp_claim,aae_rel,aae_blake3,aae_claim,{route_column} FROM fast_img_retry_sources WHERE task_key=?1 ORDER BY source_rel"))?
         .query_map([key],|row| Ok(FailedRetryAdmission { source_rel:row.get(0)?,parent_source_blake3:row.get(1)?,
-            admitted_source_blake3:row.get(2)?,claim:row.get(3)?,xmp:sidecar_from_row(row,4)?,aae:sidecar_from_row(row,7)? }))?
+            admitted_source_blake3:row.get(2)?,claim:row.get(3)?,xmp:sidecar_from_row(row,4)?,aae:sidecar_from_row(row,7)?,
+            route: match row.get::<_, Option<String>>(10)?.as_deref() {
+                None => None,
+                Some("primary") => Some(FailedRetrySourceRoute::Primary),
+                Some("original") => Some(FailedRetrySourceRoute::Original),
+                _ => return Err(rusqlite::Error::InvalidQuery),
+            } }))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut result = BTreeMap::new();
     for value in values {
@@ -354,11 +383,15 @@ fn validate_admissions(
     values: &BTreeMap<String, FailedRetryAdmission>,
 ) -> Result<()> {
     ensure!(
-        values.len() == parent.failed_sources.len() && !values.is_empty(),
+        values.len() == parent.failed_source_count() && !values.is_empty(),
         "Failed retry admission must cover exactly the parent's failed sources"
     );
     for (rel, value) in values {
         ensure!(rel == &value.source_rel, "Retry admission path key changed");
+        ensure!(
+            !parent.tier2_failed_sources.contains_key(rel) || value.route.is_some(),
+            "A retained original-format failure requires a durable retry route"
+        );
         let path = parent.src_dir.join(relative(rel)?);
         hash_text(&value.parent_source_blake3)?;
         hash_text(&value.admitted_source_blake3)?;
@@ -366,6 +399,7 @@ fn validate_admissions(
             parent
                 .failed_sources
                 .get(rel)
+                .or_else(|| parent.tier2_failed_sources.get(rel))
                 .is_some_and(|entry| entry.src == value.parent_source_blake3),
             "Retry admission contains a successful, skipped, unknown, or changed parent identity"
         );
@@ -431,7 +465,8 @@ fn manifest_hash(
     let version = 1
         + u8::from(child.tool_snapshot_disabled)
         + (u8::from(child.primary_cleanup_journal) << 1)
-        + (u8::from(child.tier2_cleanup_journal) << 2);
+        + (u8::from(child.tier2_cleanup_journal) << 2)
+        + (u8::from(child.failed_retry_primary_source_count.is_some()) << 3);
     Ok(blake3::hash(&canonical_bytes(&(
         version,
         key,
@@ -456,13 +491,28 @@ fn validate_child_results(
         child.src_jpeg_count == values.len(),
         "Retry child denominator differs from its immutable work set"
     );
+    let routed = child.failed_retry_primary_source_count.is_some();
+    ensure!(
+        values.values().all(|admission| admission.route.is_some() == routed)
+            && (!routed || values.values().filter(|admission| admission.route == Some(FailedRetrySourceRoute::Primary)).count() == child.primary_source_count()),
+        "Retry primary denominator disagrees with its immutable source routes"
+    );
     for (rel, outcome) in source_outcomes(child) {
         let admitted = values
             .get(rel)
             .context("Retry outcome escapes its admitted failure set")?;
         ensure!(
-            outcome.source == admitted.admitted_source_blake3,
+            outcome.source == admitted.admitted_source_blake3
+                && admitted.route != Some(FailedRetrySourceRoute::Original),
             "Retry outcome used a changed source identity"
+        );
+    }
+    for (rel, failure) in &child.tier2_failed_sources {
+        let admitted = values.get(rel).context("Retry original failure escapes its admitted source set")?;
+        ensure!(
+            admitted.route == Some(FailedRetrySourceRoute::Original)
+                && failure.src == admitted.admitted_source_blake3,
+            "Retry original failure used a different source identity or route"
         );
     }
     if let Some(history) = child.photos_submission_history() {
@@ -471,7 +521,11 @@ fn validate_child_results(
                 .get(&entry.source_rel)
                 .context("Retry submission escapes its admitted failure set")?;
             ensure!(
-                entry.source_blake3 == admitted.admitted_source_blake3,
+                entry.source_blake3 == admitted.admitted_source_blake3
+                    && admitted.route.is_none_or(|route| match entry.kind {
+                        crate::pipeline::verification::PhotosSubmissionKind::Encoded => route == FailedRetrySourceRoute::Primary,
+                        crate::pipeline::verification::PhotosSubmissionKind::Original => route == FailedRetrySourceRoute::Original,
+                    }),
                 "Retry submission source changed"
             );
         }
@@ -510,7 +564,8 @@ fn validate_child_results(
             .get(&receipt.rel_path)
             .context("Retry original receipt escapes its admitted source set")?;
         ensure!(
-            receipt.blake3 == admitted.admitted_source_blake3,
+            receipt.blake3 == admitted.admitted_source_blake3
+                && admitted.route != Some(FailedRetrySourceRoute::Primary),
             "Retry original receipt does not match the admitted source bytes"
         );
         ensure!(
@@ -520,6 +575,14 @@ fn validate_child_results(
         ensure!(
             !child.blake3_log.contains_key(&receipt.rel_path),
             "Retry source has both a converted output and a Photos original receipt"
+        );
+    }
+    if routed && child.is_terminal() {
+        ensure!(
+            child.source_disposition_is_complete()
+                && child.tier2_imported_assets.len().checked_add(child.tier2_failed_sources.len())
+                    == child.src_jpeg_count.checked_sub(child.primary_source_count()),
+            "Terminal retry lacks an exact disposition for every admitted source"
         );
     }
     Ok(())
@@ -536,6 +599,8 @@ fn validate_child_delivery(
                 && child.photos_import_naming_policy.is_none()
                 && child.photos_imported_assets.is_empty()
                 && child.tier2_imported_assets.is_empty()
+                && child.tier2_failed_sources.is_empty()
+                && child.primary_source_count() == child.src_jpeg_count
                 && child
                     .photos_submission_history()
                     .is_none_or(|history| history.intents.is_empty()),
@@ -854,8 +919,14 @@ pub fn create_or_resume_failed_retry(
         let key=key_for_canonical(text(&parent.child)?);
         ensure!(read_snapshot(&tx,&key)?.is_none(),"Stable retry output is already reserved by another task");
         let mut child=WorkingCopyMarker::new(parent.marker.src_dir.clone(),parent.child.clone(),values.len()).with_strategy(parent.marker.strategy.clone());
+        if values.values().any(|value| value.route.is_some()) {
+            ensure!(values.values().all(|value| value.route.is_some()), "Failed-only source routes are incomplete");
+            child.failed_retry_primary_source_count = Some(values.values().filter(|value| value.route == Some(FailedRetrySourceRoute::Primary)).count());
+            ensure!(child.primary_source_count() == child.src_jpeg_count || matches!(delivery, FailedRetryDeliveryIntent::Photos { .. }),
+                "Original-format failed-only sources require Photos delivery");
+        }
         child.primary_cleanup_journal=parent.marker.primary_cleanup_journal;
-        child.tier2_cleanup_journal=parent.marker.tier2_cleanup_journal;
+        child.tier2_cleanup_journal=parent.marker.tier2_cleanup_journal || child.primary_source_count() < child.src_jpeg_count;
         child.processing_contract.clone_from(&parent.marker.processing_contract);
         child.metadata_policy_version=metadata_policy_version(&child)?;
         if let FailedRetryDeliveryIntent::Photos{library_path,naming_policy}=delivery {
@@ -879,8 +950,8 @@ pub fn create_or_resume_failed_retry(
         for value in values.values(){
             let (xr,xh,xc)=sidecar_columns(&value.xmp); let (ar,ah,ac)=sidecar_columns(&value.aae);
             tx.execute("INSERT INTO fast_img_retry_sources(task_key,source_rel,parent_source_blake3,admitted_source_blake3,source_claim,
-                xmp_rel,xmp_blake3,xmp_claim,aae_rel,aae_blake3,aae_claim) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-                params![key,value.source_rel,value.parent_source_blake3,value.admitted_source_blake3,value.claim,xr,xh,xc,ar,ah,ac])?;
+                xmp_rel,xmp_blake3,xmp_claim,aae_rel,aae_blake3,aae_claim,route) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                params![key,value.source_rel,value.parent_source_blake3,value.admitted_source_blake3,value.claim,xr,xh,xc,ar,ah,ac,value.route.map(FailedRetrySourceRoute::as_str)])?;
         }
         ensure!(read_snapshot(&tx,&key)?.as_ref()==Some(&child),"Failed retry creation readback differs; transaction must roll back");
         recheck_parent(&tx,parent)?;

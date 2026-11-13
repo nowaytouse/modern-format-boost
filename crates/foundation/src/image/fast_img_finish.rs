@@ -797,8 +797,9 @@ mod tests {
     fn finish_only_original_photos_requires_and_binds_tier2_cleanup_journal() -> Result<()> {
         use super::super::{SourceUnlinkEvent, SourceUnlinkKind, Tier2CleanupObserver};
         use crate::fast_img_store::{
-            Tier2CleanupJournal, capture_failed_retry_admissions, create_or_resume_failed_retry,
-            finalize_failed_retry_finish, inspect_failed_retry_finish, inspect_failed_retry_parent,
+            FailedRetrySourceRoute, Tier2CleanupJournal, capture_failed_retry_admissions,
+            create_or_resume_failed_retry, finalize_failed_retry_finish, inspect_failed_retry_finish,
+            inspect_failed_retry_parent,
         };
 
         if crate::common_utils::isolated_test_process() {
@@ -817,7 +818,7 @@ mod tests {
         let bytes = b"synthetic original Photos resource";
         fs::write(&input, bytes)?;
         let hash = blake3::hash(bytes).to_hex().to_string();
-        let mut parent = WorkingCopyMarker::new(source.clone(), root.join("parent-original"), 1);
+        let mut parent = WorkingCopyMarker::new(source.clone(), root.join("parent-original"), 0);
         parent.stage = FastImgStageName::CleanupComplete;
         parent.tier2_cleanup_journal = true;
         parent.processing_contract = Some(FastImgProcessingContract {
@@ -831,7 +832,7 @@ mod tests {
                 allow_expert_options: false,
             },
         });
-        parent.failed_sources.insert(
+        parent.tier2_failed_sources.insert(
             "original.jpg".into(),
             SkippedSourceEntry {
                 src: hash.clone(),
@@ -840,7 +841,8 @@ mod tests {
         );
         write_marker_atomic(&parent)?;
         let reference = inspect_failed_retry_parent(&parent.working_copy)?;
-        let admissions = capture_failed_retry_admissions(&reference)?;
+        let mut admissions = capture_failed_retry_admissions(&reference)?;
+        admissions[0].route = Some(FailedRetrySourceRoute::Original);
         let library = root.join("synthetic.photoslibrary");
         fs::create_dir_all(library.join("database"))?;
         fs::write(library.join("database/Photos.sqlite"), b"synthetic database")?;
@@ -851,6 +853,8 @@ mod tests {
             naming_policy: super::super::current_photos_import_naming_policy(),
         };
         let mut child = create_or_resume_failed_retry(&reference, &admissions, &delivery, None)?;
+        assert_eq!(child.primary_source_count(), 0);
+        assert_eq!(child.src_jpeg_count, 1);
         let asset = LibraryAssetRecord {
             rel_path: "original.jpg".into(),
             blake3: hash.clone(),
