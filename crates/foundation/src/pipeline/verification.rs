@@ -4712,20 +4712,30 @@ pub fn matching_working_copy_markers(
 }
 
 pub fn resolve_working_copy_dir(src: &Path, strategy: &str) -> std::io::Result<PathBuf> {
-    let mut newest = None;
+    let markers = matching_working_copy_markers(src, strategy)?;
+    match latest_working_copy_marker(&markers)? {
+        Some(marker) => Ok(marker.working_copy.clone()),
+        None => resolve_fresh_working_copy_dir(src),
+    }
+}
+
+pub fn latest_working_copy_marker(
+    markers: &[WorkingCopyMarker],
+) -> std::io::Result<Option<&WorkingCopyMarker>> {
+    let mut newest: Option<(_, &WorkingCopyMarker)> = None;
     let mut ambiguous = false;
-    for marker in matching_working_copy_markers(src, strategy)? {
+    for marker in markers {
         let started = chrono::DateTime::parse_from_rfc3339(&marker.started_at)
             .map_err(std::io::Error::other)?;
         match &newest {
-            Some((previous, previous_path))
-                if *previous == started && *previous_path != marker.working_copy =>
+            Some((previous, previous_marker))
+                if *previous == started && previous_marker.working_copy != marker.working_copy =>
             {
                 ambiguous = true;
             }
             Some((previous, _)) if *previous > started => {}
             _ => {
-                newest = Some((started, marker.working_copy));
+                newest = Some((started, marker));
                 ambiguous = false;
             }
         }
@@ -4735,18 +4745,38 @@ pub fn resolve_working_copy_dir(src: &Path, strategy: &str) -> std::io::Result<P
             "fast-img newest matching checkpoints have ambiguous start times",
         ));
     }
-    match newest {
-        Some((_, path)) => Ok(path),
-        None => resolve_working_copy_dir_inner(src),
-    }
+    Ok(newest.map(|(_, marker)| marker))
 }
 
 /// Select a new adjacent working copy without consuming any prior marker.
 pub fn resolve_fresh_working_copy_dir(src: &Path) -> std::io::Result<PathBuf> {
-    resolve_working_copy_dir_inner(src)
+    resolve_working_copy_dir_inner(src, |_, _| Ok(()))
 }
 
-fn resolve_working_copy_dir_inner(src: &Path) -> std::io::Result<PathBuf> {
+/// Read the first fresh path and the exact occupied candidates preceding it.
+/// The bool records saved-task ownership, including reservations for absent paths.
+pub fn inspect_fresh_working_copy_dir(
+    src: &Path,
+    occupied_limit: usize,
+) -> std::io::Result<(PathBuf, Vec<(PathBuf, bool)>)> {
+    let mut occupied = Vec::new();
+    let fresh = resolve_working_copy_dir_inner(src, |candidate, reserved| {
+        if occupied.len() == occupied_limit {
+            return Err(std::io::Error::other(
+                "Fast IMG conflict preview has too many occupied outputs",
+            ));
+        }
+        let saved = reserved || crate::db::fast_img_store::has_saved_reservation(candidate)?;
+        occupied.push((candidate.to_owned(), saved));
+        Ok(())
+    })?;
+    Ok((fresh, occupied))
+}
+
+fn resolve_working_copy_dir_inner(
+    src: &Path,
+    mut observe_occupied: impl FnMut(&Path, bool) -> std::io::Result<()>,
+) -> std::io::Result<PathBuf> {
     let base = working_copy_dir(src);
     let mut suffix = 0usize;
     loop {
@@ -4766,11 +4796,12 @@ fn resolve_working_copy_dir_inner(src: &Path) -> std::io::Result<PathBuf> {
             base.with_file_name(format!("{name}_{}", suffix + 1))
         };
         match std::fs::symlink_metadata(&candidate) {
-            Ok(_) => {}
+            Ok(_) => observe_occupied(&candidate, false)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if !crate::db::fast_img_store::is_reserved(&candidate)? {
                     return Ok(candidate);
                 }
+                observe_occupied(&candidate, true)?;
             }
             Err(error) => return Err(error),
         }

@@ -268,7 +268,7 @@ pub(super) fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
 }
 
 pub(super) fn apply_spotlight_content_creation_date(src: &Path, dst: &Path) -> io::Result<()> {
-    let content_date = source_content_creation_date(src)?;
+    let (content_date, date_source) = source_content_creation_date(src)?;
     let payload = binary_plist_date(&content_date)?;
     xattr::set(dst, XATTR_CONTENT_CREATION_DATE, &payload).map_err(|e| {
         io::Error::new(
@@ -281,7 +281,14 @@ pub(super) fn apply_spotlight_content_creation_date(src: &Path, dst: &Path) -> i
         )
     })?;
     match xattr::get(dst, XATTR_CONTENT_CREATION_DATE) {
-        Ok(Some(actual)) if actual == payload => Ok(()),
+        Ok(Some(actual)) if actual == payload => {
+            tracing::debug!(
+                target: "metadata",
+                date_source,
+                "Spotlight content date copied or derived from the recorded source field"
+            );
+            Ok(())
+        }
         Ok(Some(_)) => Err(io::Error::other(format!(
             "Spotlight content creation date xattr verification mismatch on {}",
             dst.display()
@@ -300,12 +307,14 @@ pub(super) fn apply_spotlight_content_creation_date(src: &Path, dst: &Path) -> i
     }
 }
 
-fn source_content_creation_date(src: &Path) -> io::Result<chrono::DateTime<chrono::Utc>> {
+fn source_content_creation_date(
+    src: &Path,
+) -> io::Result<(chrono::DateTime<chrono::Utc>, &'static str)> {
     if let Some(date) = read_mdls_content_creation_date(src)? {
-        return Ok(date);
+        return Ok((date, "spotlight_content_creation"));
     }
     if let Some(date) = read_exif_datetime_original(src)? {
-        return Ok(date);
+        return Ok((date, "exif_original_with_offset"));
     }
     let created = std::fs::metadata(src)
         .and_then(|metadata| metadata.created())
@@ -318,7 +327,7 @@ fn source_content_creation_date(src: &Path) -> io::Result<chrono::DateTime<chron
                 ),
             )
         })?;
-    Ok(chrono::DateTime::<chrono::Utc>::from(created))
+    Ok((created.into(), "filesystem_creation_fallback"))
 }
 
 fn read_mdls_content_creation_date(
@@ -355,32 +364,30 @@ fn read_exif_datetime_original(src: &Path) -> io::Result<Option<chrono::DateTime
     if !crate::ExiftoolBuilder::check_available() {
         return Ok(None);
     }
-    let output = crate::ExiftoolBuilder::new()
-        .arg("-s3")
-        .arg("-d")
-        .arg("%Y-%m-%d %H:%M:%S%z")
-        .arg("-DateTimeOriginal")
-        .arg(crate::path_safety::exiftool_path_arg(src).as_ref())
-        .build()
-        .output()
-        .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "failed to run exiftool DateTimeOriginal for {}: {e}",
-                    src.display()
-                ),
-            )
-        })?;
+    let output = exif_original_date_command(src).output().map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "failed to run exiftool DateTimeOriginal for {}: {e}",
+                src.display()
+            ),
+        )
+    })?;
     if !output.status.success() {
         return Ok(None);
     }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    parse_exiftool_datetime(trimmed).map(Some)
+    parse_exif_original_date(&output.stdout)
+}
+
+fn exif_original_date_command(src: &Path) -> std::process::Command {
+    // ExifTool's date formatter would supply the process timezone for a naive
+    // timestamp. Read the raw EXIF date and its recorded offset instead.
+    crate::ExiftoolBuilder::new()
+        .arg("-j")
+        .arg("-EXIF:DateTimeOriginal")
+        .arg("-EXIF:OffsetTimeOriginal")
+        .arg(crate::path_safety::exiftool_path_arg(src).as_ref())
+        .build()
 }
 
 fn parse_spotlight_utc_date(raw: &str) -> io::Result<chrono::DateTime<chrono::Utc>> {
@@ -389,10 +396,42 @@ fn parse_spotlight_utc_date(raw: &str) -> io::Result<chrono::DateTime<chrono::Ut
         .map_err(|e| io::Error::other(format!("invalid Spotlight UTC date '{raw}': {e}")))
 }
 
-fn parse_exiftool_datetime(raw: &str) -> io::Result<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_str(raw.trim(), "%Y-%m-%d %H:%M:%S%z")
+fn parse_exif_original_date(json: &[u8]) -> io::Result<Option<chrono::DateTime<chrono::Utc>>> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct OriginalDate {
+        date_time_original: Option<String>,
+        offset_time_original: Option<String>,
+    }
+
+    let records: Vec<OriginalDate> = serde_json::from_slice(json).map_err(io::Error::other)?;
+    let [record] = records.as_slice() else {
+        return Err(io::Error::other("expected one EXIF original date record"));
+    };
+    let (Some(date), Some(offset)) = (
+        record
+            .date_time_original
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        record
+            .offset_time_original
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    ) else {
+        return Ok(None);
+    };
+    if !matches!(
+        offset.as_bytes(),
+        [b'+' | b'-', b'0'..=b'9', b'0'..=b'9', b':', b'0'..=b'9', b'0'..=b'9']
+    ) {
+        return Err(io::Error::other("invalid EXIF OffsetTimeOriginal"));
+    }
+    chrono::DateTime::parse_from_str(&format!("{date}{offset}"), "%Y:%m:%d %H:%M:%S%:z")
         .map(|date| date.with_timezone(&chrono::Utc))
-        .map_err(|e| io::Error::other(format!("invalid EXIF DateTimeOriginal '{raw}': {e}")))
+        .map(Some)
+        .map_err(|e| io::Error::other(format!("invalid EXIF original date or offset: {e}")))
 }
 
 fn binary_plist_date(date: &chrono::DateTime<chrono::Utc>) -> io::Result<Vec<u8>> {
@@ -583,8 +622,10 @@ pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
 mod tests {
     use super::{
         XATTR_CONTENT_CREATION_DATE, apply_spotlight_content_creation_date, binary_plist_date,
-        get_added_time, parse_spotlight_utc_date, set_added_time, source_content_creation_date,
+        exif_original_date_command, get_added_time, parse_exif_original_date,
+        parse_spotlight_utc_date, set_added_time, source_content_creation_date,
     };
+    use crate::builder_base::ToolBuilder;
 
     #[test]
     fn get_added_time_rejects_macos_unset_sentinel() {
@@ -656,13 +697,57 @@ mod tests {
     }
 
     #[test]
+    fn exif_original_date_requires_an_explicit_offset() -> std::io::Result<()> {
+        let unknown = parse_exif_original_date(br#"[{"DateTimeOriginal":"2024:04:06 07:53:35"}]"#)?;
+        assert_eq!(unknown, None);
+        let date = parse_exif_original_date(br#"[{"DateTimeOriginal":"2024:04:06 07:53:35","OffsetTimeOriginal":"-07:00"}]"#)?
+            .ok_or_else(|| std::io::Error::other("missing explicit offset date"))?;
+        assert_eq!(date.to_rfc3339(), "2024-04-06T14:53:35+00:00");
+        assert!(
+            parse_exif_original_date(br#"[{"DateTimeOriginal":"2024:04:06 07:53:35","OffsetTimeOriginal":"+99:00"}]"#)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exiftool_original_date_is_independent_of_process_timezone() -> anyhow::Result<()> {
+        if !crate::test_ci_contract::exiftool_available_or_ci_panic() {
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let jpeg = root.path().join("synthetic.jpg");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([23, 57, 101])).save(&jpeg)?;
+        for offset in ["", "+08:00"] {
+            let write = crate::ExiftoolBuilder::new()
+                .overwrite_original()
+                .arg("-EXIF:DateTimeOriginal=2024:04:06 07:53:35")
+                .arg(format!("-EXIF:OffsetTimeOriginal={offset}"))
+                .arg(crate::path_safety::exiftool_path_arg(&jpeg).as_ref())
+                .build()
+                .output()?;
+            anyhow::ensure!(write.status.success(), "synthetic EXIF write failed");
+            for timezone in ["UTC", "America/Los_Angeles"] {
+                let read = exif_original_date_command(&jpeg).env("TZ", timezone).output()?;
+                anyhow::ensure!(read.status.success(), "synthetic EXIF read failed");
+                let original = parse_exif_original_date(&read.stdout)?.map(|date| date.to_rfc3339());
+                assert_eq!(
+                    original.as_deref(),
+                    (offset == "+08:00").then_some("2024-04-05T23:53:35+00:00")
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn spotlight_content_creation_date_xattr_is_written_from_resolved_source_date() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let src = dir.path().join("source.jpg");
         let dst = dir.path().join("output.jxl");
         std::fs::write(&src, b"source").unwrap_or_else(|e| panic!("write source: {e}"));
         std::fs::write(&dst, b"output").unwrap_or_else(|e| panic!("write output: {e}"));
-        let expected_date =
+        let (expected_date, _) =
             source_content_creation_date(&src).unwrap_or_else(|e| panic!("source date: {e}"));
 
         apply_spotlight_content_creation_date(&src, &dst)

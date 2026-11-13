@@ -464,6 +464,7 @@ private struct ProcessorRequest {
     var retry = false
     var retryFailed = false
     var retryFailedParent: String? = nil
+    var expectedFastImgOutput: String? = nil
     var force = false
     var dryRun = false
     var plain = false
@@ -471,6 +472,160 @@ private struct ProcessorRequest {
     var watch = false
     var photosContainer: PhotosAuditContainer?
     var mediaSettings = MediaSettings()
+}
+
+private struct FastImgConflictPreview: Decodable {
+    enum Decision: String, Decodable { case automatic, fresh, `continue`, failedOnly = "failed_only" }
+    struct Previous: Decodable {
+        let output_path: String
+        let stage: String
+        let terminal: Bool
+        let recorded_failed_count: Int
+        let failed_retry_parent_output: String?
+    }
+    struct FailedOnly: Decodable {
+        enum State: String, Decodable { case available, existing, completed, conflict }
+        let output_path: String
+        let state: State
+    }
+    struct Occupied: Decodable {
+        enum Ownership: String, Decodable { case savedTask = "saved_task", filesystemOnly = "filesystem_only" }
+        let path: String
+        let ownership: Ownership
+    }
+    struct MigrationRequired: Decodable {
+        let schema_version: Int
+        let kind: String
+        let input_path: String
+        let source_root: String
+        let strategy: String
+        let photos: Bool
+        let decision: Decision
+
+        static func decodeIfPresent(_ data: Data, for request: ProcessorRequest) throws -> Self? {
+            guard let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  fields["kind"] as? String == "fast_img_retry_plan_migration_required" else { return nil }
+            let value = try JSONDecoder().decode(Self.self, from: data)
+            guard Set(fields.keys) == Set(["schema_version", "kind", "input_path", "source_root", "strategy", "photos", "decision"]),
+                  value.schema_version == 1, FastImgDeliveryReceipt.samePath(value.input_path, request.targetPath),
+                  FastImgFailedRetryAvailable.path(value.source_root), value.strategy == request.operationMode.strategy,
+                  value.photos == request.shortestPath, value.decision == FastImgConflictPreview.decision(for: request),
+                  value.decision != .failedOnly else { throw HostError(message: localized("preflight.fast.invalid")) }
+            return value
+        }
+    }
+    let schema_version: Int
+    let kind: String
+    let input_path: String
+    let source_root: String
+    let strategy: String
+    let photos: Bool
+    let decision: Decision
+    let proposed_output: String
+    let fresh_output: String
+    let previous: Previous?
+    let failed_only: FailedOnly?
+    let occupied_outputs: [Occupied]
+    let unknown: [String]
+
+    static func decision(for request: ProcessorRequest) -> Decision {
+        if request.retryFailed { return .failedOnly }
+        if request.fresh { return .fresh }
+        return request.resume || request.retry ? .continue : .automatic
+    }
+
+    static func arguments(for request: ProcessorRequest) throws -> [String] {
+        guard let strategy = request.operationMode.strategy, request.operationMode.backendMode == "fast-img" else {
+            throw HostError(message: localized("preflight.fast.invalid"))
+        }
+        var arguments = ["--plan-json", "--mode", "fast-img", "--strategy", strategy]
+        if request.shortestPath { arguments.append("--shortest-path") }
+        switch decision(for: request) {
+        case .automatic: break
+        case .continue: arguments.append("--retry")
+        case .fresh: arguments.append("--no-resume")
+        case .failedOnly:
+            arguments.append("--retry-failed")
+            if let parent = request.retryFailedParent { arguments += ["--retry-failed-parent", parent] }
+        }
+        return arguments + ["--", request.targetPath]
+    }
+
+    static func decode(_ data: Data, for request: ProcessorRequest) throws -> Self {
+        let error = HostError(message: localized("preflight.fast.invalid"))
+        guard let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(fields.keys) == Set(["schema_version", "kind", "input_path", "source_root", "strategy", "photos",
+                  "decision", "proposed_output", "fresh_output", "previous", "failed_only", "occupied_outputs",
+                  "currently_verified_completed", "currently_verified_reusable", "potential_duplicate_photos", "unknown"]),
+              ["currently_verified_completed", "currently_verified_reusable", "potential_duplicate_photos"]
+                  .allSatisfy({ fields[$0] is NSNull }) else { throw error }
+        let plan = try JSONDecoder().decode(Self.self, from: data)
+        let path = FastImgFailedRetryAvailable.path
+        let samePath = FastImgDeliveryReceipt.samePath
+        guard plan.schema_version == 1, plan.kind == "fast_img_retry_plan",
+              samePath(plan.input_path, request.targetPath), path(plan.source_root),
+              plan.strategy == request.operationMode.strategy, plan.photos == request.shortestPath,
+              plan.decision == decision(for: request), path(plan.proposed_output), path(plan.fresh_output),
+              plan.unknown == (plan.photos ? ["current_media_verification", "photos_duplicate_count"] : ["current_media_verification"]),
+              plan.occupied_outputs.count <= 128,
+              Set(plan.occupied_outputs.map { Data($0.path.utf8) }).count == plan.occupied_outputs.count,
+              plan.occupied_outputs.allSatisfy({ path($0.path) && !samePath($0.path, plan.fresh_output) }),
+              plan.previous.map({ previous in
+                  path(previous.output_path) && previous.recorded_failed_count >= 0
+                    && ["scan_complete", "output_prepared", "encode_complete", "gate1_passed", "importing",
+                        "import_complete", "gate2_passed", "deep_scan_complete", "gate3_passed", "cleanup_complete",
+                        "gate1_failed", "gate2_failed", "gate3_failed", "aborted"].contains(previous.stage)
+                    && (!previous.terminal || previous.stage == "cleanup_complete")
+                    && (previous.failed_retry_parent_output.map(path) ?? true)
+                    && plan.occupied_outputs.contains { $0.ownership == .savedTask && samePath($0.path, previous.output_path) }
+              }) ?? true,
+              plan.failed_only.map({ path($0.output_path) && plan.previous?.terminal == true
+                  && plan.previous.map { $0.recorded_failed_count > 0 && !samePath($0.output_path, plan.failed_only?.output_path) } == true }) ?? true
+        else { throw error }
+        switch plan.decision {
+        case .automatic, .continue:
+            guard samePath(plan.proposed_output, plan.previous?.output_path ?? plan.fresh_output) else { throw error }
+        case .fresh:
+            guard samePath(plan.proposed_output, plan.fresh_output) else { throw error }
+        case .failedOnly:
+            guard samePath(plan.proposed_output, plan.failed_only?.output_path),
+                  request.retryFailedParent.map({ samePath($0, plan.previous?.output_path) }) ?? true else { throw error }
+        }
+        if let child = plan.failed_only {
+            let ownership = plan.occupied_outputs.first { samePath($0.path, child.output_path) }?.ownership
+            switch child.state {
+            case .available: guard ownership == nil else { throw error }
+            case .conflict: guard ownership != nil else { throw error }
+            case .existing, .completed: guard ownership == .savedTask else { throw error }
+            }
+        }
+        return plan
+    }
+
+    var needsChoice: Bool { decision != .automatic || previous != nil || !occupied_outputs.isEmpty }
+
+    func details(privacy: Bool) -> String {
+        func path(_ value: String) -> String { privacy ? localized("privacy.display.hidden") : value.debugDescription }
+        var lines = [localized("preflight.fast.output", path(proposed_output))]
+        if let previous {
+            lines.append(localized("preflight.fast.previous", path(previous.output_path), String(previous.recorded_failed_count)))
+            if let parent = previous.failed_retry_parent_output { lines.append(localized("preflight.fast.parent", path(parent))) }
+        }
+        if decision != .fresh, !FastImgDeliveryReceipt.samePath(proposed_output, fresh_output) {
+            lines.append(localized("preflight.fast.fresh_output", path(fresh_output)))
+        }
+        if let failed_only {
+            lines.append(localized("preflight.fast.failed_output", path(failed_only.output_path),
+                                   localized("preflight.fast.child.\(failed_only.state.rawValue)")))
+        }
+        let otherOutputs = occupied_outputs.filter { !FastImgDeliveryReceipt.samePath($0.path, previous?.output_path) }
+        if !otherOutputs.isEmpty {
+            lines.append("")
+            lines += otherOutputs.map { localized($0.ownership == .savedTask ? "preflight.fast.occupied_saved"
+                : "preflight.fast.occupied_unknown", path($0.path)) }
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 private enum MediaSetting: String, CaseIterable {
@@ -4955,6 +5110,12 @@ private enum ProcessorCommand {
             guard FastImgFailedRetryAvailable.path(parent) else { throw HostError(message: localized("retry.invalid")) }
             arguments += ["--retry-failed-parent", parent]
         }
+        if let output = request.expectedFastImgOutput {
+            guard request.operationMode.backendMode == "fast-img", FastImgFailedRetryAvailable.path(output) else {
+                throw HostError(message: localized("preflight.fast.invalid"))
+            }
+            arguments += ["--output", output]
+        }
         if request.force { arguments.append("--force") }
         if request.dryRun { arguments.append("--dry-run") }
         if request.plain { arguments.append("--plain") }
@@ -8289,7 +8450,16 @@ private final class AppController: NSObject, NSWindowDelegate {
     @objc private func openInTerminal() {
         guard !isDebugWindow, !restoreFixture, !historyRemovalInProgress,
               developerMode, configurationControlsEnabled, !privacyEnabled else { return }
-        do { setStatus(try host.openInTerminal(request())) }
+        do {
+            let request = try request()
+            if request.operationMode.backendMode == "fast-img", !request.dryRun {
+                previewFastImg(request) { [weak self] approved in
+                    guard let self, !self.privacyEnabled else { return }
+                    do { self.setStatus(try self.host.openInTerminal(approved)) }
+                    catch { self.present(error) }
+                }
+            } else { setStatus(try host.openInTerminal(request)) }
+        }
         catch { present(error) }
     }
 
@@ -8422,14 +8592,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             selected.retryFailed = true; selected.retryFailedParent = selection.parentWorkingCopy
             selected.retry = false; selected.resume = false; selected.fresh = false
             selected.archive = selection.archive
-            lastRequest = selected
-            sawResumeDecision = false; sawFailedRetryDecision = false; failedRetryAvailable = nil
-            failedRetryAvailabilityInvalid = false
-            clearBatchLog()
-            try host.setControlState("running")
-            setProcessing(true)
-            appendLog(localized("retry.history.start"))
-            host.startProcessing(selected)
+            previewFastImg(selected) { [weak self] in self?.startHere($0) }
         } catch {
             setProcessing(false)
             present(error)
@@ -8501,9 +8664,13 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func inspectInput() {
-        guard configurationControlsEnabled, !host.isRunning, selectedOperation == .adjacent else { return }
+        guard configurationControlsEnabled, !host.isRunning, supportsPreflight, !privacyEnabled else { return }
         do {
             let request = try request()
+            if request.operationMode.backendMode == "fast-img" {
+                previewFastImg(request)
+                return
+            }
             guard let binary = ProcessorLocator.resolve() else {
                 throw HostError(message: localized("status.processor_unavailable"))
             }
@@ -8544,6 +8711,187 @@ private final class AppController: NSObject, NSWindowDelegate {
         } catch { present(error) }
     }
 
+    private var supportsPreflight: Bool {
+        selectedOperation == .adjacent || selectedOperation.backendMode == "fast-img"
+    }
+
+    private func previewFastImg(_ request: ProcessorRequest, context: String? = nil,
+                                afterMigration: Bool = false,
+                                launch: ((ProcessorRequest) -> Void)? = nil) {
+        guard !host.isRunning, !historyRemovalInProgress, configurationControlsEnabled else { return }
+        do {
+            _ = try ProcessorCommand.arguments(from: request)
+            guard let binary = ProcessorLocator.resolve() else {
+                throw HostError(message: localized("status.processor_unavailable"))
+            }
+            let arguments = try FastImgConflictPreview.arguments(for: request)
+            invalidatePreflight()
+            let generation = preflightGeneration
+            let query = PreflightQuery()
+            preflightQuery = query
+            setLocalizedStatus("preflight.fast.loading")
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Result { try query.run(binary, arguments: arguments) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.preflightGeneration == generation, !self.host.isRunning,
+                          !self.historyRemovalInProgress else { return }
+                    self.preflightQuery = nil
+                    do {
+                        let data = try result.get()
+                        if let migration = try FastImgConflictPreview.MigrationRequired.decodeIfPresent(data, for: request) {
+                            guard !afterMigration else { throw HostError(message: localized("preflight.fast.migration_pending")) }
+                            self.offerFastImgMigration(migration, request: request, binary: binary,
+                                                       generation: generation, launch: launch)
+                            return
+                        }
+                        let preview = try FastImgConflictPreview.decode(data, for: request)
+                        guard let launch else {
+                            self.fastImgPreviewAlert(preview, inspection: true).runModal()
+                            self.setLocalizedStatus("status.ready")
+                            return
+                        }
+                        var approved = request
+                        if preview.needsChoice || context != nil {
+                            let options = self.fastImgPreviewChoices(preview)
+                            let alert = self.fastImgPreviewAlert(preview, inspection: false)
+                            if let context { alert.informativeText = context + "\n\n" + alert.informativeText }
+                            for option in options { alert.addButton(withTitle: localized(option.title)) }
+                            alert.buttons.first?.keyEquivalent = "\u{1B}"
+                            alert.window.defaultButtonCell = alert.buttons.first?.cell as? NSButtonCell
+                            let response = alert.runModal()
+                            let selected = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+                            guard options.indices.contains(selected), let output = options[selected].output else {
+                                self.setLocalizedStatus("status.resume_choice_cancelled")
+                                return
+                            }
+                            let option = options[selected]
+                            guard self.preflightGeneration == generation, !self.host.isRunning,
+                                  !self.historyRemovalInProgress else { return }
+                            switch option.decision {
+                            case .continue: self.applyResumeDecision(fresh: false, to: &approved, updateOptions: false)
+                            case .fresh: self.applyResumeDecision(fresh: true, to: &approved, updateOptions: false)
+                            case .failedOnly:
+                                approved.resume = false; approved.retry = false; approved.fresh = false
+                                approved.retryFailed = true; approved.retryFailedParent = preview.previous?.output_path
+                            case .automatic: self.applyResumeDecision(fresh: true, to: &approved, updateOptions: false)
+                            }
+                            approved.expectedFastImgOutput = output
+                        } else {
+                            self.applyResumeDecision(fresh: true, to: &approved, updateOptions: false)
+                            approved.expectedFastImgOutput = preview.proposed_output
+                        }
+                        launch(approved)
+                    } catch {
+                        self.setLocalizedStatus("preflight.fast.unavailable")
+                        if !self.privacyEnabled { self.present(error) }
+                    }
+                }
+            }
+        } catch { present(error) }
+    }
+
+    private func offerFastImgMigration(_ migration: FastImgConflictPreview.MigrationRequired,
+                                       request: ProcessorRequest, binary: URL, generation: UUID,
+                                       launch: ((ProcessorRequest) -> Void)?) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localized("preflight.fast.migration_title")
+        alert.informativeText = localized("preflight.fast.migration_info")
+        alert.addButton(withTitle: localized(launch == nil ? "alert.ok" : "alert.cancel"))
+        if launch != nil { alert.addButton(withTitle: localized("preflight.fast.migration_update")) }
+        if launch == nil {
+            alert.runModal()
+            setLocalizedStatus("status.ready")
+            return
+        }
+        guard alert.runModal() == .alertSecondButtonReturn, let launch,
+              preflightGeneration == generation, !host.isRunning, !historyRemovalInProgress else {
+            setLocalizedStatus("status.resume_choice_cancelled")
+            return
+        }
+        let query = PreflightQuery()
+        preflightQuery = query
+        setLocalizedStatus("preflight.fast.migration_running")
+        let arguments = ["--migrate-fast-img-state", "--mode", "fast-img", "--strategy", migration.strategy,
+                         "--", migration.source_root]
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result { try query.run(binary, arguments: arguments, timeout: 120) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.preflightGeneration == generation else { return }
+                self.preflightQuery = nil
+                do {
+                    struct Receipt: Decodable {
+                        let schema_version: Int
+                        let kind: String
+                        let input_path: String
+                        let source_root: String
+                        let migrated: Int
+                        let retired: Int
+                    }
+                    let receipt = try JSONDecoder().decode(Receipt.self, from: result.get())
+                    guard receipt.schema_version == 1, receipt.kind == "fast_img_state_migration",
+                          FastImgDeliveryReceipt.samePath(receipt.input_path, migration.source_root),
+                          FastImgDeliveryReceipt.samePath(receipt.source_root, migration.source_root),
+                          receipt.migrated >= 0, receipt.retired >= 0 else {
+                        throw HostError(message: localized("preflight.fast.invalid"))
+                    }
+                    self.previewFastImg(request, context: localized("preflight.fast.migration_done"),
+                                        afterMigration: true, launch: launch)
+                } catch {
+                    self.setLocalizedStatus("preflight.fast.unavailable")
+                    if !self.privacyEnabled { self.present(error) }
+                }
+            }
+        }
+    }
+
+    private func fastImgPreviewAlert(_ preview: FastImgConflictPreview, inspection: Bool) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = inspection ? .informational : .warning
+        alert.messageText = localized("preflight.fast.title")
+        alert.informativeText = localized("preflight.fast.scope")
+            + (preview.photos ? "\n\n" + localized("preflight.fast.photos") : "")
+            + (preview.failed_only?.state == .conflict ? "\n\n" + localized("preflight.fast.conflict") : "")
+            + (preview.decision == .continue && preview.previous == nil ? "\n\n" + localized("preflight.fast.no_checkpoint") : "")
+        let details = NSTextView(frame: NSRect(x: 0, y: 0, width: 430, height: 112))
+        details.string = preview.details(privacy: privacyEnabled)
+        details.font = .systemFont(ofSize: NSFont.systemFontSize)
+        details.textContainerInset = NSSize(width: 6, height: 4)
+        details.isEditable = false
+        details.isVerticallyResizable = true
+        details.autoresizingMask = [.width]
+        details.textContainer?.widthTracksTextView = true
+        details.setAccessibilityLabel(localized("preflight.fast.title"))
+        let scroll = NSScrollView(frame: details.frame)
+        scroll.borderType = .bezelBorder
+        scroll.hasVerticalScroller = true
+        scroll.documentView = details
+        alert.accessoryView = scroll
+        if inspection { alert.addButton(withTitle: localized("alert.ok")) }
+        return alert
+    }
+
+    private func fastImgPreviewChoices(_ preview: FastImgConflictPreview)
+        -> [(title: String, decision: FastImgConflictPreview.Decision, output: String?)] {
+        var choices: [(String, FastImgConflictPreview.Decision, String?)] = [("alert.cancel", .automatic, nil)]
+        if preview.decision == .automatic && preview.previous == nil {
+            choices.append(("button.run", .automatic, preview.proposed_output))
+        }
+        if [.automatic, .continue].contains(preview.decision), let previous = preview.previous,
+           !previous.terminal || previous.recorded_failed_count == 0 || previous.failed_retry_parent_output != nil {
+            let verifyingChild = previous.terminal && previous.failed_retry_parent_output != nil
+            choices.append((verifyingChild ? "preflight.fast.verify_saved" : "alert.resume.resume", .continue, previous.output_path))
+        }
+        if [.automatic, .failedOnly].contains(preview.decision), let child = preview.failed_only, child.state != .conflict {
+            choices.append((child.state == .completed ? "preflight.fast.verify_saved" : "retry.only_failed", .failedOnly, child.output_path))
+        }
+        if preview.decision == .fresh || (preview.decision == .automatic && preview.previous != nil)
+            || (preview.decision == .continue && preview.previous == nil) {
+            choices.append(("alert.resume.fresh", .fresh, preview.fresh_output))
+        }
+        return choices
+    }
+
     @objc private func runHere() {
         if isDebugWindow {
             if !privacyEnabled { inspectInput() }
@@ -8553,6 +8901,14 @@ private final class AppController: NSObject, NSWindowDelegate {
         invalidatePreflight()
         do {
             let request = try request()
+            if request.operationMode.backendMode == "fast-img", !request.dryRun {
+                previewFastImg(request) { [weak self] in self?.startHere($0) }
+            } else { startHere(request) }
+        } catch { present(error) }
+    }
+
+    private func startHere(_ request: ProcessorRequest) {
+        do {
             lastRequest = request
             sawResumeDecision = false
             failedRetryAvailable = nil
@@ -8561,7 +8917,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             clearBatchLog()
             try host.setControlState("running")
             setProcessing(true)
-            appendLog("▶︎ \(try host.terminalCommand(for: request))")
+            if request.retryFailed { appendLog(localized("retry.history.start")) }
+            else { appendLog("▶︎ \(try host.terminalCommand(for: request))") }
             host.startProcessing(request)
         } catch {
             setProcessing(false)
@@ -8608,9 +8965,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             runButton.isEnabled = false
             openButton.isEnabled = false
         }
-        preflightButton.isEnabled = configurationControlsEnabled && selectedOperation == .adjacent
+        preflightButton.isEnabled = configurationControlsEnabled && supportsPreflight
             && !targetField.stringValue.isEmpty
-        preflightButton.toolTip = localized(selectedOperation == .adjacent ? "preflight.title" : "preflight.standard_only")
+        preflightButton.toolTip = localized(supportsPreflight ? "preflight.title" : "preflight.unavailable")
         settingsButton.isEnabled = configurationControlsEnabled
         settingsButton.toolTip = localized("settings.title")
         if let fixed = capabilities.fixedProcessingMode {
@@ -8801,7 +9158,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         copyButton.isHidden = !developerMode || hidden
         openButton.isHidden = !developerMode || hidden
         historyButton.toolTip = hidden ? localized("button.history") : resolvedHistoryDirectory.path
-        preflightButton.isEnabled = configurationControlsEnabled && selectedOperation == .adjacent
+        preflightButton.isEnabled = configurationControlsEnabled && supportsPreflight
             && !targetField.stringValue.isEmpty && !hidden
         if isDebugWindow { runButton.isEnabled = !restoreFixture && preflightButton.isEnabled }
         photosScopeButton.title = hidden ? localized("privacy.display.hidden") : selectedPhotosContainer.map {
@@ -9365,6 +9722,58 @@ private final class AppController: NSObject, NSWindowDelegate {
               statusLabel.stringValue == localized("status.resume_choice_cancelled"), !host.isRunning else {
             throw HostError(message: "Saved-task choice lost its content, appeared during self-test or presented cancellation as a media failure")
         }
+        let source = "/synthetic/saved-task"
+        let saved = "/synthetic/saved-task_optimized"
+        let fresh = "/synthetic/saved-task_optimized_2"
+        let child = "/synthetic/saved-task_retry_failed"
+        var request = ProcessorRequest(targetPath: source, processingMode: .imagesOnly,
+            operationMode: .fastImgJxl, shortestPath: true)
+        var fields: [String: Any] = ["schema_version": 1, "kind": "fast_img_retry_plan", "input_path": source,
+            "source_root": source, "strategy": "jxl", "photos": true, "decision": "automatic",
+            "proposed_output": saved, "fresh_output": fresh,
+            "previous": ["output_path": saved, "stage": "cleanup_complete", "terminal": true, "recorded_failed_count": 2,
+                "failed_retry_parent_output": NSNull()],
+            "failed_only": ["output_path": child, "state": "available"],
+            "occupied_outputs": [["path": saved, "ownership": "saved_task"]],
+            "currently_verified_completed": NSNull(), "currently_verified_reusable": NSNull(),
+            "potential_duplicate_photos": NSNull(), "unknown": ["current_media_verification", "photos_duplicate_count"]]
+        func decode() throws -> FastImgConflictPreview {
+            try FastImgConflictPreview.decode(JSONSerialization.data(withJSONObject: fields), for: request)
+        }
+        let preview = try decode()
+        let choices = fastImgPreviewChoices(preview)
+        let report = fastImgPreviewAlert(preview, inspection: true)
+        report.layout()
+        guard choices.map(\.decision) == [.automatic, .failedOnly, .fresh], choices[0].output == nil,
+              choices[1].output == child, choices[2].output == fresh,
+              preview.details(privacy: false).contains(fresh), !preview.details(privacy: true).contains(source),
+              report.informativeText.contains(localized("preflight.fast.photos")), report.accessoryView is NSScrollView,
+              !report.window.isVisible else {
+            throw HostError(message: "Fast IMG conflict preview lost its output, decisions, unknown counts or display privacy")
+        }
+        fields["input_path"] = "/synthetic/unrelated"
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted the wrong input") }
+        fields["input_path"] = source
+        fields["currently_verified_reusable"] = 0
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted an invented reusable count") }
+        fields["currently_verified_reusable"] = NSNull()
+        fields["previous"] = ["output_path": saved, "stage": "importing", "terminal": true,
+            "recorded_failed_count": 2, "failed_retry_parent_output": NSNull()]
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted a contradictory saved stage") }
+        let migrationFields: [String: Any] = ["schema_version": 1, "kind": "fast_img_retry_plan_migration_required",
+            "input_path": source, "source_root": source, "strategy": "jxl", "photos": true, "decision": "automatic"]
+        let migrationData = try JSONSerialization.data(withJSONObject: migrationFields)
+        guard try FastImgConflictPreview.MigrationRequired.decodeIfPresent(migrationData, for: request)?.source_root == source else {
+            throw HostError(message: "Conflict preview lost the read-only legacy migration decision")
+        }
+        request.retryFailed = true
+        request.retryFailedParent = saved
+        request.expectedFastImgOutput = child
+        let launchArgs = try ProcessorCommand.arguments(from: request)
+        guard let outputIndex = launchArgs.firstIndex(of: "--output"), launchArgs[safe: outputIndex + 1] == child,
+              try FastImgConflictPreview.arguments(for: request).contains("--retry-failed-parent") else {
+            throw HostError(message: "Approved conflict preview did not bind its output to execution")
+        }
     }
 
     func validateStartupAdmissionForSelfTest() throws {
@@ -9769,6 +10178,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func handleStartupAdmission(
         _ result: Result<String, Error>,
         decision: @MainActor (NSAlert) -> NSApplication.ModalResponse,
+        previewFresh: Bool,
         start: (ProcessorRequest) -> Void
     ) -> Bool {
         guard case .failure = result, startupAdmission.isBlocked else { return false }
@@ -9789,11 +10199,18 @@ private final class AppController: NSObject, NSWindowDelegate {
               var retry = lastRequest, !retry.fresh,
               FastImgDeliveryReceipt.samePath(startupAdmission.event?.input_path, retry.targetPath)
         else { return true }
+        let toolModeInfo = startupAdmission.event?.cause_code == .resumeToolModeChanged
+            ? localized("admission.tool_mode_info") + "\n\n" : ""
+        if previewFresh {
+            let context = startupAdmission.status + "\n\n" + toolModeInfo + localized("admission.fresh_info")
+            applyResumeDecision(fresh: true, to: &retry, updateOptions: false)
+            retry.expectedFastImgOutput = nil
+            previewFastImg(retry, context: context) { [weak self] in self?.startHere($0) }
+            return true
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = startupAdmission.status
-        let toolModeInfo = startupAdmission.event?.cause_code == .resumeToolModeChanged
-            ? localized("admission.tool_mode_info") + "\n\n" : ""
         alert.informativeText = toolModeInfo + localized("admission.fresh_info")
             + (retry.shortestPath ? "\n\n" + localized("admission.photos_warning") : "")
         // Return and Escape both cancel. Starting another task always requires
@@ -9805,6 +10222,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             return true
         }
         applyResumeDecision(fresh: true, to: &retry, updateOptions: false)
+        retry.expectedFastImgOutput = nil
         lastRequest = retry
         sawResumeDecision = false; sawFailedRetryDecision = false
         failedRetryAvailable = nil; failedRetryAvailabilityInvalid = false
@@ -9815,11 +10233,12 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func processingCompleted(_ result: Result<String, Error>,
-                                     resumeDecision: @MainActor (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() },
+                                     resumeDecision: (@MainActor (NSAlert) -> NSApplication.ModalResponse)? = nil,
                                      admissionStart: ((ProcessorRequest) -> Void)? = nil) {
         toolSnapshot.finish()
         refreshToolSnapshot()
-        if handleStartupAdmission(result, decision: resumeDecision, start: {
+        let choose = resumeDecision ?? { $0.runModal() }
+        if handleStartupAdmission(result, decision: choose, previewFresh: resumeDecision == nil, start: {
             if let admissionStart { admissionStart($0) } else { host.startProcessing($0) }
         }) { return }
         if sawProductionBusy, batchResults.totals.isEmpty {
@@ -9903,6 +10322,11 @@ private final class AppController: NSObject, NSWindowDelegate {
                 latestDiagnostics = LatestDiagnostics()
                 refreshLatestDiagnostics()
                 setProcessing(false)
+                if resumeDecision == nil, retry.operationMode.backendMode == "fast-img" {
+                    retry.expectedFastImgOutput = nil
+                    previewFastImg(retry) { [weak self] in self?.startHere($0) }
+                    return
+                }
                 let alert = NSAlert()
                 alert.messageText = localized("alert.resume.title")
                 let available = failedRetryAvailable
@@ -9916,7 +10340,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                     : available?.existingChildComplete == true ? "retry.reused.open" : "retry.only_failed"))
                 alert.addButton(withTitle: localized("alert.resume.fresh"))
                 alert.addButton(withTitle: localized("alert.cancel"))
-                switch resumeDecision(alert) {
+                switch choose(alert) {
                 case .alertFirstButtonReturn:
                     if let available { applyFailedRetryDecision(available, to: &retry) }
                     else { applyResumeDecision(fresh: false, to: &retry) }

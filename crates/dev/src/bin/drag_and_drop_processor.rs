@@ -118,10 +118,18 @@ struct Args {
     #[arg(long)]
     dry_run: bool,
 
-    /// Inspect standard IMG/VID routing and print a read-only per-file JSON plan.
+    /// Print a read-only standard routing plan or Fast IMG conflict preview.
     /// Does not create sessions, outputs, locks, or launch processing workers.
     #[arg(long, conflicts_with_all = ["dry_run", "watch"])]
     plan_json: bool,
+
+    /// Update old Fast IMG recovery records without processing media or opening Photos.
+    #[arg(long, conflicts_with_all = [
+        "plan_json", "dry_run", "watch", "output", "backup", "archive", "shortest_path",
+        "retry", "retry_failed", "resume", "no_resume", "in_place", "base_dir",
+        "photos_album_id", "photos_folder_id"
+    ])]
+    migrate_fast_img_state: bool,
 
     #[arg(long)]
     plain: bool,
@@ -3438,6 +3446,7 @@ fn build_run_args(
         force: false,
         dry_run: false,
         plan_json: false,
+        migrate_fast_img_state: false,
         plain: false,
         base_dir: None,
         in_place,
@@ -3836,6 +3845,257 @@ fn inspect_routing_plan(args: &Args) -> Result<dev::infra::preflight_plan::Prefl
     ))
 }
 
+fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
+    use foundation::fast_img_store::{
+        FailedRetryDeliveryIntent, failed_retry_context, inspect_failed_retry_parent,
+        is_state_migration_required, read_marker,
+    };
+    use foundation::pipeline::verification::{
+        inspect_fresh_working_copy_dir, latest_working_copy_marker, matching_working_copy_markers,
+    };
+
+    const OCCUPIED_OUTPUT_LIMIT: usize = 128;
+
+    let [input] = args.inputs.as_slice() else {
+        bail!("Fast IMG conflict preview requires exactly one input");
+    };
+    anyhow::ensure!(
+        args.mode == LaunchMode::FastImg && !args.in_place && args.backup.is_none()
+            && args.photos_album_id.is_none() && args.photos_folder_id.is_none(),
+        "Fast IMG conflict preview requires an adjacent media output and no recovery selections"
+    );
+    validate_media_options(args)?;
+    input.to_str().context("Fast IMG input path is not UTF-8")?;
+    let strategy = args.strategy.as_deref().unwrap_or("jxl");
+    anyhow::ensure!(matches!(strategy, "jxl" | "avif"), "unsupported Fast IMG strategy");
+    let metadata = match fs::symlink_metadata(input) {
+        Ok(_) => {
+            safety_check(input)?;
+            let metadata = fs::metadata(input)?;
+            anyhow::ensure!(
+                metadata.is_dir() || metadata.is_file(),
+                "Fast IMG preview input is not a file or directory"
+            );
+            Some(metadata)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).context("inspect Fast IMG preview input"),
+    };
+    let decision = if args.retry_failed {
+        "failed_only"
+    } else if args.no_resume {
+        "fresh"
+    } else if args.retry || args.resume {
+        "continue"
+    } else {
+        "automatic"
+    };
+    let migration_required = |source: &Path| serde_json::json!({
+        "schema_version": 1,
+        "kind": "fast_img_retry_plan_migration_required",
+        "input_path": input,
+        "source_root": source,
+        "strategy": strategy,
+        "photos": args.shortest_path,
+        "decision": decision,
+    });
+    let explicit_parent = match selected_failed_retry_parent(args, input) {
+        Ok(parent) => parent,
+        Err(error) if !args.retry_failed && metadata.is_some()
+            && error.downcast_ref::<io::Error>().is_some_and(is_state_migration_required) =>
+        {
+            return Ok(migration_required(&fast_img_source_root_for_run(input)?));
+        }
+        Err(error) => return Err(error),
+    };
+    if let Some(parent) = &explicit_parent
+        && metadata.as_ref().is_some_and(fs::Metadata::is_file)
+    {
+        let resolved = input.canonicalize()?;
+        let marker = parent.marker();
+        anyhow::ensure!(
+            marker.failed_source_count() == 1
+                && marker.all_failed_sources().next().is_some_and(|(relative, _)| {
+                    resolved.as_os_str() == marker.src_dir.join(relative).as_os_str()
+                }),
+            "failed-only retry requires the exact saved source directory or its sole failed file"
+        );
+    }
+    let source = if metadata.is_some() {
+        let source = fast_img_source_root_for_run(input)?;
+        safety_check(&source)?;
+        source
+    } else {
+        explicit_parent.as_ref().context("missing Fast IMG input has no exact saved retry scope")?
+            .marker().src_dir.clone()
+    };
+    let markers = match matching_working_copy_markers(&source, strategy) {
+        Ok(markers) => markers,
+        Err(error) if !args.retry_failed && metadata.is_some() && is_state_migration_required(&error) => {
+            return Ok(migration_required(&source));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(
+        markers.len() <= OCCUPIED_OUTPUT_LIMIT,
+        "Fast IMG conflict preview has too many saved outputs"
+    );
+    let (fresh_output, collisions) = match inspect_fresh_working_copy_dir(&source, OCCUPIED_OUTPUT_LIMIT) {
+        Ok(selection) => selection,
+        Err(error) if !args.retry_failed && metadata.is_some() && is_state_migration_required(&error) => {
+            return Ok(migration_required(&source));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let saved_previous = if let Some(parent) = &explicit_parent {
+        let path = if args.retry_failed {
+            parent.marker().working_copy.clone()
+        } else {
+            parent.child_working_copy().to_owned()
+        };
+        markers.iter().find(|marker| marker.working_copy == path)
+    } else {
+        latest_working_copy_marker(&markers)?
+    };
+    anyhow::ensure!(
+        explicit_parent.is_none() || saved_previous.is_some(),
+        "Fast IMG selected checkpoint changed while reading its saved scope"
+    );
+    let previous_output = saved_previous
+        .map(|marker| marker.working_copy.clone())
+        .unwrap_or_else(|| fresh_output.clone());
+    let previous = saved_previous.map(|marker| -> Result<_> {
+        let parent = failed_retry_context(&marker.working_copy)?;
+        Ok(serde_json::json!({
+            "output_path": marker.working_copy,
+            "stage": marker.stage.as_str(),
+            "terminal": marker.is_terminal(),
+            "recorded_failed_count": marker.failed_source_count(),
+            "failed_retry_parent_output": parent.as_ref().map(|context| &context.parent().working_copy),
+        }))
+    }).transpose()?;
+    let failed_parent = if args.retry_failed {
+        explicit_parent
+    } else {
+        saved_previous
+            .filter(|marker| marker.is_terminal() && marker.failed_source_count() > 0
+                && marker.source_disposition_is_complete() && marker.processing_contract.is_some())
+            .map(|marker| inspect_failed_retry_parent(&marker.working_copy))
+            .transpose()?
+    };
+    let mut occupied: std::collections::BTreeMap<PathBuf, &str> = markers.into_iter()
+        .map(|marker| (marker.working_copy, "saved_task")).collect();
+    for (path, saved) in collisions {
+        occupied.entry(path).or_insert(if saved { "saved_task" } else { "filesystem_only" });
+    }
+    let failed_only = failed_parent.as_ref().map(|parent| -> Result<_> {
+        let path = parent.child_working_copy();
+        let current = match fs::symlink_metadata(path) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("inspect prospective failed-only output"),
+        };
+        let state = if current.as_ref().is_some_and(|metadata| !metadata.is_dir()) {
+            occupied.entry(path.to_owned()).or_insert("filesystem_only");
+            "conflict"
+        } else {
+            match read_marker(path) {
+                Ok(child) => {
+                    occupied.insert(path.to_owned(), "saved_task");
+                    let context = failed_retry_context(path)?;
+                    if context.as_ref().is_some_and(|context| {
+                        context.parent() == parent.marker()
+                            && matches!(context.requested_delivery(), FailedRetryDeliveryIntent::Photos { .. })
+                                == args.shortest_path
+                    }) {
+                        if child.is_terminal() { "completed" } else { "existing" }
+                    } else {
+                        "conflict"
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if current.is_some() {
+                        occupied.insert(path.to_owned(), "filesystem_only");
+                        "conflict"
+                    } else {
+                        "available"
+                    }
+                }
+                Err(error) => return Err(error).context("read prospective failed-only checkpoint"),
+            }
+        };
+        Ok(serde_json::json!({"output_path": path, "state": state}))
+    }).transpose()?;
+    let proposed = if args.retry_failed {
+        failed_parent.as_ref().context("failed-only selection has no exact parent")?.child_working_copy()
+    } else if args.no_resume {
+        &fresh_output
+    } else {
+        &previous_output
+    };
+    anyhow::ensure!(args.output.as_deref().is_none_or(|configured| configured == proposed),
+        "Fast IMG requested output no longer matches the observed output");
+
+    anyhow::ensure!(occupied.len() <= OCCUPIED_OUTPUT_LIMIT, "Fast IMG conflict preview has too many occupied outputs");
+    let mut unknown = vec!["current_media_verification"];
+    if args.shortest_path {
+        unknown.push("photos_duplicate_count");
+    }
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "kind": "fast_img_retry_plan",
+        "input_path": input,
+        "source_root": source,
+        "strategy": strategy,
+        "photos": args.shortest_path,
+        "decision": decision,
+        "proposed_output": proposed,
+        "fresh_output": fresh_output,
+        "previous": previous,
+        "failed_only": failed_only,
+        "occupied_outputs": occupied.into_iter().map(|(path, ownership)| serde_json::json!({"path": path, "ownership": ownership})).collect::<Vec<_>>(),
+        "currently_verified_completed": null,
+        "currently_verified_reusable": null,
+        "potential_duplicate_photos": null,
+        "unknown": unknown,
+    }))
+}
+
+fn migrate_fast_img_state(args: &Args) -> Result<serde_json::Value> {
+    let [input] = args.inputs.as_slice() else {
+        bail!("Fast IMG state migration requires exactly one input");
+    };
+    anyhow::ensure!(args.mode == LaunchMode::FastImg, "Fast IMG state migration requires Fast IMG mode");
+    anyhow::ensure!(
+        matches!(args.strategy.as_deref().unwrap_or("jxl"), "jxl" | "avif"),
+        "unsupported Fast IMG strategy"
+    );
+    input.to_str().context("Fast IMG input path is not UTF-8")?;
+    safety_check(input)?;
+    let metadata = fs::metadata(input)?;
+    anyhow::ensure!(
+        metadata.is_dir() || metadata.is_file(),
+        "Fast IMG migration input is not a file or directory"
+    );
+    let source = fast_img_source_root_for_run(input)?;
+    safety_check(&source)?;
+    let _production_lease = foundation::production_lock::acquire_production_lease()?;
+    let _source_lock = acquire_global_lock(&source)?;
+    anyhow::ensure!(
+        fast_img_source_root_for_run(input)? == source && source.canonicalize()? == source,
+        "Fast IMG migration source changed while acquiring its lock"
+    );
+    let report = foundation::fast_img_store::migrate_legacy_for_source(&source, None)?;
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "kind": "fast_img_state_migration",
+        "input_path": input,
+        "source_root": source,
+        "migrated": report.migrated,
+        "retired": report.retired,
+    }))
+}
+
 #[cfg(unix)]
 fn isolate_preflight_process_group() -> Result<()> {
     // Read-only probes inherit this group, allowing GUI cancellation to reap them together.
@@ -3861,8 +4121,17 @@ fn main() -> Result<()> {
     if args.plan_json {
         #[cfg(unix)]
         isolate_preflight_process_group()?;
-        let plan = inspect_routing_plan(&args)?;
-        println!("{}", serde_json::to_string_pretty(&plan)?);
+        if args.mode == LaunchMode::FastImg {
+            println!("{}", serde_json::to_string_pretty(&inspect_fast_img_retry_plan(&args)?)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&inspect_routing_plan(&args)?)?);
+        }
+        return Ok(());
+    }
+    if args.migrate_fast_img_state {
+        #[cfg(unix)]
+        isolate_preflight_process_group()?;
+        println!("{}", serde_json::to_string_pretty(&migrate_fast_img_state(&args)?)?);
         return Ok(());
     }
     unsafe {
@@ -4194,6 +4463,198 @@ mod tests {
         }
         assert!(!prospective.exists());
         assert_eq!(fs::read(&input)?.as_slice(), image);
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_conflict_preview_does_not_create_state_or_guess_media_counts() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let state = root.join("state");
+        let _state = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            state.to_str().context("synthetic state path is not UTF-8")?,
+        );
+        let input = root.join("source");
+        fs::create_dir(&input)?;
+        let mut args = Args::try_parse_from(["mfb", "--mode", "fast-img", "--plan-json"])?;
+        args.inputs = vec![input.clone()];
+        let report = inspect_fast_img_retry_plan(&args)?;
+        assert_eq!(report["kind"], "fast_img_retry_plan");
+        assert_eq!(report["decision"], "automatic");
+        assert_eq!(report["proposed_output"].as_str(), root.join("source_optimized").to_str());
+        assert!(report["previous"].is_null());
+        assert!(report["currently_verified_completed"].is_null());
+        assert!(report["currently_verified_reusable"].is_null());
+        assert!(!state.exists());
+
+        let manual = root.join("source_optimized");
+        fs::write(&manual, b"user-owned synthetic collision")?;
+        let second = root.join("source_optimized_2");
+        fs::create_dir(&second)?;
+        fs::create_dir(root.join("source_optimized_99"))?;
+        args.shortest_path = true;
+        args.no_resume = true;
+        let report = inspect_fast_img_retry_plan(&args)?;
+        assert_eq!(report["decision"], "fresh");
+        assert_eq!(report["proposed_output"].as_str(), root.join("source_optimized_3").to_str());
+        assert_eq!(report["fresh_output"], report["proposed_output"]);
+        assert_eq!(report["occupied_outputs"], serde_json::json!([
+            {"path": manual, "ownership": "filesystem_only"},
+            {"path": second, "ownership": "filesystem_only"},
+        ]));
+        assert_eq!(report["unknown"], serde_json::json!(["current_media_verification", "photos_duplicate_count"]));
+        assert!(report["potential_duplicate_photos"].is_null());
+        assert_eq!(fs::read(&manual)?, b"user-owned synthetic collision");
+        assert!(!state.exists());
+        args.output = Some(manual);
+        assert!(inspect_fast_img_retry_plan(&args).is_err());
+        args.inputs.push(input);
+        assert!(inspect_fast_img_retry_plan(&args).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_conflict_preview_observes_different_strategy_reservations() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let state = root.join("state");
+        let _state = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            state.to_str().context("synthetic state path is not UTF-8")?,
+        );
+        let input = root.join("source");
+        let first = root.join("source_optimized");
+        let second = root.join("source_optimized_2");
+        fs::create_dir(&input)?;
+        fs::create_dir(&first)?;
+        for output in [&first, &second] {
+            let mut marker = foundation::pipeline::verification::WorkingCopyMarker::new(
+                input.clone(), output.clone(), 1,
+            );
+            marker.strategy = "avif".into();
+            foundation::pipeline::verification::write_marker_atomic(&marker)?;
+        }
+        let args = Args::try_parse_from([
+            "mfb", "--mode", "fast-img", "--plan-json", input.to_str().unwrap(),
+        ])?;
+        let report = inspect_fast_img_retry_plan(&args)?;
+        assert!(report["previous"].is_null());
+        assert_eq!(report["proposed_output"].as_str(), root.join("source_optimized_3").to_str());
+        assert_eq!(report["occupied_outputs"], serde_json::json!([
+            {"path": first, "ownership": "saved_task"},
+            {"path": second, "ownership": "saved_task"},
+        ]));
+        assert!(!second.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_conflict_preview_requires_explicit_legacy_state_migration() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let state = root.join("state");
+        let _state = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            state.to_str().context("synthetic state path is not UTF-8")?,
+        );
+        let input = root.join("source");
+        let output = root.join("source_optimized");
+        fs::create_dir(&input)?;
+        fs::create_dir(&output)?;
+        let marker = foundation::pipeline::verification::WorkingCopyMarker::new(
+            input.clone(), output.clone(), 1,
+        );
+        let legacy = output.join(".mfb_wc");
+        let raw = serde_json::to_vec(&marker)?;
+        fs::write(&legacy, &raw)?;
+        let input_arg = input.to_str().unwrap();
+        let plan = Args::try_parse_from(["mfb", "--mode", "fast-img", "--plan-json", input_arg])?;
+        let report = inspect_fast_img_retry_plan(&plan)?;
+        assert_eq!(report["kind"], "fast_img_retry_plan_migration_required");
+        assert!(report.get("proposed_output").is_none());
+        assert_eq!(fs::read(&legacy)?, raw);
+        assert!(!state.exists());
+
+        let migration = Args::try_parse_from(["mfb", "--mode", "fast-img", "--migrate-fast-img-state", input_arg])?;
+        let migrated = migrate_fast_img_state(&migration)?;
+        assert_eq!(migrated["kind"], "fast_img_state_migration");
+        assert_eq!(migrated["migrated"], 1);
+        assert_eq!(migrated["retired"], 1);
+        assert!(!legacy.exists());
+        assert!(fs::read_dir(&input)?.next().is_none());
+        assert!(fs::read_dir(&output)?.next().is_none());
+        let report = inspect_fast_img_retry_plan(&plan)?;
+        assert_eq!(report["kind"], "fast_img_retry_plan");
+        assert_eq!(report["previous"]["output_path"].as_str(), output.to_str());
+        assert_eq!(report["proposed_output"].as_str(), output.to_str());
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_conflict_preview_binds_saved_parent_and_preserves_stable_child_conflict() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
+        use foundation::pipeline::verification::{
+            FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+            SkippedSourceEntry, WorkingCopyMarker,
+        };
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let state = root.join("state");
+        let _state = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            state.to_str().context("synthetic state path is not UTF-8")?,
+        );
+        let input = root.join("source");
+        let output = root.join("source_optimized");
+        fs::create_dir(&input)?;
+        let mut marker = WorkingCopyMarker::new(input.clone(), output.clone(), 1);
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.processing_contract = Some(FastImgProcessingContract {
+            schema: 1,
+            tool_policy: ToolPolicy::Single,
+            fallback_policy: FallbackPolicy::Strict,
+            encoding: FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
+                archive: false,
+                allow_expert_options: false,
+            },
+        });
+        marker.failed_sources.insert("missing.jpg".into(), SkippedSourceEntry {
+            src: "a".repeat(64), reason: "synthetic historical failure".into(),
+        });
+        foundation::pipeline::verification::write_marker_atomic(&marker)?;
+        let parent = foundation::fast_img_store::inspect_failed_retry_parent(&output)?;
+        let child = parent.child_working_copy();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "fast-img", "--plan-json"])?;
+        args.inputs = vec![input.clone()];
+        let report = inspect_fast_img_retry_plan(&args)?;
+        assert_eq!(report["previous"]["output_path"].as_str(), output.to_str());
+        assert_eq!(report["previous"]["recorded_failed_count"], 1);
+        assert_eq!(report["failed_only"]["state"], "available");
+        assert!(!child.exists());
+        fs::write(child, b"preserve this unmanaged child path")?;
+        fs::remove_dir(&input)?;
+        args.retry_failed = true;
+        args.retry_failed_parent = Some(output.clone());
+        let report = inspect_fast_img_retry_plan(&args)?;
+        assert_eq!(report["decision"], "failed_only");
+        assert_eq!(report["proposed_output"].as_str(), child.to_str());
+        assert_eq!(report["failed_only"]["state"], "conflict");
+        assert_eq!(fs::read(child)?, b"preserve this unmanaged child path");
+        assert_eq!(foundation::fast_img_store::read_marker(&output)?, marker);
         Ok(())
     }
 
@@ -7342,6 +7803,7 @@ mod tests {
             force: false,
             dry_run: true,
             plan_json: false,
+            migrate_fast_img_state: false,
             resume: false,
             no_resume: false,
             ultimate: false,
@@ -7463,6 +7925,7 @@ mod tests {
                 force: false,
                 dry_run: true,
                 plan_json: false,
+                migrate_fast_img_state: false,
                 resume: false,
                 no_resume: false,
                 ultimate: false,
@@ -7525,6 +7988,7 @@ mod tests {
             force: false,
             dry_run: true,
             plan_json: false,
+            migrate_fast_img_state: false,
             resume: false,
             no_resume: false,
             ultimate: false,
@@ -7609,6 +8073,7 @@ mod tests {
                 force: false,
                 dry_run: true,
                 plan_json: false,
+                migrate_fast_img_state: false,
                 resume: false,
                 no_resume: false,
                 ultimate: false,

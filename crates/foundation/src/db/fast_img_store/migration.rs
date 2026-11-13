@@ -286,10 +286,7 @@ fn local_candidates(source: &Path, requested: Option<&Path>) -> Result<Vec<PathB
 }
 
 fn migration_required(path: &Path) -> anyhow::Error {
-    anyhow::anyhow!(
-        "MFB_STATE_MIGRATION_REQUIRED: legacy checkpoint {} requires the explicit Fast IMG state migration; no JSON was used as runtime proof",
-        path.display()
-    )
+    super::StateMigrationRequired(path.to_owned()).into()
 }
 
 fn reject_pending(source: Option<&str>, wc: Option<&str>) -> Result<()> {

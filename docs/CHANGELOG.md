@@ -9731,9 +9731,9 @@ Format Boost.app` shell by removing the redundant confirmation dialog
     metadata validation into `check_all.py`. The auditor now strictly
     enforces synchronization between `Cargo.toml` versions and macOS
     `Info.plist` bundle versions to ensure distribution consistency.
-  - **Environment-Level Isolation (Ghost Mode)**: Persistent redirection of all
-    transient IO to `~/.modern_format_boost/tmp/` to ensure absolute
-    zero-pollution of user media folders and static directory timestamps.
+  - **Environment-Level Isolation (Ghost Mode)**: Redirects general tool
+    scratch space to `~/.modern_format_boost/tmp/`. Atomic delivery may
+    stage a temporary file beside the final output.
   - **Automated Lifecycle Management**: Integrated `tmp/` and `locks/` purging
     into `cache_cleaner.py`.
   - **Stdin Draining**: Hardened interactive prompts against leftover input

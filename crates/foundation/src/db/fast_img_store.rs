@@ -63,7 +63,32 @@ pub struct MigrationReport {
     pub retired: usize,
 }
 
+#[derive(Debug)]
+struct StateMigrationRequired(PathBuf);
+
+impl std::fmt::Display for StateMigrationRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "MFB_STATE_MIGRATION_REQUIRED: legacy checkpoint {} requires the explicit Fast IMG state migration; no JSON was used as runtime proof",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for StateMigrationRequired {}
+
+pub fn is_state_migration_required(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|error| error.is::<StateMigrationRequired>())
+}
+
 fn as_io(error: anyhow::Error) -> io::Error {
+    let error = match error.downcast::<StateMigrationRequired>() {
+        Ok(required) => return io::Error::other(required),
+        Err(error) => error,
+    };
     let kind = error
         .downcast_ref::<io::Error>()
         .map_or(io::ErrorKind::Other, io::Error::kind);
@@ -581,6 +606,28 @@ pub fn is_reserved(working_copy: &Path) -> io::Result<bool> {
             }
             // Read and verify the complete snapshot, even if only reservation is requested.
             Ok(checked_marker(conn, &wc)?.is_some())
+        })
+    })()
+    .map_err(as_io)
+}
+
+/// Prove an exact historical reservation without following an occupied output leaf.
+/// This is for reporting only and does not validate the live directory for resume.
+pub(crate) fn has_saved_reservation(working_copy: &Path) -> io::Result<bool> {
+    (|| -> Result<bool> {
+        let parent = working_copy.parent().context("Fast IMG output has no parent")?;
+        let leaf = working_copy.file_name().context("Fast IMG output has no file name")?;
+        let locator = parent.canonicalize()?.join(leaf);
+        let locator = text(&locator)?;
+        validate_locator(locator)?;
+        let Some(conn) = open_readonly()? else {
+            return Ok(false);
+        };
+        in_snapshot(&conn, |conn| {
+            if !current_family(conn)? {
+                return Ok(false);
+            }
+            Ok(read_snapshot(conn, &key_for_canonical(locator))?.is_some())
         })
     })()
     .map_err(as_io)

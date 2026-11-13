@@ -1395,6 +1395,14 @@ that expects primary files still needs their BLAKE3 records.
 
 ## Standard Worker Preflight Admission
 
+Ghost Mode directs general temporary files to the MFB temporary directory.
+A real delivery can still stage a short-lived `.mfb-delivery-*` file beside
+its final output to publish atomically, including across filesystems. Directory
+metadata is copied from the source onto the output. Verified source cleanup can
+remove original entries and restore timestamps on surviving source directories
+when the observed changes match that cleanup. Use read-only input inspection
+to examine the selected scope without running delivery or source cleanup.
+
 Standard launcher runs submit one selected media file per IMG/VID invocation in
 both record-and-continue and fail-fast modes. They do not send the source
 directory to a worker for a second recursive media scan. Files added after the
@@ -1429,6 +1437,30 @@ identity observed at that boundary refuses the run and preserves sources.
 Existing-task decisions and explicit retries continue through saved-state
 admission.
 
+`drag_and_drop_processor --plan-json --mode fast-img -- INPUT` previews
+the saved Fast IMG task, occupied output locations and the output for a fresh
+attempt. Add `--strategy avif`, `--shortest-path`, `--retry`, `--no-resume` or
+`--retry-failed` as appropriate. A failed-only preview can be bound to an
+explicit `--retry-failed-parent`. The preview reads checkpoint and path state
+without a media worker, Photos query or execution session. Saved failure counts
+describe the previous attempt. Verified completion, reusable items and possible
+Photos duplicates stay unknown until their respective evidence is checked.
+The native confirmation passes the chosen output back to the launcher as an
+assertion. A changed destination requires a new preview, and the worker still
+checks current input, tool, configuration and delivery evidence before reuse.
+If old checkpoint records require migration, the preview reports this without
+reading them as current execution proof. The native run flow can ask to update
+those records, then repeats the preview. The state-only launcher command
+`--migrate-fast-img-state --mode fast-img -- INPUT` updates the saved records
+under the normal locks without starting a media worker.
+
+On macOS, the Spotlight content creation date uses the source Spotlight date
+when available. The EXIF fallback uses `DateTimeOriginal` with the explicit
+`OffsetTimeOriginal` from the same source file. If the EXIF offset is absent,
+the filesystem creation time supplies the fallback. Debug diagnostics identify
+which source supplied the value. The copied date alone does not establish a
+capture time or a date in the Photos library.
+
 The extra launcher traversal reads filesystem metadata only. The worker still
 performs its full content checks and independent delivery gates. The scope claim
 records the attempted handoff in invocation history. It carries no per-file
@@ -1452,7 +1484,7 @@ leases are kernel locks in the real user's state directory, independent of
 
 The debug window is labelled explicitly and uses separate MFB preferences and
 a private temporary state/log directory. It supports interface inspection,
-log viewing and the existing read-only standard input preflight. Its process
+log viewing and read-only standard and Fast IMG preflights. Its process
 and terminal entrypoints reject media processing and Photos import, and it
 cannot remove history or run cache cleanup/backups. Configuration can still be
 inspected from existing sources; debug preferences do not rewrite those files.
