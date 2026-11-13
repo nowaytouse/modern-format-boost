@@ -1396,6 +1396,23 @@ fn run_fast_img_restore_check(
         non_jpeg_outputs.len()
     ));
 
+    if !manifest_sources.is_empty() {
+        let mut records = manifest_sources.values().collect::<Vec<_>>();
+        records.sort_unstable_by(|left, right| left.source_rel.cmp(&right.source_rel));
+        report.push_str("--- Historical restoration verification ---\n");
+        for record in records {
+            let evidence = match &record.verification {
+                Some(verified) => format!(
+                    "Unix seconds {}, MFB {:?}, djxl observation {:?}",
+                    verified.verified_unix_seconds, verified.mfb_version, verified.djxl_version,
+                ),
+                None => "unknown (legacy manifest)".to_owned(),
+            };
+            report.push_str(&format!("  - {:?}: {evidence}\n", record.source_rel));
+        }
+        report.push('\n');
+    }
+
     if !retained_ineligible.is_empty() {
         report.push_str(&format!(
             "--- Safely retained JXLs without exact JPEG reconstruction ({}) ---\n",
@@ -2815,6 +2832,10 @@ source_rel_hex\toutput_rel_hex\tsource_jxl_blake3\treconstruction_jpeg_blake3\tr
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].source_blake3, "hash1");
         assert_eq!(records[0].output_blake3, "jpeg-hash");
+        let verification = records[0].verification.as_ref().unwrap();
+        assert_eq!(verification.verified_unix_seconds, 1);
+        assert_eq!(verification.mfb_version, "0.11.3");
+        assert_eq!(verification.djxl_version, "djxl 0.13.0");
         assert!(!records[0].source_deleted);
     }
 
@@ -3520,6 +3541,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.matched, 1);
         assert_eq!(stats.integrity_failures, 0);
         assert!(!stats.has_warnings);
+        assert!(report.contains("\"nested/camera.JXL\": unknown (legacy manifest)"));
     }
 
     #[test]

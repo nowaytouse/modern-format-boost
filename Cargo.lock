@@ -792,9 +792,9 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "errno"
-version = "0.3.14"
+version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
  "windows-sys",
@@ -3000,7 +3000,7 @@ checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a"
+source = "git+https://github.com/tokio-rs/tracing#8d4d4d6ceaba222a1fcf94d98f030d2970a26611"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -3010,7 +3010,7 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.5"
-source = "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a"
+source = "git+https://github.com/tokio-rs/tracing#8d4d4d6ceaba222a1fcf94d98f030d2970a26611"
 dependencies = [
  "crossbeam-channel",
  "symlink",
@@ -3022,7 +3022,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a"
+source = "git+https://github.com/tokio-rs/tracing#8d4d4d6ceaba222a1fcf94d98f030d2970a26611"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3032,7 +3032,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a"
+source = "git+https://github.com/tokio-rs/tracing#8d4d4d6ceaba222a1fcf94d98f030d2970a26611"
 dependencies = [
  "valuable",
 ]
@@ -3040,7 +3040,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a"
+source = "git+https://github.com/tokio-rs/tracing#8d4d4d6ceaba222a1fcf94d98f030d2970a26611"
 dependencies = [
  "log",
  "once_cell",
@@ -3050,7 +3050,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a"
+source = "git+https://github.com/tokio-rs/tracing#8d4d4d6ceaba222a1fcf94d98f030d2970a26611"
 dependencies = [
  "serde",
  "tracing-core",
@@ -3059,7 +3059,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing#a3d8b7fd3a8bafd1b98f9a6f48418640aab0af8a"
+source = "git+https://github.com/tokio-rs/tracing#8d4d4d6ceaba222a1fcf94d98f030d2970a26611"
 dependencies = [
  "matchers",
  "nu-ansi-term",

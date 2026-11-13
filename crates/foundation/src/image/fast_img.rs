@@ -2147,23 +2147,54 @@ pub fn reverify_media_outputs_in_library_with_quarantine(
     persisted_assets: &[LibraryAssetRecord],
     bound_library: Option<&Path>,
 ) -> Result<(LibraryHandle, PhotosQuarantineLocations)> {
-    let _photos_import_lock = acquire_photos_import_lock()?;
-    let selected = selected_photos_library(bound_library)?;
-    let report_pairs = photos_import_report_pairs_from_persisted_assets(persisted_assets)?;
-    #[cfg(target_os = "macos")]
-    let quarantine_probe = path_has_quarantine_xattr;
-    #[cfg(not(target_os = "macos"))]
-    let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
-    let (mut handle, locations) = library_handle_from_media_output_probes_with_pixel_verifier(
-        candidates,
-        &report_pairs,
-        |uuids| query_selected_photos_asset_probes(uuids, selected.as_deref()),
-        quarantine_probe,
-        selected.as_deref(),
-        crate::image::orientation::verify_orientation_pixel_diff,
-    )?;
-    handle.photos_library_path = selected;
-    Ok((handle, locations))
+    use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState, GateFileProgress};
+    let activity = GateActivity::new(GateActivityKind::PhotosCustody);
+    activity.emit("inventory", 0, 1, GateActivityState::Running, None);
+    let total = persisted_assets.len();
+    let mut verified = None;
+    let mut last_emit = std::time::Instant::now();
+    let file_progress = |processed| (total > 0).then_some(GateFileProgress { processed, total });
+    let result: Result<(LibraryHandle, PhotosQuarantineLocations)> = (|| {
+        let _uncached = crate::common_utils::UncachedVerificationScope::new()
+            .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
+        let _photos_import_lock = acquire_photos_import_lock()?;
+        let selected = selected_photos_library(bound_library)?;
+        let report_pairs = photos_import_report_pairs_from_persisted_assets(persisted_assets)?;
+        #[cfg(target_os = "macos")]
+        let quarantine_probe = path_has_quarantine_xattr;
+        #[cfg(not(target_os = "macos"))]
+        let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
+        let (mut handle, locations) = library_handle_from_media_output_probes_with_pixel_verifier(
+            candidates,
+            &report_pairs,
+            |uuids| query_selected_photos_asset_probes(uuids, selected.as_deref()),
+            quarantine_probe,
+            selected.as_deref(),
+            Some(SavedPhotosVerification {
+                assets: persisted_assets,
+                on_verified: &mut |processed| {
+                    verified = Some(processed);
+                    let now = std::time::Instant::now();
+                    if processed == 0 || now.duration_since(last_emit) >= Duration::from_millis(250) {
+                        activity.emit("original_bytes", 0, 1, GateActivityState::Running, file_progress(processed));
+                        last_emit = now;
+                    }
+                },
+            }),
+            crate::image::orientation::verify_orientation_pixel_diff,
+        )?;
+        handle.photos_library_path = selected;
+        Ok((handle, locations))
+    })();
+    let (check, completed) = if verified.is_some() { ("original_bytes", 1) } else { ("inventory", 0) };
+    // Quarantine has its own Gate 2 outcome. This event reports byte custody.
+    let state = if result.is_ok() {
+        GateActivityState::Passed
+    } else {
+        GateActivityState::Failed
+    };
+    activity.emit(check, completed, 1, state, verified.and_then(file_progress));
+    result
 }
 
 /// Build Photos import rows from the exact outputs recorded by a fast-img run.
@@ -4016,11 +4047,16 @@ where
         ));
     }
     let report_pairs = photos_import_report_pairs_from_persisted_assets(persisted_assets)?;
-    let verified = library_handle_from_media_output_probes(
+    let _uncached = crate::common_utils::UncachedVerificationScope::new()
+        .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
+    let (verified, _) = library_handle_from_media_output_probes_with_pixel_verifier(
         &candidates,
         &report_pairs,
         query_assets,
         is_quarantined,
+        None,
+        Some(SavedPhotosVerification { assets: persisted_assets, on_verified: &mut |_| {} }),
+        crate::image::orientation::verify_orientation_pixel_diff,
     )?;
     if verified.imported_assets.len() != persisted_assets.len() {
         return Err(ImgQualityError::AnalysisError(
@@ -6071,6 +6107,7 @@ fn library_handle_from_original_probes(
         query_assets,
         is_quarantined,
         None,
+        None,
         |source, _, _, _| {
             Err(ImgQualityError::AnalysisError(format!(
                 "Photos verifier BLAKE3 mismatch for Tier-2 archive original {}; pixel equivalence cannot prove metadata or auxiliary-resource custody",
@@ -6092,8 +6129,14 @@ pub fn library_handle_from_media_output_probes(
         query_assets,
         is_quarantined,
         None,
+        None,
         crate::image::orientation::verify_orientation_pixel_diff,
     ).map(|(handle, _)| handle)
+}
+
+struct SavedPhotosVerification<'a> {
+    assets: &'a [LibraryAssetRecord],
+    on_verified: &'a mut dyn FnMut(usize),
 }
 
 fn library_handle_from_media_output_probes_with_pixel_verifier(
@@ -6102,6 +6145,7 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
     mut query_assets: impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     mut is_quarantined: impl FnMut(&Path) -> Result<bool>,
     managed_generated_library: Option<&Path>,
+    mut saved: Option<SavedPhotosVerification<'_>>,
     mut verify_pixel_diff: impl FnMut(
         &Path,
         &Path,
@@ -6129,6 +6173,29 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
         }
     }
     let import_targets = fast_img_import_probe_targets(report_pairs)?;
+    let persisted_index = if let Some(verification) = &mut saved {
+        let assets = verification.assets;
+        let persisted: BTreeMap<_, _> =
+            assets.iter().map(|asset| (asset.rel_path.as_str(), asset)).collect();
+        if persisted.len() != assets.len()
+            || persisted.len() != candidates.len()
+            || import_targets.iter().any(|target| {
+                let rel = target.rel_path.as_str();
+                !candidate_index.get(rel).zip(persisted.get(rel)).is_some_and(|(candidate, asset)| {
+                    candidate.blake3 == asset.blake3
+                        && asset.photos_uuid.as_deref() == Some(target.import_identifier.as_str())
+                })
+            })
+        {
+            return Err(ImgQualityError::AnalysisError(
+                "Photos re-verification could not bind the saved UUID and output hash; sources retained".into(),
+            ));
+        }
+        (verification.on_verified)(0);
+        Some(persisted)
+    } else {
+        None
+    };
     let probes_by_rel = query_uploaded_asset_probes_batch_with_retry(
         &import_targets,
         fast_img_icloud_upload_verify_attempts(),
@@ -6162,15 +6229,38 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
                 probe.path.display()
             )));
         }
-        let library_blake3 =
+        let library_blake3 = if persisted_index.is_some() {
+            let metadata = std::fs::symlink_metadata(&probe.path)?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "Photos original is not a nonempty regular file for {}; sources retained",
+                    target.rel_path
+                )));
+            }
+            crate::batch::DiscoveredSource::from_metadata(&probe.path, &metadata)?
+                .content_blake3()
+        } else {
             crate::common_utils::calculate_blake3_hash(&probe.path).map_err(|err| {
                 ImgQualityError::AnalysisError(format!(
                     "Photos verifier BLAKE3 failed for {}: {err}",
                     probe.path.display()
                 ))
-            })?;
+            })?
+        };
         let mut final_library_blake3 = None;
-        if library_blake3 != candidate.blake3 {
+        if let Some(persisted) = &persisted_index {
+            let asset = persisted.get(target.rel_path.as_str()).ok_or_else(|| {
+                ImgQualityError::AnalysisError("Photos re-verification lost its bound receipt".into())
+            })?;
+            let expected = asset.library_blake3.as_ref().unwrap_or(&asset.blake3);
+            if &library_blake3 != expected {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "Photos original bytes changed since the recorded import for {}; sources retained",
+                    target.rel_path
+                )));
+            }
+            final_library_blake3.clone_from(&asset.library_blake3);
+        } else if library_blake3 != candidate.blake3 {
             let fmt = crate::image::format_detect::detect_true_format(&candidate.path)?;
             if let Some(tolerance) =
                 crate::image::orientation::pixel_equivalence_diff_tolerance_for_format(fmt)
@@ -6242,6 +6332,9 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
             library_blake3: final_library_blake3,
             xmp_sidecar_blake3: None,
         });
+        if let Some(verification) = &mut saved {
+            (verification.on_verified)(imported_assets.len());
+        }
     }
     if locations.affected != 0 {
         tracing::info!(
@@ -8393,6 +8486,7 @@ mod tests {
             },
             |path| Ok(path != out),
             None,
+            None,
             |source, library, fmt, tolerance| {
                 verifier_called = true;
                 assert_eq!(source, out.as_path());
@@ -8415,6 +8509,51 @@ mod tests {
             handle.imported_assets[0].photos_uuid.as_deref(),
             Some("UUID-A")
         );
+        let reverify = |saved: &[LibraryAssetRecord], verified: &mut Vec<usize>| {
+            library_handle_from_media_output_probes_with_pixel_verifier(
+                &candidates,
+                &[("a.webp".into(), "UUID-A".into())],
+                |_| {
+                    Ok(vec![FastImgLibraryAssetProbe {
+                        uuid: "UUID-A".into(),
+                        path: photos_asset.clone(),
+                        iscloudasset: false,
+                        incloud: Some(false),
+                        ismissing: false,
+                    }])
+                },
+                |_| Ok(false),
+                None,
+                Some(SavedPhotosVerification {
+                    assets: saved,
+                    on_verified: &mut |count| verified.push(count),
+                }),
+                |_, _, _, _| panic!("fresh custody cannot replace previously recorded bytes"),
+            )
+        };
+        let mut verified = Vec::new();
+        let (fresh, _) = reverify(&handle.imported_assets, &mut verified)?;
+        assert_eq!(verified, [0, 1]);
+        assert_eq!(fresh.imported_assets[0].library_blake3.as_deref(), Some(library_hash.as_str()));
+        let mut legacy = handle.imported_assets.clone();
+        legacy[0].library_blake3 = None;
+        verified.clear();
+        assert!(reverify(&legacy, &mut verified).unwrap_err().to_string().contains("original bytes changed"));
+        assert_eq!(verified, [0]);
+        std::fs::copy(&out, &photos_asset)?;
+        assert!(reverify(&handle.imported_assets, &mut Vec::new()).unwrap_err().to_string().contains("original bytes changed"));
+        assert!(reverify(&legacy, &mut Vec::new()).is_ok());
+        legacy[0].blake3 = "unbound output".into();
+        verified.clear();
+        assert!(reverify(&legacy, &mut verified).unwrap_err().to_string().contains("could not bind"));
+        assert!(verified.is_empty());
+        #[cfg(unix)]
+        {
+            legacy[0].blake3 = out_hash;
+            std::fs::remove_file(&photos_asset)?;
+            std::os::unix::fs::symlink(&out, &photos_asset)?;
+            assert!(reverify(&legacy, &mut Vec::new()).unwrap_err().to_string().contains("nonempty regular file"));
+        }
         Ok(())
     }
 

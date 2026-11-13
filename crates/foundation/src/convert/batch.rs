@@ -156,7 +156,7 @@ impl DiscoveredSource {
     }
 }
 
-/// Discovery identity retained until standard IMG task admission, not a content or delivery proof.
+/// File identity captured during discovery, before image routing or delivery.
 #[derive(Debug, Clone)]
 pub struct AdmittedImageFile {
     path: PathBuf,
@@ -164,6 +164,42 @@ pub struct AdmittedImageFile {
 }
 
 impl AdmittedImageFile {
+    /// Capture the identity from an existing observation before probing content.
+    ///
+    /// # Errors
+    /// Returns an error for non-regular files or incomplete metadata.
+    pub fn from_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<Self> {
+        Ok(Self {
+            path: path.to_path_buf(),
+            identity: CachedFileIdentity::from_metadata(metadata)?,
+        })
+    }
+
+    /// Hash the complete file while checking the identity captured before discovery.
+    ///
+    /// # Errors
+    /// Returns an error if the file changed or cannot be read consistently.
+    pub fn content_blake3(&self) -> io::Result<String> {
+        let resolved = fs::canonicalize(&self.path)?;
+        DiscoveredSource::read_content_hash(&self.path, &resolved, &self.identity)
+            .map(|hash| hash.to_hex().to_string())
+    }
+
+    /// Check the discovery identity without following a new symlink at the source.
+    ///
+    /// # Errors
+    /// Returns an error if the source changed, became a link or cannot be inspected.
+    pub fn verify_regular_file_unchanged(&self) -> io::Result<()> {
+        let metadata = fs::symlink_metadata(&self.path)?;
+        if CachedFileIdentity::from_metadata(&metadata)? != self.identity {
+            return Err(io::Error::other(format!(
+                "Source changed during preflight: {}",
+                self.path.display()
+            )));
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path

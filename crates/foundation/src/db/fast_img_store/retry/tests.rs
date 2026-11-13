@@ -3,7 +3,7 @@ use super::*;
 use crate::batch::DiscoveredSource;
 use crate::pipeline::verification::{
     Blake3Entry, FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
-    SkippedSourceEntry,
+    LibraryAssetRecord, SkippedSourceEntry,
 };
 
 fn fixture(root: &Path) -> Result<(WorkingCopyMarker, FailedRetryParent, FailedRetryAdmission)> {
@@ -386,6 +386,93 @@ fn failed_retry_delivery_request_is_immutable_and_first_photos_binding_is_allowe
     }
     assert_eq!(read_marker(&original.working_copy)?, original);
     assert_eq!(read_marker(&child.working_copy)?, child);
+    Ok(())
+}
+
+#[test]
+fn failed_retry_photos_receipts_bind_exact_per_file_custody() -> Result<()> {
+    if crate::common_utils::isolated_test_process() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let _env = crate::common_utils::EnvGuard::set(
+        crate::constants::ENV_MFB_HOME_ROOT,
+        root.path().join("state").to_str().unwrap(),
+    );
+    let (_, parent, admission) = fixture(root.path())?;
+    let request = FailedRetryDeliveryIntent::Photos {
+        library_path: Some(root.path().canonicalize()?.join("Synthetic.photoslibrary")),
+        naming_policy: "[null,null,true]".into(),
+    };
+    let mut child =
+        create_or_resume_failed_retry(&parent, std::slice::from_ref(&admission), &request, None)?;
+    child.stage = FastImgStageName::Importing;
+    let output_rel = "failed.JXL";
+    let output_hash = blake3::hash(b"synthetic encoded output").to_hex().to_string();
+    let wrong_hash = blake3::hash(b"different synthetic bytes").to_hex().to_string();
+    let mut original = LibraryAssetRecord {
+        rel_path: admission.source_rel.clone(),
+        blake3: wrong_hash.clone(),
+        photos_uuid: Some("synthetic-original-uuid".into()),
+        ..LibraryAssetRecord::default()
+    };
+    let mut wrong_original = child.clone();
+    wrong_original.tier2_imported_assets.push(original.clone());
+    let error = write_marker(&wrong_original).expect_err("original receipt has different bytes");
+    assert!(error.to_string().contains("admitted source bytes"), "{error}");
+    original.blake3.clone_from(&admission.admitted_source_blake3);
+    let mut valid_original = child.clone();
+    valid_original.tier2_imported_assets.push(original.clone());
+    write_marker(&valid_original)?;
+    assert_eq!(read_marker(&child.working_copy)?, valid_original);
+
+    child.blake3_log.insert(
+        admission.source_rel.clone(),
+        Blake3Entry {
+            src: admission.admitted_source_blake3,
+            out: output_hash.clone(),
+            out_rel: Some(output_rel.into()),
+            library_asset: Some(output_hash.clone()),
+        },
+    );
+    child.photos_imported_assets.push(LibraryAssetRecord {
+        rel_path: output_rel.into(),
+        blake3: output_hash,
+        photos_uuid: Some("synthetic-output-uuid".into()),
+        ..LibraryAssetRecord::default()
+    });
+    let mut conflicting_original = child.clone();
+    conflicting_original.tier2_imported_assets.push(original);
+    let error = write_marker(&conflicting_original).expect_err("source has two delivery outcomes");
+    assert!(error.to_string().contains("both a converted output"), "{error}");
+    write_marker(&child)?;
+    let mut no_uuid = child.clone();
+    no_uuid.photos_imported_assets[0].photos_uuid = None;
+    let error = write_marker(&no_uuid).expect_err("output receipt has no UUID");
+    assert!(error.to_string().contains("has no Photos UUID"), "{error}");
+    let mut wrong_output = child.clone();
+    wrong_output.photos_imported_assets[0].blake3.clone_from(&wrong_hash);
+    let error = write_marker(&wrong_output).expect_err("output receipt has different bytes");
+    assert!(error.to_string().contains("recorded output bytes"), "{error}");
+    assert_eq!(read_marker(&child.working_copy)?, child);
+
+    let conn = open_store_connection()?;
+    let key = key_for_canonical(text(&child.working_copy)?);
+    let digest = super::super::snapshot_digest(
+        text(&child.working_copy)?,
+        text(&child.src_dir)?,
+        &wrong_output,
+    )?;
+    conn.execute(
+        "UPDATE fast_img_photos_receipts SET blake3=?2 WHERE task_key=?1 AND receipt_kind='primary'",
+        params![key, wrong_hash],
+    )?;
+    conn.execute(
+        "UPDATE fast_img_tasks SET snapshot_blake3=?2 WHERE task_key=?1",
+        params![key, digest.as_bytes().as_slice()],
+    )?;
+    let error = read_marker(&child.working_copy).expect_err("cold read accepted wrong output bytes");
+    assert!(error.to_string().contains("recorded output bytes"), "{error}");
     Ok(())
 }
 

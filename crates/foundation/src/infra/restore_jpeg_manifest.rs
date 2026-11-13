@@ -12,6 +12,13 @@ const HEADER: &str = "# MFB_RESTORE_JPEG_MANIFEST_V3\nsource_rel_hex\toutput_rel
 const DELETED: &str = "# MFB_RESTORE_JPEG_DELETED\t";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreJpegVerificationRecord {
+    pub verified_unix_seconds: u64,
+    pub mfb_version: String,
+    pub djxl_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreJpegManifestRecord {
     pub source_rel: String,
     pub output_rel: String,
@@ -19,6 +26,8 @@ pub struct RestoreJpegManifestRecord {
     pub output_blake3: String,
     pub xmp_rel: Option<String>,
     pub xmp_blake3: Option<String>,
+    /// Historical version observations, absent in older manifests.
+    pub verification: Option<RestoreJpegVerificationRecord>,
     pub source_deleted: bool,
 }
 
@@ -77,7 +86,7 @@ fn parse_record(line: &str) -> anyhow::Result<RestoreJpegManifestRecord> {
         7 => (parts[3], parts[3], parts[4], parts[5], parts[6]),
         _ => (parts[3], parts[3], "", "", parts[4]),
     };
-    if parts.len() >= 11 {
+    let verification = if parts.len() >= 11 {
         ensure!(
             reconstruction == output,
             "reconstruction and restored JPEG hashes differ"
@@ -95,7 +104,14 @@ fn parse_record(line: &str) -> anyhow::Result<RestoreJpegManifestRecord> {
         if parts.len() == 12 && !parts[10].is_empty() {
             decode_hex(parts[10]).context("invalid Photos UUID hex/UTF-8")?;
         }
-    }
+        Some(RestoreJpegVerificationRecord {
+            verified_unix_seconds,
+            mfb_version: parts[8].to_owned(),
+            djxl_version: version,
+        })
+    } else {
+        None
+    };
     let source_rel = decode_hex(parts[0]).context("invalid source_rel hex/UTF-8 field")?;
     let output_rel = decode_hex(parts[1]).context("invalid output_rel hex/UTF-8 field")?;
     let (xmp_rel, xmp_blake3) = if xmp.is_empty() && xmp_hash.is_empty() {
@@ -132,6 +148,7 @@ fn parse_record(line: &str) -> anyhow::Result<RestoreJpegManifestRecord> {
         output_blake3: output.to_string(),
         xmp_rel,
         xmp_blake3,
+        verification,
         source_deleted,
     })
 }
@@ -269,6 +286,9 @@ pub struct RestoreJpegManifestWriter {
     file: File,
     path: PathBuf,
     length: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    changed: (i64, i64),
     records: HashMap<String, RestoreJpegManifestRecord>,
     outputs: HashMap<String, String>,
     poisoned: bool,
@@ -280,6 +300,9 @@ impl RestoreJpegManifestWriter {
     /// # Errors
     /// Rejects occupied, malformed, replaced, or non-regular manifests.
     pub fn open(root: &Path) -> anyhow::Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
         std::fs::create_dir_all(root)?;
         let path = root.join(MANIFEST_NAME);
         let mut options = OpenOptions::new();
@@ -306,6 +329,7 @@ impl RestoreJpegManifestWriter {
         file.try_lock().map_err(|error| {
             anyhow::anyhow!("restore manifest is occupied or cannot be locked: {error}")
         })?;
+        let before_read = file.metadata()?;
         let mut content = String::new();
         file.read_to_string(&mut content)?;
         ensure!(
@@ -321,11 +345,13 @@ impl RestoreJpegManifestWriter {
             "restore manifest is invalid: {}",
             errors.join("; ")
         );
-        let length = file.metadata()?.len();
         let mut writer = Self {
             file,
             path,
-            length,
+            length: before_read.len(),
+            modified: before_read.modified()?,
+            #[cfg(unix)]
+            changed: (before_read.ctime(), before_read.ctime_nsec()),
             outputs: records
                 .iter()
                 .map(|record| (record.output_rel.clone(), record.source_rel.clone()))
@@ -362,12 +388,23 @@ impl RestoreJpegManifestWriter {
             opened.len() == self.length && current.len() == self.length,
             "restore manifest length changed outside the owning writer"
         );
+        // shortcut: timestamps detect concurrent edits without rehashing the growing
+        // manifest, use content identities if supporting noncooperating writers.
+        ensure!(
+            opened.modified()? == self.modified && current.modified()? == self.modified,
+            "restore manifest was modified outside the owning writer"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
             ensure!(
                 opened.dev() == current.dev() && opened.ino() == current.ino(),
                 "restore manifest path was replaced"
+            );
+            ensure!(
+                (opened.ctime(), opened.ctime_nsec()) == self.changed
+                    && (current.ctime(), current.ctime_nsec()) == self.changed,
+                "restore manifest was changed outside the owning writer"
             );
         }
         Ok(())
@@ -382,6 +419,9 @@ impl RestoreJpegManifestWriter {
     }
 
     fn append(&mut self, content: &str) -> anyhow::Result<()> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
         let result = (|| {
             self.check_owned()?;
             self.file.seek(SeekFrom::End(0))?;
@@ -391,6 +431,12 @@ impl RestoreJpegManifestWriter {
                 .length
                 .checked_add(u64::try_from(content.len())?)
                 .context("manifest length overflow")?;
+            let metadata = self.file.metadata()?;
+            self.modified = metadata.modified()?;
+            #[cfg(unix)]
+            {
+                self.changed = (metadata.ctime(), metadata.ctime_nsec());
+            }
             self.ensure_owned()
         })();
         if result.is_err() {
@@ -417,12 +463,14 @@ impl RestoreJpegManifestWriter {
             "invalid restoration proof: {}",
             errors.join("; ")
         );
-        let record = records.remove(0);
+        let mut record = records.remove(0);
         ensure!(
             !record.source_deleted,
             "new restoration proof cannot claim source deletion"
         );
         if let Some(existing) = self.records.get(&record.source_rel) {
+            // Reuse the durable proof without relabeling when and how it was obtained.
+            record.verification.clone_from(&existing.verification);
             ensure!(
                 existing == &record,
                 "existing restoration proof conflicts with current source or output"
@@ -492,9 +540,12 @@ mod tests {
         }
         let before = std::fs::read(&path)?;
         let mut writer = RestoreJpegManifestWriter::open(root.path())?;
-        writer.record_proof(&proof("b.jxl", "b.jpg"))?;
+        let second = proof("b.jxl", "b.jpg");
+        writer.record_proof(&second)?;
         let length = writer.length;
-        writer.record_proof(&proof("b.jxl", "b.jpg"))?;
+        writer.record_proof(
+            &second.replace("\t1\t0.12.0\t646a786c\t", "\t2\t0.13.0\t646a786c32\t"),
+        )?;
         assert_eq!(writer.length, length);
         assert!(std::fs::read(&path)?.starts_with(&before));
         let (records, errors) = load_manifest(root.path());
@@ -502,6 +553,14 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert!(records[0].source_deleted);
         assert!(!records[1].source_deleted);
+        assert_eq!(
+            records[1].verification,
+            Some(RestoreJpegVerificationRecord {
+                verified_unix_seconds: 1,
+                mfb_version: "0.12.0".into(),
+                djxl_version: "djxl".into(),
+            })
+        );
         assert!(writer.record_proof(&proof("b.jxl", "changed.jpg")).is_err());
         assert!(writer.record_proof(&proof("c.jxl", "b.jpg")).is_err());
         Ok(())
@@ -548,6 +607,27 @@ mod tests {
         assert!(writer.record_deleted("a.jxl").is_err());
         assert!(writer.poisoned);
         assert!(writer.record_proof(&proof("b.jxl", "b.jpg")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn restoration_manifest_rejects_same_length_external_change() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join(MANIFEST_NAME);
+        let mut writer = RestoreJpegManifestWriter::open(root.path())?;
+        writer.record_proof(&proof("a.jxl", "a.jpg"))?;
+        let before = std::fs::read_to_string(&path)?;
+        let changed = before.replace("source-hash", "edited-hash");
+        assert_ne!(before, changed);
+        assert_eq!(before.len(), changed.len());
+        std::fs::write(&path, &changed)?;
+        File::open(&path)?.set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1)),
+        )?;
+        assert!(writer.record_deleted("a.jxl").is_err());
+        assert!(writer.poisoned);
+        assert_eq!(std::fs::read_to_string(path)?, changed);
         Ok(())
     }
 

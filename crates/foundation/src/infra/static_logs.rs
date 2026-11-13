@@ -625,6 +625,17 @@ pub fn emit_mfb_audit(
     reason: &str,
     ignore_class: Option<&str>,
 ) {
+    emit_mfb_audit_with_failure_phase(outcome, pipeline, path, reason, ignore_class, None);
+}
+
+fn emit_mfb_audit_with_failure_phase(
+    outcome: &str,
+    pipeline: &str,
+    path: Option<&std::path::Path>,
+    reason: &str,
+    ignore_class: Option<&str>,
+    failure_phase: Option<FileFailurePhase>,
+) {
     let ignore_class = ignore_class.filter(|c| !c.is_empty());
     if let Some(p) = path {
         if let Some(ic) = ignore_class {
@@ -674,13 +685,23 @@ pub fn emit_mfb_audit(
         && matches!(pipeline, "img" | "vid")
         && let Some(path) = path
     {
-        emit_file_failure_marker(pipeline, path, reason, ignore_class);
+        emit_file_failure_marker(pipeline, path, reason, ignore_class, failure_phase);
     }
 }
 
 // The complete control line, including its prefix and terminator, fits the GUI transport chunk.
 const FILE_FAILURE_MARKER_MAX_BYTES: usize = 64 * 1024 - "MFB_FILE_FAILURE=".len() - 1;
 const FILE_FAILURE_ID_MAX_BYTES: usize = 256;
+
+/// The worker phase that recorded a file failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileFailurePhase {
+    Admission,
+    EncodeOrPublish,
+    LocalVerification,
+    PhotosImport,
+}
 
 /// Machine-readable file failure written by a child process to its captured output.
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -696,6 +717,8 @@ pub struct FileFailureMarker {
     pub invocation_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_phase: Option<FileFailurePhase>,
 }
 
 impl FileFailureMarker {
@@ -744,6 +767,7 @@ fn file_failure_marker(
     path: &std::path::Path,
     message: &str,
     reason_code: Option<&str>,
+    failure_phase: Option<FileFailurePhase>,
     run_id: &str,
     invocation_id: &str,
 ) -> anyhow::Result<String> {
@@ -770,6 +794,7 @@ fn file_failure_marker(
         run_id: run_id.to_owned(),
         invocation_id: invocation_id.to_owned(),
         reason_code: reason_code.map(str::to_owned),
+        failure_phase,
     };
     marker.validate()?;
     serde_json::to_string(&marker).context("marker JSON serialization failed")
@@ -780,6 +805,7 @@ fn emit_file_failure_marker(
     path: &std::path::Path,
     message: &str,
     reason_code: Option<&str>,
+    failure_phase: Option<FileFailurePhase>,
 ) {
     let run_id = std::env::var_os("MFB_RUN_ID");
     let invocation_id = std::env::var_os("MFB_INVOCATION_ID");
@@ -800,7 +826,7 @@ fn emit_file_failure_marker(
         );
         return;
     };
-    match file_failure_marker(pipeline, path, message, reason_code, run_id, invocation_id) {
+    match file_failure_marker(pipeline, path, message, reason_code, failure_phase, run_id, invocation_id) {
         Ok(payload) => {
             let mut output = std::io::stdout().lock();
             if let Err(error) =
@@ -842,6 +868,17 @@ pub fn log_file_outcome_audit_with_class(
     ignore_class: Option<&str>,
 ) {
     emit_mfb_audit(outcome, pipeline, Some(path), reason, ignore_class);
+}
+
+/// Record a file failure at a phase known to its caller.
+pub fn log_file_failure_at_phase(
+    pipeline: &'static str,
+    path: &std::path::Path,
+    reason: &str,
+    reason_code: Option<&str>,
+    phase: FileFailurePhase,
+) {
+    emit_mfb_audit_with_failure_phase("failed", pipeline, Some(path), reason, reason_code, Some(phase));
 }
 
 /// Batch pipeline start marker (`mfb::audit` / session logs).
@@ -2294,6 +2331,7 @@ mod ui_contract_tests {
             path,
             "decoder rejected source\nsecond line",
             Some("img_decode_rejected"),
+            Some(super::FileFailurePhase::Admission),
             "run_123",
             "invocation-456",
         )
@@ -2303,6 +2341,8 @@ mod ui_contract_tests {
         assert_eq!(marker.source_path, "input/媒体\nfailed.jpg");
         assert_eq!(marker.message, "decoder rejected source\nsecond line");
         assert_eq!(marker.reason_code.as_deref(), Some("img_decode_rejected"));
+        assert_eq!(marker.failure_phase, Some(super::FileFailurePhase::Admission));
+        assert!(payload.contains(r#""failure_phase":"admission""#));
     }
 
     #[test]
@@ -2316,6 +2356,7 @@ mod ui_contract_tests {
             run_id: "run".to_owned(),
             invocation_id: "invocation".to_owned(),
             reason_code: None,
+            failure_phase: Some(super::FileFailurePhase::EncodeOrPublish),
         };
         let overhead = serde_json::to_vec(&marker).unwrap().len();
         marker.message = "x".repeat(super::FILE_FAILURE_MARKER_MAX_BYTES - overhead);
@@ -2335,12 +2376,13 @@ mod ui_contract_tests {
     #[test]
     fn file_failure_marker_rejects_invalid_identity_pipeline_and_size() {
         let path = std::path::Path::new("source.jpg");
-        assert!(file_failure_marker("img", path, "failure", None, "", "invocation").is_err());
-        assert!(file_failure_marker("cmd", path, "failure", None, "run", "invocation").is_err());
+        assert!(file_failure_marker("img", path, "failure", None, None, "", "invocation").is_err());
+        assert!(file_failure_marker("cmd", path, "failure", None, None, "run", "invocation").is_err());
         let unresolved = file_failure_marker(
             "img",
             std::path::Path::new(""),
             "failure",
+            None,
             None,
             "run",
             "invocation",
@@ -2352,6 +2394,7 @@ mod ui_contract_tests {
                 "vid",
                 path,
                 &"x".repeat(super::FILE_FAILURE_MARKER_MAX_BYTES),
+                None,
                 None,
                 "run",
                 "invocation",
@@ -2423,6 +2466,7 @@ mod ui_contract_tests {
             marker.validate().unwrap();
             assert_eq!(marker.pipeline, pipeline);
             assert_eq!(marker.source_path, "synthetic/媒体\nfile.jpg");
+            assert_eq!(marker.failure_phase, None);
         }
         for (outcome, pipeline) in [
             ("skipped", "img"),

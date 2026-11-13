@@ -943,12 +943,12 @@ fn standard_input_plans(args: &Args) -> Result<Vec<Args>> {
         if mode_uses_standard_pipeline(&args.mode)
             && !args.in_place
             && let (Some(input), Some(output)) = (args.inputs.first(), &planned.output)
-            && fs::metadata(input)?.is_dir()
         {
             let source = fs::canonicalize(input)?;
+            let source_is_dir = fs::metadata(&source)?.is_dir();
             let resolved = resolve_planned_output(output)?;
             anyhow::ensure!(
-                !resolved.starts_with(&source) && !source.starts_with(&resolved),
+                !resolved.starts_with(&source) && (!source_is_dir || !source.starts_with(&resolved)),
                 "output overlaps an input: {} and {}",
                 output.display(),
                 source.display()
@@ -1042,17 +1042,16 @@ fn standard_input_plans(args: &Args) -> Result<Vec<Args>> {
 fn resolve_planned_output(output: &Path) -> Result<PathBuf> {
     let output = std::path::absolute(output)?;
     let existing = output_resource_check_dir(&output)?;
-    let resolved = fs::canonicalize(&existing)?.join(output.strip_prefix(&existing)?);
-    // Normalize only the nonexistent suffix; existing symlinks were resolved above.
-    let mut normalized = PathBuf::new();
-    for component in resolved.components() {
-        if component == std::path::Component::ParentDir {
-            anyhow::ensure!(normalized.pop(), "output path escapes filesystem root");
-        } else if component != std::path::Component::CurDir {
-            normalized.push(component.as_os_str());
-        }
-    }
-    Ok(normalized)
+    let suffix = output.strip_prefix(&existing)?;
+    // Collapsing a missing component can expose an unchecked symlink or file.
+    anyhow::ensure!(
+        !suffix
+            .components()
+            .any(|component| component == std::path::Component::ParentDir),
+        "output traverses a missing directory: {}",
+        output.display()
+    );
+    Ok(fs::canonicalize(&existing)?.join(suffix))
 }
 
 fn scan_standard_inputs(plans: &[Args], session: Option<&AppSession>) -> Result<Vec<ContentScan>> {
@@ -4073,7 +4072,6 @@ mod tests {
             input.clone(),
             input.join("nested"),
             temp.path().to_path_buf(),
-            input.join("absent/../nested"),
         ] {
             args.output = Some(output);
             assert!(
@@ -4089,11 +4087,57 @@ mod tests {
             std::os::unix::fs::symlink(&input, &link).unwrap();
             args.output = Some(link.join("output"));
             assert!(standard_input_plans(&args).is_err());
+            args.output = Some(temp.path().join("absent/../alias/output"));
+            assert!(
+                standard_input_plans(&args)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("output traverses a missing directory")
+            );
+            assert!(!temp.path().join("absent").exists());
+            args.output = Some(input.join("../safe"));
+            assert!(standard_input_plans(&args).is_ok());
         }
         assert_eq!(fs::read_dir(&input).unwrap().count(), 0);
         args.output = Some(temp.path().join("safe"));
         assert!(standard_input_plans(&args).is_ok());
         assert!(!temp.path().join("safe").exists());
+    }
+
+    #[test]
+    fn read_only_plan_rejects_invalid_single_file_output_before_submission() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("synthetic.jpg");
+        let image = b"\xff\xd8\xff\xe0synthetic";
+        fs::write(&input, image)?;
+        let file = temp.path().join("occupied");
+        fs::write(&file, b"synthetic")?;
+        let mut args = Args::try_parse_from(["mfb", "--plan-json", "--mode", "images"])?;
+        args.inputs = vec![input.clone()];
+        for output in [input.clone(), file.clone(), file.join("nested")] {
+            args.output = Some(output);
+            assert!(inspect_routing_plan(&args).is_err());
+        }
+        #[cfg(unix)]
+        {
+            let dangling = temp.path().join("dangling");
+            std::os::unix::fs::symlink(temp.path().join("absent"), &dangling)?;
+            args.output = Some(dangling.join("nested"));
+            assert!(inspect_routing_plan(&args).is_err());
+        }
+        let prospective = temp.path().join("new/nested");
+        for output in [temp.path().to_path_buf(), prospective.clone()] {
+            args.output = Some(output.clone());
+            let report = inspect_routing_plan(&args)?;
+            assert_eq!(report.plans[0].entries[0].action, "submit_img");
+            assert_eq!(
+                standard_input_plans(&args)?[0].output.as_ref(),
+                Some(&output)
+            );
+        }
+        assert!(!prospective.exists());
+        assert_eq!(fs::read(&input)?.as_slice(), image);
+        Ok(())
     }
 
     #[test]

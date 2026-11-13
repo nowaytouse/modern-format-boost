@@ -477,20 +477,50 @@ fn validate_child_results(
             );
         }
     }
-    for receipt in &child.photos_imported_assets {
-        ensure!(
-            child
-                .blake3_log
-                .iter()
-                .any(|(rel, entry)| values.contains_key(rel)
-                    && entry.out_rel.as_deref() == Some(receipt.rel_path.as_str())),
-            "Retry receipt has no admitted converted source"
-        );
+    if !child.photos_imported_assets.is_empty() {
+        let mut outputs = BTreeMap::new();
+        for entry in child.blake3_log.values() {
+            if let Some(relative) = entry.out_rel.as_deref() {
+                ensure!(
+                    outputs.insert(relative, entry).is_none(),
+                    "Retry converted output maps to multiple admitted sources"
+                );
+            }
+        }
+        for receipt in &child.photos_imported_assets {
+            let entry = outputs
+                .get(receipt.rel_path.as_str())
+                .context("Retry receipt has no admitted converted source")?;
+            hash_text(&receipt.blake3)?;
+            ensure!(
+                receipt.photos_uuid.as_deref().is_some_and(|uuid| !uuid.is_empty()),
+                "Retry converted receipt has no Photos UUID"
+            );
+            // Re-encoding can clear an obsolete output hash before replacing the
+            // output. Its historical receipt alone is not current custody proof.
+            ensure!(
+                (entry.out.is_empty() && entry.library_asset.is_none())
+                    || (receipt.blake3 == entry.out
+                        && entry.library_asset.as_deref() == Some(entry.out.as_str())),
+                "Retry converted receipt does not match the recorded output bytes"
+            );
+        }
     }
     for receipt in &child.tier2_imported_assets {
+        let admitted = values
+            .get(&receipt.rel_path)
+            .context("Retry original receipt escapes its admitted source set")?;
         ensure!(
-            values.contains_key(&receipt.rel_path),
-            "Retry original receipt escapes its admitted source set"
+            receipt.blake3 == admitted.admitted_source_blake3,
+            "Retry original receipt does not match the admitted source bytes"
+        );
+        ensure!(
+            receipt.photos_uuid.as_deref().is_some_and(|uuid| !uuid.is_empty()),
+            "Retry original receipt has no Photos UUID"
+        );
+        ensure!(
+            !child.blake3_log.contains_key(&receipt.rel_path),
+            "Retry source has both a converted output and a Photos original receipt"
         );
     }
     Ok(())

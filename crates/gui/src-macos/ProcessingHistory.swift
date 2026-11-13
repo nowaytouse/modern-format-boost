@@ -39,6 +39,15 @@ func validHistoryIdentity(_ value: String) -> Bool {
 private enum HistoryFileFailureError: Error { case invalid }
 
 struct HistoryFileFailure: Codable, Hashable {
+    enum Phase: String, Codable {
+        case admission
+        case encodeOrPublish = "encode_or_publish"
+        case localVerification = "local_verification"
+        case photosImport = "photos_import"
+
+        var label: String { localized("history.file_failure.phase.\(rawValue)") }
+    }
+
     let schema_version: Int
     let pipeline: String
     let source_path: String
@@ -47,6 +56,7 @@ struct HistoryFileFailure: Codable, Hashable {
     let run_id: String
     let invocation_id: String
     let reason_code: String?
+    var failure_phase: Phase? = nil
 
     var userReason: String {
         switch reason_code {
@@ -59,7 +69,7 @@ struct HistoryFileFailure: Codable, Hashable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.schema_version == rhs.schema_version && lhs.pipeline == rhs.pipeline
             && lhs.run_id == rhs.run_id && lhs.invocation_id == rhs.invocation_id
-            && lhs.reason_code == rhs.reason_code
+            && lhs.reason_code == rhs.reason_code && lhs.failure_phase == rhs.failure_phase
             && lhs.source_path.utf8.elementsEqual(rhs.source_path.utf8)
             && lhs.absolute_path.map { Data($0.utf8) } == rhs.absolute_path.map { Data($0.utf8) }
             && lhs.message.utf8.elementsEqual(rhs.message.utf8)
@@ -68,6 +78,7 @@ struct HistoryFileFailure: Codable, Hashable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(schema_version); hasher.combine(pipeline)
         hasher.combine(run_id); hasher.combine(invocation_id); hasher.combine(reason_code)
+        hasher.combine(failure_phase)
         hasher.combine(Data(source_path.utf8)); hasher.combine(absolute_path.map { Data($0.utf8) })
         hasher.combine(Data(message.utf8))
     }
@@ -79,7 +90,7 @@ struct HistoryFileFailure: Codable, Hashable {
         let data = Data(line.dropFirst(prefix.count).utf8)
         guard data.count <= 64 * 1024 - prefix.utf8.count - 1 else { throw HistoryFileFailureError.invalid }
         guard let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(fields.keys).isSubset(of: ["schema_version", "pipeline", "source_path", "absolute_path", "message", "run_id", "invocation_id", "reason_code"])
+              Set(fields.keys).isSubset(of: ["schema_version", "pipeline", "source_path", "absolute_path", "message", "run_id", "invocation_id", "reason_code", "failure_phase"])
         else { throw HistoryFileFailureError.invalid }
         let value = try JSONDecoder().decode(Self.self, from: data)
         guard value.schema_version == 1, ["img", "vid"].contains(value.pipeline),
@@ -3078,7 +3089,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             ([path, absolutePath ?? "", reason] + observations.flatMap { observation in
                 let failure = observation.failure
                 return [failure.run_id, failure.invocation_id, failure.pipeline, failure.source_path,
-                        failure.absolute_path ?? "", failure.message, failure.reason_code ?? "", failure.userReason]
+                        failure.absolute_path ?? "", failure.message, failure.reason_code ?? "", failure.userReason,
+                        failure.failure_phase?.label ?? ""]
             }).joined(separator: "\n")
         }
     }
@@ -4493,7 +4505,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             var repetitions: [HistoryFileFailure: Int] = [:]
             for failure in failures { repetitions[failure, default: 0] += 1 }
             let observations = repetitions.map { FailureObservation(failure: $0.key, repetitions: $0.value) }
-                .sorted { ($0.failure.message, $0.failure.reason_code ?? "") < ($1.failure.message, $1.failure.reason_code ?? "") }
+                .sorted {
+                    ($0.failure.message, $0.failure.reason_code ?? "", $0.failure.failure_phase?.rawValue ?? "")
+                    < ($1.failure.message, $1.failure.reason_code ?? "", $1.failure.failure_phase?.rawValue ?? "")
+                }
             let reason = observations.count == 1 ? observations[0].failure.userReason
                 : localized("history.file_failure.reason.multiple", observations.count)
             return FailureDisplayRow(path: key.sourcePath, absolutePath: key.absolutePath,
@@ -4692,7 +4707,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         lines.append("")
         for observation in row.observations {
             let json = try jsonEncoder.encode(observation.failure)
-            lines += [observation.failure.userReason, observation.failure.message,
+            let phase = observation.failure.failure_phase?.label ?? localized("result.unknown")
+            lines += [localized("history.file_failure.detail.phase", phase),
+                      observation.failure.userReason, observation.failure.message,
                       localized("history.file_failure.detail.observations", observation.repetitions),
                       localized("history.file_failure.detail.json"), String(decoding: json, as: UTF8.self), ""]
         }
@@ -4841,6 +4858,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         let absolutePath: String?
         let message: String
         let code: String?
+        let phase: HistoryFileFailure.Phase?
 
         init(_ failure: HistoryFileFailure) {
             pipeline = failure.pipeline
@@ -4848,8 +4866,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             absolutePath = failure.absolute_path
             message = failure.message
             code = failure.reason_code
+            phase = failure.failure_phase
         }
-        var ordering: [String] { [path, absolutePath ?? "", pipeline, message, code ?? ""] }
+        var ordering: [String] { [path, absolutePath ?? "", pipeline, message, code ?? "", phase?.rawValue ?? ""] }
     }
 
     fileprivate static func renderFailureComparison(_ results: [HistoryStore.BatchIssues]) throws -> String {
@@ -4874,6 +4893,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             for key in group.sorted(by: { $0.ordering.lexicographicallyPrecedes($1.ordering) }) {
                 lines += ["", localized("history.media.\(key.pipeline)") + ": " + key.path,
                           localized("history.compare.failures.observations", observations[0][key] ?? 0, observations[1][key] ?? 0),
+                          localized("history.file_failure.detail.phase", key.phase?.label ?? localized("result.unknown")),
                           key.message]
                 if let absolute = key.absolutePath, absolute != key.path { lines.append(absolute) }
                 if let code = key.code { lines.append(code) }
@@ -5163,6 +5183,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         let fullDetails = try failureDetailText(for: failureDisplayRows[0])
         guard fullDetails.contains("synthetic decoder failed\nno guessed root cause"),
               fullDetails.contains("synthetic metadata failure"), fullDetails.contains("decoder_failed"),
+              fullDetails.contains(localized("history.file_failure.detail.phase", HistoryFileFailure.Phase.encodeOrPublish.label)),
+              fullDetails.contains(localized("history.file_failure.detail.phase", localized("result.unknown"))),
               fullDetails.contains(localized("history.file_failure.worker.title")),
               fullDetails.contains(issues.fileFailures[0].source_path),
               fullDetails.contains(issues.fileFailures[0].invocation_id) else {
@@ -7983,10 +8005,12 @@ func runProcessingHistorySelfTests() throws {
                 "A reused run identity silently opened another batch")
     var markerValue: [String: Any] = ["schema_version": 1, "pipeline": "img", "source_path": exactPath,
         "absolute_path": "/synthetic/absent/映像 🚀\nfile's.jpg", "message": "synthetic decoder failed\nno guessed root cause",
-        "reason_code": "decoder_failed", "run_id": "run-synthetic-1", "invocation_id": "synthetic-call-1"]
+        "reason_code": "decoder_failed", "run_id": "run-synthetic-1", "invocation_id": "synthetic-call-1",
+        "failure_phase": "encode_or_publish"]
     let markerLine = try payload("MFB_FILE_FAILURE", markerValue)
     markerValue["message"] = "synthetic metadata failure"
     markerValue["reason_code"] = nil
+    markerValue["failure_phase"] = nil
     let secondMarkerLine = try payload("MFB_FILE_FAILURE", markerValue)
     let identityEntry = identityAudit.entries[0]
     try require(try HistoryFileFailure.parse(markerLine, context: identityEntry.context!, invocations: identityEntry.invocations, pipeline: "IMG")?.source_path == exactPath,
@@ -7994,6 +8018,7 @@ func runProcessingHistorySelfTests() throws {
     for invalidMarker in [markerValue.merging(["run_id": "other-run"]) { _, new in new },
                           markerValue.merging(["invocation_id": "unknown-invocation"]) { _, new in new },
                           markerValue.merging(["pipeline": "vid"]) { _, new in new },
+                          markerValue.merging(["failure_phase": "guessed"]) { _, new in new },
                           markerValue.merging(["fingerprint": "guessed"]) { _, new in new },
                           markerValue.merging(["message": String(repeating: "x", count: 64 * 1024)]) { _, new in new }] {
         try refuseExport({ _ = try HistoryFileFailure.parse(payload("MFB_FILE_FAILURE", invalidMarker), context: identityEntry.context!, invocations: identityEntry.invocations, pipeline: "IMG") },
@@ -8027,21 +8052,28 @@ func runProcessingHistorySelfTests() throws {
     otherMarker["invocation_id"] = "synthetic-call-2"
     otherMarker["message"] = "synthetic decoder failed\nno guessed root cause"
     otherMarker["reason_code"] = "decoder_failed"
+    otherMarker["failure_phase"] = "encode_or_publish"
     let sharedFailure = try HistoryFileFailure.decode(payload("MFB_FILE_FAILURE", otherMarker))!
+    otherMarker["failure_phase"] = "local_verification"
+    let changedPhase = try HistoryFileFailure.decode(payload("MFB_FILE_FAILURE", otherMarker))!
     otherMarker["message"] = "synthetic metadata failure"
     otherMarker["reason_code"] = "different-code"
     let changedCode = try HistoryFileFailure.decode(payload("MFB_FILE_FAILURE", otherMarker))!
     otherMarker["reason_code"] = nil
+    otherMarker["failure_phase"] = nil
     otherMarker["absolute_path"] = "/other-root/file.jpg"
     let changedAbsolute = try HistoryFileFailure.decode(payload("MFB_FILE_FAILURE", otherMarker))!
     let comparisonIssues = HistoryStore.BatchIssues(groups: [], occurrences: 0,
-        fileFailures: [sharedFailure, sharedFailure, changedCode, changedAbsolute], scannedRows: 4, start: 0, upper: 4,
+        fileFailures: [sharedFailure, sharedFailure, changedPhase, changedCode, changedAbsolute], scannedRows: 5, start: 0, upper: 5,
         endSource: "snapshot_only")
     let failureComparison = try ProcessingHistoryPanel.renderFailureComparison([reasonIssues, comparisonIssues])
-    try require(failureComparison.contains(localized("history.compare.failures.totals", 1, 1, 2))
+    try require(sharedFailure.failure_phase == .encodeOrPublish && changedPhase.failure_phase == .localVerification
+                && sharedFailure.failure_phase != changedPhase.failure_phase && reasonIssues.fileFailures.contains(where: { $0.failure_phase == nil })
+                && failureComparison.contains(localized("history.compare.failures.totals", 1, 1, 3))
                 && failureComparison.contains(localized("history.compare.failures.observations", 2, 2))
+                && failureComparison.contains(localized("history.file_failure.detail.phase", HistoryFileFailure.Phase.localVerification.label))
                 && failureComparison.contains(exactPath) && failureComparison.contains(localized("history.compare.failures.note"))
-                && failureComparison.contains(localized("history.batch_issues.scope_snapshot", Int64(4), Int64(0), Int64(4)))
+                && failureComparison.contains(localized("history.batch_issues.scope_snapshot", Int64(5), Int64(0), Int64(5)))
                 && reasonEntry.summary?.img.failed == 1,
                 "Reason comparison merged codes/absolute paths, compared run IDs, or invented failed-file counts")
     let oversizedReasons = (0...1_000).map { index in

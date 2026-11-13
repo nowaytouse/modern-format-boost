@@ -16,6 +16,7 @@ use foundation::analysis_cache::AnalysisCache;
 use foundation::batch::history_source_set::{HISTORY_SOURCE_SET_PREFIX, HistorySourceSet};
 use foundation::common_utils::calculate_blake3_hash;
 use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
+use foundation::infra::static_logs::{FileFailurePhase, log_file_failure_at_phase};
 use foundation::fast_img::{
     FinalJxlVerificationTimings, IntegrityResult, PhotosImportCandidate,
     apply_library_assets_to_marker, apply_tier2_library_assets_to_marker,
@@ -4788,6 +4789,22 @@ fn scan_fast_img_sources(
     src_dir: &Path,
     strategy: &str,
 ) -> anyhow::Result<FastImgSourceInventory> {
+    scan_fast_img_sources_with(
+        candidates,
+        src_dir,
+        strategy,
+        |paths| Ok(foundation::image::format_identity::resolve_format_identities(paths)?),
+    )
+}
+
+fn scan_fast_img_sources_with(
+    candidates: Vec<PathBuf>,
+    src_dir: &Path,
+    strategy: &str,
+    resolve_formats: impl FnOnce(&[PathBuf]) -> anyhow::Result<
+        Vec<foundation::image::format_identity::FormatIdentity>,
+    >,
+) -> anyhow::Result<FastImgSourceInventory> {
     if strategy == "avif" {
         println!(
             "[FASTIMG ] enumerating static image containers in {} (no quality scan)",
@@ -4804,9 +4821,19 @@ fn scan_fast_img_sources(
     let candidate_count = candidates.len();
     let mut scan_failures = BTreeMap::new();
     let mut ignored_candidates = Vec::new();
+    let observed = candidates
+        .iter()
+        .map(|path| {
+            foundation::batch::AdmittedImageFile::from_metadata(path, &std::fs::symlink_metadata(path)?)
+                .with_context(|| format!("capture fast-img discovery identity for {}", path.display()))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let format_identities =
-        foundation::image::format_identity::resolve_format_identities(&candidates)
-            .context("fast-img batched content identity scan failed")?;
+        resolve_formats(&candidates).context("fast-img batched content identity scan failed")?;
+    anyhow::ensure!(
+        format_identities.len() == observed.len(),
+        "fast-img format observation count does not match inventory"
+    );
     let mut reconstructible_jxl = BTreeSet::new();
     if strategy == "jxl" {
         use foundation::image_detection::{CompressionType, DetectedFormat, detect_compression};
@@ -4857,11 +4884,12 @@ fn scan_fast_img_sources(
         foundation::progress::FileProgressStage::FastImgSourcePreparation,
     );
     let mut live_photos = foundation::live_photo::LivePhotoScan::default();
-    for (index, (path, identity)) in candidates.into_iter().zip(format_identities).enumerate() {
+    for (index, (source, identity)) in observed.iter().zip(format_identities).enumerate() {
         foundation::batch_control::checkpoint()?;
         preparation.set(index as u64);
-        if live_photos.is_live(&path)? {
-            ignored_candidates.push((path, fast_img_ignored::IgnoredReason::LivePhotoPairMember));
+        let path = source.path();
+        if live_photos.is_live(path)? {
+            ignored_candidates.push((path.to_path_buf(), fast_img_ignored::IgnoredReason::LivePhotoPairMember));
             continue;
         }
         if identity.extension_mismatch {
@@ -4884,13 +4912,13 @@ fn scan_fast_img_sources(
                     | FormatKind::Unknown
             ) {
                 let reason = fast_img_ignored::IgnoredReason::OutsideCurrentPolicyScope;
-                ignored_candidates.push((path, reason));
+                ignored_candidates.push((path.to_path_buf(), reason));
             } else {
-                match fast_img_container_is_static(&path, format) {
-                    Ok(true) => source_files.push(path),
+                match fast_img_container_is_static(path, format) {
+                    Ok(true) => source_files.push(source),
                     Ok(false) => {
                         ignored_candidates.push((
-                            path,
+                            path.to_path_buf(),
                             fast_img_ignored::IgnoredReason::AnimatedImageContainer,
                         ));
                     }
@@ -4900,24 +4928,24 @@ fn scan_fast_img_sources(
                             path.display(),
                             error
                         );
-                        let rel_key = fast_img_scan_failure_rel_key(&path, src_dir)?;
+                        let rel_key = fast_img_scan_failure_rel_key(path, src_dir)?;
                         scan_failures.insert(rel_key, error.to_string());
-                        source_files.push(path);
+                        source_files.push(source);
                     }
                 }
             }
-        } else if identity.family == FormatKind::Jpeg || reconstructible_jxl.contains(&path) {
-            source_files.push(path);
+        } else if identity.family == FormatKind::Jpeg || reconstructible_jxl.contains(path) {
+            source_files.push(source);
         } else if fast_img_tier2_source_format(strategy, identity.family) {
-            let admitted = modern_candidate_paths.contains(&path);
-            let probe_failed = modern_probe_failure_paths.contains(&path);
+            let admitted = modern_candidate_paths.contains(path);
+            let probe_failed = modern_probe_failure_paths.contains(path);
             if !admitted && !probe_failed {
                 let reason = fast_img_ignored::IgnoredReason::ModernTierNotAdmitted;
-                ignored_candidates.push((path, reason));
+                ignored_candidates.push((path.to_path_buf(), reason));
             }
         } else {
             let reason = fast_img_ignored::IgnoredReason::OutsideCurrentPolicyScope;
-            ignored_candidates.push((path, reason));
+            ignored_candidates.push((path.to_path_buf(), reason));
         }
     }
     preparation.set(candidate_count as u64);
@@ -4935,7 +4963,11 @@ fn scan_fast_img_sources(
         ignored_candidates,
         expected_ignored_count,
     )?;
-    let source_hashes = fast_img_source_hash_set(src_dir, &source_files)?;
+    let source_hashes =
+        fast_img_observed_source_hashes(src_dir, source_files.iter().copied())?;
+    for source in &observed {
+        source.verify_regular_file_unchanged()?;
+    }
     live_photos.verify_unchanged()?;
     ignored.emit_markers_from_environment()?;
     let planned_encode_count = source_files.len().saturating_sub(scan_failures.len());
@@ -4963,7 +4995,10 @@ fn scan_fast_img_sources(
     }
     Ok(FastImgSourceInventory {
         ignored,
-        source_files,
+        source_files: source_files
+            .into_iter()
+            .map(|source| source.path().to_path_buf())
+            .collect(),
         scan_failures,
         modern_lossy_candidates: modern_lossy_scan.candidates,
         modern_probe_failure_count,
@@ -10847,27 +10882,46 @@ fn run_restore_jpeg(
     anyhow::bail!(restore_jpeg_failure_summary(0, processing_failure_count))
 }
 
+#[cfg(test)]
 fn fast_img_source_hash_set(
     src_dir: &Path,
-    source_jpegs: &[PathBuf],
+    paths: &[PathBuf],
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let observed = paths
+        .iter()
+        .map(|path| {
+            foundation::batch::AdmittedImageFile::from_metadata(path, &std::fs::symlink_metadata(path)?)
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    fast_img_observed_source_hashes(src_dir, observed.iter())
+}
+
+fn fast_img_observed_source_hashes<'a>(
+    src_dir: &Path,
+    sources: impl ExactSizeIterator<Item = &'a foundation::batch::AdmittedImageFile>,
 ) -> anyhow::Result<BTreeMap<String, String>> {
     let mut hashes = BTreeMap::new();
     let progress = foundation::progress::FileStageProgress::new(
-        source_jpegs.len() as u64,
+        sources.len() as u64,
         foundation::progress::FileProgressStage::FastImgSourceHashing,
     );
-    for (index, source) in source_jpegs.iter().enumerate() {
+    for (index, source) in sources.enumerate() {
         foundation::batch_control::checkpoint()?;
-        let rel = source.strip_prefix(src_dir).map_err(|err| {
-            anyhow::anyhow!(
-                "fast-img source hash path outside root: source={} root={} ({err})",
-                source.display(),
+        let path = source.path();
+        let rel = path.strip_prefix(src_dir).with_context(|| {
+            format!(
+                "fast-img source hash path outside root: source={} root={}",
+                path.display(),
                 src_dir.display()
             )
         })?;
-        hashes.insert(
-            rel.to_string_lossy().to_string(),
-            calculate_blake3_hash(source)?,
+        let digest = source.content_blake3().with_context(|| {
+            format!("fast-img source changed or became unreadable during preflight: {}", path.display())
+        })?;
+        anyhow::ensure!(
+            hashes.insert(rel.to_string_lossy().into_owned(), digest).is_none(),
+            "fast-img source hash has a duplicate relative path: {}",
+            rel.display()
         );
         progress.set((index + 1) as u64);
     }
@@ -11372,13 +11426,21 @@ fn fast_img_record_controllable_media_import_failures(
             }
         }
         marker.skipped_sources.remove(&source_rel);
+        let reason = format!(
+            "Photos returned no verified result for this media item during normal-mode batch import: {output_rel}"
+        );
+        log_file_failure_at_phase(
+            "img",
+            &marker.src_dir.join(fast_img_checked_rel_path(&source_rel)?),
+            &reason,
+            None,
+            FileFailurePhase::PhotosImport,
+        );
         marker.failed_sources.insert(
             source_rel.clone(),
             SkippedSourceEntry {
                 src: entry.src,
-                reason: format!(
-                    "Photos returned no verified result for this media item during normal-mode batch import: {output_rel}"
-                ),
+                reason,
             },
         );
         println!(
@@ -11465,6 +11527,7 @@ impl FastImgEncodeContext<'_> {
                     },
                 );
                 println!("[FAIL    ] {rel_key} {reason}");
+                log_file_failure_at_phase("img", source, reason, None, FileFailurePhase::Admission);
                 tracing::error!(
                     target: "fast_img_failures",
                     file = %rel_key,
@@ -11637,6 +11700,7 @@ fn fast_img_apply_encode_results(
     completed_from_resume: usize,
     src_dir: &Path,
     working_copy: &Path,
+    failure_phase: FileFailurePhase,
 ) -> anyhow::Result<FastImgEncodeResultSummary> {
     let mut summary = FastImgEncodeResultSummary {
         encoded: completed_from_resume,
@@ -11653,12 +11717,12 @@ fn fast_img_apply_encode_results(
             Ok(outcome) => outcome,
             Err(err) => {
                 println!("[FAIL    ] {} {}", err.rel_key, err.reason);
-                foundation::infra::static_logs::log_file_outcome_audit_with_class(
+                log_file_failure_at_phase(
                     "img",
-                    "failed",
                     &src_dir.join(fast_img_checked_rel_path(&err.rel_key)?),
                     &err.reason,
                     err.reason_code.as_deref(),
+                    failure_phase,
                 );
                 fast_img_remove_failed_encode_output(working_copy, &err)?;
                 marker.blake3_log.remove(&err.rel_key);
@@ -11855,6 +11919,7 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
                 summary.encoded,
                 src_dir,
                 working_copy,
+                FileFailurePhase::EncodeOrPublish,
             )?;
             if let Some(error) = shared_failure {
                 return Err(error);
@@ -12192,6 +12257,7 @@ fn fast_img_record_local_gate_failures(
         marker.blake3_log.len(),
         &marker.src_dir.clone(),
         &marker.working_copy.clone(),
+        FileFailurePhase::LocalVerification,
     )?;
     marker.encoded_count = marker.blake3_log.len();
     fast_img_reset_delivery_gate_proofs(marker, FastImgStageName::TranscodeComplete);
@@ -17067,6 +17133,36 @@ mod fast_img_hardening_tests {
 
         assert_eq!(inventory.source_files, Vec::<PathBuf>::new());
         assert_eq!(inventory.planned_encode_count, 0);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fast_img_preflight_rejects_source_replaced_after_format_probe() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source = root.path().join("nested.jpg");
+        write_real_jpeg(&source, [20, 40, 60])?;
+        let before = std::fs::read(&source)?;
+        let replacement = root.path().join("replacement");
+        std::fs::write(&replacement, &before)?;
+        std::fs::File::open(&replacement)?.set_times(
+            std::fs::FileTimes::new().set_modified(std::fs::metadata(&source)?.modified()?),
+        )?;
+
+        let result = super::scan_fast_img_sources_with(
+            vec![source.clone()],
+            root.path(),
+            "jxl",
+            |paths| {
+                let identities = foundation::image::format_identity::resolve_format_identities(paths)?;
+                std::fs::rename(&replacement, &source)?;
+                Ok(identities)
+            },
+        );
+
+        assert!(result.is_err(), "a newer file must not inherit preflight admission");
+        assert_eq!(std::fs::read(&source)?, before);
+        assert!(!replacement.exists());
         Ok(())
     }
 

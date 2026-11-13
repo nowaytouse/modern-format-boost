@@ -472,8 +472,10 @@ pre-launch binary identity, followed by independently recorded child PID and
 exit or termination signal when available. Missing process observations do not
 turn a launch request into an observed start or exit. Invalid process evidence
 does not hide a separately valid launch record. This identifies the processing
-worker; it does not prove which encoder or verification tools ran for that
-individual file, its failure stage, or current source safety. Under display
+worker. Fast IMG file failures separately record their known admission,
+encode or publication, local verification, or Photos import phase. Older
+receipts leave the phase unknown. Neither field proves which encoder ran for
+that individual file or the current safety of its source. Under display
 privacy, program names, paths and arguments stay hidden because the same worker
 can receive routine files alongside a failed file; the explicit failure details
 and recorded numeric process outcome remain available.
@@ -823,15 +825,17 @@ acceptance.
 ### Photos Original Custody Reverification Activity
 
 The existing `MFB_GATE_ACTIVITY` schema 1 also accepts `gate=photos_custody`.
-It reports the real tier-2 Photos-original custody recheck used before cleanup
-and while validating existing receipts for resume or library binding. This is
-not Gate 2's sampled receipt comparison or Gate 3's record consistency checks.
+It reports live Photos-original custody rechecks for converted outputs and
+tier-2 originals before cleanup or during library binding. These events come
+from the full resource verification path.
 
 `inventory` has no file denominator. Once nonempty relative paths and Photos
 UUIDs are present and unique, `original_bytes` uses that fixed receipt inventory.
 The existing query resolves those UUIDs; each current original is read in full
-and BLAKE3-compared with its recorded library-delivery hash, or source hash when
-no separate delivery hash exists. The numerator advances only after a match.
+and BLAKE3-compared with its recorded library-delivery hash, or the recorded
+output or source hash for an exact-copy receipt. The numerator advances only
+after the current file is checked and its bytes match. Quarantine can still
+block final Gate 2 after all bytes match.
 Intermediate updates are coalesced at 250 ms; terminal events retain the exact
 matched count, including the matches preceding a later failure.
 
@@ -890,13 +894,25 @@ observation with inexpensive metadata freshness checks. Standard routed IMG/VID
 worker launches re-read their selected sources and compare the complete digest
 before spawning; a changed, missing or unreadable source refuses that invocation.
 Inspection does not write source media or create output directories.
+The same launcher check rejects an explicitly selected single-file output
+directory that is occupied by a file or cannot be resolved through its existing
+parents. Existing directories and new directories under a valid parent are allowed.
+A path containing `..` through a missing directory is rejected before launch,
+so simplifying the path cannot conceal a link or create an unintended directory.
 
 This adds one full input read during discovery and one before each selected
 source is launched. It is not a file lock, an immutable snapshot or a cross-process
 execution manifest: a later change still requires worker-side admission and
-final-artifact checks. Fast IMG's internal scan/resume and verified sidecar
-relationships remain separate contracts. A matching source digest never
-authorizes conversion, import or deletion on its own.
+final-artifact checks. Fast IMG's internal scan also records regular-file
+identity before format probes. It reads each primary source once for its
+complete hash and refuses a changed inventory before publishing the scan
+result. Resume and verified companion relationships remain separate
+contracts. A matching source digest cannot authorize conversion, import or
+deletion on its own.
+For Live Photos, Fast IMG also records the regular-file identities of
+same-stem candidates before reading their formats and identifiers. It rechecks
+them before publishing the inventory, including companions outside the
+selected inputs. These observations apply to that scan.
 
 ## Validation Status (2026-09-28)
 
@@ -1171,6 +1187,13 @@ the child's selected sources. Fresh original-resource hashes and source/output/
 companion checks are still required before recording a child receipt. A
 successful filename lookup with no result cannot dismiss a possible prior send.
 Diagnostic wording never determines whether a query error is safe to ignore.
+
+The failed-retry store checks Photos receipts against the immutable child work
+set on writes and cold reads. Converted receipts require the recorded output
+hash and a Photos UUID. Original-format receipts must match the admitted source
+hash and cannot coexist with a converted outcome for the same source. A
+historical receipt carried during invalidation of an old output does not
+establish current custody for its replacement.
 
 Requesting the same completed child returns a historical reference through
 `MFB_FAST_IMG_RETRY_REUSED`, confirmed by the launcher against this invocation
@@ -1519,6 +1542,12 @@ Local Photos custody queries, including the final source-deletion recheck, use
 captured JSON response. Each response must parse completely and contain only
 its requested UUIDs without duplicates. A failed or oversized response remains
 an error; truncated output is never treated as delivery evidence.
+
+Fast IMG's final and resumed primary Photos checks bind each saved relative
+output, UUID, and output BLAKE3 before querying the library. The current
+original must still match the full BLAKE3 recorded for the Photos copy, or the
+output hash for an exact-copy receipt. A later pixel-equivalence check cannot
+replace that receipt. A mismatch blocks final cleanup and preserves the source.
 
 The `gate1_verified_file` namespace is reconstructable cache, separate from
 formal task/checkpoint state. Cache Settings and `cache_cleaner` report it as
