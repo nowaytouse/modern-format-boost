@@ -358,9 +358,9 @@ checksum = "5c0e531d93d39c34eef561e929e8a7f86d77a5af08aac4f6d6e39976c51858e9"
 
 [[package]]
 name = "bumpalo"
-version = "3.20.3"
+version = "3.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+checksum = "87a0cf66fd1eb2fb7b822cb78370d82303750809bc6ba855f3f58e517d3238db"
 
 [[package]]
 name = "bytemuck"
@@ -388,9 +388,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
+checksum = "33ef9e3e8154a45c7a95cff4c1299702106ad94062d7bb85fdc5d3a5afd91d45"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -411,9 +411,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-expr"
-version = "0.20.10"
+version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ba9e9ec16c447027685b1f897b720e18e9a8afd00bd7332c483537e38086c9f"
+checksum = "edd44d82755fb9210fb10d9daf8dd7e522da0efe1d5f263cffc5db07725663ff"
 dependencies = [
  "smallvec",
  "target-lexicon",
@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "crc32fast"
 version = "1.5.5"
-source = "git+https://github.com/srijs/rust-crc32fast#8a93d2a70c00ab3e72beda42014b18fad8e496ea"
+source = "git+https://github.com/srijs/rust-crc32fast#f3dbcd668f525f6c6014072df21e2396063640d9"
 dependencies = [
  "cfg-if",
 ]
@@ -1707,9 +1707,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.4"
+version = "1.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
+checksum = "20521a903f02b0a573cd6840e9d0a5a0cc043d361fe924092cd70f8556cc9c4a"
 dependencies = [
  "libc",
  "log",
@@ -2818,7 +2818,7 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.21"
-source = "git+https://github.com/dtolnay/thiserror#3b29f0107e7900860c7a061c069958569eb458e7"
+source = "git+https://github.com/dtolnay/thiserror#e8996cb44c9cecc4192dec56bffbeae92ab9c4f3"
 dependencies = [
  "thiserror-impl",
 ]
@@ -2826,7 +2826,7 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.21"
-source = "git+https://github.com/dtolnay/thiserror#3b29f0107e7900860c7a061c069958569eb458e7"
+source = "git+https://github.com/dtolnay/thiserror#e8996cb44c9cecc4192dec56bffbeae92ab9c4f3"
 dependencies = [
  "proc-macro2",
  "quote",
