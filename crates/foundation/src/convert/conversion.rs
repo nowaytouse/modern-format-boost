@@ -1616,8 +1616,7 @@ impl Drop for TempOutputGuard {
 /// **LEAKY**: Returns a path for temporary output in the same directory as
 /// `output`.
 ///
-/// \[WARNING\] This function pollutes the user's folder with intermediate
-/// files. For Ghost Mode (Zero Pollution), use
+/// This function stages intermediate files in the output directory. For search, use
 /// `foundation::path_safety::isolated_temp_path_for_search` instead.
 ///
 /// Ensures `fs::rename(temp, output)` is atomic on the same filesystem. Use
@@ -1821,6 +1820,40 @@ pub fn commit_reconstructible_jxl_to_output_with_metadata(
 /// # Errors
 /// Returns an error if gain-map or filesystem/XMP metadata enrichment fails.
 pub fn enrich_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
+    enrich_jxl_candidate(source, output, || {
+        crate::image::gain_map::attach_jpeg_gain_map(source, output)
+    })
+}
+
+/// The gain-map bundle prepared from the original bytes admitted by one exact effort search.
+/// Candidate filesystem and XMP metadata are still read and verified for each output.
+pub struct JpegEffortMetadata<'a> {
+    source: &'a Path,
+    gain_map: crate::image::gain_map::PreparedJpegGainMap,
+}
+
+impl<'a> JpegEffortMetadata<'a> {
+    /// # Errors
+    /// Rejects changed source bytes or a gain-map bundle that cannot be proved.
+    pub fn prepare(source: &'a Path, input_blake3: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            source,
+            gain_map: crate::image::gain_map::PreparedJpegGainMap::new(source, input_blake3)?,
+        })
+    }
+
+    /// # Errors
+    /// Rejects failed attachment, readback, or per-candidate metadata validation.
+    pub fn enrich(&self, output: &Path) -> std::io::Result<()> {
+        enrich_jxl_candidate(self.source, output, || self.gain_map.attach(output))
+    }
+}
+
+fn enrich_jxl_candidate(
+    source: &Path,
+    output: &Path,
+    attach_gain_map: impl FnOnce() -> anyhow::Result<bool>,
+) -> std::io::Result<()> {
     if !fs::symlink_metadata(output)?.file_type().is_file()
         || crate::checkpoint::files_alias_same_inode(source, output)?
     {
@@ -1829,7 +1862,7 @@ pub fn enrich_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std
             "JPEG metadata candidate must be a regular file distinct from its source",
         ));
     }
-    crate::image::gain_map::attach_jpeg_gain_map(source, output).map_err(|error| {
+    attach_gain_map().map_err(|error| {
         std::io::Error::other(format!("Native gain-map preservation failed: {error:#}"))
     })?;
     prepare_output_metadata(output, Some(source), true, true)

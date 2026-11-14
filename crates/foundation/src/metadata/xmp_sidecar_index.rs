@@ -9,22 +9,45 @@ pub(super) struct DirectoryView {
     metadata: Metadata,
     membership: blake3::Hash,
     candidates: BTreeMap<String, Vec<PathBuf>>,
+    aae_candidates: BTreeMap<String, Vec<PathBuf>>,
 }
 
 impl XmpSidecarIndex {
-    pub(crate) fn capture(paths: &[PathBuf]) -> io::Result<Self> {
+    /// Capture one checked XMP namespace per source directory.
+    ///
+    /// # Errors
+    /// Rejects incomplete or changing directory observations.
+    pub fn capture(paths: &[PathBuf]) -> io::Result<Self> {
+        Self::capture_with(paths, false)
+    }
+
+    /// Capture adjacent XMP and AAE names and identities together.
+    /// # Errors
+    /// Refuses incomplete or changing directory observations.
+    pub fn capture_xmp_and_aae(paths: &[PathBuf]) -> io::Result<Self> {
+        Self::capture_with(paths, true)
+    }
+
+    fn capture_with(paths: &[PathBuf], include_aae: bool) -> io::Result<Self> {
         let mut directories = BTreeMap::new();
         for path in paths {
             let parent = crate::media_conversion_gate::path_parent_or_dot(path).to_path_buf();
             if let std::collections::btree_map::Entry::Vacant(entry) = directories.entry(parent) {
-                let view = DirectoryView::read(entry.key())?;
+                let view = DirectoryView::read(entry.key(), include_aae)?;
                 entry.insert(Mutex::new(view));
             }
         }
-        Ok(Self { directories })
+        Ok(Self {
+            directories,
+            include_aae,
+        })
     }
 
-    pub(crate) fn find(&self, src: &Path) -> io::Result<Option<PathBuf>> {
+    /// Find the unique regular XMP candidate in a captured directory.
+    ///
+    /// # Errors
+    /// Rejects changed directory evidence, ambiguous names and non-regular candidates.
+    pub fn find(&self, src: &Path) -> io::Result<Option<PathBuf>> {
         let (stem, full_name) = super::xmp_source_names(src)?;
         let parent = crate::media_conversion_gate::path_parent_or_dot(src);
         let view = self.checked_directory(parent, false)?;
@@ -52,8 +75,41 @@ impl XmpSidecarIndex {
         Ok(selected)
     }
 
+    /// Find the unique regular AAE candidate selected by the same naming rules as delivery.
+    /// # Errors
+    /// Refuses an unobserved namespace, ambiguity or non-regular candidates.
+    pub fn find_aae(&self, src: &Path) -> io::Result<Option<PathBuf>> {
+        if !self.include_aae {
+            return Err(io::Error::other(
+                "AAE was not included in the sidecar observation",
+            ));
+        }
+        let stem = super::aae_source_stem(src)?;
+        let parent = crate::media_conversion_gate::path_parent_or_dot(src);
+        let view = self.checked_directory(parent, false)?;
+        match view
+            .aae_candidates
+            .get(&stem)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            [] => Ok(None),
+            [path] => super::require_regular_sidecar(path.clone(), "AAE").map(Some),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "ambiguous AAE sidecars for {}; originals retained",
+                    src.display()
+                ),
+            )),
+        }
+    }
+
     /// Must finish before the phase can authorize delivery or reuse its results.
-    pub(crate) fn verify_unchanged(&self) -> io::Result<()> {
+    ///
+    /// # Errors
+    /// Rejects a changed or unavailable XMP namespace.
+    pub fn verify_unchanged(&self) -> io::Result<()> {
         for directory in self.directories.keys() {
             drop(self.checked_directory(directory, true)?);
         }
@@ -83,12 +139,12 @@ impl XmpSidecarIndex {
         }
         // Native change stamps trigger a scan; only fresh membership confirms the namespace.
         if full_scan || !same_change_stamp(&view.metadata, &current) {
-            let fresh = DirectoryView::read(parent)?;
+            let fresh = DirectoryView::read(parent, self.include_aae)?;
             if !same_directory(&view.metadata, &fresh.metadata)
                 || view.membership != fresh.membership
             {
                 return Err(io::Error::other(format!(
-                    "XMP candidate names or file identities changed under {}; restart verification with a fresh namespace snapshot",
+                    "Sidecar candidate names or file identities changed under {}; restart verification with a fresh namespace snapshot",
                     parent.display()
                 )));
             }
@@ -99,10 +155,11 @@ impl XmpSidecarIndex {
 }
 
 impl DirectoryView {
-    fn read(parent: &Path) -> io::Result<Self> {
+    fn read(parent: &Path, include_aae: bool) -> io::Result<Self> {
         let before = fs::metadata(parent)?;
         let mut names = BTreeSet::new();
         let mut candidates: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+        let mut aae_candidates = BTreeMap::<String, Vec<PathBuf>>::new();
         for entry in fs::read_dir(parent)? {
             let entry = entry?;
             let path = entry.path();
@@ -113,6 +170,11 @@ impl DirectoryView {
                 names.insert(entry.file_name());
                 if let Some(key) = super::xmp_candidate_key(&path) {
                     candidates.entry(key).or_default().push(path);
+                }
+            } else if include_aae {
+                if let Some(key) = super::aae_candidate_key(&path) {
+                    names.insert(entry.file_name());
+                    aae_candidates.entry(key).or_default().push(path);
                 }
             }
         }
@@ -130,7 +192,7 @@ impl DirectoryView {
         let metadata = fs::metadata(parent)?;
         if !same_directory(&before, &metadata) || !same_change_stamp(&before, &metadata) {
             return Err(io::Error::other(format!(
-                "Directory changed during XMP namespace discovery: {}; no stable snapshot was obtained",
+                "Directory changed during sidecar namespace discovery: {}; no stable snapshot was obtained",
                 parent.display()
             )));
         }
@@ -138,6 +200,7 @@ impl DirectoryView {
             metadata,
             membership: membership.finalize(),
             candidates,
+            aae_candidates,
         })
     }
 }

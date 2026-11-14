@@ -926,6 +926,84 @@ fn contract_directory_metadata_entry_points_reject_file_sources() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn contract_adjacent_timestamp_sync_preserves_source_and_skips_output_links() -> anyhow::Result<()> {
+    use std::os::unix::fs::{MetadataExt, symlink};
+
+    let temp = TempDir::new()?;
+    let source = temp.path().join("source");
+    let output = temp.path().join("output");
+    let source_child = source.join("nested");
+    let output_child = output.join("nested");
+    fs::create_dir_all(&source_child)?;
+    fs::create_dir_all(&output_child)?;
+    let original = source_child.join("photo.jpg");
+    let converted = output_child.join("photo.jxl");
+    let root_original = source.join("cover.jpg");
+    let root_converted = output.join("cover.jxl");
+    let link_target = temp.path().join("untouched");
+    fs::write(&original, b"synthetic original")?;
+    fs::write(&converted, b"synthetic conversion")?;
+    fs::write(&root_original, b"root-level original")?;
+    fs::write(&root_converted, b"root-level conversion")?;
+    fs::write(&link_target, b"outside the output")?;
+    symlink(&link_target, output_child.join("photo.alias"))?;
+    xattr::set(&source_child, "user.mfb_contract", b"source metadata")?;
+
+    let source_time = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
+    let output_time = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+    for path in [&source, &source_child, &original, &root_original] {
+        filetime::set_file_times(path, source_time, source_time)?;
+    }
+    for path in [&output, &output_child, &converted, &root_converted, &link_target] {
+        filetime::set_file_times(path, output_time, output_time)?;
+    }
+    let observation = |path: &std::path::Path| -> std::io::Result<_> {
+        let meta = fs::symlink_metadata(path)?;
+        Ok((
+            meta.dev(),
+            meta.ino(),
+            meta.ctime(),
+            meta.ctime_nsec(),
+            filetime::FileTime::from_last_modification_time(&meta),
+        ))
+    };
+    let unchanged = [&source, &source_child, &original, &root_original, &link_target];
+    let before = unchanged
+        .iter()
+        .map(|path| observation(path))
+        .collect::<std::io::Result<Vec<_>>>()?;
+
+    super::restore_timestamps_from_source_to_output(&source, &output)?;
+
+    for (path, expected) in unchanged.into_iter().zip(before) {
+        assert_eq!(observation(path)?, expected, "{} changed", path.display());
+    }
+    for path in [&output, &output_child, &converted, &root_converted] {
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&fs::metadata(path)?),
+            source_time,
+        );
+    }
+    assert_eq!(
+        xattr::get(&source_child, "user.mfb_contract")?.as_deref(),
+        Some(&b"source metadata"[..]),
+    );
+    assert_eq!(fs::read_link(output_child.join("photo.alias"))?, link_target);
+    assert!(super::restore_timestamps_from_source_to_output(&source, &source_child)
+        .unwrap_err().to_string().contains("overlap"));
+    assert_eq!(xattr::get(&source_child, "user.mfb_contract")?.as_deref(),
+        Some(&b"source metadata"[..]));
+    fs::remove_file(&root_converted)?;
+    fs::hard_link(&link_target, &root_converted)?;
+    let linked_before = observation(&link_target)?;
+    let error = super::restore_timestamps_from_source_to_output(&source, &output).unwrap_err();
+    assert!(error.to_string().contains("standalone file"));
+    assert_eq!(observation(&link_target)?, linked_before);
+    Ok(())
+}
+
 #[test]
 fn contract_directory_mirror_finishes_parent_timestamps_after_children() {
     let temp = TempDir::new().expect("tempdir");
@@ -956,6 +1034,121 @@ fn contract_directory_mirror_finishes_parent_timestamps_after_children() {
             timestamp
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn contract_scoped_delivery_metadata_touches_only_recorded_ancestors() -> anyhow::Result<()> {
+    use std::collections::BTreeSet;
+    use std::os::unix::fs::symlink;
+    use std::path::PathBuf;
+
+    let temp = TempDir::new()?;
+    let source = temp.path().join("source");
+    let output = temp.path().join("output");
+    let source_delivery = source.join("recorded/nested");
+    let output_delivery = output.join("recorded/nested");
+    let unrelated = output.join("unrelated");
+    for directory in [
+        source_delivery.as_path(), &source.join("ignored/empty"), &source.join("unrelated"),
+        &output_delivery, &unrelated,
+    ] {
+        fs::create_dir_all(directory)?;
+    }
+    let saved_time = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
+    let other_time = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+    filetime::set_file_times(&source_delivery, saved_time, saved_time)?;
+    filetime::set_file_times(&unrelated, other_time, other_time)?;
+    xattr::set(&source_delivery, "user.mfb_contract", b"recorded metadata")?;
+    xattr::set(&source.join("unrelated"), "user.mfb_contract", b"unrelated source metadata")?;
+    let saved = super::save_directory_timestamps(&source)?;
+    let ancestors = BTreeSet::from([PathBuf::new(), "recorded".into(), "recorded/nested".into()]);
+
+    let strict = super::ScopedDeliveryDirectoryMetadata::default();
+    super::apply_scoped_delivery_directory_metadata(&saved, &source, &output, &ancestors, strict)?;
+
+    assert_eq!(filetime::FileTime::from_last_modification_time(&fs::metadata(&output_delivery)?), saved_time);
+    assert_eq!(xattr::get(&output_delivery, "user.mfb_contract")?.as_deref(), Some(&b"recorded metadata"[..]));
+    assert!(!output.join("ignored").exists());
+    assert_eq!(filetime::FileTime::from_last_modification_time(&fs::metadata(&unrelated)?), other_time);
+    assert_eq!(xattr::get(&unrelated, "user.mfb_contract")?, None);
+
+    fs::remove_dir(&output_delivery)?;
+    let before_gate = super::ScopedDeliveryDirectoryMetadata { defer_missing_output_to_gate: true, ..strict };
+    super::apply_scoped_delivery_directory_metadata(&saved, &source, &output, &ancestors, before_gate)?;
+    assert!(!output_delivery.exists());
+    assert!(super::apply_scoped_delivery_directory_metadata(&saved, &source, &output, &ancestors, strict).is_err());
+    symlink(&unrelated, &output_delivery)?;
+    assert!(super::apply_scoped_delivery_directory_metadata(&saved, &source, &output, &ancestors, before_gate).is_err());
+    assert_eq!(xattr::get(&unrelated, "user.mfb_contract")?, None);
+
+    fs::remove_file(&output_delivery)?;
+    fs::create_dir(&output_delivery)?;
+    filetime::set_file_times(&output_delivery, other_time, other_time)?;
+    fs::remove_dir(&source_delivery)?;
+    let cleanup_resume = super::ScopedDeliveryDirectoryMetadata { allow_removed_source: true, ..strict };
+    assert!(super::apply_scoped_delivery_directory_metadata(&saved, &source, &output, &ancestors, cleanup_resume).is_err());
+    let resume_snapshot = super::save_directory_timestamps(&source)?;
+    assert!(super::apply_scoped_delivery_directory_metadata(&resume_snapshot, &source, &output, &ancestors, strict).is_err());
+    super::apply_scoped_delivery_directory_metadata(&resume_snapshot, &source, &output, &ancestors, cleanup_resume)?;
+    assert_eq!(filetime::FileTime::from_last_modification_time(&fs::metadata(&output_delivery)?), other_time);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn contract_scoped_directory_retry_copies_xattrs_after_restoring_owner_write() -> anyhow::Result<()> {
+    use std::collections::BTreeSet;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    let temp = TempDir::new()?;
+    let source = temp.path().join("source");
+    let output = temp.path().join("output");
+    let source_dir = source.join("nested");
+    let output_dir = output.join("nested");
+    for directory in [&source_dir, &output_dir] {
+        fs::create_dir_all(directory)?;
+    }
+    let key = "user.mfb_metadata_retry";
+    xattr::set(&source_dir, key, b"original")?;
+    fs::set_permissions(&source_dir, fs::Permissions::from_mode(0o500))?;
+    let ancestors = BTreeSet::from([PathBuf::new(), PathBuf::from("nested")]);
+    let copy = || {
+        let saved = super::save_directory_timestamps(&source)?;
+        super::apply_scoped_delivery_directory_metadata(
+            &saved,
+            &source,
+            &output,
+            &ancestors,
+            super::ScopedDeliveryDirectoryMetadata::default(),
+        )
+    };
+    copy()?;
+    let mode = |path: &Path| fs::metadata(path).map(|metadata| metadata.permissions().mode() & 0o777);
+    assert_eq!(mode(&output_dir)?, 0o500);
+
+    fs::set_permissions(&source_dir, fs::Permissions::from_mode(0o700))?;
+    xattr::set(&source_dir, key, b"after permission recovery")?;
+    copy()?;
+    assert_eq!(mode(&source_dir)?, 0o700);
+    assert_eq!(mode(&output_dir)?, 0o700);
+    assert_eq!(
+        xattr::get(&output_dir, key)?.as_deref(),
+        Some(&b"after permission recovery"[..]),
+    );
+
+    let unexpected_key = "user.mfb_metadata_unexpected";
+    xattr::set(&output_dir, unexpected_key, b"must not be discarded")?;
+    fs::set_permissions(&output_dir, fs::Permissions::from_mode(0o500))?;
+    assert!(copy().unwrap_err().to_string().contains("unexpected actual_only"));
+    assert_eq!(mode(&output_dir)?, 0o500);
+    assert_eq!(mode(&source_dir)?, 0o700);
+    assert_eq!(
+        xattr::get(&output_dir, unexpected_key)?.as_deref(),
+        Some(&b"must not be discarded"[..]),
+    );
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1069,25 +1262,61 @@ fn contract_saved_directory_timestamps_reject_missing_destination_mirror() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn contract_saved_directory_timestamps_refuse_linked_intermediate_destination() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let source = temp.path().join("source");
+    let output = temp.path().join("output");
+    let outside = temp.path().join("outside");
+    let external_child = outside.join("child");
+    fs::create_dir_all(source.join("nested/child"))?;
+    fs::create_dir_all(&external_child)?;
+    fs::create_dir(&output)?;
+    std::os::unix::fs::symlink(&outside, output.join("nested"))?;
+    let before = fs::metadata(&external_child)?.modified()?;
+    let saved = super::save_directory_timestamps(&source)?;
+    let error = super::apply_saved_timestamps_to_dst(&saved, &source, &output).unwrap_err();
+    assert!(error.to_string().contains("missing destination directory mirror"));
+    assert_eq!(fs::metadata(&external_child)?.modified()?, before);
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[test]
-fn contract_macos_file_added_time_is_reapplied_and_verified_after_filetime() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source =
-        fs::read_to_string(manifest_dir.join("src/metadata/mod.rs")).expect("metadata source");
-    let filetime_pos = source
-        .find("filetime::set_file_times(dst, atime, mtime)")
-        .expect("file timestamp setter must exist");
-    let after_filetime = &source[filetime_pos..];
+fn contract_macos_timestamp_update_remains_bound_to_open_file() -> anyhow::Result<()> {
+    use std::time::{Duration, UNIX_EPOCH};
 
-    assert!(
-        after_filetime.contains("macos::set_added_time(dst, added)"),
-        "macOS file Date Added must be re-applied after filetime::set_file_times"
-    );
-    assert!(
-        after_filetime.contains("Verifying Finder added time integrity"),
-        "macOS file Date Added must be verified after re-application"
-    );
+    let temp = TempDir::new()?;
+    let source = temp.path().join("source.jpg");
+    let target = temp.path().join("target.jxl");
+    let moved = temp.path().join("moved.jxl");
+    fs::write(&source, b"source")?;
+    fs::write(&target, b"target")?;
+    let created = UNIX_EPOCH + Duration::new(1_600_000_000, 12_345_678);
+    let added = UNIX_EPOCH + Duration::new(1_650_000_000, 34_567_890);
+    let modified = UNIX_EPOCH + Duration::new(1_700_000_000, 56_789_012);
+    let modified = filetime::FileTime::from_system_time(modified);
+    filetime::set_file_times(&source, modified, modified)?;
+    super::macos::set_creation_time(&source, created)?;
+    super::macos::set_added_time(&source, added)?;
+    let source_file = fs::File::open(&source)?;
+    let target_file = fs::File::open(&target)?;
+    fs::rename(&target, &moved)?;
+    fs::write(&target, b"replacement")?;
+    let replacement = fs::metadata(&target)?;
+
+    super::apply_file_timestamps_inner(&source, &target, Some((&source_file, &target_file)))?;
+
+    let bound = fs::metadata(&moved)?;
+    assert_eq!(bound.created()?, created);
+    assert_eq!(super::macos::get_added_time(&moved)?, added);
+    assert_eq!(filetime::FileTime::from_last_modification_time(&bound), modified);
+    let current = fs::metadata(&target)?;
+    assert_eq!(current.created()?, replacement.created()?);
+    assert_eq!(current.modified()?, replacement.modified()?);
+    assert_eq!(fs::read(&target)?, b"replacement");
+    Ok(())
 }
 
 #[test]

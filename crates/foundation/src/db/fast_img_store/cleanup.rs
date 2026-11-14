@@ -332,6 +332,7 @@ pub struct PrimaryCleanupJournal<'a> {
     revision: i64,
     entries: Entries,
     admissions: Option<BTreeMap<String, FailedRetryAdmission>>,
+    full_admissions: Option<FastImgAdmissionPlan>,
 }
 
 impl<'a> PrimaryCleanupJournal<'a> {
@@ -342,7 +343,7 @@ impl<'a> PrimaryCleanupJournal<'a> {
         );
         let key = key_for_canonical(&canonical_text(&marker.working_copy)?);
         let conn = open_store_connection()?;
-        let (revision, entries, admissions) = in_snapshot(&conn, |conn| {
+        let (revision, entries, admissions, full_admissions) = in_snapshot(&conn, |conn| {
             let saved =
                 read_snapshot(conn, &key)?.context("Primary cleanup task was not committed")?;
             ensure!(
@@ -358,6 +359,7 @@ impl<'a> PrimaryCleanupJournal<'a> {
                 revision,
                 read_entries(conn, &key, marker)?,
                 child_admissions(conn, &key, marker)?,
+                admission::read_validated(conn, &key, marker)?,
             ))
         })?;
         Ok(Self {
@@ -367,6 +369,7 @@ impl<'a> PrimaryCleanupJournal<'a> {
             revision,
             entries,
             admissions,
+            full_admissions,
         })
     }
 
@@ -393,6 +396,24 @@ impl<'a> PrimaryCleanupJournal<'a> {
             .transpose()?
             .unwrap_or(false);
         Ok((media.removed, needs_companion_cleanup))
+    }
+
+    /// Return the original AAE evidence for verification at media unlink.
+    pub fn admitted_aae(
+        &self,
+        source: &Path,
+    ) -> Result<Option<(PathBuf, FastImgAdmissionSidecar)>> {
+        let Some(plan) = &self.full_admissions else {
+            return Ok(None);
+        };
+        let rel = text(source.strip_prefix(&self.marker.src_dir)?)?;
+        let entry = plan
+            .get(rel)
+            .context("Primary cleanup source was never admitted")?;
+        Ok(entry
+            .aae
+            .clone()
+            .map(|aae| (self.marker.src_dir.clone(), aae)))
     }
 
     /// Bind exactly the file and optional XMP offered by the live deletion gates.
@@ -519,6 +540,26 @@ impl<'a> PrimaryCleanupJournal<'a> {
                     "Primary cleanup intent omitted its media"
                 );
                 validate_child_entries(source, pending, self.admissions.as_ref())?;
+                if let Some(plan) = &self.full_admissions {
+                    let admitted = plan
+                        .get(source)
+                        .context("Primary cleanup source was never admitted")?;
+                    let media = &pending[&(source.to_owned(), source.to_owned())];
+                    ensure!(
+                        admitted.route == FastImgAdmissionRoute::Primary
+                            && media.hash == admitted.source_blake3,
+                        "Primary cleanup media differs from its immutable admission"
+                    );
+                    if let Some(xmp) = &admitted.xmp {
+                        let companion = pending.values().find(|entry| entry.kind == "xmp");
+                        ensure!(
+                            xmp.matches_observation(
+                                companion.map(|entry| (entry.rel.as_str(), entry.hash.as_str()))
+                            ),
+                            "Primary cleanup XMP differs from its immutable admission; source and companion retained"
+                        );
+                    }
+                }
                 if let Some(first) = existing.next() {
                     ensure!(
                         std::iter::once(first).chain(existing).eq(pending.iter()),
@@ -647,6 +688,32 @@ mod tests {
         let out_hash = blake3::hash(b"output").to_hex().to_string();
         let mut marker = WorkingCopyMarker::new(input, output, 2);
         marker.primary_cleanup_journal = true;
+        initialize_with_admission(
+            &mut marker,
+            &BTreeMap::from([
+                (
+                    "a.jpg".into(),
+                    FastImgSourceAdmission {
+                        source_blake3: a_hash.clone(),
+                        route: FastImgAdmissionRoute::Primary,
+                        xmp: Some(FastImgAdmissionSidecar::Present {
+                            relative_path: "a.xmp".into(),
+                            blake3: xmp_hash.clone(),
+                        }),
+                        aae: None,
+                    },
+                ),
+                (
+                    "b.jpg".into(),
+                    FastImgSourceAdmission {
+                        source_blake3: b_hash.clone(),
+                        route: FastImgAdmissionRoute::Primary,
+                        xmp: Some(FastImgAdmissionSidecar::Absent),
+                        aae: None,
+                    },
+                ),
+            ]),
+        )?;
         marker.stage = FastImgStageName::Gate1Passed;
         for (rel, hash) in [("a.jpg", &a_hash), ("b.jpg", &b_hash)] {
             let out_rel = Path::new(rel).with_extension("JXL");
@@ -665,6 +732,39 @@ mod tests {
         write_marker(&marker)?;
         let current = BTreeMap::from([("b.jpg".into(), b_hash)]);
         assert!(validate_primary_cleanup_resume(&marker, &current).is_err());
+        {
+            std::fs::write(&xmp, b"changed companion")?;
+            let changed_hash = hashes(&xmp)?;
+            let mut journal = PrimaryCleanupJournal::open(&marker)?;
+            let mut observe = journal.observe(&a, PrimaryCleanupScope::MediaAndCompanion)?;
+            observe(
+                SourceUnlinkEvent::Intent,
+                SourceUnlinkKind::Xmp,
+                &xmp,
+                &changed_hash,
+            )?;
+            observe(
+                SourceUnlinkEvent::Intent,
+                SourceUnlinkKind::Media,
+                &a,
+                &a_hash,
+            )?;
+            let error = observe(
+                SourceUnlinkEvent::Ready,
+                SourceUnlinkKind::Media,
+                &a,
+                &a_hash,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("XMP differs from its immutable admission")
+            );
+            assert!(a.is_file() && xmp.is_file());
+            assert_eq!(row_count(&open_store_connection()?)?, 0);
+            std::fs::write(&xmp, b"a.xmp")?;
+        }
         {
             let mut journal = PrimaryCleanupJournal::open(&marker)?;
             let mut observe = journal.observe(&a, PrimaryCleanupScope::MediaAndCompanion)?;
@@ -691,6 +791,16 @@ mod tests {
         }
         let saved = read_marker(&marker.working_copy)?;
         validate_primary_cleanup_resume(&saved, &current)?;
+        let evidence = serde_json::to_value(read_source_evidence(&marker.working_copy, "a.jpg")?)?;
+        assert_eq!(evidence["cleanup_journal"], "primary");
+        assert_eq!(evidence["admission"]["xmp"]["relative_path"], "a.xmp");
+        assert_eq!(evidence["cleanup"].as_array().unwrap().len(), 2);
+        assert_eq!(evidence["cleanup"][0]["relative_path"], "a.jpg");
+        assert_eq!(evidence["cleanup"][0]["unlink_state"], "planned");
+        assert_eq!(
+            read_source_evidence(&marker.working_copy, "A.jpg")?.coverage,
+            "not_admitted"
+        );
         {
             let mut journal = PrimaryCleanupJournal::open(&saved)?;
             assert_eq!(journal.observed_absent(&a)?, (false, true));
@@ -720,6 +830,9 @@ mod tests {
         let evidence = read_entries(&conn, &key, &saved)?;
         assert!(!evidence[&("a.jpg".into(), "a.jpg".into())].removed);
         assert!(evidence[&("a.jpg".into(), "a.xmp".into())].removed);
+        let evidence = serde_json::to_value(read_source_evidence(&marker.working_copy, "a.jpg")?)?;
+        assert_eq!(evidence["cleanup"][0]["unlink_state"], "planned");
+        assert_eq!(evidence["cleanup"][1]["unlink_state"], "removed");
         std::fs::remove_file(&b)?;
         assert!(validate_primary_cleanup_resume(&saved, &BTreeMap::new()).is_err());
         conn.execute(

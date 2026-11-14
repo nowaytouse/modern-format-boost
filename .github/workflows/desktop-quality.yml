@@ -149,7 +149,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: stable
+          toolchain: nightly
 
       - name: Test dispatch2
         working-directory: crates/dev/dispatch2
@@ -187,7 +187,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: stable
+          toolchain: nightly
 
       - name: Test dispatch2 (no objc2; Linux libdispatch)
         working-directory: crates/dev/dispatch2
@@ -201,7 +201,7 @@ jobs:
 
   # Keep package-level signals separate from the shared workspace audit. A
   # failing video path must not hide whether IMG itself is healthy (and vice
-  # versa); both jobs still use the same pinned toolchain and static media
+  # versa); both jobs still use the same nightly channel and static media
   # dependency boundary.
   package-quality:
     name: "${{ matrix.name }}"
@@ -388,10 +388,11 @@ jobs:
         if: matrix.package == 'img'
         uses: ./.github/actions/setup-avif
 
-      - name: Install pinned Rust toolchain
+      - name: Install nightly Rust toolchain
+        id: rust-toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: nightly-2026-08-09
+          toolchain: nightly
           components: rustfmt, clippy
 
       - name: Cache Cargo dependencies
@@ -402,9 +403,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-${{ matrix.package }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.package }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.package }}-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.package }}-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Check ${{ matrix.package }} compilation
         id: package_check
@@ -452,7 +453,7 @@ jobs:
       - name: Install Rust formatter
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: nightly-2026-08-09
+          toolchain: nightly
           components: rustfmt
 
       - name: Check workspace formatting without compiling
@@ -490,11 +491,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: nightly-2026-08-09
+          toolchain: nightly
           components: rustfmt, clippy, miri, rust-src, llvm-tools
-
-      - name: Ensure required nightly components on pinned toolchain
-        run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-08-09
 
       # Restore before the MPC downloader and just fix-gate compile the workspace.
       # Cache sources only: a cross-lock target restore grew beyond 11 GB
@@ -660,7 +658,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: stable
+          toolchain: nightly
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -711,7 +709,7 @@ jobs:
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: nightly-2026-08-09
+          toolchain: nightly
           components: clippy, rustfmt, miri, rust-src, llvm-tools
 
       - name: Build standalone media dependency installer

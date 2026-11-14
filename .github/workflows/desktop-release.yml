@@ -11,7 +11,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  RUST_TOOLCHAIN: nightly-2026-08-09
+  RUST_TOOLCHAIN: nightly
   RELEASE_TARGET: aarch64-apple-darwin
   RELEASE_ARTIFACT_NAME: macos-arm64
   MIGRATED_RUST_BINS: "backfill_directory_scores cache_cleaner check_all collect_optimized create_live_photo database_manager generate_test_media icloud_import install_deps mfb_rust_toolchain normalize_stale_embed_measurement_slots post_training_closure run_training sandbox_validate session_audit setup_private_db start_training_four training_pipeline delivery_heatmap corpus_thresholds smart_build"
@@ -28,6 +28,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
+        id: rust-toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -41,8 +42,8 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: macos-15-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: macos-15-arm64-cargo-
+          key: macos-15-arm64-cargo-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-15-arm64-cargo-${{ steps.rust-toolchain.outputs.cachekey }}-
 
       - name: Install dependencies (macOS ARM64)
         shell: bash

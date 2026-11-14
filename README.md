@@ -84,8 +84,9 @@ for every platform. A nightly build is a development snapshot.
 
 MFB invokes external media tools. Common requirements are FFmpeg/ffprobe,
 JPEG XL (`cjxl`, `djxl`, `jxlinfo`), ExifTool, ImageMagick, WebP tools and libheif.
-Source builds need the repository's pinned Rust nightly and **libheif 1.23.5 or
-newer**; selected formats and features can require additional tools.
+Source builds use the rolling Rust nightly selected by the repository's Rustup
+config and require **libheif 1.23.5 or newer**. Selected formats and features can
+require additional tools. CI uses the same nightly channel.
 
 For example, install the common macOS dependencies with Homebrew:
 
@@ -100,6 +101,10 @@ git clone https://github.com/nowaytouse/modern-format-boost.git
 cd modern-format-boost
 cargo build --locked --release -p img -p vid
 ```
+
+The workspace's `Cargo.toml` defines its build profiles. For an unoptimized
+local build without debug symbols, use `cargo build --locked --profile dev-fast`.
+Use `--profile profiling` for an optimized build with debug symbols.
 
 On macOS, use Smart Build to build or refresh the native application:
 

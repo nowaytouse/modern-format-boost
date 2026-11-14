@@ -5,13 +5,42 @@ use anyhow::{Context, Result, ensure};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The selected regular files and the native metadata observed during traversal.
+/// The selected regular files and the directory identities observed during traversal.
 /// Media content and delivery checks remain the responsibility of the worker.
 pub struct FastImgInputScope {
     pub src_root: PathBuf,
     pub candidates: Vec<AdmittedImageFile>,
     pub selected_is_directory: bool,
     token: String,
+    directory_witness: FastImgDirectoryWitness,
+}
+
+/// Directory identities from a scan, retained through media classification.
+pub struct FastImgDirectoryWitness {
+    input: PathBuf,
+    selected: PathBuf,
+    root: PathBuf,
+    root_stamp: DirectoryStamp,
+    descendants: Vec<(PathBuf, DirectoryStamp)>,
+}
+
+impl FastImgDirectoryWitness {
+    /// Recheck observed directories without enumerating their entries again.
+    ///
+    /// # Errors
+    /// Returns an error if a directory or selected path changed or cannot be read.
+    pub fn verify_unchanged(&self) -> Result<()> {
+        for (directory, stamp) in self.descendants.iter().rev() {
+            verify_directory_stamp(directory, stamp)?;
+        }
+        // Recheck the root after all its descendants.
+        verify_directory_stamp(&self.root, &self.root_stamp)?;
+        ensure!(
+            fs::canonicalize(&self.input)? == self.selected,
+            "fast-img selected input changed while observing its inventory"
+        );
+        Ok(())
+    }
 }
 
 impl FastImgInputScope {
@@ -30,33 +59,43 @@ impl FastImgInputScope {
             .with_context(|| format!("inspect fast-img selected input {}", selected.display()))?;
         let src_root = source_root(&selected, &metadata)?.to_path_buf();
         let selected_is_directory = metadata.is_dir();
+        let root_stamp = if selected_is_directory {
+            DirectoryStamp::from_metadata(&metadata)?
+        } else {
+            directory_stamp(&src_root)?
+        };
+        let mut descendants = Vec::new();
         let candidates = if metadata.is_file() {
             vec![AdmittedImageFile::from_metadata(&selected, &metadata)?]
         } else {
-            observe_regular_files(&src_root, recursive)?
+            observe_regular_files(&src_root, recursive, &mut descendants)?
         };
-        ensure!(
-            fs::canonicalize(input)? == selected,
-            "fast-img selected input changed while observing its inventory"
-        );
+        descendants.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        let directory_witness = FastImgDirectoryWitness {
+            input: input.to_path_buf(),
+            selected,
+            root: src_root.clone(),
+            root_stamp,
+            descendants,
+        };
+        directory_witness.verify_unchanged()?;
         let mut hasher =
-            blake3::Hasher::new_derive_key("Modern Format Boost Fast IMG input scope v1");
-        hash_path(&mut hasher, &selected)?;
+            blake3::Hasher::new_derive_key("Modern Format Boost Fast IMG input scope v2");
+        hash_path(&mut hasher, &directory_witness.selected)?;
         hash_path(&mut hasher, &src_root)?;
         hasher.update(&[u8::from(recursive), u8::from(selected_is_directory)]);
+        directory_witness.root_stamp.hash_identity(&mut hasher);
+        hasher.update(&u64::try_from(directory_witness.descendants.len())?.to_le_bytes());
+        for (directory, stamp) in &directory_witness.descendants {
+            hash_path(&mut hasher, directory.strip_prefix(&src_root)?)?;
+            stamp.hash_identity(&mut hasher);
+        }
         hasher.update(&u64::try_from(candidates.len())?.to_le_bytes());
         for candidate in &candidates {
             hash_path(&mut hasher, candidate.path().strip_prefix(&src_root)?)?;
             let identity = &candidate.identity;
             hasher.update(&identity.size.to_le_bytes());
-            let (before_epoch, modified) =
-                match identity.modified_time.duration_since(std::time::UNIX_EPOCH) {
-                    Ok(duration) => (false, duration),
-                    Err(error) => (true, error.duration()),
-                };
-            hasher.update(&[u8::from(before_epoch)]);
-            hasher.update(&modified.as_secs().to_le_bytes());
-            hasher.update(&modified.subsec_nanos().to_le_bytes());
+            hash_modified_time(&mut hasher, identity.modified_time);
             #[cfg(unix)]
             {
                 hasher.update(&identity.device.to_le_bytes());
@@ -70,12 +109,19 @@ impl FastImgInputScope {
             candidates,
             selected_is_directory,
             token: hasher.finalize().to_hex().to_string(),
+            directory_witness,
         })
     }
 
     #[must_use]
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    /// Transfer the observed files and the witness for their containing directories.
+    #[must_use]
+    pub fn into_scan(self) -> (Vec<AdmittedImageFile>, FastImgDirectoryWitness) {
+        (self.candidates, self.directory_witness)
     }
 }
 
@@ -99,12 +145,28 @@ fn hash_path(hasher: &mut blake3::Hasher, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn observe_regular_files(root: &Path, recursive: bool) -> Result<Vec<AdmittedImageFile>> {
+fn hash_modified_time(hasher: &mut blake3::Hasher, modified: std::time::SystemTime) {
+    let (before_epoch, duration) = match modified.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => (false, duration),
+        Err(error) => (true, error.duration()),
+    };
+    hasher.update(&[u8::from(before_epoch)]);
+    hasher.update(&duration.as_secs().to_le_bytes());
+    hasher.update(&duration.subsec_nanos().to_le_bytes());
+}
+
+fn observe_regular_files(
+    root: &Path,
+    recursive: bool,
+    directories: &mut Vec<(PathBuf, DirectoryStamp)>,
+) -> Result<Vec<AdmittedImageFile>> {
     let mut files = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
         crate::batch_control::checkpoint()?;
-        let stamp = directory_stamp(&directory)?;
+        if directory != root {
+            directories.push((directory.clone(), directory_stamp(&directory)?));
+        }
         let entries = fs::read_dir(&directory)
             .with_context(|| format!("fast-img scan read dir {}", directory.display()))?;
         for entry in entries {
@@ -123,14 +185,19 @@ fn observe_regular_files(root: &Path, recursive: bool) -> Result<Vec<AdmittedIma
                 files.push(AdmittedImageFile::from_metadata(&path, &metadata)?);
             }
         }
-        ensure!(
-            directory_stamp(&directory)? == stamp,
-            "fast-img scan directory changed while observing inventory: {}",
-            directory.display()
-        );
     }
     files.sort_unstable_by(|left, right| left.path().cmp(right.path()));
     Ok(files)
+}
+
+fn verify_directory_stamp(directory: &Path, stamp: &DirectoryStamp) -> Result<()> {
+    crate::batch_control::checkpoint()?;
+    ensure!(
+        directory_stamp(directory)? == *stamp,
+        "fast-img scan directory changed while observing inventory: {}",
+        directory.display()
+    );
+    Ok(())
 }
 
 #[derive(PartialEq, Eq)]
@@ -141,9 +208,6 @@ struct DirectoryStamp {
 }
 
 fn directory_stamp(path: &Path) -> Result<DirectoryStamp> {
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
-
     ensure!(
         fs::canonicalize(path)? == path,
         "fast-img scan directory resolved through a changed link: {}",
@@ -156,16 +220,35 @@ fn directory_stamp(path: &Path) -> Result<DirectoryStamp> {
         "fast-img scan path changed to a non-directory: {}",
         path.display()
     );
-    Ok(DirectoryStamp {
-        modified: metadata.modified()?,
+    DirectoryStamp::from_metadata(&metadata)
+}
+
+impl DirectoryStamp {
+    fn hash_identity(&self, hasher: &mut blake3::Hasher) {
         #[cfg(unix)]
-        native: (
-            metadata.dev(),
-            metadata.ino(),
-            metadata.ctime(),
-            metadata.ctime_nsec(),
-        ),
-    })
+        {
+            hasher.update(&self.native.0.to_le_bytes());
+            hasher.update(&self.native.1.to_le_bytes());
+        }
+        #[cfg(not(unix))]
+        hash_modified_time(hasher, self.modified);
+    }
+
+    fn from_metadata(metadata: &fs::Metadata) -> Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
+        Ok(Self {
+            modified: metadata.modified()?,
+            #[cfg(unix)]
+            native: (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +278,43 @@ mod tests {
         let third = FastImgInputScope::observe(root, true)?;
         assert_ne!(second.token(), third.token());
         assert_eq!(third.candidates.len(), second.candidates.len());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fast_img_input_scope_refuses_replaced_ancestors_with_the_same_media() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let root = scratch.path().canonicalize()?.join("source");
+        let nested = root.join("nested");
+        fs::create_dir_all(nested.join("media"))?;
+        fs::write(nested.join("media/item.jpg"), b"synthetic media")?;
+        let parked = root.with_extension("parked");
+        let original = FastImgInputScope::observe(&root, true)?;
+        let root_stamp = directory_stamp(&root)?;
+
+        fs::rename(&root, &parked)?;
+        fs::create_dir(&root)?;
+        fs::rename(parked.join("nested"), &nested)?;
+        assert!(verify_directory_stamp(&root, &root_stamp).is_err());
+        let replaced_root = FastImgInputScope::observe(&root, true)?;
+        assert!(original.candidates[0].identity == replaced_root.candidates[0].identity);
+        assert_ne!(original.token(), replaced_root.token());
+        fs::remove_dir(&parked)?;
+
+        let shallow = FastImgInputScope::observe(&root, false)?;
+        let nested_stamp = directory_stamp(&nested)?;
+        fs::rename(&nested, &parked)?;
+        fs::create_dir(&nested)?;
+        fs::rename(parked.join("media"), nested.join("media"))?;
+        assert!(verify_directory_stamp(&nested, &nested_stamp).is_err());
+        let replaced_nested = FastImgInputScope::observe(&root, true)?;
+        assert!(original.candidates[0].identity == replaced_nested.candidates[0].identity);
+        assert_ne!(replaced_root.token(), replaced_nested.token());
+        assert_eq!(
+            shallow.token(),
+            FastImgInputScope::observe(&root, false)?.token()
+        );
         Ok(())
     }
 

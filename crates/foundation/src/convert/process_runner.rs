@@ -19,6 +19,7 @@ fn capture_text_stream_bounded<R: Read>(
     stream_name: &'static str,
     command_line: &str,
     stream_verbose_stderr: bool,
+    relay_line: impl Fn(&str) -> bool,
 ) -> Result<String> {
     let mut reader = BufReader::new(stream);
     let mut output = String::with_capacity(max_bytes.min(8 * 1024));
@@ -58,6 +59,9 @@ fn capture_text_stream_bounded<R: Read>(
             };
             match std::str::from_utf8(line) {
                 Ok(line) => {
+                    if had_newline && relay_line(line) {
+                        continue;
+                    }
                     if stream_verbose_stderr
                         && crate::progress_mode::is_verbose_mode()
                         && should_stream_verbose_stderr_line(command_line, line)
@@ -238,7 +242,14 @@ impl ManagedProcess {
     /// # Errors
     /// Returns error if spawning fails.
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
-        Self::spawn_with_policy(cmd, true, true, MANAGED_PROCESS_CAPTURE_MAX_BYTES, false)
+        Self::spawn_with_policy(
+            cmd,
+            true,
+            true,
+            MANAGED_PROCESS_CAPTURE_MAX_BYTES,
+            false,
+            |_, _| false,
+        )
     }
 
     /// Spawn a command whose non-zero exit is an expected, caller-inspected
@@ -248,7 +259,32 @@ impl ManagedProcess {
     /// # Errors
     /// Returns an error if spawning fails.
     pub fn spawn_captured(cmd: &mut Command) -> Result<Self> {
-        Self::spawn_with_policy(cmd, false, false, MANAGED_PROCESS_CAPTURE_MAX_BYTES, false)
+        Self::spawn_with_policy(
+            cmd,
+            false,
+            false,
+            MANAGED_PROCESS_CAPTURE_MAX_BYTES,
+            false,
+            |_, _| false,
+        )
+    }
+
+    /// Relay selected complete stdout lines while preserving the captured result and stderr.
+    ///
+    /// # Errors
+    /// Returns an error if spawning fails.
+    pub fn spawn_captured_relaying(
+        cmd: &mut Command,
+        relay_stdout: impl Fn(u32, &str) -> bool + Send + 'static,
+    ) -> Result<Self> {
+        Self::spawn_with_policy(
+            cmd,
+            false,
+            false,
+            MANAGED_PROCESS_CAPTURE_MAX_BYTES,
+            false,
+            relay_stdout,
+        )
     }
 
     /// Capture a diagnostic command in a group whose descendants are stopped before draining.
@@ -261,7 +297,14 @@ impl ManagedProcess {
             use std::os::unix::process::CommandExt;
             // shortcut: descendants must retain this group; add deadline-aware pipe draining if daemonizing tools need support.
             cmd.process_group(0);
-            Self::spawn_with_policy(cmd, false, false, MANAGED_PROCESS_CAPTURE_MAX_BYTES, true)
+            Self::spawn_with_policy(
+                cmd,
+                false,
+                false,
+                MANAGED_PROCESS_CAPTURE_MAX_BYTES,
+                true,
+                |_, _| false,
+            )
         }
         #[cfg(not(unix))]
         {
@@ -276,6 +319,7 @@ impl ManagedProcess {
         audit_nonzero_exit: bool,
         capture_max_bytes: usize,
         isolated: bool,
+        relay_stdout: impl Fn(u32, &str) -> bool + Send + 'static,
     ) -> Result<Self> {
         let command_line = crate::common_utils::format_command_for_audit(cmd);
         crate::log_debug!(
@@ -290,7 +334,8 @@ impl ManagedProcess {
             .spawn()
             .with_context(|| format!("Failed to spawn command: {command_line}"))?;
 
-        let isolated_group = isolated.then(|| child.id());
+        let pid = child.id();
+        let isolated_group = isolated.then_some(pid);
         let mut process = Self {
             child,
             stdout_thread: None,
@@ -320,6 +365,7 @@ impl ManagedProcess {
                 "stdout",
                 &stdout_command_line,
                 false,
+                |line| relay_stdout(pid, line),
             )
         });
 
@@ -331,6 +377,7 @@ impl ManagedProcess {
                 "stderr",
                 &stderr_command_line,
                 stream_verbose_stderr,
+                |_| false,
             )
         });
 
@@ -987,10 +1034,11 @@ mod tests {
         command.arg("-c").arg(
             "i=0; while [ \"$i\" -lt 8192 ]; do printf 0123456789abcdef; i=$((i+1)); done; printf done >&2",
         );
-        let result = ManagedProcess::spawn_with_policy(&mut command, false, false, 64, false)
-            .and_then(|process| {
-                process.wait_timeout(Duration::from_secs(2), "bounded output fixture")
-            });
+        let result =
+            ManagedProcess::spawn_with_policy(&mut command, false, false, 64, false, |_, _| false)
+                .and_then(|process| {
+                    process.wait_timeout(Duration::from_secs(2), "bounded output fixture")
+                });
         let error = match result {
             Ok(_) => panic!("oversized captured output must fail loudly"),
             Err(error) => error,
@@ -1004,8 +1052,14 @@ mod tests {
     #[test]
     fn capture_text_stream_bounded_scopes_borrow_and_drains() {
         let data = b"line1\nline2\nline3\nline4\n";
-        let captured =
-            capture_text_stream_bounded(&data[..], 12, "test_stream", "mock_command", false);
+        let captured = capture_text_stream_bounded(
+            &data[..],
+            12,
+            "test_stream",
+            "mock_command",
+            false,
+            |_| false,
+        );
         let err = captured.unwrap_err();
         assert!(err.to_string().contains("exceeded 12 captured bytes"));
     }

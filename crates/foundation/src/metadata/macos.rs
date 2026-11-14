@@ -7,6 +7,7 @@
 use crate::builder_base::ToolBuilder;
 use std::ffi::CString;
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
@@ -230,16 +231,39 @@ pub(super) fn set_added_time(path: &Path, time: std::time::SystemTime) -> io::Re
 }
 
 pub(super) fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
-    unsafe extern "C" {
-        fn getattrlist(
-            path: *const i8,
-            attrList: *mut Attrlist,
-            attrBuf: *mut std::ffi::c_void,
-            attrBufSize: usize,
-            options: u32,
-        ) -> i32;
-    }
     let c_path = CString::new(path.as_os_str().as_bytes())?;
+    read_added_time(|attributes, buffer| {
+        // SAFETY: the path and buffers stay valid for this synchronous call.
+        unsafe {
+            libc::getattrlist(
+                c_path.as_ptr(),
+                attributes,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                0,
+            )
+        }
+    })
+}
+
+pub(super) fn get_added_time_on_file(file: &std::fs::File) -> io::Result<std::time::SystemTime> {
+    read_added_time(|attributes, buffer| {
+        // SAFETY: file owns the descriptor and the buffers stay valid for the call.
+        unsafe {
+            libc::fgetattrlist(
+                file.as_raw_fd(),
+                attributes,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                0,
+            )
+        }
+    })
+}
+
+fn read_added_time(
+    get_attributes: impl FnOnce(*mut std::ffi::c_void, &mut [u8]) -> i32,
+) -> io::Result<std::time::SystemTime> {
     let mut attr_list = Attrlist {
         bitmapcount: ATTR_BIT_MAP_COUNT,
         reserved: 0,
@@ -250,17 +274,7 @@ pub(super) fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
         forkattr: 0,
     };
     let mut buf = [0_u8; GETATTRLIST_TIME_BUFFER_BYTES];
-    // SAFETY: c_path and &mut attr_list / &mut buf are valid; getattrlist is
-    // synchronous and does not retain pointers.
-    let ret = unsafe {
-        getattrlist(
-            c_path.as_ptr(),
-            &raw mut attr_list,
-            buf.as_mut_ptr().cast::<std::ffi::c_void>(),
-            buf.len(),
-            0,
-        )
-    };
+    let ret = get_attributes((&raw mut attr_list).cast(), &mut buf);
     if ret != 0_i32 {
         return Err(io::Error::last_os_error());
     }
@@ -424,7 +438,14 @@ fn parse_exif_original_date(json: &[u8]) -> io::Result<Option<chrono::DateTime<c
     };
     if !matches!(
         offset.as_bytes(),
-        [b'+' | b'-', b'0'..=b'9', b'0'..=b'9', b':', b'0'..=b'9', b'0'..=b'9']
+        [
+            b'+' | b'-',
+            b'0'..=b'9',
+            b'0'..=b'9',
+            b':',
+            b'0'..=b'9',
+            b'0'..=b'9'
+        ]
     ) {
         return Err(io::Error::other("invalid EXIF OffsetTimeOriginal"));
     }
@@ -519,16 +540,43 @@ fn system_time_from_macos_timespec(
 }
 
 fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Result<()> {
-    unsafe extern "C" {
-        fn setattrlist(
-            path: *const i8,
-            attrList: *mut Attrlist,
-            attrBuf: *mut std::ffi::c_void,
-            attrBufSize: usize,
-            options: u32,
-        ) -> i32;
-    }
     let c_path = CString::new(path.as_os_str().as_bytes())?;
+    write_time_attr(time, attr, |attributes, buffer, size| {
+        // SAFETY: the path and buffers stay valid for this synchronous call.
+        unsafe { libc::setattrlist(c_path.as_ptr(), attributes, buffer, size, 0) }
+    })
+}
+
+pub(super) fn set_creation_time_on_file(
+    file: &std::fs::File,
+    time: std::time::SystemTime,
+) -> io::Result<()> {
+    set_time_attr_on_file(file, time, ATTR_CMN_CRTIME)
+}
+
+pub(super) fn set_added_time_on_file(
+    file: &std::fs::File,
+    time: std::time::SystemTime,
+) -> io::Result<()> {
+    set_time_attr_on_file(file, time, ATTR_CMN_ADDEDTIME)
+}
+
+fn set_time_attr_on_file(
+    file: &std::fs::File,
+    time: std::time::SystemTime,
+    attr: u32,
+) -> io::Result<()> {
+    write_time_attr(time, attr, |attributes, buffer, size| {
+        // SAFETY: file owns the descriptor and the buffers stay valid for the call.
+        unsafe { libc::fsetattrlist(file.as_raw_fd(), attributes, buffer, size, 0) }
+    })
+}
+
+fn write_time_attr(
+    time: std::time::SystemTime,
+    attr: u32,
+    set_attributes: impl FnOnce(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> i32,
+) -> io::Result<()> {
     let mut attr_list = Attrlist {
         bitmapcount: ATTR_BIT_MAP_COUNT,
         reserved: 0,
@@ -546,17 +594,11 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
             .ok_or_else(|| io::Error::other("Timestamp overflows i64"))?,
         tv_nsec: i64::from(duration.subsec_nanos()),
     };
-    // SAFETY: c_path and local buffers are valid; setattrlist is synchronous and
-    // does not retain pointers.
-    let ret = unsafe {
-        setattrlist(
-            c_path.as_ptr(),
-            &raw mut attr_list,
-            (&raw mut buf).cast::<std::ffi::c_void>(),
-            std::mem::size_of::<Timespec>(),
-            0,
-        )
-    };
+    let ret = set_attributes(
+        (&raw mut attr_list).cast(),
+        (&raw mut buf).cast(),
+        std::mem::size_of::<Timespec>(),
+    );
     if ret != 0_i32 {
         return Err(io::Error::last_os_error());
     }
@@ -700,12 +742,16 @@ mod tests {
     fn exif_original_date_requires_an_explicit_offset() -> std::io::Result<()> {
         let unknown = parse_exif_original_date(br#"[{"DateTimeOriginal":"2024:04:06 07:53:35"}]"#)?;
         assert_eq!(unknown, None);
-        let date = parse_exif_original_date(br#"[{"DateTimeOriginal":"2024:04:06 07:53:35","OffsetTimeOriginal":"-07:00"}]"#)?
-            .ok_or_else(|| std::io::Error::other("missing explicit offset date"))?;
+        let date = parse_exif_original_date(
+            br#"[{"DateTimeOriginal":"2024:04:06 07:53:35","OffsetTimeOriginal":"-07:00"}]"#,
+        )?
+        .ok_or_else(|| std::io::Error::other("missing explicit offset date"))?;
         assert_eq!(date.to_rfc3339(), "2024-04-06T14:53:35+00:00");
         assert!(
-            parse_exif_original_date(br#"[{"DateTimeOriginal":"2024:04:06 07:53:35","OffsetTimeOriginal":"+99:00"}]"#)
-                .is_err()
+            parse_exif_original_date(
+                br#"[{"DateTimeOriginal":"2024:04:06 07:53:35","OffsetTimeOriginal":"+99:00"}]"#
+            )
+            .is_err()
         );
         Ok(())
     }
@@ -728,9 +774,12 @@ mod tests {
                 .output()?;
             anyhow::ensure!(write.status.success(), "synthetic EXIF write failed");
             for timezone in ["UTC", "America/Los_Angeles"] {
-                let read = exif_original_date_command(&jpeg).env("TZ", timezone).output()?;
+                let read = exif_original_date_command(&jpeg)
+                    .env("TZ", timezone)
+                    .output()?;
                 anyhow::ensure!(read.status.success(), "synthetic EXIF read failed");
-                let original = parse_exif_original_date(&read.stdout)?.map(|date| date.to_rfc3339());
+                let original =
+                    parse_exif_original_date(&read.stdout)?.map(|date| date.to_rfc3339());
                 assert_eq!(
                     original.as_deref(),
                     (offset == "+08:00").then_some("2024-04-05T23:53:35+00:00")

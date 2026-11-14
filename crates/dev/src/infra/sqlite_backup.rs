@@ -6,15 +6,29 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub fn require_new_destination(destination: &Path) -> Result<()> {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let mut path = destination.as_os_str().to_os_string();
-        path.push(suffix);
-        match fs::symlink_metadata(Path::new(&path)) {
+    require_absent_sqlite_entries(
+        destination,
+        &["", "-wal", "-shm", "-journal"],
+        "backup destination or SQLite sidecar already exists; nothing overwritten",
+    )
+}
+
+pub fn require_snapshot_without_sidecars(snapshot: &Path) -> Result<()> {
+    require_absent_sqlite_entries(
+        snapshot,
+        &["-wal", "-shm", "-journal"],
+        "standalone SQLite snapshot has a sidecar; snapshot not verified",
+    )
+}
+
+fn require_absent_sqlite_entries(path: &Path, suffixes: &[&str], conflict: &str) -> Result<()> {
+    for suffix in suffixes {
+        let mut entry = path.as_os_str().to_os_string();
+        entry.push(suffix);
+        match fs::symlink_metadata(Path::new(&entry)) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("inspect backup destination"),
-            Ok(_) => anyhow::bail!(
-                "backup destination or SQLite sidecar already exists; nothing overwritten"
-            ),
+            Err(error) => return Err(error).context("inspect backup filesystem entry"),
+            Ok(_) => anyhow::bail!("{conflict}"),
         }
     }
     Ok(())

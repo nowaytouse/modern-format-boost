@@ -545,73 +545,117 @@ impl AnalysisCache {
     /// Initializes the database schema if it doesn't exist.
     fn init_schema(client: &mut Client) -> Result<()> {
         let schema_sql = include_str!("../../../dev/src/config/sql/analysis_cache_pg.sql");
-        client
-            .batch_execute(schema_sql)
-            .context("Failed to initialize Postgres cache schema")?;
-
-        // Initialize metadata if empty
-        let current_ver: Option<i32> = client
-            .query_opt(
+        let mut tx = client
+            .build_transaction()
+            .isolation_level(postgres::IsolationLevel::ReadCommitted)
+            .start()?;
+        // Serialize cache initialization across IMG and VID workers in this database.
+        tx.query_one(
+            "SELECT pg_advisory_xact_lock(hashtext('mfb_analysis_cache_schema'))",
+            &[],
+        )?;
+        let has_metadata: bool = tx
+            .query_one("SELECT to_regclass('cache_metadata') IS NOT NULL", &[])?
+            .try_get(0)?;
+        let current_version: Option<i32> = if has_metadata {
+            tx.query_opt(
                 "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
                 &[],
             )?
-            .map(|row| row.get(0));
+            .map(|row| row.try_get(0))
+            .transpose()?
+        } else {
+            None
+        };
 
-        match current_ver {
+        match current_version {
             None => {
-                client.execute(
+                let has_unversioned_cache: bool = tx
+                    .query_one(
+                        "SELECT to_regclass('path_index') IS NOT NULL
+                         OR to_regclass('analysis_records') IS NOT NULL
+                         OR to_regclass('quality_records') IS NOT NULL
+                         OR to_regclass('video_records') IS NOT NULL
+                         OR to_regclass('path_tree_snapshots') IS NOT NULL",
+                        &[],
+                    )?
+                    .try_get(0)?;
+                anyhow::ensure!(
+                    !has_unversioned_cache,
+                    "Analysis cache has no schema version"
+                );
+                tx.batch_execute(schema_sql)
+                    .context("Initialize PostgreSQL analysis cache")?;
+                tx.execute(
                     "INSERT INTO cache_metadata (key, value) VALUES ('schema_version', $1)",
                     &[&CACHE_SCHEMA_VERSION],
                 )?;
             }
-            Some(existing) if existing != CACHE_SCHEMA_VERSION => {
-                Self::reset_cache_for_schema_cutover(client, existing, schema_sql)?;
+            Some(version) if version == CACHE_SCHEMA_VERSION => {
+                tx.batch_execute(schema_sql)
+                    .context("Ensure PostgreSQL analysis cache relations exist")?;
             }
-            Some(_) => {}
+            Some(version) if (1..CACHE_SCHEMA_VERSION).contains(&version) => {
+                Self::reset_cache_for_schema_cutover(&mut tx, schema_sql)?;
+            }
+            Some(version) => {
+                anyhow::bail!("Unsupported PostgreSQL analysis cache schema {version}")
+            }
         }
-
-        Self::invalidate_old_algorithm_entries(client)?;
+        let saved_version: i32 = tx
+            .query_one(
+                "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
+                &[],
+            )?
+            .try_get(0)?;
+        anyhow::ensure!(
+            saved_version == CACHE_SCHEMA_VERSION,
+            "Analysis cache schema version did not persist"
+        );
+        Self::invalidate_old_algorithm_entries(&mut tx)?;
+        tx.commit()?;
+        if let Some(version) = current_version.filter(|version| *version != CACHE_SCHEMA_VERSION) {
+            crate::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
+                "analysis_cache_schema_cutover_purge",
+                format!(
+                    "previous_schema_version={version}; new_schema_version={CACHE_SCHEMA_VERSION}"
+                ),
+            );
+            crate::log_info!(
+                crate::infra::static_logs::messages::LABEL_CACHE,
+                &format!(
+                    "Cleared cached analysis payloads due to schema cutover \
+                     (v{version} -> v{CACHE_SCHEMA_VERSION})"
+                )
+            );
+        }
         Ok(())
     }
 
     fn reset_cache_for_schema_cutover(
-        client: &mut Client,
-        previous_schema_version: i32,
+        tx: &mut postgres::Transaction<'_>,
         schema_sql: &str,
     ) -> Result<()> {
-        crate::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
-            "analysis_cache_schema_cutover_purge",
-            format!(
-                "previous_schema_version={previous_schema_version}; \
-                 new_schema_version={CACHE_SCHEMA_VERSION}"
-            ),
-        );
-        client
-            .batch_execute(
-                "DROP TABLE IF EXISTS path_index, analysis_records, quality_records, \
-                 video_records CASCADE",
-            )
-            .context("Failed to drop old cache tables during schema cutover")?;
-        client
-            .batch_execute(schema_sql)
-            .context("Failed to recreate cache tables during schema cutover")?;
-        client.execute(
+        tx.batch_execute(
+            "DROP TABLE IF EXISTS path_index, analysis_records, quality_records, video_records",
+        )
+        .context("Drop old analysis cache tables without cascading to dependent objects")?;
+        tx.batch_execute(schema_sql)
+            .context("Recreate analysis cache tables during schema cutover")?;
+        let updated = tx.execute(
             "UPDATE cache_metadata SET value = $1 WHERE key = 'schema_version'",
             &[&CACHE_SCHEMA_VERSION],
         )?;
-        crate::log_info!(
-            crate::infra::static_logs::messages::LABEL_CACHE,
-            &format!(
-                "Cleared cached analysis payloads due to schema cutover \
-                 (v{previous_schema_version} -> v{CACHE_SCHEMA_VERSION})"
-            )
+        anyhow::ensure!(
+            updated == 1,
+            "Analysis cache schema version row did not update"
         );
         Ok(())
     }
 
     /// Deletes entries that were created with an older version of the analysis
     /// algorithm.
-    fn invalidate_old_algorithm_entries(client: &mut Client) -> Result<()> {
+    fn invalidate_old_algorithm_entries(client: &mut impl postgres::GenericClient) -> Result<()> {
         let tables = ["analysis_records", "quality_records", "video_records"];
         let mut total_invalidated: i64 = 0;
         let current_version = cache_algorithm();
@@ -1878,6 +1922,179 @@ mod tests {
         );
         client.batch_execute("UPDATE video_records SET algorithm_version = NULL")?;
         assert!(AnalysisCache::statistics_with_client(&mut client).is_err());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires MFB_TEST_PG_CONFIG pointing to an isolated PostgreSQL instance"]
+    fn postgres_analysis_schema_rejects_unknown_versions_and_rolls_back_failed_cutover()
+    -> Result<()> {
+        let config = std::env::var("MFB_TEST_PG_CONFIG")?;
+        let mut client = Client::connect(&config, postgres::NoTls)?;
+        client.batch_execute("CREATE SCHEMA mfb_analysis_schema_fixture; SET search_path TO mfb_analysis_schema_fixture")?;
+        let result = (|| -> Result<()> {
+            client.batch_execute(
+                "CREATE TABLE path_tree_snapshots (root_path TEXT, media_kind TEXT)",
+            )?;
+            assert!(
+                AnalysisCache::init_schema(&mut client)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no schema version")
+            );
+            assert!(
+                client
+                    .query_one("SELECT to_regclass('cache_metadata') IS NULL", &[])?
+                    .get::<_, bool>(0)
+            );
+            client.batch_execute(
+                "DROP TABLE path_tree_snapshots;
+                 SET default_transaction_isolation = 'repeatable read';",
+            )?;
+            std::thread::scope(|scope| -> Result<()> {
+                let other = scope.spawn(|| -> Result<()> {
+                    let mut other = Client::connect(&config, postgres::NoTls)?;
+                    other.batch_execute(
+                        "SET search_path TO mfb_analysis_schema_fixture;
+                         SET default_transaction_isolation = 'repeatable read';",
+                    )?;
+                    AnalysisCache::init_schema(&mut other)
+                });
+                AnalysisCache::init_schema(&mut client)?;
+                other
+                    .join()
+                    .expect("concurrent cache initializer panicked")?;
+                Ok(())
+            })?;
+            let old_version = CACHE_SCHEMA_VERSION - 1;
+            client.execute("UPDATE cache_metadata SET value = $1", &[&old_version])?;
+            client.batch_execute(
+                "INSERT INTO analysis_records (content_hash,file_size,analysis_data,created_at,algorithm_version)
+                   VALUES ('original',1,'fixture',1,1);
+                 CREATE VIEW external_cache_consumer AS SELECT content_hash FROM video_records;",
+            )?;
+            assert!(AnalysisCache::init_schema(&mut client).is_err());
+            assert_eq!(
+                client
+                    .query_one("SELECT value FROM cache_metadata", &[])?
+                    .get::<_, i32>(0),
+                old_version
+            );
+            assert_eq!(
+                client
+                    .query_one("SELECT count(*) FROM analysis_records", &[])?
+                    .get::<_, i64>(0),
+                1
+            );
+            assert!(
+                client
+                    .query("SELECT * FROM external_cache_consumer", &[])
+                    .is_ok()
+            );
+            client.batch_execute("DROP VIEW external_cache_consumer")?;
+
+            client.batch_execute(
+                "CREATE FUNCTION reject_cache_version_update() RETURNS trigger LANGUAGE plpgsql AS
+                 $$ BEGIN RAISE EXCEPTION 'injected metadata failure'; END $$;
+                 CREATE TRIGGER reject_update BEFORE UPDATE ON cache_metadata
+                 FOR EACH ROW EXECUTE FUNCTION reject_cache_version_update();",
+            )?;
+            assert!(AnalysisCache::init_schema(&mut client).is_err());
+            assert_eq!(
+                client
+                    .query_one("SELECT value FROM cache_metadata", &[])?
+                    .get::<_, i32>(0),
+                old_version
+            );
+            assert_eq!(
+                client
+                    .query_one("SELECT count(*) FROM analysis_records", &[])?
+                    .get::<_, i64>(0),
+                1
+            );
+            client.batch_execute(
+                "DROP TRIGGER reject_update ON cache_metadata;
+                 CREATE FUNCTION suppress_cache_version_update() RETURNS trigger LANGUAGE plpgsql AS
+                 $$ BEGIN RETURN NULL; END $$;
+                 CREATE TRIGGER suppress_update BEFORE UPDATE ON cache_metadata
+                 FOR EACH ROW EXECUTE FUNCTION suppress_cache_version_update();",
+            )?;
+            assert!(AnalysisCache::init_schema(&mut client).is_err());
+            assert_eq!(
+                client
+                    .query_one("SELECT value FROM cache_metadata", &[])?
+                    .get::<_, i32>(0),
+                old_version
+            );
+            assert_eq!(
+                client
+                    .query_one("SELECT count(*) FROM analysis_records", &[])?
+                    .get::<_, i64>(0),
+                1
+            );
+            client.batch_execute(
+                "DROP TRIGGER suppress_update ON cache_metadata;
+                 INSERT INTO path_tree_snapshots VALUES ('saved', 'image', '/fixture', 1, '{}', 1);",
+            )?;
+
+            let future_version = CACHE_SCHEMA_VERSION + 1;
+            client.execute("UPDATE cache_metadata SET value = $1", &[&future_version])?;
+            assert!(
+                AnalysisCache::init_schema(&mut client)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Unsupported")
+            );
+            assert_eq!(
+                client
+                    .query_one("SELECT value FROM cache_metadata", &[])?
+                    .get::<_, i32>(0),
+                future_version
+            );
+            assert_eq!(
+                client
+                    .query_one("SELECT count(*) FROM analysis_records", &[])?
+                    .get::<_, i64>(0),
+                1
+            );
+            client.batch_execute("DELETE FROM cache_metadata")?;
+            assert!(
+                AnalysisCache::init_schema(&mut client)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no schema version")
+            );
+            client.execute(
+                "INSERT INTO cache_metadata VALUES ('schema_version',$1)",
+                &[&old_version],
+            )?;
+
+            AnalysisCache::init_schema(&mut client)?;
+            assert_eq!(
+                client
+                    .query_one("SELECT value FROM cache_metadata", &[])?
+                    .get::<_, i32>(0),
+                CACHE_SCHEMA_VERSION
+            );
+            assert_eq!(
+                client
+                    .query_one("SELECT count(*) FROM analysis_records", &[])?
+                    .get::<_, i64>(0),
+                0
+            );
+            assert_eq!(
+                client
+                    .query_one("SELECT cache_key FROM path_tree_snapshots", &[])?
+                    .get::<_, String>(0),
+                "saved"
+            );
+            Ok(())
+        })();
+        let cleanup = client.batch_execute(
+            "SET search_path TO pg_catalog; DROP SCHEMA mfb_analysis_schema_fixture CASCADE",
+        );
+        result?;
+        cleanup?;
         Ok(())
     }
 

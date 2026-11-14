@@ -1,8 +1,8 @@
 //! Shared verification gate model for fast/full media pipelines.
 
-use super::gate1_resume::Gate1ProofCache;
 pub(crate) use super::gate1_resume::FinalInputObservation;
-pub use super::gate1_resume::{FinalVerificationInputs, Gate1WorkProofs};
+use super::gate1_resume::Gate1ProofCache;
+pub use super::gate1_resume::{FinalVerificationInputs, Gate1WorkProofs, retained_source_blake3};
 use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
 use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState};
 use serde::{Deserialize, Serialize};
@@ -293,7 +293,7 @@ impl Gate1Local {
             error_mode,
             Gate1ProofCache::for_marker_with_work(ctx, marker, work),
             GateActivityKind::Local,
-            false,
+            true,
         )
     }
 
@@ -310,7 +310,7 @@ impl Gate1Local {
             error_mode,
             Gate1ProofCache::fresh_for_marker(ctx, marker),
             GateActivityKind::PhotosCustody,
-            false,
+            true,
         )
     }
 
@@ -337,9 +337,9 @@ impl Gate1Local {
         scoped_inventory: bool,
     ) -> GateResult {
         match selected {
-            Ok(Some(cache)) => Self::run_with_proof_cache_for_gate(
-                ctx, error_mode, &cache, kind, scoped_inventory,
-            ),
+            Ok(Some(cache)) => {
+                Self::run_with_proof_cache_for_gate(ctx, error_mode, &cache, kind, scoped_inventory)
+            }
             Ok(None) => {
                 let activity = GateActivity::new(kind);
                 run_local_checks(
@@ -353,7 +353,13 @@ impl Gate1Local {
             }
             Err(error) => {
                 let activity = GateActivity::new(kind);
-                activity.emit("inventory", 0, LOCAL_REQUIRED_CHECKS.len(), GateActivityState::Failed, None);
+                activity.emit(
+                    "inventory",
+                    0,
+                    LOCAL_REQUIRED_CHECKS.len(),
+                    GateActivityState::Failed,
+                    None,
+                );
                 gate_result(vec![detail(
                     "metadata",
                     false,
@@ -436,14 +442,38 @@ impl Gate1Local {
 }
 
 fn local_output_inventory(ctx: &PipelineCtx, scoped: bool) -> anyhow::Result<Vec<PathBuf>> {
-    if !scoped {
-        return collect_delivery_output_files(&ctx.working_copy, None);
+    if !scoped || ctx.blake3_log.values().any(|entry| entry.out_rel.is_none()) {
+        return collect_delivery_output_files(&ctx.working_copy, ctx.output_format);
     }
-    ctx.blake3_log.values().map(|entry| {
-        let rel = entry.out_rel.as_deref()
+    let mut files = BTreeSet::new();
+    for entry in ctx.blake3_log.values() {
+        let rel = entry
+            .out_rel
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("scoped final proof has no explicit output mapping"))?;
-        Ok(ctx.working_copy.join(rel))
-    }).collect()
+        validate_marker_relative_path("verified output", rel).map_err(anyhow::Error::msg)?;
+        let relative = Path::new(rel);
+        validate_no_symlink_components(&ctx.working_copy, relative).map_err(anyhow::Error::msg)?;
+        let path = ctx.working_copy.join(relative);
+        let format = crate::image::format_detect::detect_regular_file_format(&path)?;
+        anyhow::ensure!(
+            ctx.output_format.map_or_else(
+                || matches!(
+                    format,
+                    crate::image::format_detect::FormatKind::Jxl
+                        | crate::image::format_detect::FormatKind::Avif
+                ),
+                |expected| format == expected,
+            ),
+            "recorded delivery output has a different format: {}",
+            path.display()
+        );
+        anyhow::ensure!(
+            files.insert(path),
+            "duplicate recorded delivery output path: {rel}"
+        );
+    }
+    Ok(files.into_iter().collect())
 }
 
 fn finish_local_proof_phase(checked: CheckDetail, resume: &Gate1ProofCache<'_>) -> CheckDetail {
@@ -720,8 +750,24 @@ impl VerificationGate for Gate3Deep {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        self.run_inventory(
+            ctx,
+            || collect_delivery_output_files(&ctx.working_copy, ctx.output_format),
+            |_, _| {},
+        )
+    }
+}
+
+impl Gate3Deep {
+    fn run_inventory(
+        &self,
+        ctx: &PipelineCtx,
+        inventory: impl FnOnce() -> anyhow::Result<Vec<PathBuf>>,
+        mut on_check: impl FnMut(&'static str, Option<crate::ui::progress::GateFileProgress>),
+    ) -> GateResult {
         crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
-        let jxl_files = match collect_delivery_output_files(&ctx.working_copy, ctx.output_format) {
+        on_check("count_x3", None);
+        let jxl_files = match inventory() {
             Ok(files) => files,
             Err(err) => {
                 return gate_result(vec![detail(
@@ -776,6 +822,7 @@ impl VerificationGate for Gate3Deep {
             && jxl_files.len() == ctx.expected_count
             && library.imported_assets.len() == ctx.expected_count
             && ctx.blake3_log.len() == ctx.expected_count;
+        on_check("sync", None);
         let sync_failures = library
             .imported_assets
             .iter()
@@ -792,27 +839,41 @@ impl VerificationGate for Gate3Deep {
             .iter()
             .filter(|asset| asset.sync_status == "uploaded")
             .count();
+        on_check("quarantine", None);
         let quarantine_failures = library
             .imported_assets
             .iter()
             .filter(|asset| asset.quarantined)
             .map(|asset| ctx.working_copy.join(&asset.rel_path))
             .collect::<Vec<_>>();
-        let mut chain_failures = logged_outputs
-            .iter()
-            .filter_map(|(out_rel, entry)| {
-                let asset = library_index.get(out_rel)?;
-                (entry.out != asset.blake3
-                    || entry.library_asset.as_deref() != Some(asset.blake3.as_str()))
-                .then(|| ctx.working_copy.join(out_rel))
-            })
-            .collect::<Vec<_>>();
-        chain_failures.extend(
-            logged_outputs
-                .keys()
-                .filter(|out_rel| !library_index.contains_key(*out_rel))
-                .map(|out_rel| ctx.working_copy.join(out_rel)),
-        );
+        on_check("chain", None);
+        let total = logged_outputs.len();
+        let report_attempts = count_x3
+            && total == ctx.expected_count
+            && total > 0
+            && ctx.blake3_log.values().all(|entry| entry.out_rel.is_some());
+        let progress = |processed| crate::ui::progress::GateFileProgress { processed, total };
+        let mut last_report = std::time::Instant::now();
+        if report_attempts {
+            on_check("chain", Some(progress(0)));
+        }
+        let mut chain_failures = Vec::new();
+        for (index, (out_rel, entry)) in logged_outputs.iter().enumerate() {
+            if !library_index.get(out_rel).is_some_and(|asset| {
+                entry.out == asset.blake3
+                    && entry.library_asset.as_deref() == Some(asset.blake3.as_str())
+            }) {
+                chain_failures.push(ctx.working_copy.join(out_rel));
+            }
+            let processed = index + 1;
+            if report_attempts
+                && (processed == total
+                    || last_report.elapsed() >= std::time::Duration::from_millis(250))
+            {
+                on_check("chain", Some(progress(processed)));
+                last_report = std::time::Instant::now();
+            }
+        }
         chain_failures.extend(
             library_index
                 .keys()
@@ -869,6 +930,71 @@ impl VerificationGate for Gate3Deep {
 }
 
 impl Gate2Final {
+    fn run_relationship_checks(
+        ctx: &PipelineCtx,
+        mut emit: impl FnMut(
+            &'static str,
+            usize,
+            GateActivityState,
+            Option<crate::ui::progress::GateFileProgress>,
+        ),
+    ) -> GateResult {
+        // Report the five activities this stage actually performs. A failed check
+        // can still be followed by diagnostic checks, so report the blocker only
+        // once all available evidence has been collected.
+        emit("import_receipts", 0, GateActivityState::Running, None);
+        let mut checks = Gate2Import.run(ctx).checks;
+        let mut attempted = 1;
+        let mut chain_progress = None;
+        checks.extend(
+            Gate3Deep
+                .run_inventory(
+                    ctx,
+                    || local_output_inventory(ctx, true),
+                    |check, files| {
+                        if let Some(files) = files {
+                            chain_progress = Some(files);
+                            emit(
+                                check,
+                                attempted - 1,
+                                GateActivityState::Running,
+                                Some(files),
+                            );
+                        } else {
+                            emit(check, attempted, GateActivityState::Running, None);
+                            attempted += 1;
+                        }
+                    },
+                )
+                .checks,
+        );
+        let result = gate_result(checks);
+        if let Some(failed) = result.checks.iter().find(|check| !check.passed) {
+            let blocker = match failed.name {
+                "count" | "blake3_sample" | "no_error" => "import_receipts",
+                name => name,
+            };
+            emit(
+                blocker,
+                attempted,
+                GateActivityState::Failed,
+                if blocker == "chain" {
+                    chain_progress
+                } else {
+                    None
+                },
+            );
+        } else {
+            emit(
+                "chain",
+                attempted,
+                GateActivityState::Passed,
+                chain_progress,
+            );
+        }
+        result
+    }
+
     /// Validate the whole inventory and decode each output once in this uncached attempt.
     #[must_use]
     pub fn run_fresh_cleanup_resume(
@@ -885,10 +1011,15 @@ impl Gate2Final {
         let decoded = if local.passed {
             match local_output_inventory(pending, true) {
                 Ok(paths) => paths.into_iter().collect::<BTreeSet<_>>(),
-                Err(error) => return gate_result(vec![detail(
-                    "decode", false, "complete pending output mapping".into(),
-                    error.to_string(), Vec::new(),
-                )]),
+                Err(error) => {
+                    return gate_result(vec![detail(
+                        "decode",
+                        false,
+                        "complete pending output mapping".into(),
+                        error.to_string(),
+                        Vec::new(),
+                    )]);
+                }
             }
         } else {
             BTreeSet::new()
@@ -898,18 +1029,29 @@ impl Gate2Final {
             LOCAL_REQUIRED_CHECKS[0],
             LOCAL_REQUIRED_CHECKS[1],
             LOCAL_REQUIRED_CHECKS[5],
-        ].map(|(name, probe)| {
+        ]
+        .map(|(name, probe)| {
             (
                 name,
-                move |ctx: &PipelineCtx, files: &[PathBuf], progress: &mut dyn FnMut(usize, usize)| {
+                move |ctx: &PipelineCtx,
+                      files: &[PathBuf],
+                      progress: &mut dyn FnMut(usize, usize)| {
                     if name != "decode" || decoded.is_empty() {
                         return probe(ctx, files, progress);
                     }
-                    let remaining = files.iter().filter(|path| !decoded.contains(*path))
-                        .cloned().collect::<Vec<_>>();
+                    let remaining = files
+                        .iter()
+                        .filter(|path| !decoded.contains(*path))
+                        .cloned()
+                        .collect::<Vec<_>>();
                     if files.len() != decoded.len() + remaining.len() {
-                        return detail("decode", false, "unchanged output inventory".into(),
-                            "a freshly decoded pending output left the inventory".into(), Vec::new());
+                        return detail(
+                            "decode",
+                            false,
+                            "unchanged output inventory".into(),
+                            "a freshly decoded pending output left the inventory".into(),
+                            Vec::new(),
+                        );
                     }
                     probe(ctx, &remaining, progress)
                 },
@@ -919,7 +1061,7 @@ impl Gate2Final {
         let outputs = run_local_checks_with_probes(
             &probes,
             ctx,
-            || collect_delivery_output_files(&ctx.working_copy, None),
+            || local_output_inventory(ctx, true),
             |check, completed, total, state, files| {
                 activity.emit(check, completed, total, state, files);
             },
@@ -940,16 +1082,20 @@ impl VerificationGate for Gate2Final {
         if !crate::common_utils::verification_cache_disabled() {
             return final_cache_policy_failure();
         }
-        let mut checks = Gate2Import.run(ctx).checks;
-        checks.extend(Gate3Deep.run(ctx).checks);
-        gate_result(checks)
+        let activity = GateActivity::new(GateActivityKind::PhotosRelationships);
+        Self::run_relationship_checks(ctx, |check, completed, state, files| {
+            activity.emit(check, completed, 5, state, files);
+        })
     }
 }
 
 fn final_cache_policy_failure() -> GateResult {
     gate_result(vec![detail(
-        "no_error", false, "explicit cache-disabled final verification scope".into(),
-        "final verification refused: cache-disabled scope is inactive".into(), Vec::new(),
+        "no_error",
+        false,
+        "explicit cache-disabled final verification scope".into(),
+        "final verification refused: cache-disabled scope is inactive".into(),
+        Vec::new(),
     )])
 }
 
@@ -2115,16 +2261,20 @@ mod tests {
             "synthetic Gate 1: fresh={fresh_duration:?}, resumed={resumed_duration:?}, complete checks unchanged"
         );
         drop(cache);
-        let mut marker = super::WorkingCopyMarker::new(
-            ctx.src_dir.clone(), ctx.working_copy.clone(), 1,
-        );
+        let mut marker =
+            super::WorkingCopyMarker::new(ctx.src_dir.clone(), ctx.working_copy.clone(), 1);
         marker.blake3_log = ctx.blake3_log.clone();
-        let fresh = super::Gate1ProofCache::fresh_for_marker(&ctx, &marker).unwrap().unwrap();
-        let final_result = Gate1Local::run_with_proof_cache(
-            &ctx, crate::BatchErrorMode::LogAndContinue, &fresh,
-        );
+        let fresh = super::Gate1ProofCache::fresh_for_marker(&ctx, &marker)
+            .unwrap()
+            .unwrap();
+        let final_result =
+            Gate1Local::run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &fresh);
         assert!(final_result.passed, "{final_result:?}");
-        assert_eq!(fresh.counts(), (0, 3, 0), "final metadata, orientation reconstruction and decoder must run again");
+        assert_eq!(
+            fresh.counts(),
+            (0, 3, 0),
+            "final metadata, orientation reconstruction and decoder must run again"
+        );
         drop(fresh);
         #[cfg(unix)]
         {
@@ -2132,18 +2282,39 @@ mod tests {
             let rejecting_decoder = root.path().join("rejecting-djxl");
             std::fs::write(&rejecting_decoder,
                 "#!/bin/sh\ncase \"$1\" in -version|--version) echo fixture-decoder; exit 0;; esac\nprintf x >> \"$0.calls\"\nexit 71\n").unwrap();
-            std::fs::set_permissions(&rejecting_decoder, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let _decoder = crate::common_utils::EnvGuard::set("MFB_TOOL_DJXL", &rejecting_decoder.to_string_lossy());
-            let fresh = super::Gate1ProofCache::fresh_for_marker(&ctx, &marker).unwrap().unwrap();
-            let rejected = Gate1Local::run_with_proof_cache(
-                &ctx, crate::BatchErrorMode::LogAndContinue, &fresh,
+            std::fs::set_permissions(&rejecting_decoder, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            let _decoder = crate::common_utils::EnvGuard::set(
+                "MFB_TOOL_DJXL",
+                &rejecting_decoder.to_string_lossy(),
             );
-            assert!(!rejected.passed, "warm persisted success cannot hide the current decoder failure");
+            let fresh = super::Gate1ProofCache::fresh_for_marker(&ctx, &marker)
+                .unwrap()
+                .unwrap();
+            let rejected = Gate1Local::run_with_proof_cache(
+                &ctx,
+                crate::BatchErrorMode::LogAndContinue,
+                &fresh,
+            );
+            assert!(
+                !rejected.passed,
+                "warm persisted success cannot hide the current decoder failure"
+            );
             assert_eq!(fresh.counts().0, 0);
-            assert!(!std::fs::read(root.path().join("rejecting-djxl.calls")).unwrap().is_empty(),
-                "the final gate must execute the current decoder");
-            assert_eq!(calculate_blake3_hash(&source).unwrap(), ctx.blake3_log["synthetic.jpg"].src);
-            assert_eq!(calculate_blake3_hash(&output).unwrap(), ctx.blake3_log["synthetic.jpg"].out);
+            assert!(
+                !std::fs::read(root.path().join("rejecting-djxl.calls"))
+                    .unwrap()
+                    .is_empty(),
+                "the final gate must execute the current decoder"
+            );
+            assert_eq!(
+                calculate_blake3_hash(&source).unwrap(),
+                ctx.blake3_log["synthetic.jpg"].src
+            );
+            assert_eq!(
+                calculate_blake3_hash(&output).unwrap(),
+                ctx.blake3_log["synthetic.jpg"].out
+            );
         }
         filetime::set_file_mtime(
             &output,
@@ -3219,7 +3390,13 @@ mod tests {
         assert!(!result.passed);
         assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
         assert_eq!(result.affected_files, [out]);
-        assert!(result.actual.contains("Fixed incorrect URI for xmlns:MicrosoftPhoto"), "{}", result.actual);
+        assert!(
+            result
+                .actual
+                .contains("Fixed incorrect URI for xmlns:MicrosoftPhoto"),
+            "{}",
+            result.actual
+        );
         assert_eq!(std::fs::read(src).unwrap(), xmp_jpeg);
     }
 
@@ -3534,28 +3711,70 @@ mod tests {
         ).unwrap() { return; }
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("a.JXL"), [0xff, 0x0a, 0]).unwrap();
-        let mut ctx = ctx_with_library(1, vec![LibraryAssetRecord {
-            rel_path: "a.JXL".into(),
-            blake3: "out".into(),
-            sync_status: "photos_local".into(),
-            ..Default::default()
-        }]);
+        std::fs::write(root.path().join("unowned.JXL"), [0xff, 0x0a, 1]).unwrap();
+        let mut ctx = ctx_with_library(
+            1,
+            vec![LibraryAssetRecord {
+                rel_path: "a.JXL".into(),
+                blake3: "out".into(),
+                sync_status: "photos_local".into(),
+                ..Default::default()
+            }],
+        );
         ctx.working_copy = root.path().to_owned();
         ctx.output_format = Some(crate::image::format_detect::FormatKind::Jxl);
-        ctx.blake3_log.insert("a.jpg".into(), Blake3Entry {
-            out_rel: Some("a.JXL".into()),
-            src: "source".into(),
-            out: "out".into(),
-            library_asset: Some("out".into()),
-        });
-        assert!(!super::Gate2Final.run(&ctx).passed, "an inactive final policy cannot authorize a pass");
-        let _uncached = crate::common_utils::UncachedVerificationScope::new().unwrap();
-        let passed = super::Gate2Final.run(&ctx);
-        assert!(passed.passed);
-        assert_eq!(passed.checks.len(), 7);
-        let mut marker = super::WorkingCopyMarker::new(
-            ctx.src_dir.clone(), ctx.working_copy.clone(), 1,
+        ctx.blake3_log.insert(
+            "a.jpg".into(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".into()),
+                src: "source".into(),
+                out: "out".into(),
+                library_asset: Some("out".into()),
+            },
         );
+        assert!(
+            !super::Gate2Final.run(&ctx).passed,
+            "an inactive final policy cannot authorize a pass"
+        );
+        let _uncached = crate::common_utils::UncachedVerificationScope::new().unwrap();
+        use crate::ui::progress::GateActivityState::{Failed, Passed, Running};
+        let trace = |ctx: &super::PipelineCtx| {
+            let mut events = Vec::new();
+            let result = super::Gate2Final::run_relationship_checks(
+                ctx,
+                |check, completed, state, files| {
+                    events.push((check, completed, state, files));
+                },
+            );
+            (result, events)
+        };
+        let (passed, events) = trace(&ctx);
+        let all_checks = [
+            ("import_receipts", 0, Running, None),
+            ("count_x3", 1, Running, None),
+            ("sync", 2, Running, None),
+            ("quarantine", 3, Running, None),
+            ("chain", 4, Running, None),
+        ];
+        let attempt = |processed| {
+            Some(crate::ui::progress::GateFileProgress {
+                processed,
+                total: 1,
+            })
+        };
+        let chain_attempts = [
+            ("chain", 4, Running, attempt(0)),
+            ("chain", 4, Running, attempt(1)),
+        ];
+        assert_eq!(&events[..5], &all_checks);
+        assert_eq!(&events[5..7], &chain_attempts);
+        assert_eq!(events[7..], [("chain", 5, Passed, attempt(1))]);
+        assert!(super::Gate2Final.run(&ctx).passed);
+        assert!(passed.passed);
+        assert!(root.path().join("unowned.JXL").is_file());
+        assert_eq!(passed.checks.len(), 7);
+        let mut marker =
+            super::WorkingCopyMarker::new(ctx.src_dir.clone(), ctx.working_copy.clone(), 1);
         marker.apply_final_gate2(&passed);
         assert_eq!(marker.stage, super::FastImgStageName::Gate3Passed);
         for deep_failure in [false, true] {
@@ -3566,13 +3785,41 @@ mod tests {
             } else {
                 library.import_error_count = 1;
             }
-            let failed = super::Gate2Final.run(&changed);
+            let (failed, events) = trace(&changed);
+            let blocker = if deep_failure {
+                "quarantine"
+            } else {
+                "import_receipts"
+            };
+            assert_eq!(&events[..5], &all_checks);
+            assert_eq!(&events[5..7], &chain_attempts);
+            assert_eq!(events[7..], [(blocker, 5, Failed, None)]);
             assert!(!failed.passed);
             assert_eq!(failed.checks.len(), 7);
             marker.apply_final_gate2(&failed);
             assert_eq!(marker.stage, super::FastImgStageName::Gate3Failed);
             assert!(marker.error.is_some());
         }
+        let mut broken_chain = ctx.clone();
+        broken_chain
+            .blake3_log
+            .get_mut("a.jpg")
+            .unwrap()
+            .library_asset = None;
+        let (failed, events) = trace(&broken_chain);
+        assert!(!failed.passed);
+        assert_eq!(events[7..], [("chain", 5, Failed, attempt(1))]);
+
+        let mut legacy = ctx.clone();
+        legacy.blake3_log.get_mut("a.jpg").unwrap().out_rel = None;
+        let (_, events) = trace(&legacy);
+        assert!(events.iter().all(|event| event.3.is_none()));
+
+        std::fs::remove_file(root.path().join("a.JXL")).unwrap();
+        let (failed, events) = trace(&ctx);
+        assert!(!failed.passed);
+        assert_eq!(&events[..2], &all_checks[..2]);
+        assert_eq!(events[2..], [("count_x3", 2, Failed, None)]);
     }
 
     #[test]
@@ -4140,7 +4387,11 @@ pub struct WorkingCopyMarker {
     pub skipped_sources: SkippedSourceLog,
     #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
     pub failed_sources: FailedSourceLog,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "deserialize_unique_marker_map")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "deserialize_unique_marker_map"
+    )]
     pub tier2_failed_sources: FailedSourceLog,
     /// Tier-2 lossy modern static assets imported directly into Photos.
     #[serde(default)]
@@ -4172,6 +4423,9 @@ pub struct WorkingCopyMarker {
     /// Photos delivery evidence. Missing historical intent is never filled in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub processing_contract: Option<FastImgProcessingContract>,
+    /// Digest of the immutable Core admission rows for a new full-discovery task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) admission_plan_blake3: Option<String>,
     /// Binds a failed-only child to its immutable, normalized Core manifest.
     /// A missing relation must not turn this child into an ordinary task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4264,6 +4518,20 @@ pub fn fast_img_relative_key(path: &Path, root: &Path, kind: &str) -> Result<Str
     Ok(key.to_owned())
 }
 
+/// Independently read a regular file and verify its complete recorded digest.
+/// # Errors
+/// Rejects linked, unreadable, changed or nonmatching files.
+pub fn verify_regular_file_blake3(path: &Path, expected: &str) -> std::io::Result<()> {
+    let observation = FinalInputObservation::capture(path)?;
+    if observation.blake3() != expected {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "File content differs from its recorded BLAKE3",
+        ));
+    }
+    Ok(())
+}
+
 /// Reject linked components in a Fast IMG output path, including a linked root.
 ///
 /// # Errors
@@ -4333,6 +4601,7 @@ impl WorkingCopyMarker {
             strategy: "jxl".to_string(),
             metadata_policy_version: 0,
             processing_contract: None,
+            admission_plan_blake3: None,
             failed_retry_manifest_blake3: None,
             failed_retry_primary_source_count: None,
             failed_retry_finish_evidence: None,
@@ -4439,7 +4708,9 @@ impl WorkingCopyMarker {
 
     #[must_use]
     pub fn failed_source_count(&self) -> usize {
-        self.failed_sources.len().saturating_add(self.tier2_failed_sources.len())
+        self.failed_sources
+            .len()
+            .saturating_add(self.tier2_failed_sources.len())
     }
 
     #[must_use]
@@ -4486,7 +4757,9 @@ impl WorkingCopyMarker {
                 || self.skipped_sources.contains_key(rel)
                 || self.failed_sources.contains_key(rel)
             {
-                return Err(format!("Original-format failure {rel} overlaps a primary outcome"));
+                return Err(format!(
+                    "Original-format failure {rel} overlaps a primary outcome"
+                ));
             }
             validate_submission_blake3("original-format failure", &failure.src)?;
             if failure.reason.trim().is_empty() {
@@ -4495,7 +4768,10 @@ impl WorkingCopyMarker {
         }
         for asset in &self.tier2_imported_assets {
             if self.tier2_failed_sources.contains_key(&asset.rel_path) {
-                return Err(format!("{} has both an original-format failure and a delivery receipt", asset.rel_path));
+                return Err(format!(
+                    "{} has both an original-format failure and a delivery receipt",
+                    asset.rel_path
+                ));
             }
         }
         if let Some(history) = self.photos_submission_history() {
@@ -4503,7 +4779,10 @@ impl WorkingCopyMarker {
                 if intent.kind == PhotosSubmissionKind::Original
                     && self.tier2_failed_sources.contains_key(&intent.source_rel)
                 {
-                    return Err(format!("{} has both a pre-submission failure and a Photos submission", intent.source_rel));
+                    return Err(format!(
+                        "{} has both a pre-submission failure and a Photos submission",
+                        intent.source_rel
+                    ));
                 }
             }
         }
@@ -4669,7 +4948,21 @@ impl WorkingCopyMarker {
     }
 }
 
-pub(crate) fn canonical_working_copy_path(path: &Path) -> std::io::Result<PathBuf> {
+/// Resolve the Fast IMG directory identity even after its last component is gone.
+/// # Errors
+/// Rejects non-directories, linked leaves and unavailable parents.
+pub fn canonical_working_copy_path(path: &Path) -> std::io::Result<PathBuf> {
+    let private_parent = if let Some(parent) = path.parent()
+        && parent
+            .file_name()
+            .is_some_and(|name| name == PHOTOS_WORKING_COPY_DIRECTORY)
+        && parent == photos_working_copy_directory()?
+    {
+        inspect_photos_working_copy_directory(parent)?;
+        Some(parent)
+    } else {
+        None
+    };
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_dir() => path.canonicalize(),
         Ok(_) => Err(std::io::Error::other(format!(
@@ -4683,7 +4976,10 @@ pub(crate) fn canonical_working_copy_path(path: &Path) -> std::io::Result<PathBu
             let name = path
                 .file_name()
                 .ok_or_else(|| std::io::Error::other("fast-img output has no file name"))?;
-            Ok(parent.canonicalize()?.join(name))
+            Ok(match private_parent {
+                Some(parent) => parent.join(name),
+                None => parent.canonicalize()?.join(name),
+            })
         }
         Err(error) => Err(error),
     }
@@ -4704,6 +5000,227 @@ pub fn working_copy_dir(src: &Path) -> PathBuf {
     src.with_file_name(format!("{name}_optimized"))
 }
 
+const PHOTOS_WORKING_COPY_DIRECTORY: &str = "fast-img-photos";
+
+fn photos_working_copy_directory() -> std::io::Result<PathBuf> {
+    let configured = crate::process_lock::inspect_mfb_root_path().map_err(std::io::Error::other)?;
+    Ok(canonical_prospective_directory(&configured)?.join(PHOTOS_WORKING_COPY_DIRECTORY))
+}
+
+fn canonical_prospective_directory(configured: &Path) -> std::io::Result<PathBuf> {
+    if configured
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(std::io::Error::other(
+            "Photos task state path contains a parent traversal",
+        ));
+    }
+    for ancestor in configured.ancestors() {
+        match ancestor.canonicalize() {
+            Ok(canonical) => {
+                let suffix = configured
+                    .strip_prefix(ancestor)
+                    .map_err(std::io::Error::other)?;
+                return Ok(canonical.join(suffix));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "missing MFB state ancestor",
+    ))
+}
+
+#[derive(Debug)]
+struct PhotosWorkingCopyUnavailable {
+    directory: PathBuf,
+    reason: &'static str,
+}
+
+impl std::fmt::Display for PhotosWorkingCopyUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Photos working-copy storage unavailable at {}: {}",
+            self.directory.display(),
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for PhotosWorkingCopyUnavailable {}
+
+/// Distinguish a blocked private output from an unreadable state authority.
+pub fn is_photos_working_copy_unavailable(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|cause| cause.is::<PhotosWorkingCopyUnavailable>())
+}
+
+fn inspect_photos_working_copy_directory(directory: &Path) -> std::io::Result<()> {
+    let unavailable = |reason| {
+        std::io::Error::other(PhotosWorkingCopyUnavailable {
+            directory: directory.to_owned(),
+            reason,
+        })
+    };
+    let metadata = match std::fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(unavailable("permission denied"));
+        }
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() {
+        return Err(unavailable("expected a real directory"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid takes no arguments and only reads the process identity.
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+            || metadata.mode() & 0o700 != 0o700
+        {
+            return Err(unavailable(
+                "expected a directory accessible only to its owner",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Select a stable Photos working-copy base without writing to state or source.
+pub fn photos_working_copy_base(src: &Path) -> std::io::Result<PathBuf> {
+    let directory = photos_working_copy_directory()?;
+    validate_photos_state_location(src)?;
+    inspect_photos_working_copy_directory(&directory)?;
+    let key = blake3::hash(src.as_os_str().as_encoded_bytes()).to_hex();
+    Ok(directory.join(format!("{key}_optimized")))
+}
+
+/// Refuse state initialization that would write inside a Photos task's source or its parent.
+pub fn validate_photos_state_location(src: &Path) -> std::io::Result<()> {
+    let directory = photos_working_copy_directory()?;
+    let root = directory
+        .parent()
+        .ok_or_else(|| std::io::Error::other("missing MFB state root"))?;
+    if src.starts_with(&directory) {
+        return Err(std::io::Error::other(
+            "Photos working-copy storage overlaps the source or its parent",
+        ));
+    }
+    verify_photos_state_path(src, root)?;
+    for child in [
+        "tmp",
+        "logs",
+        "locks",
+        "cache",
+        "state",
+        "runtime",
+        "runtime/toolchains",
+        "runtime/toolchains/sources",
+        "photos-native",
+    ] {
+        let path = root.join(child);
+        if src.starts_with(&path) {
+            return Err(std::io::Error::other(
+                "Photos working-copy storage overlaps the source or its parent",
+            ));
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(std::io::Error::other(format!(
+                    "Photos task state must be a real directory: {}",
+                    path.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        verify_photos_state_path(src, &path)?;
+    }
+    if let Ok(logs) = std::env::var(crate::constants::ENV_MFB_LOG_DIR)
+        && !logs.trim().is_empty()
+    {
+        let path = std::path::absolute(logs.trim())?;
+        verify_photos_state_path(src, &canonical_prospective_directory(&path)?)?;
+    }
+    if let Some(control) = crate::batch_control::control_path()?
+        && let Some(parent) = control.parent()
+    {
+        verify_photos_state_path(src, &parent.canonicalize()?)?;
+    }
+    Ok(())
+}
+
+fn verify_photos_state_path(src: &Path, root: &Path) -> std::io::Result<()> {
+    let overlaps =
+        || std::io::Error::other("Photos working-copy storage overlaps the source or its parent");
+    if root.starts_with(src) || Some(root) == src.parent() {
+        return Err(overlaps());
+    }
+    // Creating any absent state ancestor can add an entry to the source parent.
+    for path in root.ancestors() {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) if Some(path) == src.parent() => return Err(overlaps()),
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Validate a fresh Photos destination before initializing app state.
+pub fn validate_new_photos_working_copy_location(src: &Path) -> std::io::Result<()> {
+    photos_working_copy_base(src).map(|_| ())
+}
+
+/// Create private Photos working-copy storage only during execution.
+pub fn prepare_photos_working_copy_parent(src: &Path, output: &Path) -> std::io::Result<()> {
+    let directory = photos_working_copy_directory()?;
+    if output.parent() != Some(directory.as_path()) {
+        return Ok(());
+    }
+    photos_working_copy_base(src)?;
+    crate::process_lock::get_mfb_root().map_err(std::io::Error::other)?;
+    #[cfg(unix)]
+    let result = {
+        use std::os::fd::AsRawFd;
+        let root = directory
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing MFB state root"))?;
+        let root = crate::io_utils::open_directory_nofollow(root)?;
+        let name = std::ffi::CString::new(PHOTOS_WORKING_COPY_DIRECTORY)?;
+        // SAFETY: the directory descriptor and the component C string are live.
+        let status = unsafe { libc::mkdirat(root.as_raw_fd(), name.as_ptr(), 0o700) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    };
+    #[cfg(not(unix))]
+    let result = std::fs::create_dir(&directory);
+    match result {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    if photos_working_copy_directory()? != directory {
+        return Err(std::io::Error::other(
+            "Photos working-copy storage changed during creation",
+        ));
+    }
+    inspect_photos_working_copy_directory(&directory)
+}
+
 pub fn matching_working_copy_markers(
     src: &Path,
     strategy: &str,
@@ -4712,10 +5229,19 @@ pub fn matching_working_copy_markers(
 }
 
 pub fn resolve_working_copy_dir(src: &Path, strategy: &str) -> std::io::Result<PathBuf> {
+    resolve_working_copy_dir_for_delivery(src, strategy, false)
+}
+
+/// Keep the saved output on resume and select a delivery-specific output for new work.
+pub fn resolve_working_copy_dir_for_delivery(
+    src: &Path,
+    strategy: &str,
+    photos: bool,
+) -> std::io::Result<PathBuf> {
     let markers = matching_working_copy_markers(src, strategy)?;
     match latest_working_copy_marker(&markers)? {
         Some(marker) => Ok(marker.working_copy.clone()),
-        None => resolve_fresh_working_copy_dir(src),
+        None => resolve_fresh_working_copy_dir_for_delivery(src, photos),
     }
 }
 
@@ -4750,7 +5276,15 @@ pub fn latest_working_copy_marker(
 
 /// Select a new adjacent working copy without consuming any prior marker.
 pub fn resolve_fresh_working_copy_dir(src: &Path) -> std::io::Result<PathBuf> {
-    resolve_working_copy_dir_inner(src, |_, _| Ok(()))
+    resolve_fresh_working_copy_dir_for_delivery(src, false)
+}
+
+/// Select a fresh output without allocating it or consuming a prior checkpoint.
+pub fn resolve_fresh_working_copy_dir_for_delivery(
+    src: &Path,
+    photos: bool,
+) -> std::io::Result<PathBuf> {
+    resolve_working_copy_dir_inner(src, photos, |_, _| Ok(()))
 }
 
 /// Read the first fresh path and the exact occupied candidates preceding it.
@@ -4759,8 +5293,17 @@ pub fn inspect_fresh_working_copy_dir(
     src: &Path,
     occupied_limit: usize,
 ) -> std::io::Result<(PathBuf, Vec<(PathBuf, bool)>)> {
+    inspect_fresh_working_copy_dir_for_delivery(src, false, occupied_limit)
+}
+
+/// Observe fresh-path conflicts using the same placement as the executor.
+pub fn inspect_fresh_working_copy_dir_for_delivery(
+    src: &Path,
+    photos: bool,
+    occupied_limit: usize,
+) -> std::io::Result<(PathBuf, Vec<(PathBuf, bool)>)> {
     let mut occupied = Vec::new();
-    let fresh = resolve_working_copy_dir_inner(src, |candidate, reserved| {
+    let fresh = resolve_working_copy_dir_inner(src, photos, |candidate, reserved| {
         if occupied.len() == occupied_limit {
             return Err(std::io::Error::other(
                 "Fast IMG conflict preview has too many occupied outputs",
@@ -4775,9 +5318,14 @@ pub fn inspect_fresh_working_copy_dir(
 
 fn resolve_working_copy_dir_inner(
     src: &Path,
+    photos: bool,
     mut observe_occupied: impl FnMut(&Path, bool) -> std::io::Result<()>,
 ) -> std::io::Result<PathBuf> {
-    let base = working_copy_dir(src);
+    let base = if photos {
+        photos_working_copy_base(src)?
+    } else {
+        working_copy_dir(src)
+    };
     let mut suffix = 0usize;
     loop {
         let candidate = if suffix == 0 {
@@ -4827,10 +5375,23 @@ pub(crate) fn validate_marker_structure(marker: &WorkingCopyMarker) -> std::io::
     if let Some(hash) = &marker.failed_retry_manifest_blake3 {
         validate_submission_blake3("failed-only manifest", hash).map_err(std::io::Error::other)?;
     }
-    if marker.failed_retry_primary_source_count.is_some_and(|count| {
-        marker.failed_retry_manifest_blake3.is_none() || count > marker.src_jpeg_count
-    }) {
-        return Err(std::io::Error::other("Invalid routed failed-only source count"));
+    if let Some(hash) = &marker.admission_plan_blake3 {
+        validate_submission_blake3("admission plan", hash).map_err(std::io::Error::other)?;
+        if marker.failed_retry_manifest_blake3.is_some() {
+            return Err(std::io::Error::other(
+                "Fast IMG full-discovery plan cannot bind a failed-only task",
+            ));
+        }
+    }
+    if marker
+        .failed_retry_primary_source_count
+        .is_some_and(|count| {
+            marker.failed_retry_manifest_blake3.is_none() || count > marker.src_jpeg_count
+        })
+    {
+        return Err(std::io::Error::other(
+            "Invalid routed failed-only source count",
+        ));
     }
     if let Some(evidence) = &marker.failed_retry_finish_evidence {
         evidence.validate().map_err(std::io::Error::other)?;
@@ -5411,9 +5972,12 @@ mod photos_submission_tests {
 mod working_copy_tests {
     use super::{
         Blake3Entry, FAST_IMG_MARKER_SCHEMA_VERSION, FastImgStageName, LibraryAssetRecord,
-        SkippedSourceEntry, WorkingCopyMarker, parse_marker_for_working_copy,
-        prepare_jxl_output_dir, read_marker, resolve_fresh_working_copy_dir,
-        resolve_working_copy_dir, working_copy_dir, write_marker_atomic,
+        SkippedSourceEntry, WorkingCopyMarker, canonical_working_copy_path,
+        inspect_fresh_working_copy_dir_for_delivery, parse_marker_for_working_copy,
+        photos_working_copy_base, photos_working_copy_directory, prepare_jxl_output_dir,
+        prepare_photos_working_copy_parent, read_marker, resolve_fresh_working_copy_dir,
+        resolve_working_copy_dir, resolve_working_copy_dir_for_delivery, working_copy_dir,
+        write_marker_atomic,
     };
     use crate::common_utils::EnvGuard;
     use serial_test::serial;
@@ -5607,6 +6171,161 @@ mod working_copy_tests {
         let src = root.path().join("Photos");
 
         assert_eq!(working_copy_dir(&src), root.path().join("Photos_optimized"));
+    }
+
+    #[test]
+    #[serial]
+    fn photos_working_copy_selection_is_read_only_and_keeps_exact_reservations()
+    -> anyhow::Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let state = temp.path().join("state");
+        let _home = EnvGuard::set(crate::constants::ENV_MFB_HOME_ROOT, state.to_str().unwrap());
+        let source = temp.path().join("input").join("Album");
+        std::fs::create_dir_all(&source)?;
+        let source = source.canonicalize()?;
+        let sibling = working_copy_dir(&source);
+        std::fs::write(&sibling, b"unowned sibling")?;
+        let (private, conflicts) = inspect_fresh_working_copy_dir_for_delivery(&source, true, 10)?;
+        assert!(conflicts.is_empty());
+        assert_eq!(
+            private,
+            resolve_working_copy_dir_for_delivery(&source, "jxl", true)?
+        );
+        assert_eq!(private, canonical_working_copy_path(&private)?);
+        assert!(!state.exists());
+
+        let lease = crate::process_lock::acquire_output_dir_lock(&private)?;
+        assert!(!private.parent().unwrap().exists());
+        prepare_photos_working_copy_parent(&source, &private)?;
+        assert!(!private.exists());
+        std::fs::create_dir(&private)?;
+        assert!(crate::process_lock::acquire_output_dir_lock(&private).is_err());
+        drop(lease);
+
+        write_marker_atomic(&WorkingCopyMarker::new(source.clone(), private.clone(), 0))?;
+        std::fs::remove_dir(&private)?;
+        let (next, conflicts) = inspect_fresh_working_copy_dir_for_delivery(&source, true, 10)?;
+        assert_eq!(conflicts, [(private.clone(), true)]);
+        assert_ne!(private, next);
+        assert_eq!(
+            private,
+            resolve_working_copy_dir_for_delivery(&source, "jxl", true)?
+        );
+        assert_eq!(std::fs::read(&sibling)?, b"unowned sibling");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial]
+    fn photos_working_copy_storage_rejects_links_and_shared_permissions() -> anyhow::Result<()> {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let state = temp.path().join("state");
+        let _home = EnvGuard::set(crate::constants::ENV_MFB_HOME_ROOT, state.to_str().unwrap());
+        let source = temp.path().join("input").join("Album");
+        std::fs::create_dir_all(&source)?;
+        std::fs::create_dir(&state)?;
+        let source = source.canonicalize()?;
+        let storage = photos_working_copy_directory()?;
+        symlink(&source, &storage)?;
+        let blocked = || photos_working_copy_base(&source).unwrap_err();
+        assert!(super::is_photos_working_copy_unavailable(&blocked()));
+        assert!(canonical_working_copy_path(&storage.join("unallocated")).is_err());
+        std::fs::remove_file(&storage)?;
+        std::fs::create_dir(&storage)?;
+        for mode in [0o750, 0o500] {
+            std::fs::set_permissions(&storage, std::fs::Permissions::from_mode(mode))?;
+            assert!(super::is_photos_working_copy_unavailable(&blocked()));
+        }
+        symlink(&source, state.join("tmp"))?;
+        assert!(!super::is_photos_working_copy_unavailable(&blocked()));
+        std::fs::remove_file(state.join("tmp"))?;
+        std::fs::create_dir(state.join("runtime"))?;
+        for child in ["state", "runtime/toolchains", "runtime/toolchains/sources"] {
+            let path = state.join(child);
+            symlink(&source, &path)?;
+            let error = super::validate_photos_state_location(&source).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Photos task state must be a real directory")
+            );
+            std::fs::remove_file(&path)?;
+            std::fs::create_dir(path)?;
+        }
+        assert_eq!(std::fs::read_dir(&source)?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn photos_working_copy_rejects_state_creation_in_source_parent() -> anyhow::Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let parent = temp.path().canonicalize()?;
+        let source = parent.join("Album");
+        std::fs::create_dir(&source)?;
+        let state = parent.join("absent").join("state");
+        let _home = EnvGuard::set(crate::constants::ENV_MFB_HOME_ROOT, state.to_str().unwrap());
+        assert!(super::validate_new_photos_working_copy_location(&source).is_err());
+        assert_eq!(std::fs::read_dir(&parent)?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn photos_working_copy_rejects_source_overlap_with_runtime_writes() -> anyhow::Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let state = temp.path().join("state");
+        let _home = EnvGuard::set(crate::constants::ENV_MFB_HOME_ROOT, state.to_str().unwrap());
+        for child in [
+            "tmp",
+            "logs",
+            "locks",
+            "cache",
+            "state",
+            "runtime/toolchains",
+            "photos-native",
+        ] {
+            let source = state.join(child).join("Album");
+            std::fs::create_dir_all(&source)?;
+            let error = super::validate_photos_state_location(&source.canonicalize()?).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("overlaps the source or its parent")
+            );
+        }
+        let source = temp.path().join("Album");
+        std::fs::create_dir(&source)?;
+        let control = tempfile::tempdir_in(&source)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(control.path(), std::fs::Permissions::from_mode(0o700))?;
+        }
+        let path = control.path().join("control");
+        let _control = EnvGuard::set("MFB_BATCH_CONTROL_FILE", path.to_str().unwrap());
+        let error = super::validate_photos_state_location(&source.canonicalize()?).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("overlaps the source or its parent")
+        );
+        assert_eq!(std::fs::read_dir(control.path())?.count(), 0);
+        Ok(())
     }
 
     #[test]

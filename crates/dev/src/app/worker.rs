@@ -375,6 +375,21 @@ impl<'a> WorkerOutputStorage<'a> {
 }
 
 #[derive(Debug)]
+pub struct WorkerAdmissionStopped(io::Error);
+
+impl std::fmt::Display for WorkerAdmissionStopped {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "worker admission stopped: {}", self.0)
+    }
+}
+
+impl std::error::Error for WorkerAdmissionStopped {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+#[derive(Debug)]
 pub struct CollectedChildError {
     pub stats: ProcessorStats,
     pub cause: anyhow::Error,
@@ -582,6 +597,28 @@ impl LaunchCommand {
                 });
             }
         }
+        if let Some(pair) = self
+            .args
+            .windows(2)
+            .rfind(|pair| pair[0] == "--planned-xmp")
+        {
+            let [source] = self.sources.as_slice() else {
+                anyhow::bail!("planned XMP launch requires exactly one discovered media source");
+            };
+            let result = foundation::batch::planned_source::verify_xmp_claim_before_launch(
+                &pair[1],
+                source.path(),
+            );
+            if let Err(error) = result {
+                return Err(match invocation_error {
+                    Some(invocation_error) => anyhow::anyhow!(
+                        "worker invocation history write failed: {invocation_error:#}"
+                    )
+                    .context(format!("{error:#}")),
+                    None => error,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -671,7 +708,7 @@ impl LaunchCommand {
                 launch_env.push((foundation::tool_snapshot::MANIFEST_ENV.into(), bound));
             }
         }
-        foundation::batch_control::checkpoint()?;
+        foundation::batch_control::checkpoint().map_err(WorkerAdmissionStopped)?;
         if self.program.components().count() > 1 && !self.program.is_file() {
             bail!(
                 "Rust CLI binary missing: {}. Build it with `cargo build -p {}` first.",
@@ -748,6 +785,7 @@ impl LaunchCommand {
             ));
             env_overrides.push(("MFB_INVOCATION_ID", invocation_id));
             self.verify_sources_unchanged(invocation_error.as_ref())?;
+            foundation::batch_control::checkpoint().map_err(WorkerAdmissionStopped)?;
             set_child_active(true);
             let mut session_log_error = None;
             let mut observed_records = Some(0_u64);
@@ -987,6 +1025,7 @@ impl LaunchCommand {
             stats
         } else {
             self.verify_sources_unchanged(invocation_error.as_ref())?;
+            foundation::batch_control::checkpoint().map_err(WorkerAdmissionStopped)?;
             foundation::infra::production_lock::inherit_active_lease(&mut cmd)
                 .context("attach active production task lease to worker")?;
             let mut child = cmd
@@ -1084,7 +1123,13 @@ impl LaunchCommand {
         if let Some(cause) = collected_error {
             return Err(CollectedChildError { stats, cause }.into());
         }
-        foundation::batch_control::checkpoint()?;
+        if let Err(cause) = foundation::batch_control::checkpoint() {
+            return Err(CollectedChildError {
+                stats,
+                cause: cause.into(),
+            }
+            .into());
+        }
         if stats.exit_code != 0 && bail_on_failure {
             bail!("command {}: {}", failure_description, self.display());
         }

@@ -1,5 +1,6 @@
 //! Layered runtime preferences. Optional quality DB access is separate from
 //! mandatory Photos custody verification.
+use super::constants::AVIF_MEME_MIN_QUALITY;
 use super::unified_error::BatchErrorMode;
 use anyhow::{Context, Result, bail, ensure};
 use clap::ValueEnum;
@@ -566,8 +567,8 @@ impl RuntimeConfig {
             "img.jxl_distance must be finite and within 0..25 when specified"
         );
         ensure!(
-            (10..=100).contains(&self.img.avif_quality),
-            "img.avif_quality must be 10..100 because progressive AVIF requires Q10 or higher"
+            (AVIF_MEME_MIN_QUALITY..=100).contains(&self.img.avif_quality),
+            "img.avif_quality must be {AVIF_MEME_MIN_QUALITY}..100 because progressive AVIF requires Q{AVIF_MEME_MIN_QUALITY} or higher"
         );
         ensure!(self.img.avif_speed <= 10, "img.avif_speed must be 0..10");
         ensure!(

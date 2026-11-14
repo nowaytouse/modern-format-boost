@@ -7,6 +7,219 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+pub(crate) fn open_directory_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+}
+
+#[cfg(unix)]
+pub(crate) fn open_entry_nofollow(
+    parent: &fs::File,
+    name: &std::ffi::OsStr,
+    directory: bool,
+) -> std::io::Result<fs::File> {
+    use std::ffi::CString;
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let name = CString::new(name.as_bytes())?;
+    let flags = libc::O_RDONLY
+        | libc::O_NOFOLLOW
+        | libc::O_CLOEXEC
+        | if directory {
+            libc::O_DIRECTORY
+        } else {
+            libc::O_NONBLOCK
+        };
+    // SAFETY: parent owns the descriptor, name is a live C string.
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: openat returned a new descriptor owned by this call.
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+pub(crate) fn open_descendant_nofollow(
+    root: &fs::File,
+    relative: &Path,
+    directory: bool,
+) -> std::io::Result<fs::File> {
+    use std::io;
+    use std::path::Component;
+
+    let mut components = relative.components().peekable();
+    let mut current = None;
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsafe relative path",
+            ));
+        };
+        let is_directory = directory || components.peek().is_some();
+        current = Some(open_entry_nofollow(
+            current.as_ref().unwrap_or(root),
+            name,
+            is_directory,
+        )?);
+    }
+    match current {
+        Some(handle) => Ok(handle),
+        None if directory => root.try_clone(),
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "missing file name",
+        )),
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn check_open_file_identity(
+    before: &fs::Metadata,
+    current: &fs::Metadata,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if before.dev() != current.dev() || before.ino() != current.ino() {
+        return Err(std::io::Error::other("filesystem entry was replaced"));
+    }
+    Ok(())
+}
+
+/// Remove a recorded Fast IMG output after rechecking its complete BLAKE3.
+///
+/// # Errors
+/// Rejects paths outside the root, links, changed or nonregular files, and
+/// platforms without descriptor-relative cleanup.
+#[cfg(unix)]
+pub fn remove_verified_fast_img_output(
+    root: &Path,
+    target: &Path,
+    expected: &str,
+) -> anyhow::Result<()> {
+    let observed_root = fs::symlink_metadata(root)?;
+    let observed_file = fs::symlink_metadata(target)?;
+    remove_verified_fast_img_output_from_root(
+        root,
+        target,
+        expected,
+        &observed_root,
+        &observed_file,
+    )
+}
+
+/// Remove a verified output only from the directory observed at cleanup admission.
+///
+/// # Errors
+/// Also rejects a replaced root or relocated parent during verification.
+#[cfg(unix)]
+pub fn remove_verified_fast_img_output_from_root(
+    root: &Path,
+    target: &Path,
+    expected: &str,
+    observed_root: &fs::Metadata,
+    observed_file: &fs::Metadata,
+) -> anyhow::Result<()> {
+    use anyhow::{Context, bail};
+    use std::ffi::CString;
+    use std::io;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+
+    let relative = target.strip_prefix(root)?;
+    let Some(std::path::Component::Normal(name)) = relative.components().next_back() else {
+        bail!("fast-img cleanup target has no file name");
+    };
+    let root_handle = open_directory_nofollow(root)?;
+    check_open_file_identity(observed_root, &root_handle.metadata()?)
+        .context("fast-img cleanup output root changed")?;
+    let parent_relative = relative.parent().context("cleanup target has no parent")?;
+    let parent = open_descendant_nofollow(&root_handle, parent_relative, true)?;
+    let parent_identity = parent.metadata()?;
+    let mut file = open_entry_nofollow(&parent, name, false)
+        .with_context(|| format!("open cleanup path {}", target.display()))?;
+    let before = file.metadata()?;
+    anyhow::ensure!(
+        observed_file.is_file() && before.is_file(),
+        "cleanup target is not a regular file: {}",
+        target.display()
+    );
+    check_open_file_identity(observed_file, &before).with_context(|| {
+        format!(
+            "fast-img cleanup target replaced before unlink: {}",
+            target.display()
+        )
+    })?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(&mut file)?;
+    let after = file.metadata()?;
+    anyhow::ensure!(
+        hasher.finalize().to_hex().as_str() == expected
+            && before.len() == after.len()
+            && before.mtime() == after.mtime()
+            && before.mtime_nsec() == after.mtime_nsec()
+            && before.ctime() == after.ctime()
+            && before.ctime_nsec() == after.ctime_nsec(),
+        "fast-img cleanup refused changed output {}",
+        target.display()
+    );
+    let current_root = open_directory_nofollow(root)?;
+    check_open_file_identity(observed_root, &current_root.metadata()?)
+        .context("fast-img cleanup output root changed")?;
+    let current_parent = open_descendant_nofollow(&current_root, parent_relative, true)?;
+    check_open_file_identity(&parent_identity, &current_parent.metadata()?)
+        .context("fast-img cleanup output parent changed")?;
+    let current = open_entry_nofollow(&current_parent, name, false)
+        .with_context(|| format!("recheck cleanup target {}", target.display()))?
+        .metadata()?;
+    anyhow::ensure!(
+        current.dev() == after.dev()
+            && current.ino() == after.ino()
+            && current.len() == after.len()
+            && current.ctime() == after.ctime()
+            && current.ctime_nsec() == after.ctime_nsec(),
+        "fast-img cleanup target replaced: {}",
+        target.display()
+    );
+    let name = CString::new(name.as_bytes())?;
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err(io::Error::last_os_error())
+            .with_context(|| format!("remove cleanup target {}", target.display()));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn remove_verified_fast_img_output(
+    _root: &Path,
+    target: &Path,
+    _expected: &str,
+) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "verified output cleanup requires no-follow directory handles: {}",
+        target.display()
+    )
+}
+
+#[cfg(not(unix))]
+pub fn remove_verified_fast_img_output_from_root(
+    root: &Path,
+    target: &Path,
+    expected: &str,
+    _observed_root: &fs::Metadata,
+    _observed_file: &fs::Metadata,
+) -> anyhow::Result<()> {
+    remove_verified_fast_img_output(root, target, expected)
+}
+
 /// Read file metadata with a retry mechanism to handle transient OS locks or
 /// network glitches.
 ///
@@ -324,8 +537,6 @@ fn prune_empty_directory_candidates_within(
 }
 
 fn remove_finder_metadata_if_only_entry(directory: &Path) -> std::io::Result<Option<PathBuf>> {
-    const DS_STORE_MAGIC: [u8; 8] = [0, 0, 0, 1, b'B', b'u', b'd', b'1'];
-
     let mut entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -334,32 +545,67 @@ fn remove_finder_metadata_if_only_entry(directory: &Path) -> std::io::Result<Opt
     let Some(entry) = entries.next().transpose()? else {
         return Ok(None);
     };
-    if entries.next().transpose()?.is_some()
-        || entry.file_name().as_os_str() != std::ffi::OsStr::new(".DS_Store")
-    {
+    if entries.next().transpose()?.is_some() {
         return Ok(None);
     }
 
     let path = entry.path();
-    let metadata = fs::symlink_metadata(&path)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
+    if !is_finder_metadata(&path)? {
         return Ok(None);
     }
-    let mut magic = [0_u8; DS_STORE_MAGIC.len()];
-    let mut file = fs::File::open(&path)?;
-    match std::io::Read::read_exact(&mut file, &mut magic) {
-        Ok(()) if magic == DS_STORE_MAGIC => {}
-        Ok(()) => return Ok(None),
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error),
-    }
-    drop(file);
 
     match fs::remove_file(&path) {
         Ok(()) => Ok(Some(path)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+/// Recognize a regular Finder directory database by its name and header.
+/// # Errors
+/// Returns an error when a candidate cannot be safely opened or read.
+pub fn is_finder_metadata(path: &Path) -> std::io::Result<bool> {
+    const MAGIC: [u8; 8] = *b"\0\0\0\x01Bud1";
+    if path.file_name().is_none_or(|name| name != ".DS_Store")
+        || !fs::symlink_metadata(path)?.is_file()
+    {
+        return Ok(false);
+    }
+    let mut file = open_regular_nofollow(path)?;
+    let mut header = [0; MAGIC.len()];
+    match std::io::Read::read_exact(&mut file, &mut header) {
+        Ok(()) => Ok(header == MAGIC),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn open_regular_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(target_os = "macos")]
+        options.custom_flags(libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK);
+        #[cfg(not(target_os = "macos"))]
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Expected a regular file",
+        ));
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Expected a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 /// Robust move that handles cross-filesystem boundaries (EXDEV).

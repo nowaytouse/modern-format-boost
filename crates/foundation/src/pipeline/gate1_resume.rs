@@ -238,7 +238,9 @@ impl FinalInputObservation {
     pub(crate) fn capture(path: &Path) -> io::Result<Self> {
         let before = std::fs::symlink_metadata(path)?;
         if !before.is_file() || before.file_type().is_symlink() {
-            return Err(error("final verification input must be a regular non-symlink file"));
+            return Err(error(
+                "final verification input must be a regular non-symlink file",
+            ));
         }
         let content = FileProofInput::capture(path)?;
         let metadata = std::fs::symlink_metadata(path)?;
@@ -259,7 +261,25 @@ impl FinalInputObservation {
         Ok(())
     }
 
-    pub(crate) fn blake3(&self) -> &str { &self.content.blake3 }
+    pub(crate) fn blake3(&self) -> &str {
+        &self.content.blake3
+    }
+}
+
+/// Observe complete bytes from a regular file under a non-linked source path.
+/// # Errors
+/// Refuses unsafe paths, read failures and changes during the observation.
+pub fn retained_source_blake3(root: &Path, relative: &Path) -> io::Result<String> {
+    if !std::fs::symlink_metadata(root)?.is_dir() || relative.as_os_str().is_empty() {
+        return Err(error(
+            "retained source requires a real root and a relative file path",
+        ));
+    }
+    super::verification::validate_no_symlink_components(root, relative).map_err(error)?;
+    let path = root.join(relative);
+    let observation = FinalInputObservation::capture(&path)?;
+    super::verification::validate_no_symlink_components(root, relative).map_err(error)?;
+    Ok(observation.content.blake3)
 }
 
 /// Current-attempt observations bind fresh checks to the files later removed.
@@ -283,24 +303,37 @@ impl std::fmt::Debug for FinalVerificationInputs {
 impl FinalVerificationInputs {
     /// `absent_sources` must already have passed the caller's historical cleanup admission.
     pub fn capture(ctx: &PipelineCtx, absent_sources: &BTreeSet<String>) -> io::Result<Self> {
-        if absent_sources.iter().any(|source| !ctx.blake3_log.contains_key(source)) {
+        if absent_sources
+            .iter()
+            .any(|source| !ctx.blake3_log.contains_key(source))
+        {
             return Err(error("final verification absence has no source mapping"));
         }
         let mut expected = BTreeMap::new();
         let mut absent = BTreeSet::new();
         for (source, entry) in &ctx.blake3_log {
-            super::verification::validate_marker_relative_path("source path", source).map_err(error)?;
-            let output = entry.out_rel.as_deref()
+            super::verification::validate_marker_relative_path("source path", source)
+                .map_err(error)?;
+            let output = entry
+                .out_rel
+                .as_deref()
                 .ok_or_else(|| error("final verification requires an explicit output mapping"))?;
-            super::verification::validate_marker_relative_path("output path", output).map_err(error)?;
+            super::verification::validate_marker_relative_path("output path", output)
+                .map_err(error)?;
             if absent_sources.contains(source) {
                 let source = ctx.src_dir.join(source);
                 require_absent(&source)?;
                 absent.insert(source);
-            } else if expected.insert(ctx.src_dir.join(source), &entry.src).is_some() {
+            } else if expected
+                .insert(ctx.src_dir.join(source), &entry.src)
+                .is_some()
+            {
                 return Err(error("final verification source mapping is ambiguous"));
             }
-            if expected.insert(ctx.working_copy.join(output), &entry.out).is_some() {
+            if expected
+                .insert(ctx.working_copy.join(output), &entry.out)
+                .is_some()
+            {
                 return Err(error("final verification output mapping is ambiguous"));
             }
         }
@@ -310,7 +343,10 @@ impl FinalVerificationInputs {
         for (path, expected_hash) in expected {
             let observed = FinalInputObservation::capture(&path)?;
             if expected_hash.is_empty() || observed.content.blake3 != *expected_hash {
-                return Err(error(format!("final verification input differs from its BLAKE3 manifest: {}", path.display())));
+                return Err(error(format!(
+                    "final verification input differs from its BLAKE3 manifest: {}",
+                    path.display()
+                )));
             }
             files.insert(path, observed);
         }
@@ -324,13 +360,22 @@ impl FinalVerificationInputs {
             }
             sidecar_by_media.insert(path, selected);
         }
-        Ok(Self { files, absent_sources: absent, sidecars, sidecar_by_media })
+        Ok(Self {
+            files,
+            absent_sources: absent,
+            sidecars,
+            sidecar_by_media,
+        })
     }
 
     pub fn verify_unchanged(&self) -> io::Result<()> {
         self.sidecars.verify_unchanged()?;
-        for path in &self.absent_sources { require_absent(path)?; }
-        for observed in self.files.values() { observed.verify_unchanged()?; }
+        for path in &self.absent_sources {
+            require_absent(path)?;
+        }
+        for observed in self.files.values() {
+            observed.verify_unchanged()?;
+        }
         Ok(())
     }
 
@@ -340,13 +385,17 @@ impl FinalVerificationInputs {
             if let Some(observed) = self.files.get(path) {
                 observed.verify_unchanged()?;
                 if let Some(sidecar) = self.sidecar_by_media.get(path).and_then(Option::as_ref) {
-                    self.files.get(sidecar).ok_or_else(|| error("final XMP observation is absent"))?
+                    self.files
+                        .get(sidecar)
+                        .ok_or_else(|| error("final XMP observation is absent"))?
                         .verify_unchanged()?;
                 }
             } else if path == source && self.absent_sources.contains(path) {
                 require_absent(path)?;
             } else {
-                return Err(error("source deletion has no current-attempt input observation"));
+                return Err(error(
+                    "source deletion has no current-attempt input observation",
+                ));
             }
         }
         Ok(())
@@ -357,7 +406,9 @@ fn require_absent(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
-        Ok(_) => Err(error("a previously removed source reappeared during final verification")),
+        Ok(_) => Err(error(
+            "a previously removed source reappeared during final verification",
+        )),
     }
 }
 
@@ -452,7 +503,9 @@ impl<'a> Gate1ProofCache<'a> {
         marker: &WorkingCopyMarker,
     ) -> io::Result<Option<Self>> {
         if !Self::validate_context(ctx, marker)? {
-            return Err(error("final verification requires complete explicit source/output mappings"));
+            return Err(error(
+                "final verification requires complete explicit source/output mappings",
+            ));
         }
         let scope = crate::common_utils::UncachedVerificationScope::new().map_err(error)?;
         let mut fresh = Self::new(ctx, None)?;
@@ -522,7 +575,11 @@ impl<'a> Gate1ProofCache<'a> {
         } else {
             ProofReusePolicy::Allowed
         };
-        let authority = if reuse_policy == ProofReusePolicy::Disabled { None } else { authority };
+        let authority = if reuse_policy == ProofReusePolicy::Disabled {
+            None
+        } else {
+            authority
+        };
         let mut paths = Vec::with_capacity(ctx.blake3_log.len().saturating_mul(2));
         let mut sources_by_output = BTreeMap::new();
         for (source, entry) in &ctx.blake3_log {
@@ -539,7 +596,7 @@ impl<'a> Gate1ProofCache<'a> {
         }
         let sidecars = XmpSidecarIndex::capture(&paths)?;
         let connection = if authority.is_some() {
-            let conn = mfb_sqlite_store::open_store_connection().map_err(error)?;
+            let conn = mfb_sqlite_store::open_cache_store_connection().map_err(error)?;
             maintain(&conn)?;
             Some(conn)
         } else {
@@ -625,10 +682,13 @@ impl<'a> Gate1ProofCache<'a> {
         probe: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<()> {
         crate::batch_control::checkpoint().map_err(error)?;
-        if self.reuse_policy == ProofReusePolicy::Disabled || crate::common_utils::verification_cache_disabled() {
+        if self.reuse_policy == ProofReusePolicy::Disabled
+            || crate::common_utils::verification_cache_disabled()
+        {
             crate::common_utils::verify_tool_runtime().map_err(error)?;
-            let inputs = self.final_inputs.as_ref()
-                .ok_or_else(|| error("cache-disabled verification requires current-attempt input observations"))?;
+            let inputs = self.final_inputs.as_ref().ok_or_else(|| {
+                error("cache-disabled verification requires current-attempt input observations")
+            })?;
             inputs.verify_pair(source, output)?;
             probe()?;
             crate::batch_control::checkpoint().map_err(error)?;
@@ -757,12 +817,19 @@ impl<'a> Gate1ProofCache<'a> {
 
     pub(crate) fn finish(&self) -> io::Result<()> {
         self.sidecars.verify_unchanged()?;
-        if self.reuse_policy == ProofReusePolicy::Disabled || crate::common_utils::verification_cache_disabled() {
-            if self.connection.is_some() || self.authority.is_some() || self.work.is_some()
-                || self.reused.get() != 0 || self.writes.get() != 0 {
+        if self.reuse_policy == ProofReusePolicy::Disabled
+            || crate::common_utils::verification_cache_disabled()
+        {
+            if self.connection.is_some()
+                || self.authority.is_some()
+                || self.work.is_some()
+                || self.reused.get() != 0
+                || self.writes.get() != 0
+            {
                 return Err(error("final verification cache-disabled invariant failed"));
             }
-            self.final_inputs.as_ref()
+            self.final_inputs
+                .as_ref()
                 .ok_or_else(|| error("final verification input observations are absent"))?
                 .verify_unchanged()?;
             tracing::info!(target: "verification_gate_resume", cache_policy = "disabled", tool_health_cache = "disabled", fresh = self.fresh.get(), proof_cache_reads = 0, proof_cache_writes = 0, reused = 0,
@@ -812,7 +879,11 @@ fn maintain_at(
 
 #[cfg(test)]
 pub(crate) fn isolate_final_verification_test(name: &str) -> io::Result<bool> {
-    if std::env::var("MFB_TEST_FINAL_VERIFICATION_CHILD").ok().as_deref() == Some(name) {
+    if std::env::var("MFB_TEST_FINAL_VERIFICATION_CHILD")
+        .ok()
+        .as_deref()
+        == Some(name)
+    {
         return Ok(true);
     }
     let output = std::process::Command::new(std::env::current_exe()?)
@@ -820,8 +891,11 @@ pub(crate) fn isolate_final_verification_test(name: &str) -> io::Result<bool> {
         .env("MFB_TEST_FINAL_VERIFICATION_CHILD", name)
         .output()?;
     if !output.status.success() {
-        return Err(error(format!("isolated final verification regression failed: {}\n{}",
-            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))));
+        return Err(error(format!(
+            "isolated final verification regression failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
     Ok(false)
 }
@@ -977,7 +1051,9 @@ mod tests {
 
     #[test]
     fn gate1_work_memo_reuses_filtered_pass_but_final_mode_always_probes() -> io::Result<()> {
-        if !isolate_final_verification_test("pipeline::gate1_resume::tests::gate1_work_memo_reuses_filtered_pass_but_final_mode_always_probes")? {
+        if !isolate_final_verification_test(
+            "pipeline::gate1_resume::tests::gate1_work_memo_reuses_filtered_pass_but_final_mode_always_probes",
+        )? {
             return Ok(());
         }
         let temp = tempfile::tempdir()?;
@@ -1033,31 +1109,43 @@ mod tests {
 
     #[test]
     fn final_disabled_policy_ignores_warm_receipts_and_rejects_probe_mutations() -> io::Result<()> {
-        if !isolate_final_verification_test("pipeline::gate1_resume::tests::final_disabled_policy_ignores_warm_receipts_and_rejects_probe_mutations")? {
+        if !isolate_final_verification_test(
+            "pipeline::gate1_resume::tests::final_disabled_policy_ignores_warm_receipts_and_rejects_probe_mutations",
+        )? {
             return Ok(());
         }
         let temp = tempfile::tempdir()?;
-        let _store = crate::db::mfb_sqlite_store::set_test_store_path_for_tests(temp.path().join("store.sqlite"));
+        let _store = crate::db::mfb_sqlite_store::set_test_store_path_for_tests(
+            temp.path().join("store.sqlite"),
+        );
         let (ctx, source, output) = fixture(temp.path())?;
         let mut marker = WorkingCopyMarker::new(ctx.src_dir.clone(), ctx.working_copy.clone(), 1);
         marker.blake3_log = ctx.blake3_log.clone();
         let persistent = Gate1ProofCache::for_tests(&ctx, "warm-final-regression")?;
         persistent.verify("decode", &source, &output, || Ok(()))?;
-        persistent.verify("decode", &source, &output, || panic!("persistent receipt should be warm"))?;
+        persistent.verify("decode", &source, &output, || {
+            panic!("persistent receipt should be warm")
+        })?;
         assert_eq!(persistent.counts(), (1, 1, 0));
         drop(persistent);
         let work = Gate1WorkProofs::default();
         let memo = Gate1ProofCache::for_marker_with_work(&ctx, &marker, &work)?.unwrap();
         memo.verify("decode", &source, &output, || Ok(()))?;
-        memo.verify("decode", &source, &output, || panic!("work memo should be warm"))?;
+        memo.verify("decode", &source, &output, || {
+            panic!("work memo should be warm")
+        })?;
         assert_eq!(memo.counts(), (1, 1, 0));
         drop(memo);
         let fresh = Gate1ProofCache::fresh_for_marker(&ctx, &marker)?.unwrap();
         let calls = Cell::new(0);
-        assert!(fresh.verify("decode", &source, &output, || {
-            calls.set(calls.get() + 1);
-            Err(error("the current decoder rejected this input"))
-        }).is_err());
+        assert!(
+            fresh
+                .verify("decode", &source, &output, || {
+                    calls.set(calls.get() + 1);
+                    Err(error("the current decoder rejected this input"))
+                })
+                .is_err()
+        );
         assert_eq!(calls.get(), 1);
         assert_eq!(fresh.counts(), (0, 0, 0));
         assert!(fresh.connection.is_none() && fresh.authority.is_none() && fresh.work.is_none());
@@ -1070,16 +1158,28 @@ mod tests {
             let (ctx, source, output) = fixture(case.path())?;
             let xmp = source.with_extension("xmp");
             std::fs::write(&xmp, b"initial XMP content")?;
-            let mut marker = WorkingCopyMarker::new(ctx.src_dir.clone(), ctx.working_copy.clone(), 1);
+            let mut marker =
+                WorkingCopyMarker::new(ctx.src_dir.clone(), ctx.working_copy.clone(), 1);
             marker.blake3_log = ctx.blake3_log.clone();
             let fresh = Gate1ProofCache::fresh_for_marker(&ctx, &marker)?.unwrap();
-            assert!(fresh.verify("decode", &source, &output, || match changed {
-                "source" => std::fs::write(&source, b"changed source"),
-                "output" => std::fs::write(&output, b"changed output"),
-                "xmp" => std::fs::write(&xmp, b"changed XMP content"),
-                _ => filetime::set_file_mtime(&output, filetime::FileTime::from_unix_time(1_600_000_000, 0)),
-            }).is_err(), "{changed} changed during a probe");
-            assert!(fresh.finish().is_err(), "{changed} cannot become a final pass");
+            assert!(
+                fresh
+                    .verify("decode", &source, &output, || match changed {
+                        "source" => std::fs::write(&source, b"changed source"),
+                        "output" => std::fs::write(&output, b"changed output"),
+                        "xmp" => std::fs::write(&xmp, b"changed XMP content"),
+                        _ => filetime::set_file_mtime(
+                            &output,
+                            filetime::FileTime::from_unix_time(1_600_000_000, 0)
+                        ),
+                    })
+                    .is_err(),
+                "{changed} changed during a probe"
+            );
+            assert!(
+                fresh.finish().is_err(),
+                "{changed} cannot become a final pass"
+            );
             assert!(source.exists() && output.exists() && xmp.exists());
         }
         let mut unbound = ctx;
@@ -1090,7 +1190,8 @@ mod tests {
     }
 
     #[test]
-    fn final_input_observations_allow_owned_removals_but_reject_late_xmp_and_media_changes() -> io::Result<()> {
+    fn final_input_observations_allow_owned_removals_but_reject_late_xmp_and_media_changes()
+    -> io::Result<()> {
         let temp = tempfile::tempdir()?;
         let (mut ctx, first_source, first_output) = fixture(temp.path())?;
         let second_source = ctx.src_dir.join("b.jpeg");
@@ -1101,12 +1202,15 @@ mod tests {
         let second_xmp = second_source.with_extension("xmp");
         std::fs::write(&first_xmp, b"first XMP")?;
         std::fs::write(&second_xmp, b"second XMP")?;
-        ctx.blake3_log.insert("b.jpeg".into(), Blake3Entry {
-            out_rel: Some("b.JXL".into()),
-            src: FileProofInput::capture(&second_source)?.blake3,
-            out: FileProofInput::capture(&second_output)?.blake3,
-            library_asset: None,
-        });
+        ctx.blake3_log.insert(
+            "b.jpeg".into(),
+            Blake3Entry {
+                out_rel: Some("b.JXL".into()),
+                src: FileProofInput::capture(&second_source)?.blake3,
+                out: FileProofInput::capture(&second_output)?.blake3,
+                library_asset: None,
+            },
+        );
         ctx.expected_count = 2;
         let inputs = FinalVerificationInputs::capture(&ctx, &BTreeSet::new())?;
         inputs.verify_unchanged()?;
@@ -1125,7 +1229,8 @@ mod tests {
     }
 
     #[test]
-    fn gate1_work_memo_invalidates_changed_bytes_and_xmp_and_never_saves_failure() -> io::Result<()> {
+    fn gate1_work_memo_invalidates_changed_bytes_and_xmp_and_never_saves_failure() -> io::Result<()>
+    {
         let temp = tempfile::tempdir()?;
         let (mut ctx, source, output) = fixture(temp.path())?;
         let sidecar = source.with_extension("xmp");
@@ -1139,16 +1244,18 @@ mod tests {
         cache.verify("decode", &source, &output, || Ok(()))?;
         assert_eq!(cache.counts(), (0, 2, 1));
         assert!(
-            cache.verify("metadata", &source, &output, || Err(error("failed probe")))
+            cache
+                .verify("metadata", &source, &output, || Err(error("failed probe")))
                 .is_err()
         );
         cache.verify("metadata", &source, &output, || Ok(()))?;
         assert_eq!(cache.counts(), (0, 3, 1));
         assert!(
-            cache.verify("changed", &source, &output, || {
-                std::fs::write(&sidecar, b"third XMP")
-            })
-            .is_err()
+            cache
+                .verify("changed", &source, &output, || {
+                    std::fs::write(&sidecar, b"third XMP")
+                })
+                .is_err()
         );
         cache.finish()?;
         drop(cache);
@@ -1294,7 +1401,7 @@ mod tests {
         let (ctx, source, output) = fixture(temp.path())?;
         let cache = Gate1ProofCache::new(&ctx, Some("authority".into()))?;
         let conn = cache.connection.as_ref().unwrap();
-        conn.execute_batch("CREATE TRIGGER reject_gate_proof BEFORE INSERT ON blob_store WHEN NEW.namespace='gate1_verified_file' BEGIN SELECT RAISE(ABORT,'synthetic commit failure'); END;").map_err(error)?;
+        conn.execute_batch("CREATE TEMP TRIGGER reject_gate_proof BEFORE INSERT ON main.blob_store WHEN NEW.namespace='gate1_verified_file' BEGIN SELECT RAISE(ABORT,'synthetic commit failure'); END;").map_err(error)?;
         assert!(cache.verify("decode", &source, &output, || Ok(())).is_err());
         assert_eq!(cache.fresh.get(), 0);
         conn.execute_batch("DROP TRIGGER reject_gate_proof;")
@@ -1324,9 +1431,9 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let _store =
             mfb_sqlite_store::set_test_store_path_for_tests(temp.path().join("store.sqlite"));
-        let conn = mfb_sqlite_store::open_store_connection().map_err(error)?;
+        let state = mfb_sqlite_store::open_store_connection().map_err(error)?;
         mfb_sqlite_store::upsert_blob(
-            &conn,
+            &state,
             mfb_sqlite_store::NS_CHECKPOINT,
             "state",
             1,
@@ -1335,6 +1442,7 @@ mod tests {
             10,
         )
         .map_err(error)?;
+        let conn = mfb_sqlite_store::open_cache_store_connection().map_err(error)?;
         for (key, now) in [("old", 1), ("new", 100)] {
             mfb_sqlite_store::upsert_blob(&conn, NS_GATE1_PROOF, key, 1, None, b"proof", now)
                 .map_err(error)?;
@@ -1356,7 +1464,7 @@ mod tests {
             .map_err(error)?;
         assert_eq!(count, 0);
         assert_eq!(
-            mfb_sqlite_store::read_blob(&conn, mfb_sqlite_store::NS_CHECKPOINT, "state", 1)
+            mfb_sqlite_store::read_blob(&state, mfb_sqlite_store::NS_CHECKPOINT, "state", 1)
                 .map_err(error)?,
             Some(b"retain".to_vec())
         );

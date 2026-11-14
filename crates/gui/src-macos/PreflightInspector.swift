@@ -1,11 +1,16 @@
 import AppKit
 
+private enum PreflightXmpXml: String, Decodable {
+    case checked, rejected, unavailable
+}
+
 private struct PreflightEntry: Decodable {
     let relative_path: String
     let route: String
     let selected: Bool
     let bytes: UInt64
     let content_blake3: String
+    let xmp_xml: PreflightXmpXml?
     let action: String
     let reason: String
 }
@@ -35,13 +40,27 @@ private struct PreflightPlan: Decodable {
     let entries: [PreflightEntry]
     let relationships: [PreflightRelationship]
     let storage: PreflightStorage
+    let storage_scope: String?
 }
 
-private struct PreflightStorage: Decodable {
+struct PreflightStorage: Decodable {
     let status: String
     let directory: String?
     let available_bytes: UInt64?
     let diagnostic: String?
+
+    var valid: Bool {
+        switch status {
+        case "observed":
+            return directory.map(FastImgDeliveryReceipt.absolute) == true
+                && available_bytes != nil && diagnostic == nil
+        case "unknown":
+            return directory == nil && available_bytes == nil
+                && diagnostic.map { !$0.isEmpty && !$0.contains("\0") } == true
+        default:
+            return false
+        }
+    }
 }
 
 private struct PreflightWorker: Decodable {
@@ -59,6 +78,8 @@ private struct PreflightSnapshot: Decodable {
     let execution_started: Bool
     let plans: [PreflightPlan]
     let workers: [PreflightWorker]
+    let launcher_minimum_free_bytes: UInt64?
+    let scratch_storage: PreflightStorage?
 
     private static func require(_ value: Bool, _ field: String) throws {
         guard value else { throw NSError(domain: "MFBPreflight", code: 1,
@@ -74,6 +95,15 @@ private struct PreflightSnapshot: Decodable {
         pathKey((path as NSString).deletingPathExtension)
     }
 
+    private static func liveStemKey(_ path: String) -> Data {
+        let bytes = pathKey(path)
+        let filename = bytes.lastIndex(of: 47).map { bytes.index(after: $0) } ?? bytes.startIndex
+        let suffix = bytes[filename...].lastIndex(of: 46).flatMap { $0 > filename ? $0 : nil }
+        var key = Data(bytes[..<filename])
+        key.append(contentsOf: bytes[filename..<(suffix ?? bytes.endIndex)].map { (65...90).contains($0) ? $0 + 32 : $0 })
+        return key
+    }
+
     private static func validRelativePath(_ path: String) -> Bool {
         !path.isEmpty && !path.hasPrefix("/") && !path.contains("\0")
             && path.split(separator: "/", omittingEmptySubsequences: false)
@@ -83,16 +113,28 @@ private struct PreflightSnapshot: Decodable {
     static func decode(_ data: Data, expectedInput: String) throws -> PreflightSnapshot {
         try require(!data.isEmpty && data.count <= 1_048_576, "report exceeds 1 MiB")
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let schema = object["schema_version"] as? Int,
               let plans = object["plans"] as? [[String: Any]],
               let workers = object["workers"] as? [[String: Any]] else {
             try require(false, "report shape")
             throw NSError(domain: "MFBPreflight", code: 1)
         }
-        try keys(object, ["schema_version", "scope", "read_only", "execution_started", "plans", "workers"])
+        try require((3...6).contains(schema), "unsupported preflight schema")
+        var reportKeys = ["schema_version", "scope", "read_only", "execution_started", "plans", "workers"]
+        if schema >= 6 {
+            reportKeys += ["launcher_minimum_free_bytes", "scratch_storage"]
+            if let scratch = object["scratch_storage"] as? [String: Any] {
+                try keys(scratch, ["status", "directory", "available_bytes", "diagnostic"])
+            }
+        }
+        try keys(object, reportKeys)
+        let liveKey = schema >= 5 ? liveStemKey : stemKey
         for plan in plans {
-            try keys(plan, ["input", "output_requested", "in_place_requested", "files_discovered",
+            var planKeys = ["input", "output_requested", "in_place_requested", "files_discovered",
                 "selected_images", "selected_videos", "filtered_media", "sidecars", "other_files",
-                "selected_media_bytes", "entries", "relationships", "storage"])
+                "selected_media_bytes", "entries", "relationships", "storage"]
+            if schema >= 6 { planKeys.append("storage_scope") }
+            try keys(plan, planKeys)
             guard let storage = plan["storage"] as? [String: Any] else {
                 try require(false, "storage observation shape")
                 continue
@@ -104,7 +146,9 @@ private struct PreflightSnapshot: Decodable {
                 continue
             }
             for entry in entries {
-                try keys(entry, ["relative_path", "route", "selected", "bytes", "content_blake3", "action", "reason"])
+                var expected = ["relative_path", "route", "selected", "bytes", "content_blake3", "action", "reason"]
+                if schema >= 4 { expected.append("xmp_xml") }
+                try keys(entry, expected)
             }
             for relationship in relationships {
                 try keys(relationship, ["kind", "source_relative_path", "match_basis", "status",
@@ -115,7 +159,7 @@ private struct PreflightSnapshot: Decodable {
             try keys(worker, ["name", "path", "status", "bytes", "executable_check"])
         }
         let snapshot = try JSONDecoder().decode(Self.self, from: data)
-        try require(snapshot.schema_version == 3 && snapshot.scope == "launcher_routing_snapshot"
+        try require(snapshot.schema_version == schema && snapshot.scope == "launcher_routing_snapshot"
             && snapshot.read_only && !snapshot.execution_started, "read-only schema")
         try require(snapshot.plans.count == 1, "one selected input is required")
         let plan = snapshot.plans[0]
@@ -124,25 +168,27 @@ private struct PreflightSnapshot: Decodable {
         if let output = plan.output_requested {
             try require(output.hasPrefix("/") && !output.contains("\0"), "output path")
         }
-        switch plan.storage.status {
-        case "observed":
-            try require(plan.in_place_requested || plan.output_requested != nil, "storage destination is unbound")
-            guard let directory = plan.storage.directory else {
-                try require(false, "storage directory is absent")
-                throw NSError(domain: "MFBPreflight", code: 1)
+        try require(plan.storage.valid, "invalid storage evidence")
+        if schema >= 6 {
+            try require(!(plan.in_place_requested && plan.output_requested != nil), "conflicting output mode")
+            let expectedScope = plan.output_requested == nil ? "input" : "output"
+            try require(plan.storage_scope == expectedScope, "storage scope")
+            if plan.selected_images > 0 || plan.selected_videos > 0 {
+                let (minimum, overflow) = plan.selected_media_bytes.addingReportingOverflow(2_147_483_648)
+                try require(!overflow && snapshot.launcher_minimum_free_bytes == minimum
+                    && snapshot.scratch_storage?.valid == true, "resource admission evidence")
+            } else {
+                try require(snapshot.launcher_minimum_free_bytes == nil && snapshot.scratch_storage == nil,
+                    "resource admission without selected media")
             }
-            try require(directory.hasPrefix("/") && !directory.contains("\0")
-                && plan.storage.available_bytes != nil && plan.storage.diagnostic == nil, "observed storage evidence")
-        case "unknown":
-            try require(plan.storage.directory == nil && plan.storage.available_bytes == nil
-                && plan.storage.diagnostic.map { !$0.isEmpty && !$0.contains("\0") } == true, "unknown storage evidence")
-        default:
-            try require(false, "unknown storage status")
+        } else if plan.storage.status == "observed" {
+            try require(plan.in_place_requested || plan.output_requested != nil, "storage destination is unbound")
         }
         try require(plan.entries.count <= 2_000 && plan.files_discovered == plan.entries.count,
             "inventory exceeds 2,000 entries or is incomplete")
         var byPath: [Data: PreflightEntry] = [:]
         var byStem: [Data: [PreflightEntry]] = [:]
+        var liveByStem: [Data: [PreflightEntry]] = [:]
         var images = 0, videos = 0, filtered = 0, sidecars = 0, other = 0
         var selectedBytes: UInt64 = 0
         for entry in plan.entries {
@@ -152,11 +198,15 @@ private struct PreflightSnapshot: Decodable {
                 (48...57).contains($0) || (97...102).contains($0)
             }, "source content identity")
             byPath[key] = entry
+            if schema >= 4 {
+                try require((entry.xmp_xml != nil) == (entry.route == "sidecar"), "XMP content observation")
+            }
             let action: String
             let reason: String
             switch entry.route {
             case "image", "video":
                 byStem[stemKey(entry.relative_path), default: []].append(entry)
+                liveByStem[liveKey(entry.relative_path), default: []].append(entry)
                 if entry.selected {
                     if entry.route == "image" { images += 1 } else { videos += 1 }
                     let addition = selectedBytes.addingReportingOverflow(entry.bytes)
@@ -196,8 +246,7 @@ private struct PreflightSnapshot: Decodable {
                 try require(false, "relationship source is absent")
                 continue
             }
-            try require(observedSources.insert(key).inserted && !relationship.verified,
-                "duplicate or verified filename relationship")
+            try require(observedSources.insert(key).inserted, "duplicate filename relationship")
             let candidates: [PreflightEntry]
             let ambiguous: Bool
             let basis: String
@@ -215,7 +264,7 @@ private struct PreflightSnapshot: Decodable {
                 ambiguous = candidates.count > 1
             case "live_photo_filename":
                 try require(source.route == "image", "Live Photo filename source is not an image")
-                let group = byStem[stemKey(source.relative_path)] ?? []
+                let group = liveByStem[liveKey(source.relative_path)] ?? []
                 candidates = group.filter { $0.route == "video" }
                 try require(!candidates.isEmpty, "Live Photo filename candidate is absent")
                 ambiguous = candidates.count > 1 || group.filter { $0.route == "image" }.count > 1
@@ -226,14 +275,21 @@ private struct PreflightSnapshot: Decodable {
             }
             let expectedPaths = candidates.prefix(64).map { pathKey($0.relative_path) }
             let status = candidates.isEmpty ? "unmatched" : (ambiguous ? "ambiguous" : "candidate")
-            try require(relationship.match_basis == basis && relationship.status == status
-                && relationship.candidate_count == candidates.count
+            if relationship.match_basis == "apple_content_identifier" {
+                try require(schema >= 5 && relationship.kind == "live_photo_filename" && status == "candidate"
+                    && ["identifier_match", "identifier_mismatch", "identifier_unavailable"].contains(relationship.status)
+                    && relationship.verified == (relationship.status == "identifier_match"), "invalid Live Photo identifier evidence")
+            } else {
+                try require(relationship.match_basis == basis && relationship.status == status
+                    && !relationship.verified, "invalid filename relationship evidence")
+            }
+            try require(relationship.candidate_count == candidates.count
                 && relationship.candidates_truncated == (candidates.count > 64)
                 && relationship.candidate_relative_paths.map(pathKey) == expectedPaths, "filename candidates do not reconcile")
         }
         let expectedSources = Set(plan.entries.filter { entry in
             entry.route == "sidecar" || (entry.route == "image"
-                && (byStem[stemKey(entry.relative_path)] ?? []).contains { $0.route == "video" })
+                && (liveByStem[liveKey(entry.relative_path)] ?? []).contains { $0.route == "video" })
         }.map { pathKey($0.relative_path) })
         try require(observedSources == expectedSources, "filename observations are incomplete")
         let expectedWorkers = Set((images > 0 ? ["img"] : []) + (videos > 0 ? ["vid"] : []))
@@ -314,6 +370,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         storage.font = .systemFont(ofSize: 12)
         storage.isSelectable = true
         storage.lineBreakMode = .byTruncatingMiddle
+        storage.maximumNumberOfLines = 2
         storage.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         search.placeholderString = text("Path, route, action or reason", "搜索路径、类型、动作或原因", "パス・種類・処理・理由を検索")
         search.setAccessibilityLabel(search.placeholderString)
@@ -351,7 +408,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         detail.isHorizontallyResizable = false
         detail.textContainer?.widthTracksTextView = true
         detail.autoresizingMask = [.width]
-        detail.setAccessibilityLabel(text("File and filename candidate details", "文件与文件名候选详情", "ファイルと名前候補の詳細"))
+        detail.setAccessibilityLabel(text("File and metadata details", "文件与元数据详情", "ファイルとメタデータの詳細"))
         let detailScroll = NSScrollView()
         detailScroll.documentView = detail
         detailScroll.hasVerticalScroller = true
@@ -426,29 +483,61 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         workers.toolTip = workers.stringValue
         workers.setAccessibilityLabel(workers.stringValue)
         workers.isHidden = snapshot.workers.isEmpty
-        displayStorage(plan.storage)
+        displayStorage(plan.storage, scope: plan.storage_scope,
+            minimum: snapshot.launcher_minimum_free_bytes, scratch: snapshot.scratch_storage)
         search.isEnabled = true
         applyFilter()
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
     }
 
-    private func displayStorage(_ observation: PreflightStorage) {
-        let limits = text("Snapshot only; not reserved. Required output, temporary and Photos space is unknown.",
-            "仅为快照，未预留空间；输出、临时文件和照片图库的所需空间未知。",
-            "スナップショットのみ・領域は未予約です。出力・一時ファイル・写真ライブラリの必要容量は不明です。")
-        if let available = observation.available_bytes, let directory = observation.directory {
-            let readable = Int64(exactly: available).map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
-                ?? String(available) + " bytes"
-            storage.stringValue = text("Destination disk available: ", "目标磁盘当前可用：", "出力先の空き容量：")
-                + readable + text(" (snapshot)", "（快照）", "（スナップショット）")
-            storage.toolTip = directory + "\n" + String(available) + " bytes\n" + limits
-        } else {
-            storage.stringValue = text("Destination filesystem capacity unknown", "目标文件系统的可用容量未知", "出力先のファイルシステムの空き容量は不明")
-            let reason = observation.diagnostic == "destination_not_bound"
-                ? text("No destination bound", "尚未绑定输出目标", "出力先は未確定") : observation.diagnostic ?? ""
-            storage.toolTip = reason + "\n" + limits
+    private func displayStorage(_ observation: PreflightStorage, scope: String?, minimum: UInt64?,
+                                scratch: PreflightStorage?) {
+        func capacity(_ observation: PreflightStorage) -> String {
+            guard let available = observation.available_bytes else {
+                return text("unknown", "未知", "不明")
+            }
+            return readableBytes(available)
         }
+        func readableBytes(_ count: UInt64) -> String {
+            Int64(exactly: count).map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+                ?? String(count) + " bytes"
+        }
+        func detail(_ observation: PreflightStorage) -> String {
+            if let location = observation.directory, let available = observation.available_bytes {
+                return Self.displayPath(location) + "\n" + String(available) + " bytes"
+            }
+            if observation.diagnostic == "destination_not_bound" {
+                return text("No destination bound", "尚未绑定输出目标", "出力先は未確定")
+            }
+            return observation.diagnostic ?? ""
+        }
+        let limits = text("Available space is a snapshot. Required output, scratch and Photos space remains unknown.",
+            "可用空间为快照。输出、临时文件和照片图库的实际空间需求未知。",
+            "空き容量は確認時点の値です。出力・作業領域・写真ライブラリの実際の必要容量は不明です。")
+        let target = scope == "input" ? text("Input filesystem available", "输入所在文件系统可用", "入力側の空き容量")
+            : text("Output filesystem available", "输出所在文件系统可用", "出力先の空き容量")
+        var lines = [target + " · " + capacity(observation)]
+        var details = [detail(observation)]
+        if let minimum {
+            let outcome: String
+            if let available = observation.available_bytes {
+                outcome = available >= minimum
+                    ? text("meets launcher minimum", "达到启动最低要求", "起動時の最低条件を満たす")
+                    : text("below launcher minimum", "低于启动最低要求", "起動時の最低条件を下回る")
+            } else {
+                outcome = text("comparison unavailable", "无法比较", "比較できません")
+            }
+            lines[0] += " · " + outcome + " (" + readableBytes(minimum) + ")"
+            details.append(text("Launcher minimum", "启动最低要求", "起動時の最低空き容量") + " · " + String(minimum) + " bytes")
+        }
+        if let scratch {
+            lines.append(text("MFB scratch filesystem available", "MFB 临时目录所在文件系统可用", "MFB作業領域の空き容量")
+                + " · " + capacity(scratch))
+            details.append(detail(scratch))
+        }
+        storage.stringValue = lines.joined(separator: "\n")
+        storage.toolTip = (details + [limits]).joined(separator: "\n")
         storage.setAccessibilityLabel(storage.stringValue + "\n" + (storage.toolTip ?? ""))
     }
 
@@ -574,7 +663,10 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         guard rows.indices.contains(table.selectedRow), let plan else { detail.string = ""; return }
         let entry = rows[table.selectedRow]
         let key = Data(entry.relative_path.utf8)
-        let relationships = plan.relationships.filter { Data($0.source_relative_path.utf8) == key }
+        let relationships = plan.relationships.filter {
+            Data($0.source_relative_path.utf8) == key || ($0.match_basis == "apple_content_identifier"
+                && $0.candidate_relative_paths.contains { Data($0.utf8) == key })
+        }
         var lines = [Self.displayPath(entry.relative_path), "\(routeText(entry.route))  · \(actionText(entry.action))  · \(entry.bytes) "
             + text("bytes", "字节", "バイト"), reasonText(entry.reason)]
         lines.append(text("Scanned content fingerprint", "扫描时的内容指纹", "スキャン時の内容指紋") + " (BLAKE3):")
@@ -582,19 +674,50 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         lines.append(text("Records the bytes read during this scan; final media verification is still required.",
             "标识本次扫描读到的文件内容；处理结果仍需完整验证。",
             "今回のスキャンで読み取った内容を識別します。処理結果の検証は別途必要です。"))
+        if entry.route == "sidecar" {
+            lines.append(xmpXmlText(entry.xmp_xml))
+        }
         for relationship in relationships {
             let kind = relationship.kind == "xmp_filename" ? "XMP" : "Live Photo"
-            let match = relationship.status == "unmatched" ? text("Unmatched", "没有候选", "候補なし")
-                : relationship.status == "ambiguous" ? text("Ambiguous", "候选不唯一", "候補が複数")
-                : text("Candidate", "候选", "候補")
-            lines.append("\(kind): \(match)  · \(relationship.candidate_count)  · "
-                + text("Filename only, unverified", "仅文件名线索，未经核验", "ファイル名の手掛かりのみ・未検証"))
-            lines += relationship.candidate_relative_paths.map(Self.displayPath)
+            lines.append("\(kind): \(relationshipText(relationship.status))")
+            let relatedPaths = entry.route == "video" ? [relationship.source_relative_path] : relationship.candidate_relative_paths
+            lines += relatedPaths.map(Self.displayPath)
             if relationship.candidates_truncated {
-                lines.append(text("Candidate list limited to 64; total shown above", "候选列表限显 64 条；完整数量见上方", "候補一覧は64件まで・総数は上記"))
+                lines.append(text("Showing 64 of \(relationship.candidate_count) candidates",
+                    "共 \(relationship.candidate_count) 个候选，显示前 64 个",
+                    "候補 \(relationship.candidate_count) 件のうち64件を表示"))
             }
         }
         detail.string = lines.joined(separator: "\n")
+    }
+
+    private func relationshipText(_ status: String) -> String {
+        switch status {
+        case "identifier_match":
+            return text("Apple content identifiers match", "Apple 内容标识一致", "Appleのコンテンツ識別子が一致")
+        case "identifier_mismatch":
+            return text("Apple content identifiers differ", "Apple 内容标识不同", "Appleのコンテンツ識別子が不一致")
+        case "identifier_unavailable":
+            return text("Apple content identifiers could not be verified", "未能核验 Apple 内容标识", "Appleのコンテンツ識別子を確認できませんでした")
+        case "unmatched":
+            return text("No filename candidate", "未找到同名候选", "ファイル名が一致する候補なし")
+        case "ambiguous":
+            return text("Multiple filename candidates, unverified", "有多个同名候选，待核验", "ファイル名が一致する候補が複数・未検証")
+        default:
+            return text("Filename candidate, unverified", "有同名候选，待核验", "ファイル名が一致する候補・未検証")
+        }
+    }
+
+    private func xmpXmlText(_ result: PreflightXmpXml?) -> String {
+        switch result {
+        case .checked:
+            return text("XMP XML structure verified", "XMP 的 XML 结构已核验", "XMPのXML構造を確認済み")
+        case .rejected:
+            return text("XMP XML is malformed or uses a prohibited declaration",
+                "XMP 的 XML 格式有误或包含禁用的声明", "XMPのXML形式が不正か、禁止された宣言があります")
+        case .unavailable, nil:
+            return text("XMP XML structure could not be verified", "未能核验 XMP 的 XML 结构", "XMPのXML構造を確認できませんでした")
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -608,9 +731,10 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         func entry(_ path: String, _ route: String, _ action: String, _ reason: String) -> [String: Any] {
             ["relative_path": path, "route": route, "selected": route != "sidecar", "bytes": 4,
                 "content_blake3": String(repeating: "a", count: 64),
+                "xmp_xml": route == "sidecar" ? ("checked" as Any) : NSNull(),
                 "action": action, "reason": reason]
         }
-        return ["schema_version": 3, "scope": "launcher_routing_snapshot", "read_only": true,
+        return ["schema_version": 4, "scope": "launcher_routing_snapshot", "read_only": true,
             "execution_started": false, "plans": [["input": "/synthetic/preflight", "output_requested": NSNull(),
                 "in_place_requested": false, "files_discovered": 3, "selected_images": 1, "selected_videos": 1,
                 "filtered_media": 0, "sidecars": 1, "other_files": 0, "selected_media_bytes": 8,
@@ -653,6 +777,76 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
               let relationships = plan["relationships"] as? [[String: Any]] else {
             return failures + ["invalid preflight test fixture"]
         }
+        let xmpLabels = [
+            ("en", ["XMP XML structure verified", "XMP XML is malformed or uses a prohibited declaration",
+                "XMP XML structure could not be verified"]),
+            ("zh-Hans", ["XMP 的 XML 结构已核验", "XMP 的 XML 格式有误或包含禁用的声明", "未能核验 XMP 的 XML 结构"]),
+            ("ja", ["XMPのXML構造を確認済み", "XMPのXML形式が不正か、禁止された宣言があります",
+                "XMPのXML構造を確認できませんでした"])
+        ]
+        for (language, expected) in xmpLabels {
+            let panel = PreflightInspectorPanel(language: language)
+            let actual = [panel.xmpXmlText(.checked), panel.xmpXmlText(.rejected), panel.xmpXmlText(.unavailable)]
+            if actual != expected || panel.xmpXmlText(nil) != expected[2] || panel.detail.accessibilityLabel()?.isEmpty != false {
+                failures.append("XMP XML status or accessibility label missing in " + language)
+            }
+        }
+        var olderReport = original
+        olderReport["schema_version"] = 3
+        var olderPlan = plan
+        olderPlan["entries"] = entries.map { entry in
+            var olderEntry = entry
+            olderEntry.removeValue(forKey: "xmp_xml")
+            return olderEntry
+        }
+        olderReport["plans"] = [olderPlan]
+        check("older routing with no XMP XML observation", olderReport, accepted: true)
+        for result in ["identifier_match", "identifier_mismatch", "identifier_unavailable"] {
+            var observed = relationships
+            observed[0]["match_basis"] = "apple_content_identifier"
+            observed[0]["status"] = result
+            let matched = result == "identifier_match"
+            observed[0]["verified"] = matched
+            var observedPlan = plan
+            observedPlan["relationships"] = observed
+            var identified = original
+            identified["plans"] = [observedPlan]
+            check("identifier evidence on older schema", identified)
+            identified["schema_version"] = 5
+            check("Live Photo identifier evidence: " + result, identified, accepted: true)
+            observed[0]["verified"] = !matched
+            observedPlan["relationships"] = observed
+            identified["plans"] = [observedPlan]
+            check("inconsistent Live Photo identifier verification: " + result, identified)
+        }
+        var xmpIdentity = relationships
+        xmpIdentity[1]["match_basis"] = "apple_content_identifier"
+        xmpIdentity[1]["status"] = "identifier_match"
+        xmpIdentity[1]["verified"] = true
+        var xmpIdentityPlan = plan
+        xmpIdentityPlan["relationships"] = xmpIdentity
+        var xmpIdentityReport = original
+        xmpIdentityReport["schema_version"] = 5
+        xmpIdentityReport["plans"] = [xmpIdentityPlan]
+        check("XMP relationship claimed Live Photo identity", xmpIdentityReport)
+        for value in ["rejected", "unavailable"] {
+            var changed = entries
+            changed[2]["xmp_xml"] = value
+            var changedPlan = plan
+            changedPlan["entries"] = changed
+            var report = original
+            report["plans"] = [changedPlan]
+            check("XMP XML observation: " + value, report, accepted: true)
+        }
+        for (index, value) in [(0, "checked" as Any), (2, NSNull()), (2, "unknown"), (2, true)] {
+            var changed = entries
+            changed[index]["xmp_xml"] = value
+            var changedPlan = plan
+            changedPlan["entries"] = changed
+            var report = original
+            report["plans"] = [changedPlan]
+            check("invalid XMP XML observation", report)
+        }
         for fingerprint in [NSNull(), "", String(repeating: "a", count: 63),
             String(repeating: "g", count: 64), String(repeating: "A", count: 64), 123, true] as [Any] {
             var invalidEntries = entries
@@ -676,6 +870,27 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         var capacityReport = original
         capacityReport["plans"] = [capacityPlan]
         check("observed zero capacity", capacityReport, accepted: true)
+        var resourcePlan = capacityPlan
+        resourcePlan["storage_scope"] = "output"
+        var resources = capacityReport
+        resources["schema_version"] = 6
+        resources["plans"] = [resourcePlan]
+        resources["launcher_minimum_free_bytes"] = UInt64(2_147_483_656)
+        resources["scratch_storage"] = observed
+        check("bound capacity and exact launcher threshold", resources, accepted: true)
+        var invalidResources = resources
+        invalidResources["launcher_minimum_free_bytes"] = UInt64(2_147_483_655)
+        check("understated launch threshold", invalidResources)
+        invalidResources = resources
+        invalidResources["scratch_storage"] = NSNull()
+        check("absent scratch observation", invalidResources)
+        resourcePlan["storage_scope"] = "input"
+        invalidResources = resources
+        invalidResources["plans"] = [resourcePlan]
+        check("misbound storage scope", invalidResources)
+        resourcePlan["output_requested"] = NSNull()
+        resources["plans"] = [resourcePlan]
+        check("implicit destination uses input filesystem", resources, accepted: true)
         for (field, value) in [("status", "guessed"), ("directory", "relative"),
             ("available_bytes", -1), ("available_bytes", true), ("diagnostic", "unexpected")] as [(String, Any)] {
             var invalid = observed
@@ -734,7 +949,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         var canonicalEntries = entries
         for path in ["\u{00e9}.txt", "e\u{0301}.txt"] {
             canonicalEntries.append(["relative_path": path, "route": "copy_only", "selected": false,
-                "bytes": 1, "content_blake3": String(repeating: "a", count: 64), "action": "copy_after_success",
+                "bytes": 1, "content_blake3": String(repeating: "a", count: 64), "xmp_xml": NSNull(), "action": "copy_after_success",
                 "reason": "non_media_copy_is_conditional_on_successful_adjacent_processing"])
         }
         var canonicalPlan = plan
@@ -747,7 +962,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         var boundaryEntries = entries
         for index in 0..<1_997 {
             boundaryEntries.append(["relative_path": "other\(index).txt", "route": "copy_only",
-                "selected": false, "bytes": 1, "content_blake3": String(repeating: "a", count: 64), "action": "copy_after_success",
+                "selected": false, "bytes": 1, "content_blake3": String(repeating: "a", count: 64), "xmp_xml": NSNull(), "action": "copy_after_success",
                 "reason": "non_media_copy_is_conditional_on_successful_adjacent_processing"])
         }
         plan["entries"] = boundaryEntries

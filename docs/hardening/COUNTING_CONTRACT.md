@@ -15,8 +15,13 @@ discovered = processed + unprocessed
 
 The batch reconciles these equations after workers finish. Overflow, missing
 terminal outcomes and more outcomes than discovered inputs are errors, not
-clamped counts. Pause and fail-fast both report remaining work. A stopped batch
-must not force its progress bar to 100 percent.
+clamped counts. For each standard IMG/VID worker with a bound launcher
+inventory, the launcher checks its reported counts against the exact admitted
+items before aggregation or finalization. If the report is incomplete or
+contradictory, its aggregate counts and conversion bytes are unknown. The
+worker exit observation and raw diagnostics remain available. Pause and
+fail-fast both report remaining work. A stopped batch must not force its
+progress bar to 100 percent.
 
 - `succeeded`: this route's required delivery proofs completed.
 - `failed`: an explicit per-file failure; the source is retained.

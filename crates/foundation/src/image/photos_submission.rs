@@ -154,7 +154,7 @@ impl AppleScriptSubmissionPermit {
         self,
         marker: &WorkingCopyMarker,
         entry: &PhotosImportPendingEntry,
-    ) -> Result<(PathBuf, String)> {
+    ) -> Result<((PathBuf, String), PhotosSubmissionIntent)> {
         let owner_matches = marker.src_dir == self.src_dir
             && marker.working_copy == self.working_copy
             && marker.started_at == self.started_at
@@ -174,7 +174,7 @@ impl AppleScriptSubmissionPermit {
                 self.intent.source_rel, self.intent.output_rel
             )));
         }
-        Ok((self.entry.path, self.entry.album_name))
+        Ok(((self.entry.path, self.entry.album_name), self.intent))
     }
 }
 
@@ -185,6 +185,25 @@ pub(super) fn prepare_applescript(
     enriched: Option<&BTreeMap<String, (String, String, String)>>,
 ) -> Result<Vec<AppleScriptSubmissionPermit>> {
     prepare_applescript_with(marker, entries, kind, enriched, write_marker_atomic)
+}
+
+/// Match the exact committed intent, never just the filename, before using
+/// a positive reconciliation to release a held source.
+pub(super) fn uncertainty_matches(
+    marker: &WorkingCopyMarker,
+    intent: &PhotosSubmissionIntent,
+    entry: &PhotosImportPendingEntry,
+    enriched: Option<&BTreeMap<String, (String, String, String)>>,
+) -> bool {
+    let source_blake3 = enriched
+        .and_then(|proofs| proofs.get(&entry.source_rel))
+        .map_or(entry.blake3_entry.src.as_str(), |(source, _, _)| source);
+    intent.source_rel == entry.source_rel
+        && intent.source_blake3 == source_blake3
+        && intent.output_rel == entry.rel_path
+        && intent.output_blake3 == entry.blake3_entry.out
+        && intent.album_name == entry.album_name
+        && intent.photos_library_path == marker.photos_library_path
 }
 
 fn prepare_applescript_with(
@@ -338,7 +357,7 @@ mod tests {
             |_| Ok(()),
         )?;
         for (permit, entry) in permits.into_iter().zip(&entries) {
-            let manifest = permit.authorize(&marker, entry)?;
+            let (manifest, _) = permit.authorize(&marker, entry)?;
             assert_eq!(manifest, (entry.path.clone(), entry.album_name.clone()));
         }
         assert_eq!(writes.get(), 1, "authorization performs no persistence");

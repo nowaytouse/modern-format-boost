@@ -79,6 +79,8 @@ pub struct FailedRetryParent {
     hash: String,
     request: String,
     child: PathBuf,
+    photos: bool,
+    child_reserved: bool,
 }
 
 impl FailedRetryParent {
@@ -149,7 +151,10 @@ struct Relation {
 }
 
 fn has_schema(conn: &Connection) -> Result<bool> {
-    Ok(matches!(inspect_store_schema_version(conn)?, Some(5..=crate::mfb_sqlite_store::STORE_SCHEMA_VERSION)))
+    Ok(matches!(
+        inspect_store_schema_version(conn)?,
+        Some(5..=crate::mfb_sqlite_store::STORE_SCHEMA_VERSION)
+    ))
 }
 
 fn hash_text(value: &str) -> Result<()> {
@@ -242,17 +247,22 @@ fn request_key(key: &str, hash: &str) -> Result<String> {
     )
 }
 
-fn child_path(marker: &WorkingCopyMarker, request: &str) -> Result<PathBuf> {
-    let name = marker
-        .src_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .context("Retry source has no supported name")?;
-    let parent = marker
-        .working_copy
-        .parent()
-        .context("Retry parent output has no parent")?;
-    let child = parent.join(format!("{name}_optimized_retry_{}", &request[..16]));
+fn child_path(marker: &WorkingCopyMarker, request: &str, photos: bool) -> Result<PathBuf> {
+    let child = if photos {
+        crate::pipeline::verification::photos_working_copy_base(&marker.src_dir)?
+            .with_file_name(format!("retry_{request}"))
+    } else {
+        let name = marker
+            .src_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("Retry source has no supported name")?;
+        marker
+            .working_copy
+            .parent()
+            .context("Retry parent output has no parent")?
+            .join(format!("{name}_optimized_retry_{}", &request[..16]))
+    };
     validate_locator(text(&child)?)?;
     ensure!(
         child != marker.working_copy
@@ -263,7 +273,20 @@ fn child_path(marker: &WorkingCopyMarker, request: &str) -> Result<PathBuf> {
     Ok(child)
 }
 
-fn parent_ref(conn: &Connection, key: &str) -> Result<FailedRetryParent> {
+fn child_for_request(conn: &Connection, request: &str) -> Result<Option<String>> {
+    if !has_schema(conn)? {
+        return Ok(None);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT task_key FROM fast_img_retry_tasks WHERE request_key=?1",
+            [request],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+fn parent_ref(conn: &Connection, key: &str, photos: bool) -> Result<FailedRetryParent> {
     let marker = read_snapshot(conn, key)?.context("Failed retry parent task is missing")?;
     validate_parent(&marker)?;
     let (revision, hash): (i64, Vec<u8>) = conn.query_row(
@@ -282,7 +305,16 @@ fn parent_ref(conn: &Connection, key: &str) -> Result<FailedRetryParent> {
     .to_hex()
     .to_string();
     let request = request_key(key, &hash)?;
-    let child = child_path(&marker, &request)?;
+    let reservation = child_for_request(conn, &request)?;
+    let child_reserved = reservation.is_some();
+    let child = match reservation {
+        Some(child_key) => {
+            read_snapshot(conn, &child_key)?
+                .context("Reserved retry child is missing")?
+                .working_copy
+        }
+        None => child_path(&marker, &request, photos)?,
+    };
     Ok(FailedRetryParent {
         marker,
         key: key.to_owned(),
@@ -290,17 +322,25 @@ fn parent_ref(conn: &Connection, key: &str) -> Result<FailedRetryParent> {
         hash,
         request,
         child,
+        photos,
+        child_reserved,
     })
 }
 
-fn recheck_parent(conn: &Connection, expected: &FailedRetryParent) -> Result<FailedRetryParent> {
-    let current = parent_ref(conn, &expected.key)?;
+fn recheck_parent(
+    conn: &Connection,
+    expected: &FailedRetryParent,
+    photos: bool,
+) -> Result<FailedRetryParent> {
+    let current = parent_ref(conn, &expected.key, photos)?;
     ensure!(
         current.revision == expected.revision
             && current.hash == expected.hash
             && current.marker == expected.marker
             && current.request == expected.request
-            && current.child == expected.child,
+            && (!expected.child_reserved || current.child_reserved)
+            && ((!expected.child_reserved && expected.photos != photos)
+                || current.child == expected.child),
         "Failed retry parent changed after inspection; neither task was reset"
     );
     Ok(current)
@@ -311,10 +351,23 @@ fn recheck_parent(conn: &Connection, expected: &FailedRetryParent) -> Result<Fai
 /// # Errors
 /// Rejects unavailable, incomplete, changed, or unsupported parent state.
 pub fn inspect_failed_retry_parent(parent_wc: &Path) -> io::Result<FailedRetryParent> {
+    inspect_failed_retry_parent_for_delivery(parent_wc, false)
+}
+
+/// Inspect the current retry reservation, or propose a delivery-specific new child.
+///
+/// # Errors
+/// Rejects unavailable or invalid state without creating an output directory.
+pub fn inspect_failed_retry_parent_for_delivery(
+    parent_wc: &Path,
+    photos: bool,
+) -> io::Result<FailedRetryParent> {
     (|| -> Result<_> {
         let conn = open_readonly()?.context("Failed retry requires an existing formal store")?;
         let wc = canonical_text(parent_wc)?;
-        in_snapshot(&conn, |conn| parent_ref(conn, &key_for_canonical(&wc)))
+        in_snapshot(&conn, |conn| {
+            parent_ref(conn, &key_for_canonical(&wc), photos)
+        })
     })()
     .map_err(as_io)
 }
@@ -351,7 +404,10 @@ fn sidecar_from_row(
     }
 }
 
-pub(super) fn admissions(conn: &Connection, key: &str) -> Result<BTreeMap<String, FailedRetryAdmission>> {
+pub(super) fn admissions(
+    conn: &Connection,
+    key: &str,
+) -> Result<BTreeMap<String, FailedRetryAdmission>> {
     let route_column = if inspect_store_schema_version(conn)?.is_some_and(|version| version >= 8) {
         "route"
     } else {
@@ -493,8 +549,15 @@ fn validate_child_results(
     );
     let routed = child.failed_retry_primary_source_count.is_some();
     ensure!(
-        values.values().all(|admission| admission.route.is_some() == routed)
-            && (!routed || values.values().filter(|admission| admission.route == Some(FailedRetrySourceRoute::Primary)).count() == child.primary_source_count()),
+        values
+            .values()
+            .all(|admission| admission.route.is_some() == routed)
+            && (!routed
+                || values
+                    .values()
+                    .filter(|admission| admission.route == Some(FailedRetrySourceRoute::Primary))
+                    .count()
+                    == child.primary_source_count()),
         "Retry primary denominator disagrees with its immutable source routes"
     );
     for (rel, outcome) in source_outcomes(child) {
@@ -508,7 +571,9 @@ fn validate_child_results(
         );
     }
     for (rel, failure) in &child.tier2_failed_sources {
-        let admitted = values.get(rel).context("Retry original failure escapes its admitted source set")?;
+        let admitted = values
+            .get(rel)
+            .context("Retry original failure escapes its admitted source set")?;
         ensure!(
             admitted.route == Some(FailedRetrySourceRoute::Original)
                 && failure.src == admitted.admitted_source_blake3,
@@ -523,8 +588,10 @@ fn validate_child_results(
             ensure!(
                 entry.source_blake3 == admitted.admitted_source_blake3
                     && admitted.route.is_none_or(|route| match entry.kind {
-                        crate::pipeline::verification::PhotosSubmissionKind::Encoded => route == FailedRetrySourceRoute::Primary,
-                        crate::pipeline::verification::PhotosSubmissionKind::Original => route == FailedRetrySourceRoute::Original,
+                        crate::pipeline::verification::PhotosSubmissionKind::Encoded =>
+                            route == FailedRetrySourceRoute::Primary,
+                        crate::pipeline::verification::PhotosSubmissionKind::Original =>
+                            route == FailedRetrySourceRoute::Original,
                     }),
                 "Retry submission source changed"
             );
@@ -546,7 +613,10 @@ fn validate_child_results(
                 .context("Retry receipt has no admitted converted source")?;
             hash_text(&receipt.blake3)?;
             ensure!(
-                receipt.photos_uuid.as_deref().is_some_and(|uuid| !uuid.is_empty()),
+                receipt
+                    .photos_uuid
+                    .as_deref()
+                    .is_some_and(|uuid| !uuid.is_empty()),
                 "Retry converted receipt has no Photos UUID"
             );
             // Re-encoding can clear an obsolete output hash before replacing the
@@ -569,7 +639,10 @@ fn validate_child_results(
             "Retry original receipt does not match the admitted source bytes"
         );
         ensure!(
-            receipt.photos_uuid.as_deref().is_some_and(|uuid| !uuid.is_empty()),
+            receipt
+                .photos_uuid
+                .as_deref()
+                .is_some_and(|uuid| !uuid.is_empty()),
             "Retry original receipt has no Photos UUID"
         );
         ensure!(
@@ -580,8 +653,13 @@ fn validate_child_results(
     if routed && child.is_terminal() {
         ensure!(
             child.source_disposition_is_complete()
-                && child.tier2_imported_assets.len().checked_add(child.tier2_failed_sources.len())
-                    == child.src_jpeg_count.checked_sub(child.primary_source_count()),
+                && child
+                    .tier2_imported_assets
+                    .len()
+                    .checked_add(child.tier2_failed_sources.len())
+                    == child
+                        .src_jpeg_count
+                        .checked_sub(child.primary_source_count()),
             "Terminal retry lacks an exact disposition for every admitted source"
         );
     }
@@ -710,7 +788,9 @@ pub(super) fn context_for(
         .to_string();
         ensure!(
             row.request == request_key(&row.parent, &hash)?
-                && current.working_copy == child_path(&parent, &row.request)?
+                && (current.working_copy == child_path(&parent, &row.request, false)?
+                    || (matches!(row.delivery, FailedRetryDeliveryIntent::Photos { .. })
+                        && current.working_copy == child_path(&parent, &row.request, true)?))
                 && current.src_dir == parent.src_dir
                 && current.strategy == parent.strategy
                 && current.processing_contract == parent.processing_contract
@@ -827,18 +907,9 @@ pub fn find_failed_retry_child(
     (|| -> Result<_> {
         let conn = open_readonly()?.context("Retry parent store disappeared")?;
         in_snapshot(&conn, |conn| {
-            recheck_parent(conn, parent)?;
+            recheck_parent(conn, parent, matches!(delivery, FailedRetryDeliveryIntent::Photos { .. }))?;
             validate_delivery(delivery)?;
-            if !has_schema(conn)? {
-                return Ok(None);
-            }
-            let key: Option<String> = conn
-                .query_row(
-                    "SELECT task_key FROM fast_img_retry_tasks WHERE request_key=?1",
-                    [&parent.request],
-                    |r| r.get(0),
-                )
-                .optional()?;
+            let key = child_for_request(conn, &parent.request)?;
             key.map(|key| {
                 let marker=read_snapshot(conn,&key)?.context("Existing retry child disappeared")?;
                 let context=context_for(conn,&key,&marker)?.context("Existing retry has no lineage")?;
@@ -894,10 +965,26 @@ pub fn create_or_resume_failed_retry(
     delivery: &FailedRetryDeliveryIntent,
     tools: Option<&FailedRetryToolAuthority>,
 ) -> io::Result<WorkingCopyMarker> {
+    create_or_resume_failed_retry_at(
+        parent,
+        supplied,
+        delivery,
+        tools,
+        matches!(delivery, FailedRetryDeliveryIntent::Photos { .. }),
+    )
+}
+
+fn create_or_resume_failed_retry_at(
+    parent: &FailedRetryParent,
+    supplied: &[FailedRetryAdmission],
+    delivery: &FailedRetryDeliveryIntent,
+    tools: Option<&FailedRetryToolAuthority>,
+    photos: bool,
+) -> io::Result<WorkingCopyMarker> {
     (||->Result<_>{
         let mut conn=open_store_connection()?;
         let tx=conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        recheck_parent(&tx,parent)?;
+        let parent = recheck_parent(&tx, parent, photos)?;
         validate_delivery(delivery)?;
         if let Some(tools)=tools { validate_locator(text(&tools.manifest_path)?)?; hash_text(&tools.identity)?; }
         let tool_snapshot_disabled = tools.is_none() && crate::runtime_config::active()
@@ -905,7 +992,7 @@ pub fn create_or_resume_failed_retry(
         let mut values=BTreeMap::new();
         for value in supplied {ensure!(values.insert(value.source_rel.clone(),value.clone()).is_none(),"Duplicate failed retry source");}
         validate_admissions(&parent.marker,&values)?;
-        if let Some(key)=tx.query_row("SELECT task_key FROM fast_img_retry_tasks WHERE request_key=?1",[&parent.request],|r|r.get::<_,String>(0)).optional()? {
+        if let Some(key) = child_for_request(&tx, &parent.request)? {
             let marker=read_snapshot(&tx,&key)?.context("Existing failed child is missing")?;
             let context=context_for(&tx,&key,&marker)?.context("Existing child lost its retry manifest")?;
             ensure!(context.admissions==values,"Existing retry request has different admissions; no second child was created");
@@ -954,7 +1041,7 @@ pub fn create_or_resume_failed_retry(
                 params![key,value.source_rel,value.parent_source_blake3,value.admitted_source_blake3,value.claim,xr,xh,xc,ar,ah,ac,value.route.map(FailedRetrySourceRoute::as_str)])?;
         }
         ensure!(read_snapshot(&tx,&key)?.as_ref()==Some(&child),"Failed retry creation readback differs; transaction must roll back");
-        recheck_parent(&tx,parent)?;
+        recheck_parent(&tx, &parent, photos)?;
         tx.commit().context("Failed retry creation did not commit; parent retained")?;
         Ok(child)
     })().map_err(as_io)

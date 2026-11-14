@@ -163,11 +163,19 @@ not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
   for a confirmed-lossless source. A progressive AVIF can keep its existing
   encoded media. A compatible non-progressive AVIF must pass exact full-sample
   and payload-budget checks before a progressive candidate can be published.
+  After a Q100 sample mismatch, a direct 8-bit three-component JFIF input up
+  to 16 MiB can retry at the same quality and speed with an RGB identity
+  matrix. The retry admits only a complete JPEG with its single JFIF
+  application segment and no trailing data. The candidate still requires
+  exact samples, progressive output, the configured payload budget and all
+  normal metadata and final-delivery checks.
 - **Fast AVIF final Speed.** `img.avif_speed` accepts integers 0..10 (default 0,
   slowest; 10 is fastest). It applies to true-lossless probes, final-domain Q
-  probes and refinement. The existing fast locator remains Speed6; its temporary
-  candidate is discarded and its coordinate must be re-probed at the selected
-  final Speed. This is a speed selection, not Speed exploration or a JXL E value.
+  probes and refinement. The fast locator remains Speed6. A different final
+  Speed requires a fresh probe at the selected coordinate. At final Speed6,
+  repeated coordinates reuse same-run evidence only while the candidate bytes,
+  input, and effective encoder parameters still match. Final delivery checks
+  run independently. This selects encoding Speed.
   No runtime or compression benefit is guaranteed by changing it.
 - **Fast AVIF metadata intent.** `img.avif_metadata_policy` explicitly records the
   existing private `clear` policy. It is the only supported value; `preserve`,
@@ -180,6 +188,10 @@ not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
   separate loading, unavailable and unsupported states. Standard JXL retains its
   preservation policy. Removable metadata clearing does not waive pixel, color,
   HDR, filesystem-property or source/sidecar deletion proofs.
+  Fast AVIF retains inputs with embedded ICC profiles under Clear until color
+  equivalence after profile removal can be established. A previously recorded
+  output also needs a fresh source-profile check before reuse or import.
+  Final verification independently repeats the check before source cleanup.
 
 `--avif-quality` and `--avif-speed` are valid for `img fast-img --strategy avif`
 and `img config` inspection, not ordinary IMG, Fast JXL or unrelated commands.
@@ -406,8 +418,16 @@ terminal run event carries the later failure. An unavailable verification leaves
 its integrity state and issue count unknown, and blocked cleanup remains an
 unmeasured cleanup receipt.
 
-An unavailable verifier can report its failure stage in the terminal run
-event. Raw verifier stderr is kept out of that event. Once a verification
+An unavailable independent Fast IMG verifier can report a controlled cause in
+the terminal run event. The launcher preserves the verifier's cause and only
+publishes the live receipt after recording the same cause in History. The live
+result requires a matching worker run identity, normal nonzero completion,
+complete processing counts, and the corresponding unattempted cleanup receipt.
+Reopened History binds its terminal cause and cleanup receipt to the same run.
+The main window and History localize the known cause. Missing, conflicting,
+or unrecognized evidence leaves the generic result in place, and separate
+integrity failures retain priority. Raw verifier stderr is kept out of the
+terminal event. Once a verification
 result is measured, a later cleanup error does not rewrite its issue count
 or status. In checkpoint-owned output directories, cleanup can remove a
 recognized Finder `.DS_Store` when it is the only remaining entry. This
@@ -420,6 +440,19 @@ ignores link targets. Unavailable or incomplete observations have unknown
 counts. A bounded relative-path sample is available in full History details
 and hidden under display privacy. The record describes what was observed
 during cleanup and carries no ownership or deletion authority.
+
+Fast IMG never sweeps the working copy by format or filename. A reserved name
+does not authorize overwriting or unlinking a file. Re-encoding an occupied
+path reserves another name. Rejected recorded media can be removed only after
+checking the exact saved path and complete digest without following links.
+The delivery gates verify the recorded media inventory. Independent verification
+reports unrelated entries, including unexpected files of the target format.
+
+If a source has an adjacent AAE adjustment file, primary media cleanup requires
+a current byte-identical AAE beside the converted output. Both AAE copies are
+retained. Photos custody covers the media and leaves the local media/AAE pair
+in place. Original-format Tier-2 delivery keeps AAE-bearing sources and their
+companions because that route has no verified companion delivery.
 
 During cleanup, the indexed Photos lookup can reuse its read-only database
 connection and prepared statements. Each removal still starts a fresh
@@ -448,6 +481,12 @@ quarantine only from pending, checkpoint-bound generated files and verifies
 the attribute is absent. Original-media candidates and already imported
 resources receive read-only quarantine checks. Fresh verification logs separate
 counts for working copies and Photos originals with blocking marks.
+For a Tier-2 JXL or AVIF submitted directly, the same local record is accepted
+only with a clean submitted file, an exact match of the complete managed
+original, and the saved library and UUID. The verifier reads the current
+original again before cleanup, and the worker checks the source attribute
+again before unlink. Existing blocking receipts, XMP-enriched submissions,
+and rewritten originals keep the strict quarantine check.
 The final result receipt carries both location counts when quarantine is the
 sole blocker. One asset can count in both locations. Continue an existing
 Photos task to recheck its saved resource UUIDs. Starting a fresh task can
@@ -481,12 +520,29 @@ exit or termination signal when available. Missing process observations do not
 turn a launch request into an observed start or exit. Invalid process evidence
 does not hide a separately valid launch record. This identifies the processing
 worker. Fast IMG file failures separately record their known admission,
-encode or publication, local verification, or Photos import phase. Older
-receipts leave the phase unknown. Neither field proves which encoder ran for
-that individual file or the current safety of its source. Under display
+encode or publication, local verification, metadata preparation, Photos
+import, or source cleanup phase. Original-format preparation reports AAE
+and XMP failures against the original path. Per-file primary and original
+source cleanup stops record the exact media path and reason
+without adding a conversion failure or claiming the source or its companion
+was retained. Older receipts leave the phase unknown. The observations do not
+identify the individual encoder or prove the current safety of the source.
+File failure details follow the actual SQLite output sequence. Repeated exact
+observations retain the first and last sequence and their occurrence count.
+Related invocations are shown only in the same run and pipeline, with the exact
+UTF-8 relative and absolute source paths present and equal. The link identifies a
+recorded location. It does not establish unchanged bytes or a common cause.
+Under display
 privacy, program names, paths and arguments stay hidden because the same worker
 can receive routine files alongside a failed file; the explicit failure details
 and recorded numeric process outcome remain available.
+
+A Fast IMG result can carry up to eight exact relative paths whose source
+bytes were re-read and matched their recorded BLAKE3 at the end of that attempt.
+History displays this fact for a file only when the output receipt and file
+diagnostic agree on the source path and worker invocation within the run.
+Paths outside this bounded observation, including older receipts, have no
+file-level proof. The recorded match does not describe the current filesystem.
 
 History actions use visible text alongside native symbols. Output viewing,
 cleanup inspection and diagnostic export are grouped separately from record
@@ -495,6 +551,38 @@ cleanup details does not delete files. Record removal retains its existing
 selection checks, preview and confirmation. Under display privacy, the copy
 button reads **Copy visible content**, including after a language change, and
 raw export remains unavailable.
+
+The legacy `cache_cleaner --purge-session-state` command refuses unscoped
+removal before opening application state, including when passed `--yes`.
+Select exact runs in Processing History or use the existing History cleanup
+preview and confirmed snapshot token. Temporary paths, progress and lock files
+are not removed by the legacy command.
+
+For a single recorded Fast IMG working copy, cleanup details can also read the
+current contents with `verify --fast-img-cleanup-inventory WORKING_COPY`.
+It reports file counts and logical bytes. Regenerable copies require the saved
+output hash, an independently re-read byte-identical source, and a complete
+history with no Photos submission or cleanup in progress. Other hash-matching
+recorded outputs remain protected for recovery. Changed or untracked contents
+remain unclassified. The scan observes up to 16,384 entries, 32 directory
+levels and 256 MiB of hash work, and reports failures without guessing. Path
+samples are bounded and hidden in display privacy. The result describes a
+read-only observation and grants no deletion authority.
+
+After verified Fast IMG Photos delivery, cleanup details also show observations
+from up to eight historical working copies with saved checkpoints for the same
+source and strategy. The history check is read-only. It reports absent, empty
+or nonempty directories and distinguishes records for recovery or local
+delivery. A saved path alone cannot establish that a directory still belongs
+to that run. Where the inventory can be read safely, it records regular file
+count and logical bytes. Display privacy hides historical paths.
+
+Current Fast IMG Photos output cleanup rechecks the admitted output directory
+identity around custody verification and before each deletion. A replacement
+at the same path cannot inherit the active cleanup. Cleanup checks for pause
+or cancellation between file transactions and before directory pruning.
+Directory pruning is limited to ancestors of recorded delivery paths.
+Unrecorded empty branches remain visible as residual directories.
 
 The native history list uses an unstriped background and a centered empty-state
 message. An empty history, a search with no matches, and records that could not
@@ -797,6 +885,17 @@ advance only after checkpoint persistence, including successful items preceding
 a later failure. Same-run recovered assets are already checkpointed before they
 advance progress.
 
+When an encoded working-copy file has an adjacent AAE, AppleScript submits a
+same-name, independently hashed copy from a private directory without the AAE.
+Its submission permit binds the actual temporary path. The local AAE stays with
+the working copy, and the original output path still supplies the delivery
+evidence. An empty AppleScript response triggers exact reconciliation before
+the current attempt ends. Without a verified original, the attempt stays
+pending and sends nothing further for that request. Explicit continuation
+rechecks held requests against current original bytes. This also covers
+interruption before a reply arrives, as described under Photos Submission
+References.
+
 Checkpointed original-media imports share the native original-media plan. Prior
 receipts must pass the existing live custody recheck and match the candidate's
 delivery hash before they are excluded from pending work. Each newly verified
@@ -858,8 +957,14 @@ round up to 100 percent, and later activity cannot erase a recorded safety risk.
 
 This progress is a current local byte-custody observation, not a persisted
 checkpoint, whole-batch completion, deletion authorization, iCloud proof or a
-replacement for source, metadata and sidecar deletion gates. It reuses the
-captured worker-output channel and adds no state store or extra media query.
+replacement for source, metadata and sidecar deletion gates. It adds no state
+store or extra media query.
+
+The launcher also streams this local custody activity from the independent
+verifier while it is still running, including a cleanup-only recovery. It
+relays only the verification phase and bounded custody events that match the
+spawned verifier's process ID. The final integrity result is handled separately
+after exit. Cleanup's own follow-up recheck adds no second progress sequence.
 
 ### Local Gate 1 File-check Activity
 
@@ -889,14 +994,77 @@ Photos custody, deletion authorization, a persistent checkpoint or iCloud sync.
 Photos original-custody progress above has a different numerator: it counts
 successful byte matches rather than completed check attempts.
 
+### Final Photos Gate Relationship Activity
+
+The final uncached Photos gate emits five existing check steps on the same
+channel: import receipts, inventory and counts, local custody, quarantine, and
+hash relationships. It reports the first blocking check after collecting the
+available diagnostic results. During hash relationship checks, the native app
+can show completed comparisons when the inventory counts agree and each output
+has an explicit, distinct recorded path. A comparison can still fail. Missing
+or ambiguous inventory keeps progress at the stage level. This activity leaves
+the authoritative final gate outcome, later input rechecks, and source cleanup
+authorization with their existing receipts. It adds no media scan, hash or
+library query.
+
+The uncached final sidecar check reports source and companion preparation
+as a phase. It reports a file count only after resolving a nonempty set of
+exact, unique working-copy AAE observations from the saved admission.
+A completed comparison may confirm either the recorded AAE or its recorded
+absence. The native display shows completion only after the final
+stability check. The count describes that sidecar check.
+
+### Durable Fast IMG Admission
+
+Core SQLite schema 12 introduced exact relative source keys, complete BLAKE3
+digests, and observed routes for new Fast IMG full-discovery tasks. Schema 13
+adds the adjacent XMP observation, and schema 14 adds the adjacent AAE
+observation. The initial ScanComplete checkpoint binds the plan before encoding
+or Photos submission. A resume checks the saved plan against current inspected
+items. Only durable cleanup evidence can account for admitted files that have
+since disappeared.
+
+Each companion observation distinguishes explicit absence, an exact relative path
+with complete BLAKE3, and unresolved evidence. Older tasks omit fields they
+never recorded. Failed-only retries use their own saved admission records.
+The worker rechecks companion evidence before delivery and cleanup. Independent
+verification of a recorded AAE requires the selected source and delivery copy
+to match the admitted bytes. Primary cleanup keeps the source AAE and verifies
+its custody before unlinking the media. The original-format Photos path requires
+confirmed AAE absence when the plan records AAE evidence, and checks its selected
+XMP before submission. Metadata, Photos custody and Live Photo relationships
+still require their own proofs.
+
+`verify --fast-img-admission WORKING_COPY --source-relative SOURCE_KEY`
+reads one exact key after verifying the entire saved plan digest. It reports
+`recorded` with its historical source hash and route, `not_admitted` for a
+missing key in a verified plan, or `unknown` when the task predates this
+evidence. An original-format route records eligibility for an actual Photos
+run. Admission does not prove a successful encode, current media integrity,
+Photos delivery, or permission to clean up a source.
+
 ## Launcher Preflight Content Identity
 
-The read-only routing report uses schema 3. Every visible inventory entry,
-including sidecars and retained non-media files, carries `content_blake3`: the
-lowercase BLAKE3 digest of the complete bytes observed during that scan.
-The native preflight inspector validates the field and displays it in file
-details. Older or incomplete reports are rejected rather than assigned a guessed
-identity.
+The read-only routing report uses schema 6. Every visible inventory entry
+carries `content_blake3`, the lowercase BLAKE3 digest of the complete bytes
+observed during that scan. The native inspector validates and displays it.
+Schema 3 through 5 reports remain readable with their original evidence.
+
+Schema 6 reports the launcher's minimum free-space threshold for selected
+standard media. It uses the total selected media bytes plus 2 GiB, including
+all inputs in a multi-input plan. For each checked filesystem, the report
+identifies whether the check will use the output or input location. The
+configured scratch volume is observed read-only. The threshold describes the
+launch check; the plan reserves no storage or encoder scratch budget.
+
+Schema 5 groups Live Photo filename candidates within a directory by
+ASCII-case-insensitive stem. The launcher checks up to eight unambiguous
+pairs per input with a total metadata process budget of two seconds.
+A stable JPEG or HEIF and a QuickTime MOV can have matching, mismatching
+or unavailable Apple Content Identifier evidence. Ambiguous and unchecked
+candidates keep their filename-only status. The report omits raw identifiers.
+These observations describe the preflight scan and do not authorize Photos
+delivery or cleanup.
 
 Discovery checks the opened file's metadata before and after the read, the byte
 count, and the logical path's resolved target. Routing/publication reuse that
@@ -911,9 +1079,15 @@ A path containing `..` through a missing directory is rejected before launch,
 so simplifying the path cannot conceal a link or create an unintended directory.
 
 This adds one full input read during discovery and one before each selected
-source is launched. It is not a file lock, an immutable snapshot or a cross-process
-execution manifest: a later change still requires worker-side admission and
-final-artifact checks. Fast IMG's internal scan also records regular-file
+source is launched. A later change still requires worker-side admission and
+final-artifact checks.
+
+Standard runs can independently verify and record completed input groups when
+another group reports accounted per-file failures. A cancelled run or an
+unaccounted worker failure stops verification and finalization. Equal
+source/output counts require resolved path coverage before reporting MATCH.
+When duplicate output paths need comparison, the verifier reads their
+complete contents without reusing a digest cache. Fast IMG's internal scan also records regular-file
 identity before format probes. It reads each primary source once for its
 complete hash and refuses a changed inventory before publishing the scan
 result. Resume and verified companion relationships remain separate
@@ -1068,6 +1242,103 @@ and Photos-target checks. It does not establish complete sidecar/filesystem
 identity or a complete persistent per-file plan. Failed-only child attempts add
 their own admission evidence, as described below.
 
+## Fast IMG JPEG Encoder History
+
+On macOS and Linux an identified Fast IMG worker's full JPEG effort search
+syncs a reservation to its private scratch directory before its first encoder
+call. It binds the directory's filesystem identity, the attempt identity, and
+the source content hash. Normal temporary cleanup removes it with the search
+directory. If interrupted, `verify --fast-img-jpeg-scratch SCRATCH_DIRECTORY`
+checks the exact private directory and observes the number and logical bytes of
+candidate files. Candidate content stays unverified, and the observation
+grants no deletion authority.
+
+Use `verify --fast-img-jpeg-scratch-list` to find reservations without
+supplying their paths. It checks up to 4,096 direct names under the formal
+temporary directory and validates up to 128 matching names with the same
+ownership check as the exact query. The two limit flags identify partial
+observations. Counts cover examined entries, and observed logical bytes cover
+only validated reservations. Unknown entries are counted without printing their
+names. This inventory does not verify candidates, decide whether a task is
+active, or authorize deletion.
+
+New Fast IMG JPEG-to-JXL encodes record the winning `cjxl` command when the
+published output is committed to the task checkpoint. Fixed effort records the
+actual successful invocation. Full search records the winning effort, including
+its actual arguments, executable BLAKE3 and process exit status. The receipt
+binds the source and published output paths and full hashes, processing
+contract, and the available launcher attempt identifiers. It records neither
+the full environment nor the invocation of any unobserved encoder.
+
+Core SQLite v10 adds the receipt table without assigning provenance to older
+outputs. Receipts stay available across retries as protected task history.
+When an existing reconstructible JXL is replaced by a smaller winner, its
+receipt uses schema 2. It stores the admitted JXL hash, the hash of the exact
+reconstructed JPEG consumed by the recorded encoder invocation, and the
+verified candidate hash, which must equal the published output hash.
+An unchanged existing JXL has no new winning encoder receipt.
+If the receipt cannot commit, the matching outcome is not reported as
+committed and the source and published file are retained. A retry must not
+overwrite an unowned file.
+
+`verify --fast-img-jpeg-execution WORKING_COPY --source-relative SOURCE_KEY`
+reads historical receipts for one exact relative path. A result of `unknown`
+means there is no matching encoder receipt. The query is limited to 64
+receipts and returns an error rather than a partial history if the limit is
+exceeded. Add `--after-receipt start` for the first bounded page. To continue,
+pass its `next_cursor` as the value of `--after-receipt` with the same working
+copy and source key. The version 2 report uses a null cursor at the end of
+the history. Each page reads a new SQLite snapshot. A receipt committed
+concurrently at or before the current cursor can be absent from that pass.
+The query without this option continues to return version 1. This explicit
+diagnostic can print filesystem paths and command arguments. Its receipts do
+not provide current media integrity, Photos custody or deletion authorization.
+
+## Fast IMG AVIF Encoder History
+
+Core SQLite v11 stores a receipt for a published AVIF candidate actually
+created by `avifenc`. The record uses the winning process arguments after
+any allowed retry, the executable BLAKE3 observed before and after the
+successful invocation, and its exit status and timeouts. It also binds the
+processing contract, source, candidate and published output BLAKE3 hashes.
+The published bytes must match the verified candidate. The checkpoint and
+receipt commit together. If that write fails, the source and the published
+file are retained, without treating the output as a committed conversion.
+
+`verify --fast-img-avif-execution WORKING_COPY --source-relative SOURCE_KEY`
+reads the recorded history for the exact path, at most 64 entries per page.
+Use the returned `next_cursor` as `--after-receipt` to continue with the
+same working copy and source key. Pass-through AVIF and older checkpoints
+without a receipt have unknown encoder history. This read-only diagnostic can
+include local paths, including scratch arguments. Its receipts do not establish
+current integrity, Photos custody or deletion authority.
+
+## Historical Fast IMG Source Evidence
+
+`verify --fast-img-source-evidence WORKING_COPY --source-relative SOURCE_KEY`
+reads one exact, case-sensitive source key in one committed Core SQLite
+snapshot. It returns the task key and revision, admission or retry source
+hashes, source disposition, exact Photos receipt when recorded, and primary or
+original-format cleanup journal entries. `planned` means the unlink outcome is
+unknown. `removed` means Core recorded a successful unlink. Both describe
+historical evidence.
+
+Core SQLite schema 15 also binds observed primary encode, publish and
+Gate 1 isolation outcomes to their committed task revision. The observation
+records the actual run and invocation identity when supplied, plus the
+observed stage and failure reason code when available. It shares the
+transaction with the outcome and any winning encoder receipt. A change
+made without new processing evidence clears the current attribution.
+Older rows and unobserved transitions return unknown.
+
+The JSON also reports source-bound submission references with a request
+identity digest and backend. AppleScript uncertainty is reported when its
+separate evidence exists. An absent coverage flag or receipt leaves the
+corresponding evidence unknown. An exact source excluded by a saved admission
+plan reports `not_admitted`. The query may expose local paths and identifiers,
+and does not run an encoder, read source media, query Photos, or authorize
+cleanup. Use the existing encoder history queries for the actual command.
+
 ## Photos Submission References
 
 Checkpointed Fast IMG imports persist schema-1 `photos_submission_history`
@@ -1088,6 +1359,17 @@ possible side effect, not a verified asset, a successful send or a commit.
 Native journals and fresh UUID/original-resource verification
 remain authoritative. Submission records never grant deletion permission or
 increment media success counts.
+
+Each checkpointed AppleScript media request records a durable hold for its
+exact committed submission intent after preparation and before launching the
+import process. A hold-write failure prevents launch. A crash after the hold
+commits, a missing reply or an uncommitted verified receipt leaves the request
+pending. A typed Automation denial that establishes the media was never sent
+can release the hold. Otherwise continuation requires fresh verification of
+one matching Photos original before the request can advance. An unresolved
+request blocks another send from either backend. Reserved siblings whose
+launch was never armed continue through ordinary recovery. Older persisted
+empty-reply holds retain the same recovery behavior.
 
 New checkpoints record complete coverage of their own checkpointed media
 submissions from creation; this is not a global Photos deduplication claim.
@@ -1260,7 +1542,7 @@ child can settle only when every admitted source has an exact outcome.
 ## Canonical Fast IMG State
 
 Fast IMG task headers, source outcomes, Photos request/entry references and
-verified receipt records use the existing Core SQLite store, schema 8. Large
+verified receipt records use the Core SQLite store. The current schema is 15. Large
 per-file collections are normalized rows, not a second authoritative JSON blob.
 One IMMEDIATE transaction publishes a logical snapshot; failed writes and commits
 preserve the last committed snapshot. The writer validates the saved state first,
@@ -1268,9 +1550,9 @@ updates only changed rows, and verifies exact readback before commit. Identical
 logical snapshots make no row changes. Submission history is append-only, and
 missing historical coverage cannot be promoted to complete coverage.
 
-SQLite opens the verified cache directory's canonical path so macOS root aliases
-such as `/var` work with `NOFOLLOW`. The configured root remains identity-bound,
-and cache-directory or database replacement still stops state access.
+SQLite opens the canonical directory of the selected database so macOS root
+aliases such as `/var` work with `NOFOLLOW`. The configured root remains
+identity-bound. Replacing the bound directory or database stops state access.
 
 Canonical source/output paths bind the header, indexed task locator and complete
 snapshot digest. The same output cannot silently become a different task or
@@ -1324,7 +1606,7 @@ rest of the processing pipeline.
 Core schema migrations from CRC32 v1 and BLAKE3 v2 through v5 to v6 are transactional.
 Known v2 through v5 databases remain inspectable read-only without pretending they already
 have the newer tables, directory evidence or retry relations. Integrity inspection
-verifies all nine Fast IMG tables and migration backups in a consistent SQL snapshot. Durable
+verifies the versioned Fast IMG tables and migration backups in a consistent SQL snapshot. Durable
 directory evidence is parsed, hashed and scope-checked without revisiting media
 paths. It does not open media files or
 confer Photos custody or deletion permission. Cache management counts these as
@@ -1337,11 +1619,32 @@ The formal Rust Core root is fixed for the process; invalid or unavailable
 configuration cannot redirect durable state to temporary storage. The store
 selection follows startup environment loading: the bootstrap configuration
 location is read before the resolved state root is bound, and cannot be used
-to rebind an already active state session. The store
-still lives at `cache/mfb_store.sqlite` and also contains protected legacy
-Checkpoint/processed records. This change does not physically separate Cache and
-State, implement a complete file-task Manifest or prove cross-filesystem crash
-atomicity. Failed-only child attempts provide the narrower recovery contract above.
+to rebind an already active state session. Fresh roots select
+`state/mfb_store.sqlite`. An existing root with a legacy Core database uses
+`cache/mfb_store.sqlite` until its explicit location migration completes.
+Core includes protected legacy checkpoint and processed-source records.
+Failed-only child attempts provide the recovery contract above.
+
+## Fast IMG Photos Working-Copy Recovery
+
+For an ordinary completed Fast IMG Photos task whose source root was already
+removed, explicitly continue or retry with the exact saved absolute source and
+working-copy paths, the original strategy, and Photos delivery enabled. The
+launcher uses the saved checkpoint and does not spawn an encoder or send a
+Photos import. Independent verification freshly checks the complete Photos
+custody proof and any surviving working-copy file. Previously missing copies
+remain an absence observation. Files surviving the cleanup must match the
+recorded path and bytes, and unowned entries are retained. The launcher
+records independent verification before resuming cleanup and refuses if the
+source reappears or the checkpoint changes.
+
+In Processing History, open the eligible task's cleanup details and choose
+Continue Working Copy Cleanup. Confirmation names the saved output and starts
+the same verifier through a cleanup-only command. The command refuses an
+ineligible saved task, including when the source reappears after confirmation.
+Its result is separately bound to the run, source, output and checkpoint.
+The main window and History require the matching cleanup receipt; completion
+adds no processing or import counts.
 
 ## Fast IMG Primary Cleanup Journal
 
@@ -1393,21 +1696,83 @@ An ordinary original-only task may resume with an empty primary inventory
 when its saved and current primary counts and records agree. A checkpoint
 that expects primary files still needs their BLAKE3 records.
 
-## Standard Worker Preflight Admission
+## Temporary Files and Delivery Working Copies
 
 Ghost Mode directs general temporary files to the MFB temporary directory.
-A real delivery can still stage a short-lived `.mfb-delivery-*` file beside
-its final output to publish atomically, including across filesystems. Directory
-metadata is copied from the source onto the output. Verified source cleanup can
-remove original entries and restore timestamps on surviving source directories
-when the observed changes match that cleanup. Use read-only input inspection
-to examine the selected scope without running delivery or source cleanup.
+New Fast IMG Photos tasks and new Photos failure retries place their working
+copies in `fast-img-photos` under the selected persistent MFB state root.
+The outer directory is owner-only on Unix. It stays outside the input tree
+and keeps recovery data available across restarts. Preview selects the same
+path without creating it. The launcher checks space on the selected output
+filesystem. Existing tasks and reserved retries keep the exact checkpoint
+location, which can be adjacent to the input.
+Fast IMG Photos admission refuses runtime directories that would write inside
+the source or directly into its parent, including state subdirectories,
+configured log storage and the pause acknowledgment directory.
+The guard rejects links in the runtime toolchain and its source index.
+Fast IMG legacy state migration applies the same guard before creating state
+or acquiring the production lease, including when a bootstrap configuration
+selects the state root.
+
+A delivery can stage a short-lived `.mfb-delivery-*` file beside its final
+output for atomic publication, so new Photos tasks stage it inside the private
+working copy. Local Fast IMG still uses the adjacent output directory and
+mirrors the source tree. Creating or removing that output changes the shared
+parent's directory metadata. Photos delivery copies
+directory metadata only onto existing ancestors of recorded deliveries in
+its working copy. Verified cleanup can remove original entries and restore
+timestamps on surviving source directories when observed changes match that
+cleanup. Read-only inspection creates neither output nor media recovery state.
+AVIF probes and pre-publication normalization use private scratch and leave
+unneeded output subdirectories uncreated. Standard adjacent output timestamp
+sync writes to the destination tree and skips symbolic-link files. On Unix,
+directory and file updates use descriptors opened relative to the output root
+without following links inside that tree. The file pass refuses a hard-linked
+destination and checks the entry still refers to the file that was updated.
+On macOS the same open file binds creation, Finder-added, and access/modified
+timestamps.
+
+## Standard Worker Preflight Admission
+
+Standard read-only preflight reports whether XMP sidecars passed its bounded
+XML syntax check, were rejected, or could not be checked. The preview checks
+attribute syntax, predefined entity references, comments and text placement
+in addition to the shared structure check. Archive admission keeps its
+existing structure checks. The added XML reads are limited to 128 attempts and
+8 MiB per selected input. Filename matches remain candidates for association.
+The XML result does not attest to RDF semantics or ownership by a media file.
 
 Standard launcher runs submit one selected media file per IMG/VID invocation in
 both record-and-continue and fail-fast modes. They do not send the source
 directory to a worker for a second recursive media scan. Files added after the
 inventory are therefore outside those invocations. An empty selected inventory
 does not fall back to an unplanned directory run.
+
+The standard launcher checks pause and cancellation before starting adjacent
+post-processing and after the final verification. Handoff copying, non-media
+sync and timestamp restoration acknowledge pause at transaction boundaries.
+The timestamp subprocess inherits the active launcher's production lease so it
+can restore the selected output within the same authorized task.
+If the run stops after media workers have finished, their counts and any
+completed verification remain recorded with the cancelled outcome. A failed-only
+Fast IMG recovery that runs before the normal media scan also persists usable
+worker counts on cancellation or a missing durable retry receipt. Delivery
+confirmation still requires the independent retry receipt.
+
+The independent verifier observes the same pause and cancellation request as the
+launcher. It checks between media items, between fresh Photos custody checks,
+during diagnostic log scans, and before publishing the report. An in-flight
+external query or single file read can finish before the next check. A stopped
+check does not emit a successful verification receipt or authorize working-copy
+cleanup. Standard verification requires both real directories to remain
+available. A missing directory makes the check unavailable even when there are
+zero observed files. The Fast IMG delivery verifier retains its separate rules
+for checkpointed cleanup, including legitimately removed source directories.
+
+Standard verification and the adjacent handoff review read the same route
+records. Audit records preserve exact paths with spaces, line breaks, quotes or
+Unicode. Non-route messages and absolute or parent-traversal paths do not
+contribute a routed file.
 
 The launcher passes the original source observation as a bounded, versioned
 internal `--planned-source` claim. Before configuration, ghost-mode, logging or
@@ -1419,7 +1784,13 @@ persistent preference or an authorization to convert, import or delete media.
 
 This adds a full source read at worker admission, in addition to discovery and
 the launcher's pre-spawn check. No intermediate media or manifest file is written
-for transport. Fail-fast still stops subsequent invocations after failure, but
+for transport. Standard IMG also carries an adjacent XMP observation. Directory
+runs derive it from the same preflight inventory. Single-file runs observe the
+actual adjacent dependency. The launcher checks the selected path before spawn.
+The IMG worker then rechecks the selection and, when present, its complete
+content. Absence and ambiguity are explicitly represented. Standard VID keeps
+the media observation for the standard encoding path. Fail-fast still stops
+subsequent invocations after failure, but
 uses the same per-file launch boundary as record mode; it no longer obtains
 directory-worker batching throughput. No general throughput improvement is claimed.
 
@@ -1430,21 +1801,43 @@ final-artifact and deletion checks remain required.
 
 For a new Fast IMG run, the launcher and worker use the same regular-file
 enumerator. A fixed-size claim binds the canonical selection, recursive scope,
-relative path bytes, and file metadata. The worker compares its observation
-under the source lock before probing formats or creating the output. It uses
-the matched candidates for the rest of admission. A late file or changed file
-identity observed at that boundary refuses the run and preserves sources.
-Existing-task decisions and explicit retries continue through saved-state
-admission.
+relative path bytes, file metadata and the identity of the source root and
+each traversed directory. On Unix, directory identity is its device and inode.
+Other platforms use the available directory modification timestamp. After
+walking, the enumerator rechecks directory observations from descendants to
+the root. The worker compares its observation under the source lock before
+probing formats or creating output. A late file or changed file or directory
+identity at that boundary refuses the run and preserves sources. The worker
+also rechecks the observed directories after its format and admission scan and
+before output preparation. This uses one metadata check per observed directory,
+without enumerating files again. The claim is ephemeral and both components use
+the same version. Full discovery on resume uses the same directory recheck.
+Failed-only retry continues through saved-state admission.
 
 `drag_and_drop_processor --plan-json --mode fast-img -- INPUT` previews
 the saved Fast IMG task, occupied output locations and the output for a fresh
 attempt. Add `--strategy avif`, `--shortest-path`, `--retry`, `--no-resume` or
 `--retry-failed` as appropriate. A failed-only preview can be bound to an
 explicit `--retry-failed-parent`. The preview reads checkpoint and path state
-without a media worker, Photos query or execution session. Saved failure counts
+without a media worker, Photos query or execution session. SQLite can update its
+shared-memory reader coordination file during this read. Saved failure counts
 describe the previous attempt. Verified completion, reusable items and possible
 Photos duplicates stay unknown until their respective evidence is checked.
+When there is a proposed output, the version 2 plan can include a storage
+snapshot for that exact path. It uses the same filesystem location as the
+launch capacity check and reports unknown when it cannot read the available
+bytes. The snapshot neither reserves space nor estimates this task's demand.
+If only the private Photos working folder is unavailable, the version 2 plan
+can still propose a saved output with `fresh_output` set to null and a
+`fresh_unavailable_reason`. The App can offer the saved action while showing
+why it cannot start fresh. An explicit fresh request and an unreserved retry
+still require the private folder to be usable.
+The preview and launcher check saved failed-only attempts against the same
+effective Photos settings, including the configured library, album naming and
+folder structure. If the previous attempt is incompatible, the automatic plan
+can offer only a fresh start when its destination is available. The version 2
+plan marks that attempt with `previous.delivery_conflict`. An explicit request
+to continue that attempt is refused.
 The native confirmation passes the chosen output back to the launcher as an
 assertion. A changed destination requires a new preview, and the worker still
 checks current input, tool, configuration and delivery evidence before reuse.
@@ -1544,6 +1937,15 @@ unavailable window capture, conflicting identity and a child still running at
 command completion cannot pass. Activation, visible windows and non-prohibited
 policy observations remain failures after termination. The original native
 presentation guard remains authoritative for activity between external samples.
+
+Smart Build's `--gui` asks Cargo to check all bundled Rust tools in one
+incremental build, including the cache tool and launcher. Cargo can reuse
+current outputs. An output timestamp can be newer than a source edit that
+occurred during linking, so timestamps alone cannot select the Rust targets
+for App publication. Before signing and publishing, Smart Build also checks
+for further source changes. On macOS it also compares the built and signed
+Rust tools' Mach-O UUIDs. A Rust-only update reuses the native host and
+refreshes the signed App resources.
 
 ## IMG Tool Runtime Lifetime
 
@@ -1646,7 +2048,8 @@ checks do not establish media, event-JSON or Photos correctness.
 
 ## Large-batch Local Verification and Recovery
 
-Fast IMG saves successful per-file Gate 1 checks in the existing SQLite store.
+Fast IMG saves successful per-file Gate 1 checks in the dedicated rebuildable
+SQLite cache.
 Recovery rehashes the complete source, output and adjacent XMP contents before
 reusing embedded-metadata, orientation/reconstruction or decode evidence.
 The proof also binds the exact task, explicit output mapping, processing
@@ -1674,10 +2077,57 @@ original must still match the full BLAKE3 recorded for the Photos copy, or the
 output hash for an exact-copy receipt. A later pixel-equivalence check cannot
 replace that receipt. A mismatch blocks final cleanup and preserves the source.
 
-The `gate1_verified_file` namespace is reconstructable cache, separate from
-formal task/checkpoint state. Cache Settings and `cache_cleaner` report it as
-rebuildable and can clear it globally or for an exact source root. Clearing or
-evicting it requires rechecking the affected files. The existing
+`gate1_verified_file` and `path_tree` are stored in `cache/mfb_cache.sqlite`
+under the selected MFB root. Its role and schema allow only these two
+rebuildable namespaces. The first use starts with empty cache data. Previous
+cache rows in the Core database stay there for compatibility and are reported
+separately once the dedicated cache exists or the Core database is relocated.
+Core backups use the current resolved database path. A backup of the split
+layout excludes inactive legacy cache rows from the staged copy, so stale
+cache hashes cannot block recovery of formal records.
+
+A standalone Core backup created with `cache_cleaner --local-backup PATH
+--json` includes the published snapshot's `snapshot_blake3`. Keep that value
+with the backup. To check it later, run `cache_cleaner --check-core-backup
+PATH --expected-backup-blake3 DIGEST --json`. The command checks the exact
+bytes against the receipt and verifies the versioned Core tables on a private
+copy. It refuses cache databases, links and adjacent SQLite sidecars. The
+original snapshot stays untouched. This check neither activates the snapshot
+nor establishes its provenance without an independently retained receipt.
+
+On macOS and Linux, run `cache_cleaner --migrate-core-state --yes --json` to relocate
+an existing Core database under the selected root. The operation requires the
+production lease. It retains a verified full rollback snapshot under
+`state/relocation-backups/` and fences the old SQLite database before activating
+the new location. The receipt reports the paths and store schema. An interrupted
+activation stops Core opens until the same explicit command verifies the
+recovery evidence and finishes. The verified backup contains the committed
+SQLite snapshot, including SQLite row identifiers and unknown tables. Keep the
+retained database and backup in place. Older binaries should use an isolated
+root if needed after the location change. Cache inspection, pruning previews,
+and routine launches never run migration.
+
+If the activated database is missing, `cache_cleaner --preview-core-recovery
+--json` verifies the historical rollback snapshot and reports its BLAKE3. After
+reviewing the result, pass that digest to `cache_cleaner --export-core-recovery
+NEW_DIRECTORY --expected-snapshot-blake3 DIGEST --yes --json`. Choose a new
+directory under a canonical, user-writable parent outside the selected MFB root
+and Git worktrees. The operation creates a read-only SQLite file and its
+provenance receipt. The app refuses to use this directory as an MFB state root.
+The snapshot captures state before relocation. Later Photos transactions and
+source cleanup still require their own evidence, and the original root remains
+blocked. Existing active databases and orphaned SQLite sidecars are preserved
+for separate recovery. Core and History backups both exclude the managed
+`cache/` and `state/` directories.
+
+Cache Settings and `cache_cleaner` show a combined storage size and separate
+Core and rebuildable database metadata. Directory pruning and global or exact
+source cache cleanup target the dedicated database when present. A relocated
+Core database is never a cache maintenance target. An existing legacy-only
+layout retains its legacy maintenance behavior. A cache file that
+disappears after maintenance selected it causes that operation to stop.
+Read-only inspection and preview do not initialize the dedicated database.
+Clearing or evicting cache data requires rechecking the affected files. The existing
 `cache.path_tree_max_bytes` value applies independently to directory snapshots
 and Gate 1 proof payloads; it is not a combined database or disk-size limit.
 `cache.path_tree_ttl_seconds` is the idle lifetime for directory snapshots and
@@ -1685,6 +2135,19 @@ the age since successful verification for Gate proofs. Gate proof maintenance
 runs at session boundaries and every 256 new receipts; it can transiently
 exceed its payload budget by that bounded write interval. SQLite free pages
 remain reusable after deletion.
+
+On Unix, cache maintenance refuses multiply linked managed SQLite files
+before inspecting, backing up or pruning the managed store. This covers
+database sidecars and obsolete managed cache files. Rejected aliases remain
+at their existing paths.
+
+The optional PostgreSQL analysis cache initializes and upgrades its known
+schema in one transaction. Concurrent IMG and VID initializers serialize in
+that database. An unknown version or unversioned analysis tables block startup
+of the cache. A failed upgrade preserves the previous schema and rows.
+Replacing the analysis tables refuses dependent objects instead of cascading
+into them. The SQLite task store is outside this operation. Connection failure
+messages omit the configured PostgreSQL connection string.
 
 Gate metadata audits capture each parent directory's XMP namespace once and
 recheck the complete namespace before accepting the phase. Directory timestamps

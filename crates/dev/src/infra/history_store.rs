@@ -290,15 +290,12 @@ pub fn backup_history_store(log_dir: &Path, destination: &Path) -> Result<Histor
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )?;
     connection.busy_timeout(Duration::from_secs(5))?;
-    // READ_ONLY protects the main database; query_only would also prohibit the new output database.
-    connection
-        .execute(
-            "VACUUM main INTO ?1",
-            [backup
-                .to_str()
-                .context("history backup staging path is not UTF-8")?],
-        )
+    connection.pragma_update(None, "query_only", true)?;
+    let mut staged_db = Connection::open(&backup)?;
+    staged_db.pragma_update(None, "synchronous", "FULL")?;
+    foundation::mfb_sqlite_store::copy_sqlite_snapshot(&connection, &mut staged_db)
         .context("copy committed history SQLite snapshot; source retained")?;
+    drop(staged_db);
     drop(connection);
 
     let mut verified = Connection::open_with_flags(
@@ -571,6 +568,8 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
                 | "MFB_HISTORY_OUTPUT_CLEANUP"
+                | "MFB_HISTORY_PHOTOS_CLEANUP_RECOVERY"
+                | "MFB_HISTORY_HISTORICAL_OUTPUT_CLEANUP"
                 | "MFB_HISTORY_FAST_IMG_RESULT"
                 | "MFB_HISTORY_FAST_IMG_FAILED_RETRY_REQUEST"
                 | "MFB_HISTORY_FAST_IMG_RETRY_REUSED"
@@ -1055,7 +1054,7 @@ mod tests {
              INSERT INTO history_sessions VALUES ('original', 'synthetic timestamp');
              INSERT INTO history_events(session_id, ts, event) VALUES ('original', 'synthetic timestamp', 'UNRECOGNIZED_RAW_EVENT=not rewritten');
              CREATE TABLE extra_raw_evidence(payload BLOB);
-             INSERT INTO extra_raw_evidence VALUES (x'000102ff');
+             INSERT INTO extra_raw_evidence(rowid, payload) VALUES (101, x'000102ff');
              PRAGMA user_version=1;",
         ).unwrap();
         if version == 2 {
@@ -1115,6 +1114,13 @@ mod tests {
             .query_row("SELECT event FROM history_events", [], |row| row.get(0))
             .unwrap();
         assert_eq!(raw, "UNRECOGNIZED_RAW_EVENT=not rewritten");
+        assert_eq!(
+            backup
+                .query_row("SELECT rowid FROM extra_raw_evidence", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            101
+        );
         assert_eq!(
             backup
                 .query_row("SELECT payload FROM extra_raw_evidence", [], |row| row

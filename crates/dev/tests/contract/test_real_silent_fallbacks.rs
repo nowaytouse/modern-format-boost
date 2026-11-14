@@ -9160,8 +9160,8 @@ fn media_conversion_path_tree_cache_sqlite_m213() {
 
     let cargo = fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
-        cargo.contains("rusqlite = { version = \"0.41\", features = [\"bundled\"] }"),
-        "workspace rusqlite must use the approved 0.41.x release with bundled SQLite (M214)"
+        cargo.contains("rusqlite = { version = \"0.42\", features = [\"bundled\"] }"),
+        "workspace rusqlite must use the approved 0.42.x release with bundled SQLite (M214)"
     );
 }
 
@@ -11505,13 +11505,14 @@ fn media_conversion_analysis_cache_schema_cutover_m150() {
         .and_then(|s| s.split("fn invalidate_old_algorithm_entries").next())
         .expect("reset_cache_for_schema_cutover body"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
-        cutover.contains("analysis_cache_schema_cutover_purge"),
-        "schema cutover must batch-audit (M150)"
+        cache.contains("analysis_cache_schema_cutover_purge"),
+        "committed schema cutover must batch-audit (M150)"
     );
     assert!(
         cutover.contains("DROP TABLE IF EXISTS path_index, analysis_records, quality_records")
-            && cutover.contains("video_records CASCADE"),
-        "schema cutover must drop and recreate every typed cache table (M150)"
+            && cutover.contains("video_records")
+            && !cutover.contains(" CASCADE"),
+        "schema cutover must replace only the declared analysis cache tables (M150)"
     );
 }
 

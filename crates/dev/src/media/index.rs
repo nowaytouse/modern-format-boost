@@ -42,8 +42,9 @@ impl MediaIndex {
     /// # Errors
     /// Returns an error if the store cannot be opened.
     pub fn open_default() -> Result<Self> {
-        let path = foundation::mfb_sqlite_store::default_store_path()?;
-        Self::open(&path)
+        let conn = foundation::mfb_sqlite_store::open_store_connection()?;
+        Self::init_schema(&conn)?;
+        Ok(Self { conn })
     }
 
     fn init_schema(conn: &Connection) -> Result<()> {

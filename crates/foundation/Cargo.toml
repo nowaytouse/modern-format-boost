@@ -44,7 +44,7 @@ ctrlc = { workspace = true }
 blake3 = { workspace = true }
 postgres = { workspace = true }
 pgvector = { workspace = true }
-rusqlite = { workspace = true }
+rusqlite = { workspace = true, features = ["backup"] }
 rmp-serde = { workspace = true }
 crc32fast = { workspace = true }
 infer = { workspace = true }

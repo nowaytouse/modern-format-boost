@@ -14,8 +14,7 @@ use dev::media::scope::{
 use foundation::common_utils::calculate_blake3_hash;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::Read;
+use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -54,6 +53,9 @@ struct Args {
     )]
     fast_img_delivery: bool,
 
+    #[arg(long, hide = true, requires_all = ["verify", "fast_img_delivery"])]
+    fast_img_photos_cleanup_recovery: Option<String>,
+
     #[arg(
         long = "fast-img-restore",
         help = "Verify fast-img restore-jpeg invariant."
@@ -65,6 +67,85 @@ struct Args {
         help = "Print fast-img marker lookup result as JSON for an optimized directory."
     )]
     fast_img_marker_json: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "WORKING_COPY",
+        conflicts_with_all = ["verify", "fast_img_marker_json", "fast_img_jpeg_execution", "fast_img_delivery", "fast_img_restore", "logs", "output", "session_audit", "print_integrity_summary", "print_integrity_json"],
+        help = "Observe remaining files in one exact Fast IMG working copy without cleaning it."
+    )]
+    fast_img_cleanup_inventory: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "PRIVATE_SEARCH_DIRECTORY",
+        conflicts_with_all = ["verify", "fast_img_marker_json", "fast_img_jpeg_execution", "fast_img_cleanup_inventory", "fast_img_delivery", "fast_img_restore", "logs", "output", "session_audit", "print_integrity_summary", "print_integrity_json"],
+        help = "Read the ownership reservation of an exact Fast IMG full JPEG effort scratch directory."
+    )]
+    fast_img_jpeg_scratch: Option<PathBuf>,
+
+    #[arg(
+        long,
+        conflicts_with_all = ["verify", "fast_img_marker_json", "fast_img_jpeg_execution", "fast_img_cleanup_inventory", "fast_img_jpeg_scratch", "fast_img_delivery", "fast_img_restore", "logs", "output", "session_audit", "print_integrity_summary", "print_integrity_json"],
+        help = "List bounded Fast IMG full JPEG effort scratch reservations without changing them."
+    )]
+    fast_img_jpeg_scratch_list: bool,
+
+    #[arg(
+        long,
+        value_name = "WORKING_COPY",
+        group = "encoder_execution",
+        requires = "source_relative",
+        conflicts_with_all = ["verify", "fast_img_marker_json", "fast_img_cleanup_inventory", "fast_img_jpeg_scratch", "fast_img_jpeg_scratch_list", "fast_img_delivery", "fast_img_restore", "logs", "output", "session_audit", "print_integrity_summary", "print_integrity_json"],
+        help = "Page through historical Fast IMG AVIF encoder evidence for one exact source."
+    )]
+    fast_img_avif_execution: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "WORKING_COPY",
+        group = "encoder_execution",
+        requires = "source_relative",
+        conflicts_with_all = ["verify", "fast_img_marker_json", "fast_img_delivery", "fast_img_restore", "logs", "output", "session_audit", "print_integrity_summary", "print_integrity_json"],
+        help = "Print historical Fast IMG JPEG encoder evidence for one exact source."
+    )]
+    fast_img_jpeg_execution: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "WORKING_COPY",
+        group = "encoder_execution",
+        requires = "source_relative",
+        conflicts_with_all = ["verify", "fast_img_marker_json", "fast_img_cleanup_inventory", "fast_img_jpeg_scratch", "fast_img_jpeg_scratch_list", "fast_img_delivery", "fast_img_restore", "logs", "output", "session_audit", "print_integrity_summary", "print_integrity_json", "after_receipt"],
+        help = "Read the saved Fast IMG admission for one exact source."
+    )]
+    fast_img_admission: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "WORKING_COPY",
+        group = "encoder_execution",
+        requires = "source_relative",
+        conflicts_with_all = ["verify", "fast_img_marker_json", "fast_img_cleanup_inventory", "fast_img_jpeg_scratch", "fast_img_jpeg_scratch_list", "fast_img_delivery", "fast_img_restore", "logs", "output", "session_audit", "print_integrity_summary", "print_integrity_json", "after_receipt"],
+        help = "Read committed Fast IMG delivery and cleanup evidence for one exact source."
+    )]
+    fast_img_source_evidence: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "SOURCE_KEY",
+        requires = "encoder_execution",
+        help = "Exact relative source path recorded by Fast IMG."
+    )]
+    source_relative: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "CURSOR",
+        requires = "encoder_execution",
+        help = "Page through encoder evidence. Use 'start' or the previous page's next_cursor."
+    )]
+    after_receipt: Option<String>,
 
     #[arg(long = "mode", value_parser = ["both", "images_only", "videos_only"], default_value = "both", help = "Limit integrity verification.")]
     mode: String,
@@ -80,18 +161,11 @@ struct Args {
     strategy: String,
 }
 
-fn file_content_blake3(path: &Path, chunk_size: usize) -> (Option<String>, Option<String>) {
-    let mut file = match File::open(path) {
-        Ok(f) => f,
-        Err(e) => return (None, Some(e.to_string())),
-    };
-    let mut buf = vec![0u8; chunk_size];
-    let n = match file.read(&mut buf) {
-        Ok(n) => n,
-        Err(e) => return (None, Some(e.to_string())),
-    };
-    buf.truncate(n);
-    (Some(blake3::hash(&buf).to_hex().to_string()), None)
+fn file_content_blake3(path: &Path) -> (Option<String>, Option<String>) {
+    match calculate_blake3_hash(path) {
+        Ok(digest) => (Some(digest), None),
+        Err(error) => (None, Some(error.to_string())),
+    }
 }
 
 fn collect_media_files(
@@ -101,6 +175,7 @@ fn collect_media_files(
     let mut result: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     let canonical_dir = directory.canonicalize().context("canonicalize directory")?;
     for entry in walkdir::WalkDir::new(&canonical_dir) {
+        foundation::batch_control::checkpoint()?;
         let entry = match entry {
             Ok(e) => e,
             Err(err) => return Err(anyhow::anyhow!("Walkdir error: {err}")),
@@ -141,7 +216,10 @@ fn collect_media_files(
 fn collect_regular_files(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut result = Vec::new();
     let canonical = directory.canonicalize().context("canonicalize")?;
-    for entry in walkdir::WalkDir::new(&canonical) {
+    for (index, entry) in walkdir::WalkDir::new(&canonical).into_iter().enumerate() {
+        if index % 64 == 0 {
+            foundation::batch_control::checkpoint()?;
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(err) => return Err(anyhow::anyhow!("Walkdir error: {err}")),
@@ -257,6 +335,8 @@ struct IntegrityStats {
     count_status_label: Option<String>,
     tier2_recorded: usize,
     tier2_verified_deleted: usize,
+    verified_local_aae: usize,
+    photos_local_aae_retention: bool,
 }
 
 fn integrity_count_status(stats: &IntegrityStats) -> String {
@@ -387,7 +467,10 @@ fn resolve_source_directory_for_post_cleanup(source_dir: &Path) -> Result<(PathB
                     source_dir.display()
                 ),
                 Err(link_error) if link_error.kind() == std::io::ErrorKind::NotFound => {
-                    Ok((source_dir.to_path_buf(), false))
+                    let path = foundation::pipeline::verification::canonical_working_copy_path(
+                        source_dir,
+                    )?;
+                    Ok((path, false))
                 }
                 Err(link_error) => Err(link_error).with_context(|| {
                     format!("inspect missing source_dir {}", source_dir.display())
@@ -406,14 +489,197 @@ fn run_fast_img_delivery_check(
     report: &mut String,
     processing_mode: &str,
     strategy: &str,
+    photos_cleanup_recovery: Option<&str>,
 ) -> Result<IntegrityStats> {
-    run_fast_img_delivery_check_with(source_dir, optimized_dir, report, processing_mode, strategy,
+    run_fast_img_delivery_check_for_scope(
+        source_dir,
+        optimized_dir,
+        report,
+        processing_mode,
+        strategy,
+        photos_cleanup_recovery,
         |marker| {
-            let _custody = foundation::fast_img::verify_output_photos_custody(marker)?;
+            let _custody = foundation::fast_img::verify_output_photos_custody(marker, true)?;
             Ok(())
-        })
+        },
+    )
 }
 
+fn verified_fast_img_aae_outputs(
+    source: &Path,
+    output: &Path,
+    strategy: &str,
+    marker: Option<&serde_json::Value>,
+    media: &[PathBuf],
+    unexpected: &[(PathBuf, String)],
+) -> Result<(HashSet<PathBuf>, bool, Vec<PathBuf>)> {
+    use foundation::fast_img_store::{FastImgAdmissionSidecar, read_admission_plan};
+    use foundation::pipeline::verification::{
+        WorkingCopyMarker, validate_no_symlink_components, verify_regular_file_blake3,
+    };
+
+    let sidecars: Vec<_> = unexpected
+        .iter()
+        .filter(|(_, reason)| reason == "unverified AAE companion")
+        .map(|(path, _)| path)
+        .collect();
+    let Some(marker) = marker
+        .and_then(|value| serde_json::from_value::<WorkingCopyMarker>(value.clone()).ok())
+        .filter(|marker| {
+            marker.is_terminal()
+                && marker.src_dir == source
+                && marker.working_copy == output
+                && marker.strategy == strategy
+        })
+    else {
+        return Ok((HashSet::new(), false, Vec::new()));
+    };
+    let admission = read_admission_plan(&marker).context(IntegrityUnavailableReason::Checkpoint)?;
+    if sidecars.is_empty()
+        && admission.as_ref().is_none_or(|plan| {
+            marker.blake3_log.keys().all(|key| {
+                !matches!(
+                    plan.get(key).and_then(|entry| entry.aae.as_ref()),
+                    Some(
+                        FastImgAdmissionSidecar::Present { .. }
+                            | FastImgAdmissionSidecar::Unresolved
+                    )
+                )
+            })
+        })
+    {
+        return Ok((HashSet::new(), false, Vec::new()));
+    }
+
+    let media: HashSet<&Path> = media.iter().map(PathBuf::as_path).collect();
+    let sidecar_keys: HashSet<_> = sidecars
+        .iter()
+        .map(|path| path.with_extension("aae"))
+        .collect();
+    let mut owners = HashMap::new();
+    let mut source_stems = HashMap::new();
+    for source_rel in marker
+        .blake3_log
+        .keys()
+        .chain(marker.skipped_sources.keys())
+        .chain(marker.failed_sources.keys())
+        .chain(marker.tier2_failed_sources.keys())
+        .chain(
+            marker
+                .tier2_imported_assets
+                .iter()
+                .map(|asset| &asset.rel_path),
+        )
+    {
+        let path = Path::new(source_rel);
+        if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+            let key = path.with_file_name(stem.to_lowercase());
+            *source_stems.entry(key).or_insert(0usize) += 1;
+        }
+    }
+    for (source_rel, delivery) in &marker.blake3_log {
+        let Some(out_rel) = delivery.out_rel.as_deref() else {
+            continue;
+        };
+        let target = output.join(out_rel);
+        let key = target.with_extension("aae");
+        if sidecar_keys.contains(&key) && media.contains(target.as_path()) {
+            owners
+                .entry(key)
+                .and_modify(|record| *record = None)
+                .or_insert(Some((source_rel, delivery, target)));
+        }
+    }
+
+    let mut verified = HashSet::new();
+    for sidecar in sidecars {
+        foundation::batch_control::checkpoint()?;
+        let Some(Some((source_rel, delivery, target))) = owners.get(&sidecar.with_extension("aae"))
+        else {
+            continue;
+        };
+        let proof = (|| -> Result<()> {
+            let expected = admission
+                .as_ref()
+                .and_then(|plan| plan.get(*source_rel))
+                .and_then(|entry| entry.aae.as_ref());
+            let source_rel = Path::new(source_rel);
+            let stem = source_rel
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .context("AAE source stem")?;
+            anyhow::ensure!(
+                source_stems.get(&source_rel.with_file_name(stem.to_lowercase())) == Some(&1)
+            );
+            validate_no_symlink_components(source, source_rel).map_err(anyhow::Error::msg)?;
+            let source_media = source.join(source_rel);
+            foundation::safety::check_apple_photos_library(&source_media)
+                .map_err(anyhow::Error::msg)?;
+            let source_aae = foundation::metadata::find_aae_sidecar(&source_media)?
+                .context("recorded source AAE is unavailable")?;
+            anyhow::ensure!(
+                foundation::metadata::aae_sidecar_destination(&source_aae, target)? == *sidecar
+            );
+            validate_no_symlink_components(source, source_aae.strip_prefix(source)?)
+                .map_err(anyhow::Error::msg)?;
+            validate_no_symlink_components(output, target.strip_prefix(output)?)
+                .map_err(anyhow::Error::msg)?;
+            validate_no_symlink_components(output, sidecar.strip_prefix(output)?)
+                .map_err(anyhow::Error::msg)?;
+            verify_regular_file_blake3(target, &delivery.out)?;
+            if let Some(expected) = expected {
+                let FastImgAdmissionSidecar::Present {
+                    relative_path,
+                    blake3,
+                } = expected
+                else {
+                    anyhow::bail!("output AAE was not resolved at admission");
+                };
+                anyhow::ensure!(source_aae.as_os_str() == source.join(relative_path).as_os_str());
+                verify_regular_file_blake3(&source_aae, blake3)?;
+                verify_regular_file_blake3(sidecar, blake3)?;
+            } else {
+                foundation::metadata::verify_aae_sidecar_copy(&source_aae, sidecar)?;
+            }
+            Ok(())
+        })();
+        if proof.is_ok() {
+            verified.insert(sidecar.clone());
+        }
+    }
+    let photos = !marker.photos_imported_assets.is_empty()
+        || !marker.tier2_imported_assets.is_empty()
+        || marker.photos_library_path.is_some();
+    let mut unresolved = Vec::new();
+    if let Some(admission) = admission {
+        for (source_rel, delivery) in &marker.blake3_log {
+            foundation::batch_control::checkpoint()?;
+            let sidecar = admission
+                .get(source_rel)
+                .and_then(|entry| entry.aae.as_ref());
+            let safe = match sidecar {
+                Some(FastImgAdmissionSidecar::Present { relative_path, .. }) => {
+                    delivery.out_rel.as_ref().is_some_and(|out_rel| {
+                        foundation::metadata::aae_sidecar_destination(
+                            &source.join(relative_path),
+                            &output.join(out_rel),
+                        )
+                        .is_ok_and(|sidecar| verified.contains(&sidecar))
+                    })
+                }
+                Some(FastImgAdmissionSidecar::Unresolved) => false,
+                _ => true,
+            };
+            if !safe {
+                unresolved.push(PathBuf::from(source_rel));
+            }
+        }
+        unresolved.sort();
+    }
+    Ok((verified, photos, unresolved))
+}
+
+#[cfg(test)]
 fn run_fast_img_delivery_check_with(
     source_dir: &Path,
     optimized_dir: &Path,
@@ -422,16 +688,70 @@ fn run_fast_img_delivery_check_with(
     strategy: &str,
     verify_photos: impl FnOnce(&foundation::pipeline::verification::WorkingCopyMarker) -> Result<()>,
 ) -> Result<IntegrityStats> {
+    run_fast_img_delivery_check_for_scope(
+        source_dir,
+        optimized_dir,
+        report,
+        processing_mode,
+        strategy,
+        None,
+        verify_photos,
+    )
+}
+
+fn run_fast_img_delivery_check_for_scope(
+    source_dir: &Path,
+    optimized_dir: &Path,
+    report: &mut String,
+    processing_mode: &str,
+    strategy: &str,
+    photos_cleanup_recovery: Option<&str>,
+    verify_photos: impl FnOnce(&foundation::pipeline::verification::WorkingCopyMarker) -> Result<()>,
+) -> Result<IntegrityStats> {
+    foundation::batch_control::checkpoint()?;
+    let recovery_marker = photos_cleanup_recovery
+        .map(|expected| {
+            use dev::infra::drag_drop::{
+                exact_fast_img_photos_cleanup_recovery, fast_img_cleanup_checkpoint_digest,
+            };
+            let marker =
+                exact_fast_img_photos_cleanup_recovery(source_dir, optimized_dir, strategy)?;
+            anyhow::ensure!(
+                fast_img_cleanup_checkpoint_digest(&marker)? == expected,
+                "Fast IMG cleanup checkpoint changed before independent verification"
+            );
+            Ok::<_, anyhow::Error>(marker)
+        })
+        .transpose()
+        .context(IntegrityUnavailableReason::Checkpoint)?;
     let _uncached = foundation::common_utils::UncachedVerificationScope::new()
         .context(IntegrityUnavailableReason::UncachedVerification)?;
     let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_dir)
         .context(IntegrityUnavailableReason::DirectoryPair)?;
-    let optimized_dir = if optimized_dir.exists() {
-        optimized_dir
-            .canonicalize()
-            .context(IntegrityUnavailableReason::DirectoryPair)?
-    } else {
-        optimized_dir.to_path_buf()
+    let (optimized_dir, optimized_dir_exists) = match fs::symlink_metadata(optimized_dir) {
+        Ok(metadata) if metadata.is_dir() => {
+            let path = optimized_dir
+                .canonicalize()
+                .context(IntegrityUnavailableReason::DirectoryPair)?;
+            foundation::safety::check_apple_photos_library(&path)
+                .map_err(anyhow::Error::msg)
+                .context(IntegrityUnavailableReason::DirectoryPair)?;
+            (path, true)
+        }
+        Ok(_) => {
+            return Err(anyhow::anyhow!("optimized path is not a real directory")
+                .context(IntegrityUnavailableReason::DirectoryPair));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+            foundation::pipeline::verification::canonical_working_copy_path(optimized_dir)
+                .context(IntegrityUnavailableReason::DirectoryPair)?,
+            false,
+        ),
+        Err(error) => {
+            return Err(
+                anyhow::Error::from(error).context(IntegrityUnavailableReason::DirectoryPair)
+            );
+        }
     };
 
     let (marker_opt, _path_opt, marker_error) = load_fast_img_marker_for_optimized(&optimized_dir);
@@ -449,13 +769,16 @@ fn run_fast_img_delivery_check_with(
                 && context.admissions().len() == typed.src_jpeg_count,
             IntegrityUnavailableReason::Checkpoint
         );
-        let marker_value = serde_json::to_value(&typed)
-            .context(IntegrityUnavailableReason::Checkpoint)?;
+        let marker_value =
+            serde_json::to_value(&typed).context(IntegrityUnavailableReason::Checkpoint)?;
         anyhow::ensure!(
             marker_error.is_none() && marker_opt.as_ref() == Some(&marker_value),
             IntegrityUnavailableReason::Checkpoint
         );
-        typed.failed_retry_primary_source_count.is_some().then_some(typed)
+        typed
+            .failed_retry_primary_source_count
+            .is_some()
+            .then_some(typed)
     } else {
         None
     };
@@ -490,6 +813,7 @@ fn run_fast_img_delivery_check_with(
         if let Some(context) = &failed_retry {
             let mut paths = Vec::new();
             for admission in context.admissions().values() {
+                foundation::batch_control::checkpoint()?;
                 let path = source_dir.join(&admission.source_rel);
                 match fs::symlink_metadata(&path) {
                     Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
@@ -513,6 +837,7 @@ fn run_fast_img_delivery_check_with(
         Vec::new()
     };
     for path in source_files {
+        foundation::batch_control::checkpoint()?;
         if path
             .file_name()
             .and_then(|f| f.to_str())
@@ -534,31 +859,139 @@ fn run_fast_img_delivery_check_with(
     let mut optimized_outputs = Vec::new();
     let mut unexpected_outputs = Vec::new();
     let mut optimized_probe_errors = Vec::new();
-    let optimized_files = if optimized_dir.exists() {
-        collect_regular_files(&optimized_dir)?
-    } else {
-        Vec::new()
-    };
-    for path in optimized_files {
-        if let Some(name) = path.file_name().and_then(|f| f.to_str()) {
-            if name.starts_with('.') || name == "fastmode_img_marker.json" || name == ".mfb_wc" {
+    if optimized_dir_exists {
+        let mut entries = WalkDir::new(&optimized_dir)
+            .follow_root_links(false)
+            .into_iter();
+        while let Some(entry) = entries.next() {
+            foundation::batch_control::checkpoint()?;
+            let entry = entry?;
+            let file_type = entry.file_type();
+            if entry.depth() == 0 {
+                anyhow::ensure!(
+                    file_type.is_dir(),
+                    IntegrityUnavailableReason::DirectoryPair
+                );
                 continue;
             }
-        } else {
-            continue;
-        }
-        match detect_true_format(&path) {
-            Ok(true_format) => {
-                if true_format == strategy {
-                    optimized_outputs.push(path);
-                } else {
-                    unexpected_outputs.push((path, true_format));
+            if file_type.is_dir() {
+                if entry.file_name().to_str().is_none_or(|name| {
+                    let lower = name.to_ascii_lowercase();
+                    name.starts_with('.')
+                        || lower.ends_with(".photoslibrary")
+                        || lower.ends_with(".photolibrary")
+                }) {
+                    entries.skip_current_dir();
+                    unexpected_outputs
+                        .push((entry.into_path(), "uninspected directory".to_owned()));
+                }
+                continue;
+            }
+            let path = entry.into_path();
+            if !file_type.is_file() {
+                unexpected_outputs.push((path, "nonregular entry".to_owned()));
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("aae"))
+            {
+                unexpected_outputs.push((path, "unverified AAE companion".to_owned()));
+            } else if path.file_name().is_some_and(|name| name == ".DS_Store") {
+                match foundation::io_utils::is_finder_metadata(&path) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        unexpected_outputs.push((path, "unrecognized Finder metadata".to_owned()))
+                    }
+                    Err(error) => optimized_probe_errors.push((path, error.into())),
+                }
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_none_or(|name| name.starts_with('.'))
+            {
+                unexpected_outputs.push((path, "unrecognized file name".to_owned()));
+            } else {
+                match foundation::image::format_detect::detect_regular_file_format(&path) {
+                    Ok(format) if format.canonical_extension() == Some(strategy) => {
+                        optimized_outputs.push(path)
+                    }
+                    Ok(format) => unexpected_outputs.push((
+                        path,
+                        format!(
+                            "detected true format: {}",
+                            format.canonical_extension().unwrap_or("unknown")
+                        ),
+                    )),
+                    Err(error) => optimized_probe_errors.push((path, error.into())),
                 }
             }
-            Err(e) => {
-                optimized_probe_errors.push((path, e));
+        }
+    }
+    let (verified_aae, photos_aae, unresolved_aae) = verified_fast_img_aae_outputs(
+        &source_dir,
+        &optimized_dir,
+        strategy,
+        marker_opt.as_ref(),
+        &optimized_outputs,
+        &unexpected_outputs,
+    )?;
+    unexpected_outputs.retain(|(path, _)| !verified_aae.contains(path));
+    if !unresolved_aae.is_empty() {
+        report.push_str("Recorded source AAE lacks a matching current local copy:\n");
+        for path in &unresolved_aae {
+            report.push_str(&format!("  - {:?}\n", path));
+        }
+    }
+
+    let recovery_outputs = recovery_marker
+        .as_ref()
+        .map(|marker| {
+            foundation::fast_img::build_fast_img_output_import_candidates(marker).map(
+                |candidates| {
+                    candidates
+                        .into_iter()
+                        .map(|candidate| candidate.path)
+                        .collect::<HashSet<_>>()
+                },
+            )
+        })
+        .transpose()
+        .context(IntegrityUnavailableReason::Checkpoint)?;
+    let recorded_outputs = || {
+        let records = marker_opt.as_ref()?.get("blake3_log")?.as_object()?;
+        if records.is_empty() {
+            return None;
+        }
+        records
+            .values()
+            .map(|record| Some(optimized_dir.join(record.get("out_rel")?.as_str()?)))
+            .collect::<Option<HashSet<_>>>()
+    };
+    let mut missing_recorded_outputs = Vec::new();
+    let mut observed_absent_outputs = 0;
+    if let Some(mut expected) =
+        recovery_outputs.or_else(|| optimized_dir_exists.then(recorded_outputs).flatten())
+    {
+        optimized_outputs.retain(|path| {
+            if expected.remove(path) {
+                return true;
+            }
+            unexpected_outputs.push((
+                path.clone(),
+                "no matching delivery checkpoint entry".to_owned(),
+            ));
+            false
+        });
+        for path in expected {
+            foundation::batch_control::checkpoint()?;
+            if recovery_marker.is_some()
+                && matches!(fs::symlink_metadata(&path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+            {
+                observed_absent_outputs += 1;
+            } else {
+                missing_recorded_outputs.push(path);
             }
         }
+        missing_recorded_outputs.sort();
     }
 
     let mut recorded_source_jpegs: u64 = 0;
@@ -615,18 +1048,32 @@ fn run_fast_img_delivery_check_with(
                 }
             }
         }
-        if let Some(failed) = m.get("tier2_failed_sources").and_then(|value| value.as_object()) {
+        if let Some(failed) = m
+            .get("tier2_failed_sources")
+            .and_then(|value| value.as_object())
+        {
             tier2_failed_count = failed.len();
             if routed_child.is_none() {
                 for (rel, failure) in failed {
                     let verification = (|| -> Result<()> {
-                        foundation::pipeline::verification::validate_no_symlink_components(&source_dir, Path::new(rel))
-                            .map_err(anyhow::Error::msg)?;
+                        foundation::pipeline::verification::validate_no_symlink_components(
+                            &source_dir,
+                            Path::new(rel),
+                        )
+                        .map_err(anyhow::Error::msg)?;
                         let source = source_dir.join(rel);
-                        let expected = failure.get("src").and_then(serde_json::Value::as_str)
+                        let expected = failure
+                            .get("src")
+                            .and_then(serde_json::Value::as_str)
                             .context("retained original failure has no recorded hash")?;
-                        anyhow::ensure!(fs::symlink_metadata(&source)?.is_file(), "retained original is not a regular file");
-                        anyhow::ensure!(calculate_blake3_hash(&source)? == expected, "retained original differs from its recorded hash");
+                        anyhow::ensure!(
+                            fs::symlink_metadata(&source)?.is_file(),
+                            "retained original is not a regular file"
+                        );
+                        anyhow::ensure!(
+                            calculate_blake3_hash(&source)? == expected,
+                            "retained original differs from its recorded hash"
+                        );
                         Ok(())
                     })();
                     match verification {
@@ -645,22 +1092,39 @@ fn run_fast_img_delivery_check_with(
         };
 
         recorded_source_jpegs = u64::try_from(typed.primary_source_count())?;
-        let receipts = typed.tier2_imported_assets.iter().map(|asset| asset.rel_path.as_str()).collect::<HashSet<_>>();
-        let originals_still_present = tier2_unexpected_remaining.iter().map(String::as_str).collect::<HashSet<_>>();
+        let receipts = typed
+            .tier2_imported_assets
+            .iter()
+            .map(|asset| asset.rel_path.as_str())
+            .collect::<HashSet<_>>();
+        let originals_still_present = tier2_unexpected_remaining
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
         let absent = foundation::fast_img_store::validate_tier2_cleanup_resume(typed)
             .context(IntegrityUnavailableReason::Checkpoint)?;
-        for admission in context.admissions().values().filter(|admission| {
-            admission.route == Some(FailedRetrySourceRoute::Original)
-        }) {
+        for admission in context
+            .admissions()
+            .values()
+            .filter(|admission| admission.route == Some(FailedRetrySourceRoute::Original))
+        {
             let rel = &admission.source_rel;
-            match (receipts.contains(rel.as_str()), typed.tier2_failed_sources.get(rel)) {
+            match (
+                receipts.contains(rel.as_str()),
+                typed.tier2_failed_sources.get(rel),
+            ) {
                 (true, None) if absent.contains(rel) => {
                     let verification = (|| -> Result<()> {
                         if let FailedRetrySidecar::Present { relative_path, .. } = &admission.xmp {
                             match fs::symlink_metadata(source_dir.join(relative_path)) {
                                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                                Err(error) => return Err(error).context("inspect saved original-format XMP companion"),
-                                Ok(_) => anyhow::bail!("saved original-format XMP companion still awaits cleanup"),
+                                Err(error) => {
+                                    return Err(error)
+                                        .context("inspect saved original-format XMP companion");
+                                }
+                                Ok(_) => anyhow::bail!(
+                                    "saved original-format XMP companion still awaits cleanup"
+                                ),
                             }
                         }
                         verify_failed_retry_retained_companions(typed, admission, true)
@@ -672,7 +1136,10 @@ fn run_fast_img_delivery_check_with(
                 (true, None) if originals_still_present.contains(rel.as_str()) => {}
                 (false, Some(failure)) => {
                     if failure.src != admission.admitted_source_blake3 {
-                        tier2_unresolved.push((rel.as_str(), "retained failure identity differs from its admission".into()));
+                        tier2_unresolved.push((
+                            rel.as_str(),
+                            "retained failure identity differs from its admission".into(),
+                        ));
                         continue;
                     }
                     match verify_failed_retry_admission(&source_dir, admission) {
@@ -680,11 +1147,16 @@ fn run_fast_img_delivery_check_with(
                         Err(error) => tier2_unresolved.push((rel.as_str(), format!("{error:#}"))),
                     }
                 }
-                _ => tier2_unresolved.push((rel.as_str(), "missing exact delivery or retained failure evidence".into())),
+                _ => tier2_unresolved.push((
+                    rel.as_str(),
+                    "missing exact delivery or retained failure evidence".into(),
+                )),
             }
         }
         if !typed.is_terminal() && tier2_unresolved.is_empty() {
-            report.push_str("  - The failed-only child still has pending delivery or source cleanup\n");
+            report.push_str(
+                "  - The failed-only child still has pending delivery or source cleanup\n",
+            );
         }
     }
 
@@ -764,7 +1236,11 @@ fn run_fast_img_delivery_check_with(
         }
     }
 
-    stats.source_files = routed_child.as_ref().map_or(recorded_source_jpegs as usize, |marker| marker.src_jpeg_count);
+    stats.source_files = routed_child
+        .as_ref()
+        .map_or(recorded_source_jpegs as usize, |marker| {
+            marker.src_jpeg_count
+        });
     stats.optimized_files = optimized_outputs.len();
     stats.skipped_sources = skipped_source_rels.len();
     stats.failed_sources = failed_source_rels.len() + tier2_failed_count;
@@ -772,7 +1248,11 @@ fn run_fast_img_delivery_check_with(
     stats.source_probe_errors = source_probe_errors.len();
     stats.optimized_probe_errors = optimized_probe_errors.len();
     stats.extra = unexpected_outputs.len() + optimized_probe_errors.len();
-    stats.count_delta = (optimized_outputs.len() as isize) - (expected_delivery_count as isize);
+    stats.missing = missing_recorded_outputs.len();
+    stats.verified_local_aae = verified_aae.len();
+    stats.photos_local_aae_retention = photos_aae && !verified_aae.is_empty();
+    let accounted_delivery_count = optimized_outputs.len() + observed_absent_outputs;
+    stats.count_delta = (accounted_delivery_count as isize) - (expected_delivery_count as isize);
     stats.matched = optimized_outputs.len();
     stats.explained_gaps = skipped_source_rels.len() + failed_source_rels.len() + tier2_retained;
     stats.optimized_total_size = optimized_size;
@@ -789,10 +1269,11 @@ fn run_fast_img_delivery_check_with(
     if !unexpected_outputs.is_empty() {
         integrity_failures += unexpected_outputs.len();
     }
-    if marker_opt.is_some() && expected_delivery_count != optimized_outputs.len() {
+    integrity_failures += missing_recorded_outputs.len() + unresolved_aae.len();
+    if marker_opt.is_some() && expected_delivery_count != accounted_delivery_count {
         integrity_failures += 1;
     }
-    if optimized_outputs.is_empty() && expected_delivery_count > 0 {
+    if accounted_delivery_count == 0 && expected_delivery_count > 0 {
         integrity_failures += 1;
     }
     if !skipped_sources_missing.is_empty() {
@@ -808,7 +1289,10 @@ fn run_fast_img_delivery_check_with(
         integrity_failures += tier2_unexpected_remaining.len();
     }
     integrity_failures += tier2_unresolved.len();
-    if routed_child.as_ref().is_some_and(|marker| !marker.is_terminal()) {
+    if routed_child
+        .as_ref()
+        .is_some_and(|marker| !marker.is_terminal())
+    {
         integrity_failures += 1;
     }
     integrity_failures += source_probe_errors.len() + optimized_probe_errors.len();
@@ -833,7 +1317,21 @@ fn run_fast_img_delivery_check_with(
         );
     }
 
-    let count_matches = integrity_failures == 0;
+    let count_matches = marker_ok
+        && expected_delivery_count == accounted_delivery_count
+        && missing_recorded_outputs.is_empty()
+        && unresolved_aae.is_empty()
+        && unexpected_source_true_jpegs.is_empty()
+        && skipped_sources_missing.is_empty()
+        && failed_sources_missing.is_empty()
+        && tier2_missing_proof.is_empty()
+        && tier2_unexpected_remaining.is_empty()
+        && tier2_unresolved.is_empty()
+        && routed_child
+            .as_ref()
+            .is_none_or(|marker| marker.is_terminal())
+        && source_probe_errors.is_empty()
+        && optimized_probe_errors.is_empty();
     stats.count_matches_with_handoff = count_matches;
     stats.count_fully_explained = count_matches;
     stats.count_status_label = if count_matches {
@@ -890,6 +1388,15 @@ fn run_fast_img_delivery_check_with(
         "Unexpected optimized files:  {}\n",
         unexpected_outputs.len()
     ));
+    if !verified_aae.is_empty() {
+        report.push_str(&format!(
+            "Verified local AAE companions: {}\n",
+            verified_aae.len()
+        ));
+        if stats.photos_local_aae_retention {
+            report.push_str("  - Retaining local media and AAE companions because Photos custody covers the media only.\n");
+        }
+    }
     if tier2_recorded > 0 {
         report.push_str(&format!(
             "Recorded tier-2 lossy files: {}\n",
@@ -901,7 +1408,9 @@ fn run_fast_img_delivery_check_with(
         ));
     }
     if tier2_failed_count > 0 || routed_child.is_some() {
-        report.push_str(&format!("Verified retained original-format failures: {tier2_retained}\n"));
+        report.push_str(&format!(
+            "Verified retained original-format failures: {tier2_retained}\n"
+        ));
     }
     report.push('\n');
 
@@ -933,25 +1442,27 @@ fn run_fast_img_delivery_check_with(
             }
         }
         if !unexpected_outputs.is_empty() {
-            let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
             report.push_str(&format!(
-                "  - {} non-{ext_name} output(s) found in optimized directory:\n",
+                "  - {} unverified output entries retained in the optimized directory:\n",
                 unexpected_outputs.len()
             ));
-            for (p, fmt) in &unexpected_outputs {
+            for (p, reason) in &unexpected_outputs {
                 report.push_str(&format!(
-                    "      - {} (detected true format: {})\n",
-                    p.strip_prefix(&optimized_dir)?.display(),
-                    fmt
+                    "      - {:?} ({reason})\n",
+                    p.strip_prefix(&optimized_dir)?,
                 ));
             }
         }
-        if marker_opt.is_some() && expected_delivery_count != optimized_outputs.len() {
+        for missing in &missing_recorded_outputs {
+            report.push_str(&format!(
+                "  - Recorded output unavailable: {:?}\n",
+                missing.strip_prefix(&optimized_dir)?,
+            ));
+        }
+        if marker_opt.is_some() && expected_delivery_count != accounted_delivery_count {
             let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
             report.push_str(&format!(
-                "  - Delivered {ext_name} count mismatch: expected {} but got {}\n",
-                expected_delivery_count,
-                optimized_outputs.len()
+                "  - Delivered {ext_name} count mismatch: expected {expected_delivery_count} but accounted for {accounted_delivery_count}\n",
             ));
         }
         if !skipped_sources_missing.is_empty() {
@@ -1025,15 +1536,26 @@ fn run_fast_img_delivery_check_with(
     } else {
         let typed = foundation::pipeline::verification::read_marker(&optimized_dir)
             .context(IntegrityUnavailableReason::Checkpoint)?;
-        let marker_value = serde_json::to_value(&typed)
-            .context(IntegrityUnavailableReason::Checkpoint)?;
+        let marker_value =
+            serde_json::to_value(&typed).context(IntegrityUnavailableReason::Checkpoint)?;
         anyhow::ensure!(
-            typed.working_copy == optimized_dir && typed.src_dir == source_dir
-                && typed.strategy == strategy && marker_opt.as_ref() == Some(&marker_value),
+            typed.working_copy == optimized_dir
+                && typed.src_dir == source_dir
+                && typed.strategy == strategy
+                && marker_opt.as_ref() == Some(&marker_value),
             IntegrityUnavailableReason::Checkpoint
         );
+        if let Some(expected) = &recovery_marker {
+            anyhow::ensure!(
+                &typed == expected
+                    && matches!(fs::symlink_metadata(&source_dir),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+                IntegrityUnavailableReason::Checkpoint
+            );
+        }
         if !typed.photos_imported_assets.is_empty() || !typed.tier2_imported_assets.is_empty() {
             verify_photos(&typed).context(IntegrityUnavailableReason::PhotosCustody)?;
+            foundation::batch_control::checkpoint()?;
             report.push_str("  - Current Photos UUIDs and complete original-resource bytes were freshly verified\n");
         }
         foundation::fast_img_store::verify_tier2_cleanup_complete(&typed)
@@ -1042,13 +1564,18 @@ fn run_fast_img_delivery_check_with(
             "{} FAST-IMG DELIVERY INVARIANTS PASS\n",
             pick_symbol("✓", "[OK]")
         ));
-        report.push_str(&format!(
-            "  - All non-skipped/non-failed source {source_kind} were successfully deleted\n"
-        ));
-        report.push_str(&format!(
-            "  - Optimized directory contains only {ext_name} delivery files\n"
-        ));
-        if tier2_recorded > 0 {
+        if recovery_marker.is_some() {
+            report.push_str("  - Saved source directory is absent. This recovery did not delete source files.\n");
+            report.push_str(&format!(
+                "  - Recorded local outputs absent now: {observed_absent_outputs}. Current Photos originals cover them.\n"
+            ));
+        } else {
+            report.push_str(&format!(
+                "  - All non-skipped/non-failed source {source_kind} were successfully deleted\n"
+            ));
+        }
+        report.push_str(&format!("  - Verified {ext_name} delivery inventory\n"));
+        if tier2_recorded > 0 && recovery_marker.is_none() {
             report.push_str(
                 "  - All tier-2 modern lossy files were successfully deleted after verification\n",
             );
@@ -1131,6 +1658,7 @@ fn run_fast_img_restore_check(
         Vec::new()
     };
     for path in source_files {
+        foundation::batch_control::checkpoint()?;
         if let Some(name) = path.file_name().and_then(|f| f.to_str()) {
             if name.starts_with('.') || name == "fastmode_img_marker.json" || name == ".mfb_wc" {
                 continue;
@@ -1167,6 +1695,7 @@ fn run_fast_img_restore_check(
     let mut non_jpeg_outputs = Vec::new();
     let mut restored_probe_errors = Vec::new();
     for path in collect_regular_files(&restored_dir)? {
+        foundation::batch_control::checkpoint()?;
         if path
             .file_name()
             .and_then(|f| f.to_str())
@@ -1239,6 +1768,7 @@ fn run_fast_img_restore_check(
     let mut manifest_deleted_sources = HashSet::new();
     let mut seen_manifest_keys = HashSet::new();
     for record in manifest_records {
+        foundation::batch_control::checkpoint()?;
         let source_rel = &record.source_rel;
         let output_rel = &record.output_rel;
         let source_key = integrity_stem_key(Path::new(source_rel));
@@ -1385,6 +1915,7 @@ fn run_fast_img_restore_check(
 
     let mut hash_mismatched_restored_jpegs = Vec::new();
     for (key, record) in &manifest_sources {
+        foundation::batch_control::checkpoint()?;
         let output_rel = &record.output_rel;
         let expected_output = restored_dir.join(output_rel);
         if expected_output.is_file() {
@@ -1673,13 +2204,23 @@ fn run_integrity_check(
         ..Default::default()
     };
 
-    if !source_dir.is_dir() || !optimized_dir.is_dir() {
-        report.push_str("❌ Error: Source or Optimized directory missing.\n\n");
-        return Ok(stats);
+    for directory in [source_dir, optimized_dir] {
+        let metadata = fs::metadata(directory)
+            .with_context(|| format!("inspect verification directory {}", directory.display()))
+            .context(IntegrityUnavailableReason::DirectoryPair)?;
+        anyhow::ensure!(metadata.is_dir(), IntegrityUnavailableReason::DirectoryPair);
     }
 
-    let source_files = collect_media_files(source_dir, processing_mode)?;
-    let optimized_files = collect_media_files(optimized_dir, processing_mode)?;
+    let _uncached = foundation::common_utils::UncachedVerificationScope::new()
+        .context(IntegrityUnavailableReason::UncachedVerification)?;
+    let source_root = source_dir
+        .canonicalize()
+        .context(IntegrityUnavailableReason::DirectoryPair)?;
+    let output_root = optimized_dir
+        .canonicalize()
+        .context(IntegrityUnavailableReason::DirectoryPair)?;
+    let source_files = collect_media_files(&source_root, processing_mode)?;
+    let optimized_files = collect_media_files(&output_root, processing_mode)?;
 
     let mut src_collisions = BTreeMap::new();
     for (k, v) in &source_files {
@@ -1721,6 +2262,7 @@ fn run_integrity_check(
             HashMap::new()
         }
     };
+    foundation::batch_control::checkpoint()?;
     let rust_outcomes = match load_rust_outcomes_from_logs(&log_paths, Some(source_dir)) {
         Ok(o) => o,
         Err(e) => {
@@ -1729,6 +2271,9 @@ fn run_integrity_check(
         }
     };
 
+    foundation::batch_control::checkpoint()?;
+    let source_dir = source_root.as_path();
+    let optimized_dir = output_root.as_path();
     let mut true_missing = Vec::new();
     let mut pipeline_handoff = Vec::new();
     let mut vid_pipeline_failed = Vec::new();
@@ -1738,6 +2283,7 @@ fn run_integrity_check(
     let mut ambiguous = Vec::new();
 
     for (key, src_paths) in &source_files {
+        foundation::batch_control::checkpoint()?;
         if optimized_files.contains_key(key) {
             let opt_paths = &optimized_files[key];
             if src_paths.len() == 1 && opt_paths.len() == 1 {
@@ -1806,19 +2352,29 @@ fn run_integrity_check(
 
     let integrity_failures =
         true_missing.len() + vid_pipeline_failed.len() + vid_pipeline_unverified.len();
-    stats.integrity_failures = integrity_failures;
+    let unmatched_source_collisions = src_collisions
+        .keys()
+        .filter(|key| !optimized_files.contains_key(*key))
+        .count();
+    stats.integrity_failures =
+        integrity_failures + extra.len() + ambiguous.len() + unmatched_source_collisions;
+    stats.has_warnings = stats.integrity_failures != 0;
 
     if !src_collisions.is_empty() {
         report
             .push_str("⚠️ WARNING: Duplicate source stems detected (Unsafe for 1-to-1 mapping):\n");
         for (key, paths) in &src_collisions {
+            foundation::batch_control::checkpoint()?;
             let mut hash_results = Vec::new();
             for p in paths {
-                hash_results.push(file_content_blake3(p, 65536));
+                foundation::batch_control::checkpoint()?;
+                hash_results.push(file_content_blake3(p));
             }
             let unique_hashes: HashSet<String> =
                 hash_results.iter().filter_map(|(h, _)| h.clone()).collect();
-            let label = if unique_hashes.len() == 1 {
+            let label = if hash_results.iter().any(|(hash, _)| hash.is_none()) {
+                "content equality unavailable".to_string()
+            } else if unique_hashes.len() == 1 {
                 "IDENTICAL content".to_string()
             } else {
                 format!("{} DISTINCT files", unique_hashes.len())
@@ -1847,13 +2403,17 @@ fn run_integrity_check(
     if !opt_collisions.is_empty() {
         report.push_str("⚠️ WARNING: Duplicate optimized stems detected (Potential overwrites):\n");
         for (key, paths) in &opt_collisions {
+            foundation::batch_control::checkpoint()?;
             let mut hash_results = Vec::new();
             for p in paths {
-                hash_results.push(file_content_blake3(p, 65536));
+                foundation::batch_control::checkpoint()?;
+                hash_results.push(file_content_blake3(p));
             }
             let unique_hashes: HashSet<String> =
                 hash_results.iter().filter_map(|(h, _)| h.clone()).collect();
-            let label = if unique_hashes.len() == 1 {
+            let label = if hash_results.iter().any(|(hash, _)| hash.is_none()) {
+                "content equality unavailable".to_string()
+            } else if unique_hashes.len() == 1 {
                 "IDENTICAL content".to_string()
             } else {
                 format!("{} DISTINCT files", unique_hashes.len())
@@ -1906,7 +2466,7 @@ fn run_integrity_check(
                 note
             ));
         }
-    } else {
+    } else if !stats.has_warnings {
         report.push_str(&format!(
             "{} INTEGRITY CHECKS CLEAN\n\n",
             pick_symbol("✓", "[OK]")
@@ -1960,13 +2520,11 @@ fn run_integrity_check(
 
     let explained = pipeline_handoff.len();
     stats.explained_gaps = explained;
-    if delta.unsigned_abs() == explained {
-        stats.count_matches_with_handoff = true;
-        stats.count_fully_explained = true;
-    } else {
-        stats.count_matches_with_handoff = false;
-        stats.count_fully_explained = false;
-    }
+    let expected =
+        isize::try_from(explained).context("handoff count exceeds verification range")?;
+    stats.expected_count_delta = -expected;
+    stats.count_matches_with_handoff = !stats.has_warnings && delta == -expected;
+    stats.count_fully_explained = stats.count_matches_with_handoff;
 
     Ok(stats)
 }
@@ -1977,6 +2535,7 @@ fn collect_bundle_run_logs(log_dir: &Path) -> Result<Vec<PathBuf>> {
     }
     let mut paths = HashSet::new();
     for entry in WalkDir::new(log_dir).into_iter().filter_map(Result::ok) {
+        foundation::batch_control::checkpoint()?;
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -2071,6 +2630,7 @@ fn parse_logs(
     for path in log_paths {
         if path.is_dir() {
             for entry in WalkDir::new(path).into_iter().filter_map(Result::ok) {
+                foundation::batch_control::checkpoint()?;
                 let p = entry.path();
                 if p.is_file()
                     && (p.extension().and_then(|e| e.to_str()) == Some("log")
@@ -2085,6 +2645,7 @@ fn parse_logs(
     }
 
     for log_file in files {
+        foundation::batch_control::checkpoint()?;
         let log_name = log_file
             .file_name()
             .and_then(|n| n.to_str())
@@ -2093,7 +2654,10 @@ fn parse_logs(
         let content = fs::read_to_string(&log_file)
             .with_context(|| format!("log file unreadable: {}", log_file.display()))?;
         let mut current_file: Option<String> = None;
-        for raw_line in content.lines() {
+        for (index, raw_line) in content.lines().enumerate() {
+            if index % 256 == 0 {
+                foundation::batch_control::checkpoint()?;
+            }
             let line = raw_line.trim();
             if line.is_empty() {
                 continue;
@@ -2343,7 +2907,8 @@ fn report_integrity_unavailable<T>(result: Result<T>, requested: bool) -> Result
         };
         println!(
             "{INTEGRITY_UNAVAILABLE_JSON_PREFIX}{}",
-            serde_json::to_string(&unavailable).context("serialize unavailable integrity result")?
+            serde_json::to_string(&unavailable)
+                .context("serialize unavailable integrity result")?
         );
     }
     result
@@ -2351,6 +2916,115 @@ fn report_integrity_unavailable<T>(result: Result<T>, requested: bool) -> Result
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.fast_img_jpeg_scratch_list {
+        let report = foundation::jxl_effort_policy::list_jpeg_effort_scratch()?;
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+        println!();
+        return Ok(());
+    }
+    if let Some(directory) = args.fast_img_jpeg_scratch.as_deref() {
+        let report = foundation::jxl_effort_policy::inspect_jpeg_effort_scratch(directory)?;
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+        println!();
+        return Ok(());
+    }
+    if let Some(output) = args.fast_img_cleanup_inventory.as_deref() {
+        let report = dev::infra::drag_drop::inspect_fast_img_cleanup_inventory(output);
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+        println!();
+        return Ok(());
+    }
+    if let Some(working_copy) = args.fast_img_source_evidence.as_deref() {
+        let source = args
+            .source_relative
+            .as_deref()
+            .context("missing exact source key")?;
+        let report = foundation::fast_img_store::read_source_evidence(working_copy, source)?;
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+        println!();
+        return Ok(());
+    }
+    if let Some(working_copy) = args.fast_img_admission.as_deref() {
+        let source = args
+            .source_relative
+            .as_deref()
+            .context("missing exact source key")?;
+        let relative = Path::new(source);
+        let validated = foundation::pipeline::verification::fast_img_relative_key(
+            &working_copy.join(relative),
+            working_copy,
+            "admission query source",
+        )
+        .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            validated == source,
+            "admission query requires the exact relative source key"
+        );
+        let marker = foundation::pipeline::verification::read_marker(working_copy)?;
+        let plan = foundation::fast_img_store::read_admission_plan(&marker)?;
+        let admission = plan.as_ref().and_then(|plan| plan.get(source));
+        let coverage = match (&plan, admission) {
+            (_, Some(_)) => "recorded",
+            (Some(_), None) => "not_admitted",
+            (None, None) => "unknown",
+        };
+        let report = serde_json::json!({
+            "schema_version": 1,
+            "scope": "historical_fast_img_admission",
+            "source_relative": source,
+            "coverage": coverage,
+            "admission": admission,
+        });
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+        println!();
+        return Ok(());
+    }
+    if let Some(working_copy) = args
+        .fast_img_jpeg_execution
+        .as_deref()
+        .or(args.fast_img_avif_execution.as_deref())
+    {
+        let source = args
+            .source_relative
+            .as_deref()
+            .context("missing exact source key")?;
+        let after = args
+            .after_receipt
+            .as_deref()
+            .filter(|&value| value != "start");
+        let report = if args.fast_img_avif_execution.is_some() || args.after_receipt.is_some() {
+            let read_page = if args.fast_img_avif_execution.is_some() {
+                foundation::fast_img_store::read_avif_execution_receipt_page
+            } else {
+                foundation::fast_img_store::read_jpeg_execution_receipt_page
+            };
+            let page = read_page(working_copy, source, after)?;
+            let recorded = after.is_some() || !page.receipts.is_empty();
+            serde_json::json!({
+                "schema_version": 2,
+                "scope": "historical_encoder_invocations",
+                "source_relative": source,
+                "coverage": if recorded { "recorded" } else { "unknown" },
+                "receipts": page.receipts,
+                "next_cursor": page.next_cursor,
+            })
+        } else {
+            let receipts = foundation::fast_img_store::read_jpeg_execution_receipts_for_source(
+                working_copy,
+                source,
+            )?;
+            serde_json::json!({
+                "schema_version": 1,
+                "scope": "historical_encoder_invocations",
+                "source_relative": source,
+                "coverage": if receipts.is_empty() { "unknown" } else { "recorded" },
+                "receipts": receipts,
+            })
+        };
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+        println!();
+        return Ok(());
+    }
     report_integrity_unavailable(
         foundation::init_ghost_mode().context(IntegrityUnavailableReason::Startup),
         args.print_integrity_json,
@@ -2371,6 +3045,10 @@ fn main() -> Result<()> {
             None
         };
 
+    report_integrity_unavailable(
+        foundation::batch_control::checkpoint().map_err(Into::into),
+        args.print_integrity_json,
+    )?;
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
     let output_report = if let Some(ref p) = args.output {
         p.clone()
@@ -2432,34 +3110,47 @@ fn main() -> Result<()> {
     }
 
     if let Some(ref verify_args) = args.verify {
+        if args.fast_img_photos_cleanup_recovery.is_some() && verify_args.len() != 2 {
+            return report_integrity_unavailable(
+                Err(anyhow::Error::new(
+                    IntegrityUnavailableReason::DirectoryPair,
+                )),
+                args.print_integrity_json,
+            );
+        }
         let resolved = resolve_verify_dirs(verify_args);
         if let Some((src, opt)) = resolved {
             source_dir_context = Some(src.clone());
             if args.fast_img_delivery {
-                integrity_stats = Some(report_integrity_unavailable(run_fast_img_delivery_check(
-                    &src,
-                    &opt,
-                    &mut report,
-                    &args.mode,
-                    &args.strategy,
-                ), args.print_integrity_json)?);
+                integrity_stats = Some(report_integrity_unavailable(
+                    run_fast_img_delivery_check(
+                        &src,
+                        &opt,
+                        &mut report,
+                        &args.mode,
+                        &args.strategy,
+                        args.fast_img_photos_cleanup_recovery.as_deref(),
+                    ),
+                    args.print_integrity_json,
+                )?);
             } else if args.fast_img_restore {
-                integrity_stats = Some(report_integrity_unavailable(run_fast_img_restore_check(
-                    &src,
-                    &opt,
-                    &mut report,
-                    &args.strategy,
-                ), args.print_integrity_json)?);
+                integrity_stats = Some(report_integrity_unavailable(
+                    run_fast_img_restore_check(&src, &opt, &mut report, &args.strategy),
+                    args.print_integrity_json,
+                )?);
             } else {
-                integrity_stats = Some(report_integrity_unavailable(run_integrity_check(
-                    &src,
-                    &opt,
-                    &mut report,
-                    &args.mode,
-                    &session_audit_paths,
-                    bundle_log_dir.as_deref(),
-                    explicit_log_paths.as_deref(),
-                ), args.print_integrity_json)?);
+                integrity_stats = Some(report_integrity_unavailable(
+                    run_integrity_check(
+                        &src,
+                        &opt,
+                        &mut report,
+                        &args.mode,
+                        &session_audit_paths,
+                        bundle_log_dir.as_deref(),
+                        explicit_log_paths.as_deref(),
+                    ),
+                    args.print_integrity_json,
+                )?);
             }
         } else {
             report.push_str(&format!(
@@ -2497,6 +3188,14 @@ fn main() -> Result<()> {
         println!("🔭 Uncertain loop cases: {unc_count}");
     }
 
+    report_integrity_unavailable(
+        foundation::batch_control::checkpoint().map_err(Into::into),
+        args.print_integrity_json,
+    )?;
+    report_integrity_unavailable(
+        fs::write(&output_report, &report).context(IntegrityUnavailableReason::Report),
+        args.print_integrity_json,
+    )?;
     if args.print_integrity_summary {
         if let Some(ref stats) = integrity_stats {
             let delta_text = integrity_count_status(stats);
@@ -2563,6 +3262,12 @@ fn main() -> Result<()> {
                 stats.vid_pipeline_unverified
             );
             println!("   Extra:           {}", stats.extra);
+            if stats.photos_local_aae_retention {
+                println!(
+                    "   Local AAE companions retained: {} (Photos custody covers media only)",
+                    stats.verified_local_aae
+                );
+            }
             println!("   Type mismatch:   {}", stats.mismatched_types);
             println!("   Integrity Issues:{}", stats.integrity_failures);
             println!(
@@ -2593,13 +3298,11 @@ fn main() -> Result<()> {
         }
     }
 
-    report_integrity_unavailable(
-        fs::write(&output_report, &report).context(IntegrityUnavailableReason::Report),
-        args.print_integrity_json,
-    )?;
     if args.print_integrity_json {
         let stats = report_integrity_unavailable(
-            integrity_stats.as_ref().context(IntegrityUnavailableReason::DirectoryPair),
+            integrity_stats
+                .as_ref()
+                .context(IntegrityUnavailableReason::DirectoryPair),
             true,
         )?;
         let summary = IntegritySummaryMachine {
@@ -2612,6 +3315,8 @@ fn main() -> Result<()> {
             source_remaining_count: stats.source_remaining_files,
             verified_deleted_count: stats.verified_deleted_sources,
             count_status: Some(integrity_count_status(stats)),
+            retained_local_aae: (stats.photos_local_aae_retention && !stats.has_warnings)
+                .then_some(stats.verified_local_aae),
         };
         println!(
             "{INTEGRITY_SUMMARY_JSON_PREFIX}{}",
@@ -2642,9 +3347,179 @@ mod tests {
     use foundation::ToolBuilder;
     use serial_test::serial;
 
+    #[test]
+    fn fast_img_admission_cli_requires_an_exact_source_and_excludes_encoder_paging() {
+        let admission = ["verify", "--fast-img-admission", "/fixture/work"];
+        assert!(Args::try_parse_from(admission).is_err());
+        let args = admission
+            .into_iter()
+            .chain(["--source-relative", "nested/素材.jpg"]);
+        assert_eq!(
+            Args::try_parse_from(args.clone())
+                .unwrap()
+                .source_relative
+                .as_deref(),
+            Some("nested/素材.jpg")
+        );
+        assert!(Args::try_parse_from(args.clone().chain(["--after-receipt", "start"])).is_err());
+        assert!(
+            Args::try_parse_from(args.chain(["--fast-img-jpeg-execution", "/fixture/work"]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn source_evidence_cli_is_exact_and_separate_from_delivery_and_encoder_queries() {
+        let command = ["verify", "--fast-img-source-evidence", "/fixture/work"];
+        assert!(Args::try_parse_from(command).is_err());
+        let exact = command
+            .into_iter()
+            .chain(["--source-relative", "nested/photo.jpg"]);
+        assert_eq!(
+            Args::try_parse_from(exact.clone())
+                .unwrap()
+                .fast_img_source_evidence
+                .as_deref(),
+            Some(Path::new("/fixture/work")),
+        );
+        for other in [
+            ["--fast-img-admission", "/fixture/work"],
+            ["--fast-img-jpeg-execution", "/fixture/work"],
+            ["--verify", "/fixture/source"],
+            ["--after-receipt", "start"],
+        ] {
+            assert!(Args::try_parse_from(exact.clone().chain(other)).is_err());
+        }
+    }
+
+    #[test]
+    fn fast_img_jpeg_execution_cli_requires_exact_source_and_separate_mode() {
+        let args = [
+            "verify",
+            "--fast-img-jpeg-execution",
+            "/fixture/work",
+            "--source-relative",
+            "nested/photo.jpg",
+        ];
+        let parsed = Args::try_parse_from(args).unwrap();
+        assert_eq!(parsed.source_relative.as_deref(), Some("nested/photo.jpg"));
+        assert!(Args::try_parse_from(&args[..3]).is_err());
+        assert!(Args::try_parse_from(["verify", "--source-relative", "photo.jpg"]).is_err());
+        assert!(
+            Args::try_parse_from(args.into_iter().chain(["--verify", "/fixture/input"])).is_err()
+        );
+        let page =
+            Args::try_parse_from(args.into_iter().chain(["--after-receipt", "start"])).unwrap();
+        assert_eq!(page.after_receipt.as_deref(), Some("start"));
+        assert!(Args::try_parse_from(["verify", "--after-receipt", "start"]).is_err());
+    }
+
+    #[test]
+    fn fast_img_avif_execution_cli_requires_exact_source_and_separate_mode() {
+        let args = [
+            "verify",
+            "--fast-img-avif-execution",
+            "/fixture/work",
+            "--source-relative",
+            "nested/photo.png",
+        ];
+        let parsed = Args::try_parse_from(args).unwrap();
+        assert_eq!(
+            parsed.fast_img_avif_execution.as_deref(),
+            Some(Path::new("/fixture/work"))
+        );
+        assert!(Args::try_parse_from(&args[..3]).is_err());
+        assert!(Args::try_parse_from(args.into_iter().chain(["--after-receipt", "start"])).is_ok());
+        assert!(
+            Args::try_parse_from(
+                args.into_iter()
+                    .chain(["--fast-img-jpeg-execution", "/fixture/work"])
+            )
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from(args.into_iter().chain(["--fast-img-jpeg-scratch-list"])).is_err()
+        );
+    }
+
+    #[test]
+    fn fast_img_cleanup_inventory_cli_is_a_separate_read_only_mode() {
+        let base = [
+            "verify",
+            "--fast-img-cleanup-inventory",
+            "/fixture/working-copy",
+        ];
+        let args = Args::try_parse_from(base).unwrap();
+        assert_eq!(
+            args.fast_img_cleanup_inventory.as_deref(),
+            Some(Path::new("/fixture/working-copy"))
+        );
+        assert!(
+            Args::try_parse_from(base.into_iter().chain(["--verify", "/fixture/input"])).is_err()
+        );
+        assert!(
+            Args::try_parse_from(base.into_iter().chain(["--output", "/fixture/report"])).is_err()
+        );
+        assert!(
+            Args::try_parse_from(
+                base.into_iter()
+                    .chain(["--fast-img-marker-json", "/fixture/other"])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fast_img_jpeg_scratch_cli_is_a_separate_read_only_mode() {
+        let base = [
+            "verify",
+            "--fast-img-jpeg-scratch",
+            "/fixture/private-search",
+        ];
+        let args = Args::try_parse_from(base).unwrap();
+        assert_eq!(
+            args.fast_img_jpeg_scratch.as_deref(),
+            Some(Path::new("/fixture/private-search"))
+        );
+        assert!(
+            Args::try_parse_from(base.into_iter().chain(["--verify", "/fixture/input"])).is_err()
+        );
+        assert!(
+            Args::try_parse_from(base.into_iter().chain(["--output", "/fixture/report"])).is_err()
+        );
+        assert!(
+            Args::try_parse_from(
+                base.into_iter()
+                    .chain(["--fast-img-cleanup-inventory", "/fixture/other"])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fast_img_jpeg_scratch_list_cli_conflicts_with_other_queries() {
+        let base = ["verify", "--fast-img-jpeg-scratch-list"];
+        assert!(
+            Args::try_parse_from(base)
+                .unwrap()
+                .fast_img_jpeg_scratch_list
+        );
+        for conflicting in [
+            ["--fast-img-jpeg-scratch", "/fixture/scratch"],
+            ["--fast-img-cleanup-inventory", "/fixture/work"],
+            ["--output", "/fixture/report"],
+        ] {
+            assert!(Args::try_parse_from(base.into_iter().chain(conflicting)).is_err());
+        }
+    }
+
     // Inventory fixtures model local files; live UUID/resource failures are tested separately.
     fn delivery_inventory_fixture(
-        source: &Path, output: &Path, report: &mut String, mode: &str, strategy: &str,
+        source: &Path,
+        output: &Path,
+        report: &mut String,
+        mode: &str,
+        strategy: &str,
     ) -> Result<IntegrityStats> {
         run_fast_img_delivery_check_with(source, output, report, mode, strategy, |_| Ok(()))
     }
@@ -2810,12 +3685,20 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_fingerprint_uses_blake3_over_the_requested_prefix() {
-        let temp = tempfile::NamedTempFile::new().expect("temp file");
-        fs::write(temp.path(), b"abcdef").expect("write test payload");
-        let (digest, error) = file_content_blake3(temp.path(), 3);
-        assert_eq!(digest, Some(blake3::hash(b"abc").to_hex().to_string()));
+    fn duplicate_fingerprint_hashes_bytes_after_the_old_sampling_boundary() -> Result<()> {
+        let temp = tempfile::NamedTempFile::new()?;
+        let mut bytes = vec![17; 65_537];
+        fs::write(temp.path(), &bytes)?;
+        let (first, error) = file_content_blake3(temp.path());
         assert!(error.is_none());
+        bytes[65_536] = 18;
+        fs::write(temp.path(), &bytes)?;
+        let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
+        let (digest, error) = file_content_blake3(temp.path());
+        assert!(error.is_none());
+        assert_ne!(first, digest);
+        assert_eq!(digest, Some(blake3::hash(&bytes).to_hex().to_string()));
+        Ok(())
     }
 
     #[test]
@@ -3005,8 +3888,306 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
     #[test]
     #[serial]
+    fn fast_img_delivery_verifier_retains_unproved_outputs_and_counts_verified_aae_separately()
+    -> Result<()> {
+        use foundation::pipeline::verification::{
+            Blake3Entry, FastImgStageName, LibraryAssetRecord, WorkingCopyMarker,
+            write_marker_atomic,
+        };
+
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let _state = marker_test_state(&root);
+        let source = root.join("source");
+        let output = root.join("source_optimized");
+        fs::create_dir(&source)?;
+        fs::create_dir(&output)?;
+        let target = output.join("photo.JXL");
+        let source_aae = source.join("photo.AAE");
+        let output_aae = output.join("photo.AAE");
+        fs::write(&target, b"\xff\x0asynthetic")?;
+        fs::write(&source_aae, b"synthetic edit record")?;
+        fs::write(&output_aae, b"synthetic edit record")?;
+        let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 1);
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.blake3_log.insert(
+            "photo.jpg".into(),
+            Blake3Entry {
+                src: blake3::hash(b"synthetic source").to_hex().to_string(),
+                out: calculate_blake3_hash(&target)?,
+                out_rel: Some("photo.JXL".into()),
+                library_asset: None,
+            },
+        );
+        write_marker_atomic(&marker)?;
+
+        let verify = |report: &mut String| {
+            delivery_inventory_fixture(&source, &output, report, "images_only", "jxl")
+        };
+        let local = verify(&mut String::new())?;
+        assert_eq!(local.verified_local_aae, 1);
+        assert_eq!(local.optimized_files, 1);
+        assert_eq!(local.extra, 0);
+        assert!(!local.has_warnings);
+
+        marker.photos_imported_assets.push(LibraryAssetRecord {
+            rel_path: "photo.jpg".into(),
+            photos_uuid: Some("synthetic-photos-uuid".into()),
+            blake3: calculate_blake3_hash(&target)?,
+            ..Default::default()
+        });
+        write_marker_atomic(&marker)?;
+        let mut report = String::new();
+        let mut checked_photos = false;
+        let photos = run_fast_img_delivery_check_with(
+            &source,
+            &output,
+            &mut report,
+            "images_only",
+            "jxl",
+            |_| {
+                checked_photos = true;
+                Ok(())
+            },
+        )?;
+        assert!(checked_photos);
+        assert!(photos.photos_local_aae_retention);
+        assert!(!photos.has_warnings);
+        assert_eq!(photos.optimized_files, 1);
+        assert_eq!(photos.extra, 0);
+        assert!(integrity_count_status(&photos).starts_with("MATCH"));
+        assert!(report.contains("Retaining local media and AAE companions"));
+
+        fs::write(&output_aae, b"changed edit record")?;
+        fs::write(output.join(".user"), b"private synthetic residual")?;
+        fs::write(output.join(".DS_Store"), b"\0\0\0\x01Bud1")?;
+        fs::create_dir(output.join("Private.photoslibrary"))?;
+        fs::write(output.join("Private.photoslibrary/ignored"), b"private")?;
+        let mut expected_extras = 3;
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&target, output.join("linked.JXL"))?;
+            expected_extras += 1;
+        }
+        #[cfg(not(unix))]
+        let _ = &mut expected_extras;
+        let mut report = String::new();
+        let changed = verify(&mut report)?;
+        assert_eq!(changed.verified_local_aae, 0);
+        assert_eq!(changed.extra, expected_extras);
+        assert!(changed.has_warnings);
+        assert!(report.contains("unverified AAE companion"));
+        assert!(report.contains(".user"));
+        assert!(!report.contains("Private.photoslibrary/ignored"));
+        assert_eq!(fs::read(&output_aae)?, b"changed edit record");
+
+        fs::rename(&target, output.join("unowned.JXL"))?;
+        let mut report = String::new();
+        let substituted = verify(&mut report)?;
+        assert_eq!(substituted.optimized_files, 0);
+        assert_eq!(substituted.missing, 1);
+        assert_eq!(substituted.extra, expected_extras + 1);
+        assert!(report.contains("Recorded output unavailable: \"photo.JXL\""));
+        assert!(report.contains("no matching delivery checkpoint entry"));
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn v14_delivery_requires_the_admitted_aae_even_if_both_copies_match() -> Result<()> {
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        use foundation::fast_img_store::{
+            FastImgAdmissionRoute, FastImgAdmissionSidecar, FastImgSourceAdmission,
+            initialize_with_admission,
+        };
+        use foundation::pipeline::verification::{
+            Blake3Entry, FastImgStageName, WorkingCopyMarker, write_marker_atomic,
+        };
+        let fixture = tempfile::tempdir()?;
+        let root = fixture.path().canonicalize()?;
+        let _state = marker_test_state(&root);
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir(&source)?;
+        fs::create_dir(&output)?;
+        let source_aae = source.join("photo.AAE");
+        let output_aae = output.join("photo.AAE");
+        let target = output.join("photo.JXL");
+        fs::write(&source_aae, b"synthetic edit")?;
+        fs::write(&output_aae, b"synthetic edit")?;
+        fs::write(&target, b"\xff\x0asynthetic")?;
+        let source_hash = blake3::hash(b"original JPEG").to_hex().to_string();
+        let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 1);
+        initialize_with_admission(
+            &mut marker,
+            &BTreeMap::from([(
+                "photo.jpg".into(),
+                FastImgSourceAdmission {
+                    source_blake3: source_hash.clone(),
+                    route: FastImgAdmissionRoute::Primary,
+                    xmp: Some(FastImgAdmissionSidecar::Absent),
+                    aae: Some(FastImgAdmissionSidecar::Present {
+                        relative_path: "photo.AAE".into(),
+                        blake3: calculate_blake3_hash(&source_aae)?,
+                    }),
+                },
+            )]),
+        )?;
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.blake3_log.insert(
+            "photo.jpg".into(),
+            Blake3Entry {
+                src: source_hash,
+                out: calculate_blake3_hash(&target)?,
+                out_rel: Some("photo.JXL".into()),
+                library_asset: None,
+            },
+        );
+        write_marker_atomic(&marker)?;
+        let check = |report: &mut String| {
+            delivery_inventory_fixture(&source, &output, report, "images_only", "jxl")
+        };
+        assert_eq!(check(&mut String::new())?.verified_local_aae, 1);
+        fs::write(&source_aae, b"external edit")?;
+        fs::write(&output_aae, b"external edit")?;
+        let mut report = String::new();
+        let changed = check(&mut report)?;
+        assert!(changed.has_warnings && changed.verified_local_aae == 0);
+        assert!(report.contains("Recorded source AAE lacks a matching current local copy"));
+        fs::remove_file(&output_aae)?;
+        assert!(check(&mut String::new())?.has_warnings);
+        assert_eq!(fs::read(&source_aae)?, b"external edit");
+        Ok(())
+    }
+
+    #[test]
+    fn standard_equal_counts_with_mismatched_paths_do_not_report_match() -> Result<()> {
+        let fixture = tempfile::tempdir()?;
+        let source = fixture.path().join("source");
+        let output = fixture.path().join("output");
+        fs::create_dir(&source)?;
+        fs::create_dir(&output)?;
+        fs::write(source.join("one.jpg"), b"\xff\xd8\xff\xe0synthetic")?;
+        fs::write(output.join("different.jpg"), b"\xff\xd8\xff\xe0synthetic")?;
+        let mut report = String::new();
+        let stats = run_integrity_check(
+            &source,
+            &output,
+            &mut report,
+            "images_only",
+            &[],
+            None,
+            None,
+        )?;
+        assert_eq!((stats.source_files, stats.optimized_files), (1, 1));
+        assert_eq!(
+            (stats.missing, stats.extra, stats.integrity_failures),
+            (1, 1, 2)
+        );
+        assert!(stats.has_warnings);
+        assert!(!integrity_count_status(&stats).starts_with("MATCH"));
+        assert!(!report.contains("INTEGRITY CHECKS CLEAN"));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_standard_verification_directory_cannot_confirm_empty_delivery() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let output = root.path().join("missing-output");
+        fs::create_dir(&source)?;
+        let error = run_integrity_check(
+            &source,
+            &output,
+            &mut String::new(),
+            "images_only",
+            &[],
+            None,
+            None,
+        )
+        .err()
+        .context("missing output must make verification unavailable")?;
+        assert_eq!(
+            error.downcast_ref::<IntegrityUnavailableReason>(),
+            Some(&IntegrityUnavailableReason::DirectoryPair),
+        );
+        assert!(!output.exists());
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn delivery_verifier_cancellation_during_custody_cannot_publish_pass() -> Result<()> {
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))?;
+        }
+        let control = root.path().join("control");
+        fs::write(&control, "running\nsynthetic-running")?;
+        let _control = foundation::common_utils::EnvGuard::set(
+            "MFB_BATCH_CONTROL_FILE",
+            control.to_str().context("test control path is not UTF-8")?,
+        );
+        let source = root.path().join("source");
+        let output = root.path().join("output");
+        fs::create_dir(&output)?;
+        let bytes = b"\xff\x0aencoded";
+        fs::write(output.join("a.JXL"), bytes)?;
+        let hash = blake3::hash(bytes).to_hex().to_string();
+        let partial = serde_json::json!({
+            "src_jpeg_count":1, "stage":"cleanup_complete",
+            "photos_imported_assets":[{
+                "rel_path":"a.JXL","blake3":hash,"sync_status":"photos_local",
+                "photos_uuid":"synthetic-uuid","quarantined":false,"library_blake3":null,
+                "xmp_sidecar_blake3":null
+            }],
+            "blake3_log":{"a.jpg":{"src":"source-hash","out":hash,
+                "out_rel":"a.JXL","library_asset":hash}}
+        });
+        let _state = write_marker_fixture(&output.join("fixture"), &source, &partial);
+        let mut report = String::new();
+        let error = run_fast_img_delivery_check_with(
+            &source,
+            &output,
+            &mut report,
+            "images_only",
+            "jxl",
+            |_| {
+                let next = control.with_extension("next");
+                fs::write(&next, "cancelled\nsynthetic-stop")?;
+                fs::rename(next, &control)?;
+                Ok(())
+            },
+        )
+        .err()
+        .context("interrupted verifier must not confirm delivery")?;
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::Interrupted),
+        );
+        assert!(!report.contains("DELIVERY INVARIANTS PASS"));
+        assert_eq!(fs::read(output.join("a.JXL"))?, bytes);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
     fn delivery_check_refuses_stale_photos_receipts_before_claiming_current_integrity() {
-        if isolated_marker_test() { return; }
+        if isolated_marker_test() {
+            return;
+        }
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source");
         let output = root.path().join("output");
@@ -3024,12 +4205,18 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         let _state = write_marker_fixture(&output.join("fixture"), &source, &partial);
         let mut report = String::new();
         let mut calls = 0;
-        let result = run_fast_img_delivery_check_with(&source, &output, &mut report,
-            "images_only", "jxl", |_| {
+        let result = run_fast_img_delivery_check_with(
+            &source,
+            &output,
+            &mut report,
+            "images_only",
+            "jxl",
+            |_| {
                 assert!(foundation::common_utils::verification_cache_disabled());
                 calls += 1;
                 anyhow::bail!("current Photos original no longer matches the recorded UUID")
-            });
+            },
+        );
         let error = result.err().expect("stale Photos custody must fail");
         assert_eq!(
             error.downcast_ref::<IntegrityUnavailableReason>(),
@@ -3038,8 +4225,134 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(calls, 1);
         assert!(!report.contains("DELIVERY INVARIANTS PASS"));
         assert!(output.join("a.JXL").exists());
-        assert!(run_fast_img_delivery_check(&source, &output, &mut String::new(),
-            "images_only", "jxl").is_err(), "historical receipts without an actual library were accepted");
+        assert!(
+            run_fast_img_delivery_check(
+                &source,
+                &output,
+                &mut String::new(),
+                "images_only",
+                "jxl",
+                None
+            )
+            .is_err(),
+            "historical receipts without an actual library were accepted"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn photos_cleanup_recovery_requires_fresh_custody_for_absent_local_copies() -> Result<()> {
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        use foundation::pipeline::verification::{
+            Blake3Entry, FastImgStageName, Gate1Checks, Gate2Checks, Gate3Checks,
+            WorkingCopyMarker, write_marker_atomic,
+        };
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().canonicalize()?;
+        let _state = marker_test_state(&root);
+        let source = root.join("source");
+        let output = root.join("output");
+        let existing = output.join("b.JXL");
+        fs::create_dir(&output)?;
+        fs::write(&existing, b"\xff\x0averified synthetic JXL")?;
+        let hash = calculate_blake3_hash(&existing)?;
+        let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 2);
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.gate1_checks = Gate1Checks {
+            count: true.into(),
+            blake3: true.into(),
+            metadata: true.into(),
+            size: true.into(),
+            orient: true.into(),
+            decode: true.into(),
+        };
+        marker.gate2_checks = Gate2Checks {
+            count: true.into(),
+            blake3_sample: true.into(),
+            no_error: true.into(),
+        };
+        marker.gate3_checks = Gate3Checks {
+            count_x3: true.into(),
+            sync: true.into(),
+            quarantine: true.into(),
+            chain: true.into(),
+        };
+        marker.photos_library_path = Some(root.join("synthetic.photoslibrary"));
+        for (index, stem) in ["a", "b"].into_iter().enumerate() {
+            let relative = format!("{stem}.JXL");
+            marker.blake3_log.insert(
+                format!("{stem}.jpg"),
+                Blake3Entry {
+                    src: blake3::hash(stem.as_bytes()).to_hex().to_string(),
+                    out: hash.clone(),
+                    out_rel: Some(relative.clone()),
+                    library_asset: Some(hash.clone()),
+                },
+            );
+            marker
+                .photos_imported_assets
+                .push(serde_json::from_value(serde_json::json!({
+                    "rel_path": relative, "blake3": hash, "sync_status": "photos_local",
+                    "photos_uuid": format!("synthetic-{index}"), "quarantined": false,
+                    "library_blake3": hash,
+                }))?);
+        }
+        write_marker_atomic(&marker)?;
+        let mut report = String::new();
+        let standard = run_fast_img_delivery_check_with(
+            &source,
+            &output,
+            &mut report,
+            "images_only",
+            "jxl",
+            |_| unreachable!(),
+        )?;
+        assert!(standard.has_warnings && standard.missing == 1);
+        let digest = dev::infra::drag_drop::fast_img_cleanup_checkpoint_digest(&marker)?;
+        let check = |report: &mut String, good_custody| {
+            run_fast_img_delivery_check_for_scope(
+                &source,
+                &output,
+                report,
+                "images_only",
+                "jxl",
+                Some(&digest),
+                |verified| {
+                    assert!(foundation::common_utils::verification_cache_disabled());
+                    assert_eq!(verified.photos_imported_assets.len(), 2);
+                    anyhow::ensure!(good_custody, "synthetic Photos original missing");
+                    Ok(())
+                },
+            )
+        };
+        report.clear();
+        assert!(check(&mut report, false).is_err());
+        assert!(!report.contains("DELIVERY INVARIANTS PASS"));
+        report.clear();
+        let recovery = check(&mut report, true)?;
+        assert!(!recovery.has_warnings);
+        assert_eq!(
+            (
+                recovery.optimized_files,
+                recovery.missing,
+                recovery.verified_deleted_sources
+            ),
+            (1, 0, 0)
+        );
+        assert!(report.contains("Recorded local outputs absent now: 1"));
+        assert!(!report.contains("were successfully deleted"));
+
+        fs::write(output.join("a.JXL"), b"unknown replacement")?;
+        report.clear();
+        let wrong_format = check(&mut report, true)?;
+        assert!(wrong_format.has_warnings && wrong_format.missing == 1);
+        fs::remove_file(output.join("a.JXL"))?;
+        fs::create_dir(&source)?;
+        assert!(check(&mut String::new(), true).is_err());
+        assert_eq!(fs::read(existing)?, b"\xff\x0averified synthetic JXL");
+        Ok(())
     }
 
     #[test]
@@ -3275,8 +4588,8 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             create_or_resume_failed_retry, inspect_failed_retry_parent,
         };
         use foundation::pipeline::verification::{
-            FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName, SkippedSourceEntry,
-            WorkingCopyMarker, write_marker_atomic,
+            FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+            SkippedSourceEntry, WorkingCopyMarker, write_marker_atomic,
         };
         let temporary = tempfile::tempdir()?;
         let _state = marker_test_state(temporary.path());
@@ -3302,7 +4615,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 allow_expert_options: false,
             },
         });
-        parent.failed_sources.insert("retained.heic".into(), failure.clone());
+        parent
+            .failed_sources
+            .insert("retained.heic".into(), failure.clone());
         write_marker_atomic(&parent)?;
         let reference = inspect_failed_retry_parent(&parent.working_copy)?;
         let mut admissions = capture_failed_retry_admissions(&reference)?;
@@ -3311,8 +4626,17 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             &foundation::runtime_config::RuntimeConfig::default().photos,
         );
         let mut child = create_or_resume_failed_retry(
-            &reference, &admissions,
-            &FailedRetryDeliveryIntent::Photos { library_path: None, naming_policy }, None,
+            &reference,
+            &admissions,
+            &FailedRetryDeliveryIntent::Photos {
+                library_path: None,
+                naming_policy,
+            },
+            None,
+        )?;
+        foundation::pipeline::verification::prepare_photos_working_copy_parent(
+            &source,
+            &child.working_copy,
         )?;
         fs::create_dir(&child.working_copy)?;
         let check = |report: &mut String| {
@@ -3320,15 +4644,28 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         };
         let mut report = String::new();
         let pending = check(&mut report)?;
-        assert!(pending.has_warnings && report.contains("no confirmed delivery or retained failure proof"));
+        assert!(
+            pending.has_warnings
+                && report.contains("no confirmed delivery or retained failure proof")
+        );
 
         child.stage = FastImgStageName::CleanupComplete;
-        child.tier2_failed_sources.insert("retained.heic".into(), failure);
+        child
+            .tier2_failed_sources
+            .insert("retained.heic".into(), failure);
         write_marker_atomic(&child)?;
         let mut report = String::new();
         let settled = check(&mut report)?;
         assert!(!settled.has_warnings);
-        assert_eq!((settled.source_files, settled.optimized_files, settled.failed_sources, settled.source_remaining_files), (1, 0, 1, 1));
+        assert_eq!(
+            (
+                settled.source_files,
+                settled.optimized_files,
+                settled.failed_sources,
+                settled.source_remaining_files
+            ),
+            (1, 0, 1, 1)
+        );
         fs::write(source.join("retained.xmp"), b"unexpected companion")?;
         let mut report = String::new();
         assert!(check(&mut report)?.has_warnings);
@@ -4118,7 +5455,11 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             rel_path: "original.webp".into(),
             blake3: hash.clone(),
             photos_uuid: Some("synthetic-original-uuid".into()),
-            library_blake3: Some(blake3::hash(b"synthetic merged original").to_hex().to_string()),
+            library_blake3: Some(
+                blake3::hash(b"synthetic merged original")
+                    .to_hex()
+                    .to_string(),
+            ),
             xmp_sidecar_blake3: Some(xmp_hash.clone()),
             ..Default::default()
         };
@@ -4143,19 +5484,24 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         }
         marker.tier2_in_progress = false;
         write_marker_atomic(&marker)?;
-        let clean = delivery_inventory_fixture(
-            &source, &output, &mut String::new(), "images_only", "jxl",
-        )?;
+        let clean =
+            delivery_inventory_fixture(&source, &output, &mut String::new(), "images_only", "jxl")?;
         assert!(!clean.has_warnings);
 
         let mut report = String::new();
         let error = run_fast_img_delivery_check_with(
-            &source, &output, &mut report, "images_only", "jxl",
+            &source,
+            &output,
+            &mut report,
+            "images_only",
+            "jxl",
             |_| {
                 fs::write(&xmp, b"<xmp/>")?;
                 Ok(())
             },
-        ).err().expect("restored XMP must fail final delivery verification");
+        )
+        .err()
+        .expect("restored XMP must fail final delivery verification");
         assert!(format!("{error:#}").contains("XMP changed or reappeared"));
         assert!(!report.contains("FAST-IMG DELIVERY INVARIANTS PASS"));
         assert_eq!(fs::read(&xmp)?, b"<xmp/>");

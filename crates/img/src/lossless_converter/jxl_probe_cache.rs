@@ -54,7 +54,7 @@ fn read_stamp(path: &Path) -> io::Result<Option<ReadStamp>> {
     }
 }
 
-fn fingerprint(path: &Path) -> io::Result<Option<(u64, String)>> {
+pub(super) fn fingerprint(path: &Path) -> io::Result<Option<(u64, String)>> {
     let Some(before) = read_stamp(path)? else {
         return Ok(None);
     };
@@ -163,6 +163,27 @@ impl JxlProbeCache {
         path: PathBuf,
         payload_size: u64,
     ) -> io::Result<bool> {
+        self.retain_candidate(key, path, payload_size, None)
+    }
+
+    /// Keep a candidate only if its bytes still match the caller's media proof.
+    pub(super) fn retain_verified(
+        &mut self,
+        key: String,
+        path: PathBuf,
+        payload_size: u64,
+        expected_hash: &str,
+    ) -> io::Result<bool> {
+        self.retain_candidate(key, path, payload_size, Some(expected_hash))
+    }
+
+    fn retain_candidate(
+        &mut self,
+        key: String,
+        path: PathBuf,
+        payload_size: u64,
+        expected_hash: Option<&str>,
+    ) -> io::Result<bool> {
         if self
             .candidates
             .iter()
@@ -190,6 +211,12 @@ impl JxlProbeCache {
                     "JXL probe candidate is missing, non-regular, empty, or changed while hashing",
                 )
             })?;
+            if expected_hash.is_some_and(|expected| expected != hash) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "probe candidate changed after media verification",
+                ));
+            }
             if payload_size == 0 || payload_size > length {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,

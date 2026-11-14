@@ -450,6 +450,57 @@ private struct OperationCapabilities {
     }
 }
 
+struct FastImgCleanupRecoveryResult: Decodable, Equatable {
+    static let prefix = "MFB_PHOTOS_CLEANUP_RECOVERY="
+    static let historyPrefix = "MFB_HISTORY_PHOTOS_CLEANUP_RECOVERY="
+
+    let schema_version: Int
+    let run_id: String
+    let source_path: String
+    let output_path: String
+    let strategy: String
+    let checkpoint_blake3: String
+    let outcome: String
+    let verified: Bool
+
+    static func decode(_ line: String, prefix: String = Self.prefix) throws -> Self? {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(prefix) else { return nil }
+        let data = Data(raw.dropFirst(prefix.count).utf8)
+        let fields = ["schema_version", "run_id", "source_path", "output_path", "strategy",
+                      "checkpoint_blake3", "outcome", "verified"]
+        guard data.count < 64 * 1024,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == Set(fields) else {
+            throw HostError(message: localized("cleanup.recovery.unconfirmed"))
+        }
+        let value = try JSONDecoder().decode(Self.self, from: data)
+        guard value.schema_version == 1, validHistoryIdentity(value.run_id),
+              [value.source_path, value.output_path].allSatisfy(validFastImgCleanupPath),
+              !FastImgDeliveryReceipt.samePath(value.source_path, value.output_path),
+              ["jxl", "avif"].contains(value.strategy),
+              FastImgFailedRetryAvailable.hash(value.checkpoint_blake3),
+              ["removed", "already_absent", "residual", "failed", "verification_blocked"].contains(value.outcome),
+              value.verified == (value.outcome != "verification_blocked") else {
+            throw HostError(message: localized("cleanup.recovery.unconfirmed"))
+        }
+        return value
+    }
+
+    var statusText: String { localized("cleanup.recovery.\(outcome)") }
+    var expectsCleanExit: Bool { ["removed", "already_absent", "residual"].contains(outcome) }
+
+    func matches(source: String, output: String?, strategy: String?) -> Bool {
+        strategy == self.strategy && FastImgDeliveryReceipt.samePath(source, source_path)
+            && FastImgDeliveryReceipt.samePath(output, output_path)
+    }
+
+    func matches(_ cleanup: OutputCleanupReceipt) -> Bool {
+        cleanup.run_id == run_id && cleanup.outcome == outcome
+            && FastImgDeliveryReceipt.samePath(cleanup.output_path, output_path)
+    }
+}
+
 private struct ProcessorRequest {
     let targetPath: String
     let processingMode: ProcessingMode
@@ -465,6 +516,7 @@ private struct ProcessorRequest {
     var retryFailed = false
     var retryFailedParent: String? = nil
     var expectedFastImgOutput: String? = nil
+    var recoverPhotosCleanup = false
     var force = false
     var dryRun = false
     var plain = false
@@ -476,12 +528,16 @@ private struct ProcessorRequest {
 
 private struct FastImgConflictPreview: Decodable {
     enum Decision: String, Decodable { case automatic, fresh, `continue`, failedOnly = "failed_only" }
+    enum FreshUnavailableReason: String, Decodable {
+        case privateWorkingCopyUnavailable = "private_working_copy_unavailable"
+    }
     struct Previous: Decodable {
         let output_path: String
         let stage: String
         let terminal: Bool
         let recorded_failed_count: Int
         let failed_retry_parent_output: String?
+        let delivery_conflict: Bool?
     }
     struct FailedOnly: Decodable {
         enum State: String, Decodable { case available, existing, completed, conflict }
@@ -492,6 +548,10 @@ private struct FastImgConflictPreview: Decodable {
         enum Ownership: String, Decodable { case savedTask = "saved_task", filesystemOnly = "filesystem_only" }
         let path: String
         let ownership: Ownership
+    }
+    struct OutputStorage: Decodable {
+        let output_path: String
+        let observation: PreflightStorage
     }
     struct MigrationRequired: Decodable {
         let schema_version: Int
@@ -522,7 +582,9 @@ private struct FastImgConflictPreview: Decodable {
     let photos: Bool
     let decision: Decision
     let proposed_output: String
-    let fresh_output: String
+    let storage: OutputStorage?
+    let fresh_output: String?
+    let fresh_unavailable_reason: FreshUnavailableReason?
     let previous: Previous?
     let failed_only: FailedOnly?
     let occupied_outputs: [Occupied]
@@ -548,24 +610,40 @@ private struct FastImgConflictPreview: Decodable {
             arguments.append("--retry-failed")
             if let parent = request.retryFailedParent { arguments += ["--retry-failed-parent", parent] }
         }
+        arguments += try request.mediaSettings.arguments(operation: request.operationMode, processing: request.processingMode)
         return arguments + ["--", request.targetPath]
     }
 
     static func decode(_ data: Data, for request: ProcessorRequest) throws -> Self {
         let error = HostError(message: localized("preflight.fast.invalid"))
         guard let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(fields.keys) == Set(["schema_version", "kind", "input_path", "source_root", "strategy", "photos",
-                  "decision", "proposed_output", "fresh_output", "previous", "failed_only", "occupied_outputs",
-                  "currently_verified_completed", "currently_verified_reusable", "potential_duplicate_photos", "unknown"]),
               ["currently_verified_completed", "currently_verified_reusable", "potential_duplicate_photos"]
                   .allSatisfy({ fields[$0] is NSNull }) else { throw error }
         let plan = try JSONDecoder().decode(Self.self, from: data)
+        var expectedFields: Set<String> = ["schema_version", "kind", "input_path", "source_root", "strategy", "photos",
+            "decision", "proposed_output", "fresh_output", "previous", "failed_only", "occupied_outputs",
+            "currently_verified_completed", "currently_verified_reusable", "potential_duplicate_photos", "unknown"]
+        switch plan.schema_version {
+        case 1: break
+        case 2:
+            expectedFields.insert("fresh_unavailable_reason")
+            if fields["storage"] != nil {
+                expectedFields.insert("storage")
+                guard let storage = fields["storage"] as? [String: Any],
+                      Set(storage.keys) == ["output_path", "observation"],
+                      let observation = storage["observation"] as? [String: Any],
+                      Set(observation.keys) == ["status", "directory", "available_bytes", "diagnostic"],
+                      let decoded = plan.storage, decoded.observation.valid,
+                      FastImgDeliveryReceipt.samePath(decoded.output_path, plan.proposed_output) else { throw error }
+            }
+        default: throw error
+        }
         let path = FastImgFailedRetryAvailable.path
         let samePath = FastImgDeliveryReceipt.samePath
-        guard plan.schema_version == 1, plan.kind == "fast_img_retry_plan",
+        guard Set(fields.keys) == expectedFields, plan.kind == "fast_img_retry_plan",
               samePath(plan.input_path, request.targetPath), path(plan.source_root),
               plan.strategy == request.operationMode.strategy, plan.photos == request.shortestPath,
-              plan.decision == decision(for: request), path(plan.proposed_output), path(plan.fresh_output),
+              plan.decision == decision(for: request), path(plan.proposed_output),
               plan.unknown == (plan.photos ? ["current_media_verification", "photos_duplicate_count"] : ["current_media_verification"]),
               plan.occupied_outputs.count <= 128,
               Set(plan.occupied_outputs.map { Data($0.path.utf8) }).count == plan.occupied_outputs.count,
@@ -582,9 +660,26 @@ private struct FastImgConflictPreview: Decodable {
               plan.failed_only.map({ path($0.output_path) && plan.previous?.terminal == true
                   && plan.previous.map { $0.recorded_failed_count > 0 && !samePath($0.output_path, plan.failed_only?.output_path) } == true }) ?? true
         else { throw error }
+        if let fresh = plan.fresh_output {
+            guard path(fresh), plan.fresh_unavailable_reason == nil else { throw error }
+        } else {
+            guard plan.schema_version == 2, plan.fresh_unavailable_reason == .privateWorkingCopyUnavailable,
+                  plan.photos, plan.previous != nil, plan.decision != .fresh,
+                  plan.failed_only?.state != .available else { throw error }
+            if plan.decision == .failedOnly {
+                guard let child = plan.failed_only, child.state == .existing || child.state == .completed else { throw error }
+            }
+        }
+        let deliveryConflict = plan.previous?.delivery_conflict == true
+        if deliveryConflict {
+            guard plan.schema_version == 2, plan.decision == .automatic,
+                  let previous = plan.previous, previous.failed_retry_parent_output != nil,
+                  plan.failed_only == nil, samePath(plan.proposed_output, plan.fresh_output) else { throw error }
+        }
         switch plan.decision {
         case .automatic, .continue:
-            guard samePath(plan.proposed_output, plan.previous?.output_path ?? plan.fresh_output) else { throw error }
+            let expected = deliveryConflict ? plan.fresh_output : (plan.previous?.output_path ?? plan.fresh_output)
+            guard samePath(plan.proposed_output, expected) else { throw error }
         case .fresh:
             guard samePath(plan.proposed_output, plan.fresh_output) else { throw error }
         case .failedOnly:
@@ -607,12 +702,19 @@ private struct FastImgConflictPreview: Decodable {
     func details(privacy: Bool) -> String {
         func path(_ value: String) -> String { privacy ? localized("privacy.display.hidden") : value.debugDescription }
         var lines = [localized("preflight.fast.output", path(proposed_output))]
+        if let observation = storage?.observation {
+            if let available = observation.available_bytes {
+                lines.append(localized("preflight.fast.storage_available", String(available)))
+            } else {
+                lines.append(localized("preflight.fast.storage_unknown"))
+            }
+        }
         if let previous {
             lines.append(localized("preflight.fast.previous", path(previous.output_path), String(previous.recorded_failed_count)))
             if let parent = previous.failed_retry_parent_output { lines.append(localized("preflight.fast.parent", path(parent))) }
         }
-        if decision != .fresh, !FastImgDeliveryReceipt.samePath(proposed_output, fresh_output) {
-            lines.append(localized("preflight.fast.fresh_output", path(fresh_output)))
+        if decision != .fresh, let fresh = fresh_output, !FastImgDeliveryReceipt.samePath(proposed_output, fresh) {
+            lines.append(localized("preflight.fast.fresh_output", path(fresh)))
         }
         if let failed_only {
             lines.append(localized("preflight.fast.failed_output", path(failed_only.output_path),
@@ -1401,6 +1503,7 @@ private struct LocalCacheStatus: Decodable {
     }
     let schemaVersion: Int
     let cacheDirectory: String
+    let coreStorePath: String?
     let storeBytes: UInt64
     let namespaces: [Namespace]
     let legacyAnalysisBytes: UInt64
@@ -1411,6 +1514,23 @@ private struct LocalCacheStatus: Decodable {
     let pruning: Pruning?
     let pruningPreview: PruningPreview?
     let database: Database?
+    let rebuildableDatabase: Database?
+    let inactiveLegacyCache: LegacyCache?
+
+    struct LegacyCache: Decodable {
+        let rows: UInt64
+        let payloadBytes: UInt64
+    }
+
+    var coreStoreURL: URL? {
+        guard database != nil else { return nil }
+        return coreStorePath.map { URL(fileURLWithPath: $0) } ??
+            URL(fileURLWithPath: cacheDirectory, isDirectory: true).appendingPathComponent("mfb_store.sqlite")
+    }
+
+    var hasPruningStore: Bool {
+        rebuildableDatabase != nil || coreStoreURL?.deletingLastPathComponent().path == cacheDirectory
+    }
 
     var pathTree: Namespace? { namespaces.first { $0.name == "path_tree" } }
 
@@ -1451,8 +1571,24 @@ private struct LocalCacheStatus: Decodable {
         }
         try status.integrity?.validate()
         try status.database?.validate()
+        try status.rebuildableDatabase?.validate()
+        if let path = status.coreStorePath {
+            let cache = URL(fileURLWithPath: status.cacheDirectory, isDirectory: true)
+            let state = cache.deletingLastPathComponent().appendingPathComponent("state", isDirectory: true)
+            guard status.database != nil, path.hasPrefix("/"),
+                  [cache, state].contains(where: { $0.appendingPathComponent("mfb_store.sqlite").path == path }) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+        if let legacy = status.inactiveLegacyCache {
+            guard status.database != nil,
+                  status.rebuildableDatabase != nil || !status.hasPruningStore,
+                  legacy.rows > 0, legacy.payloadBytes <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
         if let preview = status.pruningPreview {
-            guard status.database != nil, status.removedRows == 0, status.removedFiles == 0,
+            guard status.hasPruningStore, status.removedRows == 0, status.removedFiles == 0,
                   status.pruning == nil else { throw HostError(message: localized("settings.cache.invalid")) }
             try preview.validate(rows: status.pathTree?.rows ?? 0, bytes: status.pathTree?.payloadBytes ?? 0)
         }
@@ -1687,7 +1823,7 @@ private func queryLocalCache(action: LocalCacheAction, policyArguments: [String]
         }
     }
     if action == .preview {
-        guard (status.database == nil ? status.pruningPreview == nil : status.pruningPreview != nil),
+        guard status.hasPruningStore == (status.pruningPreview != nil),
               status.removedRows == 0, status.removedFiles == 0 else {
             throw HostError(message: localized("settings.cache.invalid"))
         }
@@ -2822,9 +2958,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
         cacheLabels["path"]?.stringValue = snapshot.cacheDirectory
         cacheLabels["path"]?.toolTip = snapshot.cacheDirectory
-        cacheStore = snapshot.database.map {
-            (URL(fileURLWithPath: snapshot.cacheDirectory, isDirectory: true).appendingPathComponent("mfb_store.sqlite"), $0.storeSchemaVersion)
-        }
+        cacheStore = snapshot.coreStoreURL.flatMap { url in snapshot.database.map { (url, $0.storeSchemaVersion) } }
         if let database = snapshot.database {
             cacheLabels["database"]?.stringValue = localized("settings.cache.database_value", database.storeSchemaVersion, database.sqliteVersion)
             cacheLabels["database"]?.toolTip = cacheStore?.url.path
@@ -2832,7 +2966,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             cacheLabels["pages"]?.stringValue = localized("settings.cache.pages_value", String(database.pageCount), String(database.freePages), String(database.pageSize))
             cacheLabels["pages"]?.toolTip = localized("settings.cache.pages_help")
         } else {
-            let value = snapshot.storeBytes == 0 ? localized("settings.cache.absent") : localized("result.unknown")
+            let value = snapshot.rebuildableDatabase != nil || snapshot.storeBytes == 0
+                ? localized("settings.cache.absent") : localized("result.unknown")
             for key in ["database", "journal", "pages"] { cacheLabels[key]?.stringValue = value; cacheLabels[key]?.toolTip = nil }
         }
         cacheLabels["rebuildable"]?.stringValue = localized("settings.cache.records", String(cache.rows), size(cache.bytes))
@@ -2840,6 +2975,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheLabels["retained"]?.toolTip = snapshot.namespaces.filter { !$0.rebuildable }.map { "\($0.name): \($0.rows)" }.joined(separator: "\n")
         cacheLabels["store"]?.stringValue = size(snapshot.storeBytes)
         cacheLabels["store"]?.toolTip = localized("settings.cache.store_help")
+        if let legacy = snapshot.inactiveLegacyCache {
+            cacheLabels["store"]?.toolTip = [
+                localized("settings.cache.store_help"),
+                localized("settings.cache.inactive_cache", String(legacy.rows), size(legacy.payloadBytes)),
+            ].joined(separator: "\n")
+        }
         cacheLabels["obsolete"]?.stringValue = localized("settings.cache.files", String(snapshot.legacyAnalysisFiles), size(snapshot.legacyAnalysisBytes))
         cacheClear.isEnabled = !cacheBusy && (cache.rows > 0 || snapshot.legacyAnalysisFiles > 0)
         cachePrune.isEnabled = !cacheBusy && (snapshot.pathTree?.rows ?? 0) > 0
@@ -4778,6 +4919,28 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             catch { continue }
             throw HostError(message: "Invalid database overview was accepted: \(key)")
         }
+        var relocated = withDatabase
+        relocated["database"] = database
+        relocated["legacy_analysis_bytes"] = 0
+        relocated["legacy_analysis_files"] = 0
+        relocated["namespaces"] = snapshot.namespaces.filter { !$0.rebuildable }.map {
+            ["name": $0.name, "rows": $0.rows, "payload_bytes": $0.payloadBytes, "rebuildable": $0.rebuildable] as [String: Any]
+        }
+        relocated["core_store_path"] = "/synthetic/state/mfb_store.sqlite"
+        relocated["inactive_legacy_cache"] = ["rows": 1, "payload_bytes": 9]
+        let relocatedSnapshot = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: relocated))
+        try displayCache(relocatedSnapshot)
+        guard cacheBackup.isEnabled, !relocatedSnapshot.hasPruningStore,
+              !cacheClear.isEnabled, !cachePrune.isEnabled,
+              cacheStore?.url.path == "/synthetic/state/mfb_store.sqlite" else {
+            throw HostError(message: "Relocated Core database lost its backup path or was exposed as a cache")
+        }
+        relocated["core_store_path"] = "/unrelated/state/mfb_store.sqlite"
+        do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: relocated)) }
+        catch { relocated["core_store_path"] = nil }
+        guard relocated["core_store_path"] == nil else {
+            throw HostError(message: "Cache report accepted an unrelated Core database path")
+        }
         let backupDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("mfb-backup-receipt-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: backupDirectory) }
@@ -4910,6 +5073,16 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: previewed)).pruningPreview?.retainedRows == 1 else {
             throw HostError(message: "Read-only cache preview lost retained counts")
         }
+        var cacheOnly = previewed
+        cacheOnly["database"] = nil
+        var cacheDatabase = database
+        cacheDatabase["store_schema_version"] = 1
+        cacheOnly["rebuildable_database"] = cacheDatabase
+        let cacheOnlyStatus = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: cacheOnly))
+        guard cacheOnlyStatus.hasPruningStore, cacheOnlyStatus.database == nil,
+              cacheOnlyStatus.pruningPreview?.retainedRows == 1 else {
+            throw HostError(message: "Dedicated cache preview was confused with a Core backup source")
+        }
         for (key, value) in [("schema_version", 2 as Any), ("cutoff_unix_secs", 101), ("cutoff_unix_secs", 39),
             ("expired_rows", 4), ("retained_payload_bytes", 255), ("total_rows", UInt64.max)] {
             var invalidPreview = preview
@@ -5032,6 +5205,16 @@ private struct PhotosAuditContainer: Decodable, Equatable {
 
 private enum ProcessorCommand {
     static func arguments(from request: ProcessorRequest) throws -> [String] {
+        if request.recoverPhotosCleanup {
+            guard request.operationMode.backendMode == "fast-img",
+                  let strategy = request.operationMode.strategy, let output = request.expectedFastImgOutput,
+                  [request.targetPath, output].allSatisfy(validFastImgCleanupPath),
+                  !FastImgDeliveryReceipt.samePath(request.targetPath, output) else {
+                throw HostError(message: localized("cleanup.recovery.unconfirmed"))
+            }
+            return ["--mode", "fast-img", "--strategy", strategy, "--shortest-path",
+                    "--retry", "--recover-photos-cleanup", "--output", output, "--", request.targetPath]
+        }
         guard !request.targetPath.isEmpty else {
             throw HostError(message: localized("error.select_target"))
         }
@@ -5697,6 +5880,8 @@ private struct PhotosImportProgress {
 }
 
 struct GateCheckActivity {
+    private static let relationshipChecks = ["import_receipts", "count_x3", "sync", "quarantine", "chain"]
+
     struct Event: Decodable, Equatable {
         struct Files: Decodable, Equatable {
             let processed: UInt64
@@ -5711,13 +5896,32 @@ struct GateCheckActivity {
         let state: String
         let file_progress: Files?
 
+        var isPhotosRelationshipCheck: Bool { gate == "photos_relationships" }
+
         var valid: Bool {
             guard schema_version == 1, !stage_id.isEmpty, stage_id.utf8.count <= 64 else { return false }
-            if gate == "photos_custody", total == 1 {
-                if check == "inventory" {
+            if isPhotosRelationshipCheck {
+                let checks = GateCheckActivity.relationshipChecks
+                guard total == UInt64(checks.count),
+                      let index = checks.firstIndex(of: check) else { return false }
+                if let files = file_progress {
+                    guard check == "chain", files.total > 0, files.total <= UInt64(Int64.max),
+                          files.processed <= files.total,
+                          state != "passed" || files.processed == files.total else { return false }
+                }
+                switch state {
+                case "running": return completed == UInt64(index)
+                case "failed": return completed <= total && completed > UInt64(index)
+                    && (completed == total || completed == 2)
+                case "passed": return check == "chain" && completed == total
+                default: return false
+                }
+            }
+            if ["photos_custody", "photos_sidecars"].contains(gate), total == 1 {
+                if gate == "photos_custody", check == "inventory" {
                     return completed == 0 && file_progress == nil && ["running", "failed"].contains(state)
                 }
-                guard check == "original_bytes" else { return false }
+                guard check == (gate == "photos_custody" ? "original_bytes" : "working_copy_aae") else { return false }
                 if let files = file_progress {
                     guard files.total > 0, files.total <= UInt64(Int64.max), files.processed <= files.total,
                           state != "passed" || files.processed == files.total else { return false }
@@ -5765,8 +5969,32 @@ struct GateCheckActivity {
             invalidate()
             return true
         }
+        if next.isPhotosRelationshipCheck {
+            if let previous = event, previous.stage_id == next.stage_id {
+                let chainProgress = previous.check == "chain" && next.check == "chain"
+                    && next.state == "running" && next.file_progress != nil && next.completed == previous.completed
+                guard next == previous || (previous.state == "running"
+                    && (next.completed == previous.completed + 1 || chainProgress)) else {
+                    invalidate()
+                    return true
+                }
+            } else if next.check != "import_receipts" || next.state != "running" {
+                invalidate()
+                return true
+            }
+        }
+        if next.gate == "photos_sidecars", event?.stage_id != next.stage_id,
+           next.state != "running" || next.file_progress != nil {
+            invalidate()
+            return true
+        }
         if let previous = event, previous.stage_id == next.stage_id {
             guard previous.gate == next.gate, previous.total == next.total else { invalidate(); return true }
+            if next.gate == "photos_sidecars", previous.file_progress == nil,
+               let files = next.file_progress, next.state != "running" || files.processed != 0 {
+                invalidate()
+                return true
+            }
             if previous.check == next.check, let files = previous.file_progress {
                 guard let nextFiles = next.file_progress, nextFiles.total == files.total,
                       nextFiles.processed >= files.processed else { invalidate(); return true }
@@ -5781,7 +6009,7 @@ struct GateCheckActivity {
                     || (next.gate == "photos_custody" && next.state == "running"
                         && (previous.check == "inventory" || previous.check == "original_bytes")
                         && next.check == "original_bytes")
-                    || (next.total != 1 && previous.check == next.check
+                    || ((next.total != 1 || next.gate == "photos_sidecars") && previous.check == next.check
                         && next.state == "running" && next.file_progress != nil) else {
                 invalidate()
                 return true
@@ -5802,7 +6030,21 @@ struct GateCheckActivity {
     func label(now: TimeInterval) -> String {
         guard let event else { return invalid ? localized("gate.activity.invalid") : "" }
         var text: String
-        if event.gate == "photos_custody", event.total == 1 {
+        if event.isPhotosRelationshipCheck {
+            if event.state == "passed" {
+                text = localized("gate.relationships.passed")
+            } else {
+                text = localized("gate.relationships.\(event.state)", localized("gate.check.\(event.check)"))
+            }
+            if let files = event.file_progress {
+                text += " · " + localized("gate.relationships.files", String(files.processed), String(files.total))
+            }
+        } else if event.gate == "photos_sidecars" {
+            text = localized("gate.sidecars.\(event.state)")
+            if let files = event.file_progress {
+                text += " · " + localized("gate.sidecars.files", String(files.processed), String(files.total))
+            }
+        } else if event.gate == "photos_custody", event.total == 1 {
             let state = event.state == "running" && event.check == "inventory" ? "preparing" : event.state
             text = localized("gate.custody.\(state)")
             if let files = event.file_progress {
@@ -5945,6 +6187,7 @@ private struct BatchResults {
     private var workerExitCodes: [Int] = []
     private var completedFileErrors: Int?
     private var photosQuarantineBlocked: Int?
+    private var unavailableVerification: (runID: String, reason: IndependentVerificationUnavailable)?
     private(set) var mandatoryEvidenceConflict = false
     private(set) var integrityIssueCount: Int?
     private(set) var failedRetryRequest: FastImgRetryReference?
@@ -5996,6 +6239,7 @@ private struct BatchResults {
 
     private func retryOutcomeIsConfirmed(processExit: Int32?, exitedNormally: Bool, runID: String?) -> Bool {
         guard !failedRetryInvalid, !mandatoryEvidenceConflict, !isIncomplete, !hasFailure, exitedNormally,
+              unavailableVerification == nil,
               failedRetryReused == nil || failedRetryFinalized == nil,
               processExit == 0, let request = failedRetryRequest, let reused = failedRetryFinalized ?? failedRetryReused,
               request.sameRequest(as: reused), reused.runId == runID, fastDeliveries.isEmpty,
@@ -6058,7 +6302,25 @@ private struct BatchResults {
         processingCountTotal(fastDeliveries.map { $0[keyPath: key] })
     }
 
-    mutating func ingestTerminalEvidence(_ raw: String) -> Bool {
+    mutating func ingestTerminalEvidence(_ raw: String, runID: String? = nil) -> Bool {
+        let unavailablePrefix = "MFB_BATCH_VERIFICATION_UNAVAILABLE="
+        if raw.hasPrefix(unavailablePrefix) {
+            struct Receipt: Decodable {
+                let schema_version: Int
+                let run_id: String
+                let reason: IndependentVerificationUnavailable
+            }
+            let payload = raw.dropFirst(unavailablePrefix.count)
+            guard payload.utf8.count <= 256, unavailableVerification == nil,
+                  photosQuarantineBlocked == nil, completedFileErrors == nil, let runID,
+                  let receipt = try? JSONDecoder().decode(Receipt.self, from: Data(payload.utf8)),
+                  receipt.schema_version == 1, receipt.run_id == runID else {
+                mandatoryEvidenceConflict = true
+                return true
+            }
+            unavailableVerification = (receipt.run_id, receipt.reason)
+            return true
+        }
         let quarantinePrefix = "MFB_BATCH_PHOTOS_QUARANTINE_BLOCKED="
         let isQuarantine = raw.hasPrefix(quarantinePrefix)
         let prefix = isQuarantine ? quarantinePrefix : "MFB_BATCH_FILE_ERRORS_COMPLETE="
@@ -6069,7 +6331,7 @@ private struct BatchResults {
             let quarantined: Int?
         }
         let payload = raw.dropFirst(prefix.count)
-        guard payload.utf8.count <= 128, photosQuarantineBlocked == nil, completedFileErrors == nil,
+        guard payload.utf8.count <= 128, photosQuarantineBlocked == nil, completedFileErrors == nil, unavailableVerification == nil,
               let receipt = try? JSONDecoder().decode(Receipt.self, from: Data(payload.utf8)),
               receipt.schema_version == 1,
               let count = isQuarantine ? receipt.quarantined : receipt.failed,
@@ -6079,6 +6341,15 @@ private struct BatchResults {
         }
         if isQuarantine { photosQuarantineBlocked = count } else { completedFileErrors = count }
         return true
+    }
+
+    func confirmedUnavailableVerification(photos: Bool, processExit: Int32?, exitedNormally: Bool) -> IndependentVerificationUnavailable? {
+        guard processExit == 1, exitedNormally, !mandatoryEvidenceConflict, !isIncomplete,
+              hasCompleteCountReport, !fastDeliveryInvalid, !outputCleanupInvalid,
+              let unavailableVerification, outputCleanups.count == 1, let cleanup = outputCleanups.first,
+              cleanup.run_id == unavailableVerification.runID,
+              cleanup.outcome == (photos ? "verification_blocked" : "not_requested") else { return nil }
+        return unavailableVerification.reason
     }
 
     func confirmedPhotosQuarantine(source: String?, processExit: Int32?, exitedNormally: Bool) -> Int? {
@@ -6112,7 +6383,7 @@ private struct BatchResults {
 
     func fastDeliveryIsConfirmed(photos: Bool, processExit: Int32?, exitedNormally: Bool = true) -> Bool {
         guard let processExit, exitedNormally, !mandatoryEvidenceConflict,
-              photosQuarantineBlocked == nil,
+              photosQuarantineBlocked == nil, unavailableVerification == nil,
               !isIncomplete, !fastDeliveryInvalid, !fastDeliveries.isEmpty,
               totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
               let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
@@ -6145,7 +6416,7 @@ private struct BatchResults {
 
     func deliveryIsDeferred(photos: Bool, source: String?, processExit: Int32?, exitedNormally: Bool) -> Bool {
         guard photos, processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
-              completedFileErrors == nil, photosQuarantineBlocked == nil,
+              completedFileErrors == nil, photosQuarantineBlocked == nil, unavailableVerification == nil,
               !isIncomplete, !fastDeliveryInvalid, fastDeliveries.count == 1,
               fastDeliveries.contains(where: \.isDeferred), totals.keys.allSatisfy({ $0 == "img" }),
               pendingTotals.count == 1, let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
@@ -7604,6 +7875,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let mainLayout = NSStackView()
     private var logDetailsExpanded = false
     private var processEndedWithError = false
+    private var cleanupRecoveryResult: FastImgCleanupRecoveryResult?
+    private var cleanupRecoveryResultInvalid = false
     private var deliveryFixture = false
     private var restoreFixture = false
     private var hasConfirmedFileFailures = false
@@ -8475,6 +8748,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func clearBatchLog() {
         processEndedWithError = false
+        cleanupRecoveryResult = nil
+        cleanupRecoveryResultInvalid = false
         sawProductionBusy = false
         hasConfirmedFileFailures = false
         let hadQuarantineResume = hasConfirmedPhotosQuarantine
@@ -8525,6 +8800,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                     && self.configurationControlsEnabled && !self.restoreFixture
             }
             historyPanel?.onRetryFailed = { [weak self] selection in self?.runSelectedFailures(selection) }
+            historyPanel?.canRecoverCleanup = { [weak self] in self?.canRunHistoryCleanupRecovery == true }
+            historyPanel?.onRecoverCleanup = { [weak self] selection in self?.runHistoryCleanupRecovery(selection) }
             historyPanel?.onRemoved = { [weak self] directory, _, runID in
                 guard let self, !self.host.isRunning, self.workerExecution.confirmedRunID == runID,
                       self.resolvedHistoryDirectory.standardizedFileURL == directory.standardizedFileURL else { return }
@@ -8567,13 +8844,37 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func publishResultNotification() {
         guard resultNotifier.hasPendingTask, host.lastExitStatus != nil, !host.isRunning else { return }
-        let title = batchOverview.isHidden ? localized("notification.result_ended") : batchOverviewTitle.stringValue
+        let title = lastRequest?.recoverPhotosCleanup == true ? statusLabel.stringValue
+            : (batchOverview.isHidden ? localized("notification.result_ended") : batchOverviewTitle.stringValue)
         let body = batchResults.summary ?? localized("notification.result_info")
         announce(title + ". " + body, priority: .high)
         resultNotifier.complete(resultVisible: NSApp.isActive && window.isKeyWindow && !window.isMiniaturized
             && window.occlusionState.contains(.visible) && window.attachedSheet == nil,
             title: title, body: body)
         refreshUnreadResults()
+    }
+
+    private var canRunHistoryCleanupRecovery: Bool {
+        !isDebugWindow && !restoreFixture && !host.isRunning && !historyRemovalInProgress
+            && configurationControlsEnabled
+    }
+
+    private func runHistoryCleanupRecovery(_ selection: FastImgCleanupRecoverySelection) {
+        guard canRunHistoryCleanupRecovery else { return }
+        let operation: OperationMode
+        switch selection.strategy {
+        case "jxl": operation = .fastImgJxl
+        case "avif": operation = .fastImgAvif
+        default: return
+        }
+        var request = ProcessorRequest(targetPath: selection.sourceDirectory, processingMode: .imagesOnly,
+                                       operationMode: operation)
+        request.shortestPath = true
+        request.retry = true
+        request.recoverPhotosCleanup = true
+        request.expectedFastImgOutput = selection.workingCopy
+        window.makeKeyAndOrderFront(nil)
+        startHere(request)
     }
 
     private func runSelectedFailures(_ selection: FastImgFailedRetrySelection) {
@@ -8850,7 +9151,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         alert.alertStyle = inspection ? .informational : .warning
         alert.messageText = localized("preflight.fast.title")
         alert.informativeText = localized("preflight.fast.scope")
+            + (preview.storage?.observation.status == "observed" ? "\n\n" + localized("preflight.fast.storage_scope") : "")
             + (preview.photos ? "\n\n" + localized("preflight.fast.photos") : "")
+            + (preview.fresh_unavailable_reason != nil ? "\n\n" + localized("preflight.fast.fresh_unavailable") : "")
+            + (preview.previous?.delivery_conflict == true ? "\n\n" + localized("preflight.fast.delivery_conflict") : "")
             + (preview.failed_only?.state == .conflict ? "\n\n" + localized("preflight.fast.conflict") : "")
             + (preview.decision == .continue && preview.previous == nil ? "\n\n" + localized("preflight.fast.no_checkpoint") : "")
         let details = NSTextView(frame: NSRect(x: 0, y: 0, width: 430, height: 112))
@@ -8878,6 +9182,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             choices.append(("button.run", .automatic, preview.proposed_output))
         }
         if [.automatic, .continue].contains(preview.decision), let previous = preview.previous,
+           previous.delivery_conflict != true,
            !previous.terminal || previous.recorded_failed_count == 0 || previous.failed_retry_parent_output != nil {
             let verifyingChild = previous.terminal && previous.failed_retry_parent_output != nil
             choices.append((verifyingChild ? "preflight.fast.verify_saved" : "alert.resume.resume", .continue, previous.output_path))
@@ -8885,9 +9190,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         if [.automatic, .failedOnly].contains(preview.decision), let child = preview.failed_only, child.state != .conflict {
             choices.append((child.state == .completed ? "preflight.fast.verify_saved" : "retry.only_failed", .failedOnly, child.output_path))
         }
-        if preview.decision == .fresh || (preview.decision == .automatic && preview.previous != nil)
+        if let fresh = preview.fresh_output,
+           preview.decision == .fresh || (preview.decision == .automatic && preview.previous != nil)
             || (preview.decision == .continue && preview.previous == nil) {
-            choices.append(("alert.resume.fresh", .fresh, preview.fresh_output))
+            choices.append(("alert.resume.fresh", .fresh, fresh))
         }
         return choices
     }
@@ -9322,7 +9628,10 @@ private final class AppController: NSObject, NSWindowDelegate {
                 continue
             }
             if gateActivity.ingest(line, now: now) {
-                if gateActivity.invalid || gateActivity.event?.state == "failed" { batchResults.markMandatoryEvidenceConflict() }
+                if gateActivity.invalid || (gateActivity.event?.state == "failed"
+                    && gateActivity.event?.isPhotosRelationshipCheck != true) {
+                    batchResults.markMandatoryEvidenceConflict()
+                }
                 diagnosticLogFolder.reset()
                 lastBufferedDiagnostic = nil
                 progressChanged = true
@@ -9354,7 +9663,21 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if developerMode { displayLines.append(line) }
                 continue
             }
-            if batchResults.ingestTerminalEvidence(control) {
+            if batchResults.ingestTerminalEvidence(control, runID: workerExecution.confirmedRunID) {
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if control.hasPrefix(FastImgCleanupRecoveryResult.prefix) {
+                do {
+                    guard let receipt = try FastImgCleanupRecoveryResult.decode(control),
+                          lastRequest?.recoverPhotosCleanup == true,
+                          cleanupRecoveryResult == nil else {
+                        throw HostError(message: localized("cleanup.recovery.unconfirmed"))
+                    }
+                    cleanupRecoveryResult = receipt
+                } catch {
+                    cleanupRecoveryResultInvalid = true
+                }
                 if developerMode { displayLines.append(line) }
                 continue
             }
@@ -9389,7 +9712,11 @@ private final class AppController: NSObject, NSWindowDelegate {
                 do {
                     if let failure = try HistoryFileFailure.decode(line) {
                         let reason = hasSeriousProcessingDiagnostic(failure.message) ? failure.message : failure.userReason
-                        visibleLine = "[FAIL] \(failure.source_path): \(reason)"
+                        visibleLine = if let phase = failure.failure_phase, phase == .sourceCleanup || phase == .metadataPreparation {
+                            "[FAIL] \(phase.label) · \(failure.source_path): \(reason)"
+                        } else {
+                            "[FAIL] \(failure.source_path): \(reason)"
+                        }
                         if developerMode { displayLines.append(line) }
                     }
                 } catch { visibleLine = "[WARN] " + localized("history.batch_issues.invalid") }
@@ -9647,7 +9974,12 @@ private final class AppController: NSObject, NSWindowDelegate {
             fileProgressLabel.stringValue = label
             fileProgressLabel.toolTip = label
             fileProgressLabel.setAccessibilityLabel(label)
-            fileProgressLabel.textColor = gateActivity.event?.state == "failed" ? .systemRed : .secondaryLabelColor
+            if let event = gateActivity.event, event.state == "failed" {
+                fileProgressLabel.textColor = event.isPhotosRelationshipCheck && event.check == "quarantine"
+                    ? .systemOrange : .systemRed
+            } else {
+                fileProgressLabel.textColor = .secondaryLabelColor
+            }
             if let event = gateActivity.event, let files = event.file_progress {
                 fileProgressIndicator.isHidden = false
                 fileProgressIndicator.isIndeterminate = false
@@ -9751,6 +10083,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               !report.window.isVisible else {
             throw HostError(message: "Fast IMG conflict preview lost its output, decisions, unknown counts or display privacy")
         }
+        let legacyFields = fields
         fields["input_path"] = "/synthetic/unrelated"
         guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted the wrong input") }
         fields["input_path"] = source
@@ -9766,13 +10099,133 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard try FastImgConflictPreview.MigrationRequired.decodeIfPresent(migrationData, for: request)?.source_root == source else {
             throw HostError(message: "Conflict preview lost the read-only legacy migration decision")
         }
+        fields = legacyFields
+        fields["schema_version"] = 2
+        fields["fresh_unavailable_reason"] = NSNull()
+        let observation: [String: Any] = ["status": "observed", "directory": "/private/synthetic-filesystem",
+            "available_bytes": 1_234_567, "diagnostic": NSNull()]
+        fields["storage"] = ["output_path": saved, "observation": observation]
+        let withStorage = try decode()
+        guard withStorage.details(privacy: true).contains(localized("preflight.fast.storage_available", "1234567")),
+              !withStorage.details(privacy: true).contains("synthetic-filesystem"),
+              fastImgPreviewAlert(withStorage, inspection: true).informativeText
+                .contains(localized("preflight.fast.storage_scope")) else {
+            throw HostError(message: "Fast IMG conflict preview lost the read-only capacity snapshot or disclosed its path")
+        }
+        fields["storage"] = ["output_path": fresh, "observation": observation]
+        guard (try? decode()) == nil else { throw HostError(message: "Capacity snapshot accepted a different output") }
+        fields["storage"] = ["output_path": saved, "observation": [
+            "status": "unknown", "directory": NSNull(), "available_bytes": NSNull(), "diagnostic": "synthetic diagnostic"]]
+        guard try decode().details(privacy: true).contains(localized("preflight.fast.storage_unknown")) else {
+            throw HostError(message: "Capacity snapshot lost its unknown status")
+        }
+        fields["storage"] = nil
+        guard try decode().fresh_output == fresh else {
+            throw HostError(message: "Conflict preview rejected the available fresh output in schema 2")
+        }
+        fields["fresh_unavailable_reason"] = "private_working_copy_unavailable"
+        guard (try? decode()) == nil else {
+            throw HostError(message: "Conflict preview accepted both an available and an unavailable fresh output")
+        }
+        fields["fresh_output"] = NSNull()
+        guard (try? decode()) == nil else {
+            throw HostError(message: "Conflict preview offered a new failed-only child from an automatic plan with unavailable fresh storage")
+        }
+        fields["previous"] = ["output_path": saved, "stage": "gate2_failed", "terminal": false,
+            "recorded_failed_count": 0, "failed_retry_parent_output": NSNull()]
+        fields["failed_only"] = NSNull()
+        let recovery = try decode()
+        let recoveryChoices = fastImgPreviewChoices(recovery)
+        guard recoveryChoices.map(\.decision) == [.automatic, .continue], recoveryChoices[1].output == saved,
+              !recovery.details(privacy: false).contains(fresh),
+              fastImgPreviewAlert(recovery, inspection: false).informativeText.contains(localized("preflight.fast.fresh_unavailable")) else {
+            throw HostError(message: "Unavailable fresh output hid saved recovery or appeared as a fresh choice")
+        }
+        for language in ["en", "zh-Hans", "ja"] {
+            let keys = ["preflight.fast.fresh_unavailable", "preflight.fast.delivery_conflict"]
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path),
+                  keys.allSatisfy({ bundle.localizedString(forKey: $0, value: nil, table: nil) != $0 }) else {
+                throw HostError(message: "Missing Fast IMG conflict preview translation")
+            }
+        }
+        fields["fresh_unavailable_reason"] = nil
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted a missing schema 2 reason") }
+        fields["fresh_unavailable_reason"] = "unknown"
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted an unknown fresh output reason") }
+        fields["fresh_unavailable_reason"] = "private_working_copy_unavailable"
+        fields["photos"] = false
+        fields["unknown"] = ["current_media_verification"]
+        request.shortestPath = false
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted unavailable Photos storage for local output") }
+        request.shortestPath = true
+        fields["photos"] = true
+        fields["unknown"] = ["current_media_verification", "photos_duplicate_count"]
+        request.fresh = true
+        fields["decision"] = "fresh"
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted an unavailable fresh request") }
+        request.fresh = false
+        fields["decision"] = "continue"
+        request.retry = true
+        guard try fastImgPreviewChoices(decode())[safe: 1]?.output == saved else {
+            throw HostError(message: "Conflict preview lost exact explicit continuation with unavailable fresh storage")
+        }
+        request.retry = false
+        request.retryFailed = true
+        request.retryFailedParent = saved
+        fields["decision"] = "failed_only"
+        fields["proposed_output"] = child
+        fields["previous"] = legacyFields["previous"]
+        fields["failed_only"] = legacyFields["failed_only"]
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted a new failed-only child with unavailable fresh storage") }
+        fields["failed_only"] = ["output_path": child, "state": "existing"]
+        fields["occupied_outputs"] = [["path": saved, "ownership": "saved_task"], ["path": child, "ownership": "saved_task"]]
+        let retryChoices = try fastImgPreviewChoices(decode())
+        guard retryChoices.map(\.decision) == [.automatic, .failedOnly], retryChoices[1].output == child else {
+            throw HostError(message: "Conflict preview lost the exact saved failed-only child")
+        }
+        request.retryFailed = false
+        request.retryFailedParent = nil
+        fields["decision"] = "automatic"
+        fields["proposed_output"] = fresh
+        fields["fresh_output"] = fresh
+        fields["fresh_unavailable_reason"] = NSNull()
+        fields["previous"] = ["output_path": child, "stage": "gate2_failed", "terminal": false,
+            "recorded_failed_count": 0, "failed_retry_parent_output": saved, "delivery_conflict": true]
+        fields["failed_only"] = NSNull()
+        let mismatch = try decode()
+        let mismatchChoices = fastImgPreviewChoices(mismatch)
+        guard mismatchChoices.map(\.decision) == [.automatic, .fresh], mismatchChoices[1].output == fresh,
+              fastImgPreviewAlert(mismatch, inspection: false).informativeText.contains(localized("preflight.fast.delivery_conflict")),
+              mismatch.details(privacy: false).contains(child), !mismatch.details(privacy: true).contains(child) else {
+            throw HostError(message: "Delivery conflict offered stale recovery or lost a safe fresh choice")
+        }
+        fields["proposed_output"] = child
+        guard (try? decode()) == nil else { throw HostError(message: "Delivery conflict bound the stale child") }
+        fields["proposed_output"] = fresh
+        fields["failed_only"] = ["output_path": child, "state": "existing"]
+        guard (try? decode()) == nil else { throw HostError(message: "Delivery conflict offered an incompatible retry") }
         request.retryFailed = true
         request.retryFailedParent = saved
         request.expectedFastImgOutput = child
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mfb-preview-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("synthetic.json")
+        try Data("{}".utf8).write(to: config, options: .atomic)
+        request.mediaSettings.fastImage.configurationFile = config.path
+        request.mediaSettings.photos = PhotosImportSettings(backend: .native, rootFolder: "Synthetic Root",
+                                                           album: "Synthetic Album", preserveTree: false)
         let launchArgs = try ProcessorCommand.arguments(from: request)
+        let previewArgs = try FastImgConflictPreview.arguments(for: request)
+        let mediaArgs = ["--img-config", config.path, "--photos-backend", "native",
+                         "--photos-import-root", "Synthetic Root", "--photos-album-name", "Synthetic Album",
+                         "--preserve-folder-structure=false"]
         guard let outputIndex = launchArgs.firstIndex(of: "--output"), launchArgs[safe: outputIndex + 1] == child,
-              try FastImgConflictPreview.arguments(for: request).contains("--retry-failed-parent") else {
-            throw HostError(message: "Approved conflict preview did not bind its output to execution")
+              previewArgs == ["--plan-json", "--mode", "fast-img", "--strategy", "jxl", "--shortest-path",
+                              "--retry-failed", "--retry-failed-parent", saved] + mediaArgs + ["--", source],
+              Array(launchArgs.suffix(mediaArgs.count + 1)) == mediaArgs + [source] else {
+            throw HostError(message: "Fast IMG conflict preview and launch disagreed on the failed-only Photos destination")
         }
     }
 
@@ -10237,6 +10690,10 @@ private final class AppController: NSObject, NSWindowDelegate {
                                      admissionStart: ((ProcessorRequest) -> Void)? = nil) {
         toolSnapshot.finish()
         refreshToolSnapshot()
+        if let request = lastRequest, request.recoverPhotosCleanup {
+            completeHistoryCleanupRecovery(request)
+            return
+        }
         let choose = resumeDecision ?? { $0.runModal() }
         if handleStartupAdmission(result, decision: choose, previewFresh: resumeDecision == nil, start: {
             if let admissionStart { admissionStart($0) } else { host.startProcessing($0) }
@@ -10404,6 +10861,89 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    func validateCleanupRecoveryForSelfTest() throws {
+        let fixture = URL(fileURLWithPath: "/private/tmp").appendingPathComponent(
+            "mfb-native-cleanup-self-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer {
+            do { try FileManager.default.removeItem(at: fixture) }
+            catch { fputs("Native cleanup self-test fixture cleanup failed: \(error)\n", stderr) }
+        }
+        let source = fixture.path
+        let output = fixture.appendingPathComponent("absent-working-copy").path
+        var request = ProcessorRequest(targetPath: source, processingMode: .imagesOnly, operationMode: .fastImgJxl)
+        request.recoverPhotosCleanup = true
+        request.expectedFastImgOutput = output
+        let arguments = try ProcessorCommand.arguments(from: request)
+        guard arguments == ["--mode", "fast-img", "--strategy", "jxl", "--shortest-path", "--retry",
+                            "--recover-photos-cleanup", "--output", output, "--", source] else {
+            throw HostError(message: "Cleanup recovery did not use its exclusive backend command")
+        }
+        lastRequest = request
+        let state = String(repeating: "a", count: 64)
+        let receipt = FastImgCleanupRecoveryResult.prefix + """
+        {"schema_version":1,"run_id":"cleanup-run","source_path":"\(source)","output_path":"\(output)","strategy":"jxl","checkpoint_blake3":"\(state)","outcome":"already_absent","verified":true}
+        """
+        let cleanup = OutputCleanupReceipt.prefix + """
+        {"schema_version":1,"run_id":"cleanup-run","output_path":"\(output)","outcome":"already_absent","error":null}
+        """
+        appendLog(receipt)
+        guard completedCleanupRecovery(for: request, status: 0, exitedNormally: true) == nil else {
+            throw HostError(message: "Cleanup recovery accepted a missing generic receipt")
+        }
+        appendLog(cleanup)
+        guard completedCleanupRecovery(for: request, status: 0, exitedNormally: true)?.outcome == "already_absent",
+              completedCleanupRecovery(for: request, status: 1, exitedNormally: true) == nil,
+              completedCleanupRecovery(for: request, status: 0, exitedNormally: false) == nil else {
+            throw HostError(message: "Cleanup-only completion did not bind the exact receipt and exit")
+        }
+        request.expectedFastImgOutput = "/synthetic/other-output"
+        guard completedCleanupRecovery(for: request, status: 0, exitedNormally: true) == nil else {
+            throw HostError(message: "Cleanup completion accepted the wrong output")
+        }
+        request.expectedFastImgOutput = output
+        appendLog(receipt.replacingOccurrences(of: "cleanup-run", with: "unrelated-run"))
+        guard completedCleanupRecovery(for: request, status: 0, exitedNormally: true) == nil else {
+            throw HostError(message: "Cleanup completion ignored conflicting run identity")
+        }
+    }
+
+    private func completedCleanupRecovery(for request: ProcessorRequest, status: Int32?, exitedNormally: Bool)
+        -> FastImgCleanupRecoveryResult? {
+        guard exitedNormally, let status, !cleanupRecoveryResultInvalid,
+              let receipt = cleanupRecoveryResult, request.recoverPhotosCleanup,
+              receipt.matches(source: request.targetPath, output: request.expectedFastImgOutput,
+                              strategy: request.operationMode.strategy),
+              receipt.expectsCleanExit ? status == 0 : (status != 0 && status != 130),
+              !batchResults.outputCleanupInvalid, !batchResults.mandatoryEvidenceConflict,
+              !batchResults.hasFastDelivery, batchResults.totals.isEmpty, batchResults.pendingTotals.isEmpty,
+              workerExecution.latest == nil, !workerExecution.invalid,
+              batchResults.outputCleanups.count == 1,
+              let cleanup = batchResults.outputCleanups.first, receipt.matches(cleanup) else { return nil }
+        return receipt
+    }
+
+    private func completeHistoryCleanupRecovery(_ request: ProcessorRequest) {
+        let receipt = completedCleanupRecovery(for: request, status: host.lastExitStatus,
+                                               exitedNormally: host.lastExitWasNormal)
+        let title: String
+        if host.controlState == "cancelled", host.lastExitStatus == 130 {
+            title = localized("cleanup.recovery.stopped")
+        } else if sawProductionBusy {
+            title = localized("error.production_busy")
+        } else {
+            title = receipt?.statusText ?? localized("cleanup.recovery.unconfirmed")
+        }
+        setProcessing(false)
+        batchOverview.isHidden = true
+        setStatus(title)
+        appendLog(title, captureDiagnostics: false)
+        historyPanel?.refresh(directory: resolvedHistoryDirectory)
+        publishResultNotification()
+        if closeWhenFinished { NSApp.terminate(nil) }
+    }
+
     private var interruptedWithoutFileSummary: Bool {
         processEndedWithError && host.controlState != "cancelled" && workerExecution.interruptionSignal != nil
             && batchResults.totals.isEmpty && batchResults.pendingTotals.isEmpty && !batchResults.hasFastDelivery
@@ -10411,7 +10951,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func refreshBatchOverview(processExit: Int32? = nil, exitedNormally: Bool? = nil) {
-        if startupAdmissionIsIsolated {
+        if lastRequest?.recoverPhotosCleanup == true || startupAdmissionIsIsolated {
             batchOverview.isHidden = true
             return
         }
@@ -10426,6 +10966,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         let interrupted = interruptedWithoutFileSummary
         let terminalExit = processExit ?? host.lastExitStatus ?? (deliveryFixture ? 1 : nil)
         let normalExit = exitedNormally ?? (deliveryFixture || host.lastExitWasNormal)
+        let unavailableVerification = expectsFastDelivery && host.controlState != "cancelled"
+            ? batchResults.confirmedUnavailableVerification(photos: photos, processExit: terminalExit, exitedNormally: normalExit) : nil
         let finalizedRetry = batchResults.retryFinalizationIsConfirmed(processExit: terminalExit, exitedNormally: normalExit,
             runID: workerExecution.singleSuccessfulImageRunID)
         if finalizedRetry || batchResults.retryReuseIsConfirmed(processExit: terminalExit, exitedNormally: normalExit,
@@ -10469,7 +11011,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let quarantineReason = quarantineLocations ?? finalPhotosQuarantine.flatMap { count in
             count > 0 ? localized("result.final_photos_quarantine", String(count)) : nil
         }
-        batchOverviewDelivery.maximumNumberOfLines = deferred || quarantineReason != nil ? 0 : 2
+        batchOverviewDelivery.maximumNumberOfLines = deferred || quarantineReason != nil || unavailableVerification != nil ? 0 : 2
         let retainedOnly = confirmed && batchResults.fastDeliveries.allSatisfy(\.isRetainedOnly)
         let quarantineChanged = hasConfirmedPhotosQuarantine != quarantineBlocked
         let presentationChanged = hasConfirmedFileFailures != (confirmed && batchResults.hasFileFailures)
@@ -10496,6 +11038,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let title: String
         if batchResults.mandatoryEvidenceConflict { title = batchResults.integritySummary ?? localized("result.unconfirmed") }
         else if host.controlState == "cancelled" { title = localized("status.stopped") }
+        else if unavailableVerification != nil { title = localized("result.independent_verification.title") }
         else if interrupted { title = localized("result.process_terminated") }
         else if countsNeedReview { title = localized("result.counts_need_review") }
         else if preparationStopped { title = localized("result.photos_preparation_stopped") }
@@ -10510,6 +11053,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverviewTitle.stringValue = title
         batchOverviewTitle.textColor = batchResults.mandatoryEvidenceConflict ? .systemRed
             : host.controlState == "cancelled" ? .labelColor
+            : unavailableVerification != nil ? .systemOrange
             : interrupted ? .systemOrange
             : countsNeedReview ? .systemOrange
             : uncertain ? .systemRed : deferred || quarantineBlocked ? .systemOrange
@@ -10569,6 +11113,14 @@ private final class AppController: NSObject, NSWindowDelegate {
                 batchOverviewCleanup.isHidden = !logDetailsExpanded
             }
         }
+        if let unavailableVerification {
+            let facts = batchOverviewDelivery.isHidden ? "" : "\n" + batchOverviewDelivery.stringValue
+            batchOverviewDelivery.stringValue = unavailableVerification.label + facts
+            batchOverviewDelivery.isHidden = false
+            batchOverviewCleanup.stringValue = batchResults.outputCleanupText(detailed: logDetailsExpanded, privacy: privacyEnabled)
+            batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .labelColor
+            batchOverviewCleanup.isHidden = !logDetailsExpanded && !cleanupNeedsAttention
+        }
         for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
             label.toolTip = label.stringValue
             label.setAccessibilityLabel(label.stringValue)
@@ -10577,6 +11129,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         fileProgressRow.isHidden = true
         if batchResults.mandatoryEvidenceConflict { setStatus(title) }
         else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
+        else if unavailableVerification != nil { setLocalizedStatus("result.independent_verification.title") }
         else if interrupted { setLocalizedStatus("result.process_terminated") }
         else if countsNeedReview { setLocalizedStatus("result.counts_need_review") }
         else if preparationStopped { setLocalizedStatus("result.photos_preparation_stopped") }
@@ -11062,6 +11615,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         commandField.stringValue = "synthetic command preview"
         for language in [AppLanguage.english, .simplifiedChinese, .japanese] {
             languageChanged(language)
+            for reason in IndependentVerificationUnavailable.allCases {
+                guard !reason.label.hasPrefix("result.independent_verification.") else {
+                    throw HostError(message: "Missing localized independent verification cause: \(reason.rawValue)")
+                }
+            }
             let repeatLabel = localized("log.repeated_occurrences", "3")
             guard repeatLabel != "log.repeated_occurrences", repeatLabel.contains("3") else {
                 throw HostError(message: "Repeated-log count was not localized for every language")
@@ -11091,7 +11649,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
             for key in ["log.omitted", "log.critical_overflow", "log.diagnostics_omitted", "log.visible_tail",
                         "result.counts_need_review", "result.control_records_missing", "result.independent_delivery_facts",
-                        "status.processor_diagnostic_truncated"] {
+                        "status.processor_diagnostic_truncated", "gate.relationships.running", "gate.relationships.failed",
+                        "gate.relationships.passed", "gate.check.import_receipts", "gate.check.count_x3", "gate.check.sync",
+                        "gate.check.quarantine", "gate.check.chain"] {
                 guard localized(key) != key else { throw HostError(message: "Missing log visibility explanation: \(key)") }
             }
             let queue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0, maxCriticalBytes: 0, maxCriticalEntries: 0,
@@ -11251,6 +11811,45 @@ private final class AppController: NSObject, NSWindowDelegate {
         func cleanupLine(_ fields: [String: Any]) throws -> String {
             OutputCleanupReceipt.prefix + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
         }
+        var blockedVerification = cleanup
+        blockedVerification["outcome"] = "verification_blocked"
+        for key in ["removed_files", "already_absent_files", "pruned_directories"] { blockedVerification[key] = NSNull() }
+        let unavailableMarker = #"MFB_BATCH_VERIFICATION_UNAVAILABLE={"schema_version":1,"run_id":"synthetic-cleanup-run","reason":"checkpoint"}"#
+        func independentVerificationFixture() throws -> BatchResults {
+            var fixture = BatchResults()
+            _ = fixture.ingest(batch)
+            _ = fixture.ingestOutputCleanup(try cleanupLine(blockedVerification))
+            return fixture
+        }
+        for terminal in [unavailableMarker.replacingOccurrences(of: "checkpoint", with: "unknown"),
+                         unavailableMarker.replacingOccurrences(of: "synthetic-cleanup-run", with: "wrong-run")] {
+            var invalid = try independentVerificationFixture()
+            _ = invalid.ingestTerminalEvidence(terminal, runID: "synthetic-cleanup-run")
+            guard invalid.mandatoryEvidenceConflict, invalid.confirmedUnavailableVerification(photos: true, processExit: 1, exitedNormally: true) == nil else {
+                throw HostError(message: "Unbound independent verification evidence received a cause")
+            }
+        }
+        batchResults = try independentVerificationFixture()
+        _ = batchResults.ingestTerminalEvidence(unavailableMarker, runID: "synthetic-cleanup-run")
+        guard batchResults.confirmedUnavailableVerification(photos: true, processExit: 0, exitedNormally: true) == nil,
+              batchResults.confirmedUnavailableVerification(photos: false, processExit: 1, exitedNormally: true) == nil else {
+            throw HostError(message: "Contradictory exit or cleanup confirmed the independent verification cause")
+        }
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.independent_verification.title"),
+              batchOverviewTitle.textColor == .systemOrange,
+              batchOverviewDelivery.stringValue.contains(IndependentVerificationUnavailable.checkpoint.label),
+              batchOverviewDelivery.accessibilityLabel() == batchOverviewDelivery.stringValue,
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.verification_blocked"),
+              batchResults.totals["img"]?[0] == 1829 else {
+            throw HostError(message: "Independent verification failure lost its accessible cause, cleanup, or earlier counts")
+        }
+        appendLog("Integrity Issues: 1")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Independent verification unavailable masked an integrity failure")
+        }
+        clearBatchLog()
         appendLog(try cleanupLine(cleanup))
         appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"metadata","completed":4,"total":6,"state":"file_failures"}"#)
         appendLog("[GATE 1  ] metadata:❌ → FILE_FAILURES")
@@ -11979,6 +12578,148 @@ private final class AppController: NSObject, NSWindowDelegate {
         var wrongFinalCheck = GateCheckActivity()
         _ = wrongFinalCheck.ingest(try finalActivity("original_bytes", completed: 0, total: 6), now: 1)
         guard wrongFinalCheck.invalid else { throw HostError(message: "Final Gate 2 confused its local checks with original-byte custody") }
+        try validateFinalSidecarActivityForSelfTest()
+        try validateFinalRelationshipActivityForSelfTest()
+    }
+
+    private func validateFinalSidecarActivityForSelfTest() throws {
+        func activity(_ stage: String, _ state: String = "running", processed: Int? = nil, total: Int = 2) throws -> String {
+            var record: [String: Any] = [
+                "schema_version": 1, "stage_id": stage, "gate": "photos_sidecars",
+                "check": "working_copy_aae", "completed": state == "running" ? 0 : 1,
+                "total": 1, "state": state,
+            ]
+            if let processed { record["file_progress"] = ["processed": processed, "total": total] }
+            return "MFB_GATE_ACTIVITY=" + String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+        }
+
+        batchResults = BatchResults()
+        let stage = "sidecar-verified"
+        appendLog(try activity(stage))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue.contains(localized("gate.sidecars.running")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+            throw HostError(message: "Preparing final sidecars invented file progress or lost its label")
+        }
+        for bad in [try activity(stage, processed: 1), try activity(stage, "passed", processed: 2)] {
+            var rejected = gateActivity
+            _ = rejected.ingest(bad, now: 2)
+            guard rejected.invalid else { throw HostError(message: "Sidecar progress skipped its initial zero count") }
+        }
+        for processed in [0, 1, 2] { appendLog(try activity(stage, processed: processed)) }
+        guard !gateActivity.invalid, !fileProgressIndicator.isHidden, fileProgressIndicator.doubleValue < 100,
+              fileProgressLabel.stringValue.contains(localized("gate.sidecars.files", "2", "2")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+            throw HostError(message: "Final sidecar activity lost its verified working-copy count")
+        }
+        for bad in [try activity(stage, processed: 2, total: 3), try activity(stage, "passed", processed: 1),
+                    try activity(stage, "failed"), try activity("unbound-sidecar", processed: 2)] {
+            var rejected = gateActivity
+            _ = rejected.ingest(bad, now: 2)
+            guard rejected.invalid else { throw HostError(message: "Invalid sidecar evidence was accepted") }
+        }
+        appendLog(try activity(stage, "passed", processed: 2))
+        guard !gateActivity.invalid, fileProgressIndicator.doubleValue == 100,
+              fileProgressLabel.stringValue.contains(localized("gate.sidecars.passed")),
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "Sidecar check completed without its count or was presented as batch completion")
+        }
+
+        appendLog(try activity("sidecar-failed"))
+        appendLog(try activity("sidecar-failed", processed: 0))
+        appendLog(try activity("sidecar-failed", "failed", processed: 1))
+        guard !gateActivity.invalid, fileProgressIndicator.doubleValue == 50,
+              fileProgressLabel.stringValue.contains(localized("gate.sidecars.failed")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+              batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Stopped sidecar verification did not preserve the verified count and failure")
+        }
+    }
+
+    private func validateFinalRelationshipActivityForSelfTest() throws {
+        // The preceding custody fixture deliberately records an independent failure.
+        batchResults = BatchResults()
+        func activity(_ check: String, _ completed: Int, _ state: String = "running", stage: String = "relationships-fixture",
+                      fileProgress: Int? = nil, fileTotal: Int = 3) throws -> String {
+            var record: [String: Any] = [
+                "schema_version": 1, "stage_id": stage, "gate": "photos_relationships",
+                "check": check, "completed": completed, "total": 5, "state": state,
+            ]
+            if let fileProgress { record["file_progress"] = ["processed": fileProgress, "total": fileTotal] }
+            return "MFB_GATE_ACTIVITY=" + String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+        }
+        let checks = ["import_receipts", "count_x3", "sync", "quarantine", "chain"]
+        for (index, check) in checks.enumerated() {
+            appendLog(try activity(check, index))
+            let label = localized("gate.relationships.running", localized("gate.check.\(check)"))
+            guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+                  fileProgressLabel.stringValue.contains(label),
+                  fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+                throw HostError(message: "Final Photos relationship activity lost its label or invented file progress")
+            }
+        }
+        appendLog(try activity("quarantine", 5, "failed"))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.relationships.failed", localized("gate.check.quarantine")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+              fileProgressLabel.textColor == .systemOrange, batchResults.totals.isEmpty,
+              !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "A relationship-check quarantine blocker became a contradictory batch result")
+        }
+        var replay = gateActivity
+        _ = replay.ingest(try activity("chain", 5, "passed"), now: 2)
+        guard replay.invalid else { throw HostError(message: "A completed relationship check erased its own failure") }
+
+        appendLog(try activity("import_receipts", 0, stage: "missing-inventory"))
+        appendLog(try activity("count_x3", 1, stage: "missing-inventory"))
+        appendLog(try activity("count_x3", 2, "failed", stage: "missing-inventory"))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.relationships.failed", localized("gate.check.count_x3")) else {
+            throw HostError(message: "Incomplete final Photos inventory fabricated progress")
+        }
+        for (index, check) in checks.enumerated() { appendLog(try activity(check, index, stage: "separate-check")) }
+        appendLog(try activity("chain", 5, "passed", stage: "separate-check"))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.relationships.passed"),
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "Relationship-check completion was presented as batch completion")
+        }
+        appendLog("[GATE 2] final verification FAIL")
+        guard batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Relationship-check completion concealed a later mandatory verification failure")
+        }
+        appendLog(try activity("import_receipts", 0, stage: "next-check"))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue.contains(localized("gate.relationships.running", localized("gate.check.import_receipts"))),
+              batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "A new activity kept stale completion text or concealed an earlier failure")
+        }
+        for (index, check) in checks.enumerated() { appendLog(try activity(check, index, stage: "chain-attempts")) }
+        for attempted in [0, 1, 3] {
+            appendLog(try activity("chain", 4, stage: "chain-attempts", fileProgress: attempted))
+            let label = localized("gate.relationships.files", String(attempted), "3")
+            guard !gateActivity.invalid, !fileProgressIndicator.isHidden,
+                  fileProgressIndicator.doubleValue < 100,
+                  fileProgressLabel.stringValue.contains(label),
+                  fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+                throw HostError(message: "Final chain lost its verified inventory denominator or accessibility label")
+            }
+        }
+        var wrongCount = gateActivity
+        _ = wrongCount.ingest(try activity("chain", 4, stage: "chain-attempts", fileProgress: 2), now: 2)
+        guard wrongCount.invalid else { throw HostError(message: "Final chain accepted a regressing attempt count") }
+        appendLog(try activity("chain", 5, "failed", stage: "chain-attempts", fileProgress: 3))
+        guard !gateActivity.invalid, fileProgressIndicator.doubleValue < 100,
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "Final chain failure was shown as a completed delivery")
+        }
+        for bad in [try activity("chain", 5, "passed", fileProgress: 3), try activity("quarantine", 2, "failed"),
+                    try activity("sync", 2, fileProgress: 1),
+                    try activity("quarantine", 5, "passed"), try activity("invented", 1), try activity("chain", 5, "passed")] {
+            var rejected = GateCheckActivity()
+            _ = rejected.ingest(bad, now: 1)
+            guard rejected.invalid else { throw HostError(message: "Invalid relationship-check activity was accepted") }
+        }
     }
 
     private func configurePhotosProgressFixture(handoff: Bool = false) throws {
@@ -12259,6 +13000,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard latestDiagnostics.warning == "[WARN] " + localized("history.batch_issues.invalid"),
               latestDiagnostics.failure == visibleFailure else {
             throw HostError(message: "Malformed file failure marker hid the previous actionable error")
+        }
+        clearBatchLog()
+        for phase in [HistoryFileFailure.Phase.sourceCleanup, .metadataPreparation] {
+            var phasedFailure = fileFailure
+            phasedFailure.failure_phase = phase
+            appendLog(HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(phasedFailure), as: UTF8.self))
+            guard latestDiagnostics.failure == "[FAIL] \(phase.label) · \(fileFailure.source_path): \(fileFailure.message)",
+                  !batchResults.hasFailure, batchResults.totals.isEmpty else {
+                throw HostError(message: "File failure lost its live phase label or changed authoritative media counts")
+            }
         }
         clearBatchLog()
         let incompleteJpeg = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/incomplete.jpg",
@@ -13931,6 +14682,7 @@ private func runSelfTest() -> Int32 {
             try AppController(preferences: preferences).validateResumeChoiceForSelfTest()
             try AppController(preferences: preferences).validateStartupAdmissionForSelfTest()
             try AppController(preferences: preferences).validateFailedRetryForSelfTest()
+            try AppController(preferences: preferences).validateCleanupRecoveryForSelfTest()
             try AppController(preferences: preferences).validateProcessInterruptionForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
             try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/synthetic/privacy-history"), preferences: preferences).validatePrivacyForSelfTest()

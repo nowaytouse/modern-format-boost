@@ -108,6 +108,8 @@ pub(crate) struct GateFileProgress {
 pub(crate) enum GateActivityKind {
     Local,
     PhotosCustody,
+    PhotosSidecars,
+    PhotosRelationships,
 }
 
 pub(crate) struct GateActivity {
@@ -162,6 +164,46 @@ impl GateActivity {
                 "failed to write gate activity event");
         }
     }
+}
+
+/// Run the existing final sidecar check with session-scoped activity.
+/// `None` starts the check without file progress. A subsequent pair gives
+/// verified working-copy AAE rows and their fixed total.
+///
+/// # Errors
+/// Returns the check's original error without changing its outcome.
+pub fn with_final_sidecar_activity<E>(
+    check: impl FnOnce(&mut dyn FnMut(Option<(usize, usize)>)) -> Result<(), E>,
+) -> Result<(), E> {
+    use GateActivityState::{Failed, Passed, Running};
+
+    let activity = GateActivity::new(GateActivityKind::PhotosSidecars);
+    let mut started = false;
+    let mut files = None;
+    let mut last_emit = Instant::now();
+    let result = check(&mut |update| {
+        if let Some((processed, total)) = update {
+            files = Some(GateFileProgress { processed, total });
+            let now = Instant::now();
+            if processed == 0 || now.duration_since(last_emit) >= Duration::from_millis(250) {
+                activity.emit("working_copy_aae", 0, 1, Running, files);
+                last_emit = now;
+            }
+        } else {
+            started = true;
+            activity.emit("working_copy_aae", 0, 1, Running, None);
+        }
+    });
+    if started {
+        activity.emit(
+            "working_copy_aae",
+            1,
+            1,
+            if result.is_ok() { Passed } else { Failed },
+            files,
+        );
+    }
+    result
 }
 
 #[derive(Clone, Copy, serde::Serialize)]

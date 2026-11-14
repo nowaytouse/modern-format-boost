@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow};
 use foundation::image::format_detect::{FormatKind, detect_true_format as rust_detect_true_format};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -642,33 +642,16 @@ pub fn lookup_rust_outcomes_for_rel(
     rel_s: &str,
     source_dir: Option<&Path>,
 ) -> Vec<HashMap<String, String>> {
-    let mut hits = Vec::new();
-    for (audit_path, records) in rust_outcomes {
-        if audit_path_matches_rel(audit_path, rel_s, source_dir) {
-            hits.extend(records.clone());
-        }
-    }
-    hits
-}
-
-fn audit_path_matches_rel(audit_path: &str, rel_s: &str, source_dir: Option<&Path>) -> bool {
-    let rel_norm = rel_s.replace('\\', "/");
-    if let Some(s_dir) = source_dir {
-        match s_dir.canonicalize() {
-            Ok(s_abs) => match Path::new(audit_path).canonicalize() {
-                Ok(a_abs) => match a_abs.strip_prefix(&s_abs) {
-                    Ok(key) => {
-                        return key.to_string_lossy().replace('\\', "/") == rel_norm;
-                    }
-                    Err(_err) => {}
-                },
-                Err(_err) => {}
-            },
-            Err(_err) => {}
-        }
-    }
-    let norm = audit_path.replace('\\', "/");
-    norm.ends_with(&format!("/{rel_norm}")) || norm.ends_with(&rel_norm) || norm.contains(&rel_norm)
+    let path = match source_dir {
+        Some(root) => Path::new(rel_s)
+            .strip_prefix(root)
+            .unwrap_or_else(|_| Path::new(rel_s)),
+        None => Path::new(rel_s),
+    };
+    path.to_str()
+        .and_then(|key| rust_outcomes.get(key))
+        .cloned()
+        .unwrap_or_default()
 }
 
 #[must_use]
@@ -730,21 +713,13 @@ pub fn classify_missing_entry(
     let reason_full = rust
         .and_then(|r| r.get("reason").map(std::string::String::as_str))
         .unwrap_or("");
-    let reason = if reason_full.len() > 200 {
-        &reason_full[..200]
-    } else {
-        reason_full
-    };
+    let reason = &reason_full[..reason_full.floor_char_boundary(200)];
 
     if let Some(vr) = vid_rust {
         let outcome = vr.get("outcome").map_or("", std::string::String::as_str);
         if outcome == "failed" || outcome == "skipped" {
             let vr_reason_full = vr.get("reason").map_or("", std::string::String::as_str);
-            let vr_reason = if vr_reason_full.len() > 200 {
-                &vr_reason_full[..200]
-            } else {
-                vr_reason_full
-            };
+            let vr_reason = &vr_reason_full[..vr_reason_full.floor_char_boundary(200)];
             return Ok((
                 "vid_pipeline_failed".to_string(),
                 format!(
@@ -1131,25 +1106,93 @@ pub fn load_session_routing(audit_paths: &[PathBuf]) -> Result<HashMap<String, S
         if !path.is_file() {
             continue;
         }
-        let contents = fs::read_to_string(path)?;
-        for line in contents.lines() {
-            if line.contains("ROUTED") {
-                let mut pipeline = String::new();
-                let mut path_val = String::new();
-                for part in line.split_whitespace() {
-                    if part.starts_with("pipeline=") {
-                        pipeline = part.split('=').nth(1).unwrap_or("").trim().to_lowercase();
-                    } else if part.starts_with("path=") {
-                        path_val = part.split('=').nth(1).unwrap_or("").trim().to_string();
-                    }
-                }
-                if !path_val.is_empty() && !pipeline.is_empty() {
-                    routing.insert(path_val, pipeline);
-                }
+        let reader = BufReader::new(File::open(path)?);
+        for (index, line) in reader.lines().enumerate() {
+            if index % 256 == 0 {
+                foundation::batch_control::checkpoint()?;
             }
+            let line = line?;
+            if !line.contains("ROUTED pipeline=") {
+                continue;
+            }
+            let json = if line.starts_with('{') {
+                serde_json::from_str::<serde_json::Value>(&line).ok()
+            } else {
+                None
+            };
+            let event = json
+                .as_ref()
+                .and_then(|row| row.get("event"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(&line);
+            let Some((pipeline, relative)) = event
+                .strip_prefix("ROUTED pipeline=")
+                .and_then(|record| record.split_once(" path="))
+            else {
+                continue;
+            };
+            let pipeline = match pipeline {
+                PIPELINE_IMAGE | "img" => PIPELINE_IMAGE,
+                PIPELINE_VIDEO | "vid" => PIPELINE_VIDEO,
+                _ => continue,
+            };
+            if relative.is_empty()
+                || !Path::new(relative)
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+            {
+                continue;
+            }
+            routing.insert(relative.to_owned(), pipeline.to_owned());
         }
     }
     Ok(routing)
+}
+
+fn text_audit_fields(line: &str) -> Option<HashMap<&str, String>> {
+    let (_, mut rest) = line.split_once("MFB_AUDIT ")?;
+    let mut fields = HashMap::new();
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return Some(fields);
+        }
+        let (key, value) = rest.split_once('=')?;
+        if key.is_empty()
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return None;
+        }
+        let (value, remainder) = if let Some(quoted) = value.strip_prefix('"') {
+            let mut escaped = false;
+            let end = quoted.char_indices().find_map(|(index, character)| {
+                if escaped {
+                    escaped = false;
+                    return None;
+                }
+                if character == '\\' {
+                    escaped = true;
+                    return None;
+                }
+                (character == '"').then_some(index + 2)
+            })?;
+            let (token, remainder) = value.split_at(end);
+            if !remainder.is_empty() && !remainder.starts_with(char::is_whitespace) {
+                return None;
+            }
+            (serde_json::from_str(token).ok()?, remainder)
+        } else {
+            let end = value.find(char::is_whitespace).unwrap_or(value.len());
+            let (token, remainder) = value.split_at(end);
+            (token.to_owned(), remainder)
+        };
+        if fields.insert(key, value).is_some() {
+            return None;
+        }
+        rest = remainder;
+    }
 }
 
 pub fn load_rust_outcomes_from_logs(
@@ -1157,98 +1200,109 @@ pub fn load_rust_outcomes_from_logs(
     source_root: Option<&Path>,
 ) -> Result<HashMap<String, Vec<HashMap<String, String>>>> {
     let mut by_path = HashMap::new();
-    let source_abs = match source_root {
-        Some(r) => match r.canonicalize() {
-            Ok(p) => p.to_str().map(String::from),
-            Err(_err) => None,
-        },
-        None => None,
-    };
-
-    let mut add =
-        |path_str: &str, outcome: &str, pipeline: &str, reason: &str, ignore_class: &str| {
-            let p_str = path_str.trim();
-            if let Some(ref s_abs) = source_abs {
-                match Path::new(p_str).canonicalize() {
-                    Ok(res_path) => {
-                        if !res_path.to_string_lossy().starts_with(s_abs) {
-                            return;
-                        }
-                    }
-                    Err(_err) => {}
-                }
-            }
-            let mut record = HashMap::new();
-            record.insert("outcome".to_string(), outcome.to_string());
-            record.insert("pipeline".to_string(), pipeline.to_string());
-            record.insert("reason".to_string(), reason.to_string());
-            if !ignore_class.is_empty() {
-                record.insert("ignore_class".to_string(), ignore_class.to_string());
-            }
-            by_path
-                .entry(p_str.to_string())
-                .or_insert_with(Vec::new)
-                .push(record);
+    let source_abs = source_root.map(Path::canonicalize).transpose()?;
+    let mut add = |path: &str, outcome: &str, pipeline: &str, reason: &str, ignore_class: &str| {
+        if !matches!(pipeline, "img" | "vid")
+            || !matches!(outcome, "ignored" | "skipped" | "failed" | "converted")
+        {
+            return;
+        }
+        let path = Path::new(path);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let key = match (source_abs.as_deref(), source_root, path.is_absolute()) {
+            (Some(root), Some(selected), true) => path
+                .strip_prefix(root)
+                .ok()
+                .or_else(|| path.strip_prefix(selected).ok())
+                .map(Path::to_path_buf)
+                .or_else(|| {
+                    path.canonicalize().ok().and_then(|resolved| {
+                        resolved.strip_prefix(root).ok().map(Path::to_path_buf)
+                    })
+                }),
+            _ => Some(path.to_path_buf()),
         };
+        let Some(key) = key.as_deref().and_then(Path::to_str) else {
+            return;
+        };
+        if key.is_empty()
+            || Path::new(key)
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return;
+        }
+        let mut record = HashMap::from([
+            ("outcome".to_owned(), outcome.to_owned()),
+            ("pipeline".to_owned(), pipeline.to_owned()),
+            ("reason".to_owned(), reason.to_owned()),
+        ]);
+        if !ignore_class.is_empty() {
+            record.insert("ignore_class".to_owned(), ignore_class.to_owned());
+        }
+        by_path
+            .entry(key.to_owned())
+            .or_insert_with(Vec::new)
+            .push(record);
+    };
 
     for log_path in log_paths {
         if !log_path.is_file() {
             continue;
         }
-        let contents = fs::read_to_string(log_path)?;
-        for line in contents.lines() {
-            let stripped = line.trim();
-            if stripped.contains(MFB_AUDIT_PREFIX) || stripped.contains("mfb::audit") {
-                if stripped.contains("outcome=batch_complete") {
+        let reader = BufReader::new(File::open(log_path)?);
+        for (index, line) in reader.lines().enumerate() {
+            if index % 256 == 0 {
+                foundation::batch_control::checkpoint()?;
+            }
+            let line = line?;
+            let stripped = line.trim_start();
+            if stripped.starts_with('{') {
+                if !stripped.contains(r#""mfb::audit""#) {
                     continue;
                 }
-                // Parse key values from structured log
-                let mut kvs = HashMap::new();
-                for part in stripped.split_whitespace() {
-                    if let Some(idx) = part.find('=') {
-                        let k = &part[..idx];
-                        let v = part[idx + 1..].trim_matches('"');
-                        kvs.insert(k, v);
-                    }
+                let Ok(event) = serde_json::from_str::<serde_json::Value>(stripped) else {
+                    continue;
+                };
+                if event["target"] == "mfb::audit" && event["fields"]["mfb_audit_schema"] == 1 {
+                    let field = |name: &str| event["fields"][name].as_str().unwrap_or_default();
+                    add(
+                        field("path"),
+                        field("outcome"),
+                        field("pipeline"),
+                        field("reason"),
+                        field("ignore_class"),
+                    );
                 }
-                if let Some(outcome) = kvs.get("outcome") {
-                    if *outcome == "batch_complete" {
-                        continue;
-                    }
-                    if let Some(path_raw) = kvs.get("path") {
-                        let pipeline = kvs.get("pipeline").copied().unwrap_or_else(|| {
-                            if stripped.contains("image_processing") {
-                                "img"
-                            } else {
-                                "vid"
-                            }
-                        });
-                        let reason = kvs.get("reason").copied().unwrap_or("");
-                        let ignore_class = kvs.get("ignore_class").copied().unwrap_or("");
-                        add(path_raw, outcome, pipeline, reason, ignore_class);
-                        continue;
-                    }
-                }
+                continue;
             }
-            // Fallback to legacy ignore/skip logs
-            if stripped.contains("[IGNORE]")
-                && let Some(idx) = stripped.find("[IGNORE]")
-            {
-                let rest = &stripped[idx + 8..];
-                if let Some(dash_idx) = rest.find("—") {
-                    let path_val = &rest[..dash_idx].trim();
-                    let reason = &rest[dash_idx + 1..].trim();
-                    add(path_val, "ignored", "img", reason, "");
+            if stripped.contains(MFB_AUDIT_PREFIX) {
+                let plain = foundation::logging::strip_ansi_str(stripped);
+                if let Some(fields) = text_audit_fields(&plain) {
+                    let field = |name: &str| fields.get(name).map_or("", String::as_str);
+                    if field("mfb_audit_schema") == "1" {
+                        add(
+                            field("path"),
+                            field("outcome"),
+                            field("pipeline"),
+                            field("reason"),
+                            field("ignore_class"),
+                        );
+                    }
                 }
+                continue;
             }
-            if stripped.contains("[SKIP]")
-                && let Some(idx) = stripped.find("[SKIP]")
-            {
-                let rest = &stripped[idx + 6..];
-                if let Some(dash_idx) = rest.find("—") {
-                    let path_val = &rest[..dash_idx].trim();
-                    let reason = &rest[dash_idx + 1..].trim();
-                    add(path_val, "skipped", "img", reason, "");
+            // Older plain rows have no structured pipeline. Their IMG ignore and
+            // skip events still identify a complete path between the delimiters.
+            for (marker, outcome) in [("[IGNORE] ", "ignored"), ("[SKIP] ", "skipped")] {
+                if let Some((path, reason)) = stripped
+                    .strip_prefix(marker)
+                    .and_then(|row| row.split_once(" — "))
+                {
+                    add(path, outcome, "img", reason, "");
+                    break;
                 }
             }
         }
@@ -1301,12 +1355,7 @@ pub fn reconcile_handoff(
             routed.unwrap_or("(not in session audit)")
         ));
 
-        let mut rust_hits = Vec::new();
-        for (log_path, records) in rust_outcomes {
-            if log_path.ends_with(&rel_s) || log_path.contains(&rel_s) {
-                rust_hits.extend(records.clone());
-            }
-        }
+        let rust_hits = lookup_rust_outcomes_for_rel(rust_outcomes, &rel_s, Some(source_dir));
 
         if rust_hits.is_empty() {
             lines.push(
@@ -1317,11 +1366,7 @@ pub fn reconcile_handoff(
         } else {
             for rec in rust_hits.iter().take(3) {
                 let reason = rec.get("reason").map_or("", std::string::String::as_str);
-                let reason_trunc = if reason.len() > 120 {
-                    &reason[..120]
-                } else {
-                    reason
-                };
+                let reason_trunc = &reason[..reason.floor_char_boundary(120)];
                 lines.push(format!(
                     "      Rust log: outcome={} pipeline={} — {}",
                     rec.get("outcome").map_or("", String::as_str),
@@ -1571,26 +1616,11 @@ pub fn preserve_handoff_gaps(
 
 /// Scan session audit logs for routed video paths after img/vid processing.
 pub fn extract_routed_video_paths_from_audit(session_audit: &Path) -> Result<Vec<String>> {
-    if !session_audit.is_file() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(session_audit)?;
-    let mut routed = Vec::new();
-    for line in content.lines() {
-        if line.contains("ROUTED")
-            && line.contains("pipeline=vid")
-            && let Some(idx) = line.find("path=")
-        {
-            let rest = &line[idx + 5..];
-            if let Some(space_idx) = rest.find(|c: char| c.is_whitespace() || c == '"') {
-                routed.push(rest[..space_idx].to_string());
-            } else {
-                routed.push(rest.to_string());
-            }
-        }
-    }
+    let mut routed = load_session_routing(&[session_audit.to_path_buf()])?
+        .into_iter()
+        .filter_map(|(path, pipeline)| (pipeline == PIPELINE_VIDEO).then_some(path))
+        .collect::<Vec<_>>();
     routed.sort();
-    routed.dedup();
     Ok(routed)
 }
 
@@ -1606,6 +1636,99 @@ pub fn report_handoff_preserve_gaps_from_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorded_routing_preserves_exact_path_and_requires_a_routing_event() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let audit = temporary.path().join("session.log");
+        let video = "嵌套目录/a b\"\\name\nclip.mov";
+        let image = "folder/photo path=detail.jpg";
+        for (pipeline, relative) in [(PIPELINE_VIDEO, video), (PIPELINE_IMAGE, image)] {
+            crate::infra::log_paths::append_jsonl_audit_record(
+                &audit,
+                &format_session_audit_routed(pipeline, relative),
+            )?;
+        }
+        for unrelated in [
+            "NOT_ROUTED pipeline=vid path=fake.mov",
+            "ROUTED pipeline=vid path=../other.mov",
+            "ROUTED pipeline=vid path=/root.mov",
+        ] {
+            crate::infra::log_paths::append_jsonl_audit_record(&audit, unrelated)?;
+        }
+        let mut plain = fs::OpenOptions::new().append(true).open(&audit)?;
+        std::io::Write::write_all(
+            &mut plain,
+            b"ROUTED pipeline=img path=plain legacy filename.JPG\n",
+        )?;
+        let routing = load_session_routing(std::slice::from_ref(&audit))?;
+        assert_eq!(routing.len(), 3);
+        assert_eq!(routing.get(video).map(String::as_str), Some(PIPELINE_VIDEO));
+        assert_eq!(routing.get(image).map(String::as_str), Some(PIPELINE_IMAGE));
+        assert_eq!(
+            routing.get("plain legacy filename.JPG").map(String::as_str),
+            Some(PIPELINE_IMAGE)
+        );
+        assert_eq!(extract_routed_video_paths_from_audit(&audit)?, [video]);
+        Ok(())
+    }
+
+    #[test]
+    fn worker_audit_indexes_exact_scoped_paths_and_decodes_quoted_fields() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().canonicalize()?;
+        let source = root.join("source");
+        let other_root = root.join("source-copy");
+        fs::create_dir(&source)?;
+        fs::create_dir(&other_root)?;
+        let relative = "nested/图 a\"\\b\nmore.mov";
+        let other = "ordinary.mp4";
+        let audit = root.join("audit.log");
+        let reason = "decoder failed: 中文\nretry";
+        let quote = |text: &str| serde_json::Value::String(text.to_owned()).to_string();
+        let malformed = format!(
+            "MFB_AUDIT mfb_audit_schema=1 outcome=failed pipeline=vid path={} path=ordinary.mp4",
+            quote(relative)
+        );
+        let exact = format!(
+            "[mfb::audit] MFB_AUDIT mfb_audit_schema=1 outcome=failed pipeline=vid path={} reason={}",
+            quote(source.join(relative).to_str().unwrap()),
+            quote(reason)
+        );
+        let jsonl = |target, path: PathBuf| {
+            serde_json::json!({
+                "target": target, "fields":{"message":"MFB_AUDIT","mfb_audit_schema":1,
+                    "outcome":"skipped","pipeline":"img","path":path,"reason":"retained exact input"}
+            })
+        };
+        fs::write(
+            &audit,
+            format!(
+                "{malformed}\n{exact}\n{}\n{}\n{}\n[SKIP] plain old.jpg — original kept\n",
+                jsonl("mfb::audit", source.join(other)),
+                jsonl("mfb::audit", other_root.join(other)),
+                jsonl("unrelated", source.join("spoofed.mp4"))
+            ),
+        )?;
+        let rows = load_rust_outcomes_from_logs(&[audit], Some(&source))?;
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert_eq!(rows[other].len(), 1);
+        assert_eq!(rows["plain old.jpg"][0]["outcome"], "skipped");
+        assert_eq!(
+            lookup_rust_outcomes_for_rel(&rows, relative, Some(&source))[0]["reason"],
+            reason
+        );
+        assert!(lookup_rust_outcomes_for_rel(&rows, "more.mov", Some(&source)).is_empty());
+        assert!(
+            lookup_rust_outcomes_for_rel(
+                &rows,
+                other_root.join(other).to_str().unwrap(),
+                Some(&source)
+            )
+            .is_empty()
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_format_bytes() {

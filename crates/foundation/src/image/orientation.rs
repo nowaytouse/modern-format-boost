@@ -1088,8 +1088,9 @@ fn parse_exif_orientation_evidence(
     }
     crate::common_utils::validate_unique_json_members(stdout)
         .map_err(|error| invalid(&format!("invalid JSON orientation evidence: {error}")))?;
-    let records: Vec<serde_json::Map<String, serde_json::Value>> = serde_json::from_slice(stdout)
-        .map_err(|error| invalid(&format!("invalid JSON orientation record: {error}")))?;
+    let records: Vec<serde_json::Map<String, serde_json::Value>> =
+        serde_json::from_slice(stdout)
+            .map_err(|error| invalid(&format!("invalid JSON orientation record: {error}")))?;
     let [record] = records.as_slice() else {
         return Err(invalid("expected exactly one orientation record"));
     };
@@ -1101,7 +1102,9 @@ fn parse_exif_orientation_evidence(
             .map(Path::new)
             != Some(Path::new(expected_source.as_ref()))
     {
-        return Err(invalid("SourceFile identity differs from the requested file"));
+        return Err(invalid(
+            "SourceFile identity differs from the requested file",
+        ));
     }
     let mut orientation = None;
     let mut warnings = Vec::new();
@@ -1116,7 +1119,9 @@ fn parse_exif_orientation_evidence(
         } else if orientation_evidence_key(key, "ExifTool", "Warning") {
             warnings.push(value);
         } else {
-            return Err(invalid(&format!("unexpected orientation evidence {key}: {value}")));
+            return Err(invalid(&format!(
+                "unexpected orientation evidence {key}: {value}"
+            )));
         }
     }
     // Report an explicit invalid direction before unrelated metadata diagnostics.
@@ -2256,7 +2261,9 @@ mod tests {
         }
         let valid = br#"[{"SourceFile":"source.jpg","IFD0:Orientation":6}]"#;
         for (succeeded, stderr) in [(false, b"".as_slice()), (true, b"unexpected warning")] {
-            assert!(super::parse_exif_orientation_evidence(source, succeeded, valid, stderr).is_err());
+            assert!(
+                super::parse_exif_orientation_evidence(source, succeeded, valid, stderr).is_err()
+            );
         }
     }
 

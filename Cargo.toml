@@ -203,11 +203,34 @@ vid = { path = "crates/vid" }
 
 
 [profile.release]
-lto = true
+lto = "thin"
 opt-level = 3
 codegen-units = 1
-strip = "symbols"
+panic = "abort"
+# Preserve linker layout. Smart Build applies native stripping to final macOS executables.
+strip = "none"
 overflow-checks = true
 
 [profile.dev]
+opt-level = 1
+
+[profile.dev.package.image]
+opt-level = 2
+
+[profile.dev.package.num-rational]
+opt-level = 3
+
+[profile.dev-fast]
+inherits = "dev"
 opt-level = 0
+debug = 0
+
+[profile.test]
+opt-level = 2
+debug = true
+
+[profile.profiling]
+inherits = "release"
+debug = true
+lto = false
+codegen-units = 16

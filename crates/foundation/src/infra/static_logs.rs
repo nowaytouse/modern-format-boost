@@ -701,6 +701,8 @@ pub enum FileFailurePhase {
     EncodeOrPublish,
     LocalVerification,
     PhotosImport,
+    MetadataPreparation,
+    SourceCleanup,
 }
 
 /// Machine-readable file failure written by a child process to its captured output.
@@ -826,7 +828,15 @@ fn emit_file_failure_marker(
         );
         return;
     };
-    match file_failure_marker(pipeline, path, message, reason_code, failure_phase, run_id, invocation_id) {
+    match file_failure_marker(
+        pipeline,
+        path,
+        message,
+        reason_code,
+        failure_phase,
+        run_id,
+        invocation_id,
+    ) {
         Ok(payload) => {
             let mut output = std::io::stdout().lock();
             if let Err(error) =
@@ -878,7 +888,20 @@ pub fn log_file_failure_at_phase(
     reason_code: Option<&str>,
     phase: FileFailurePhase,
 ) {
-    emit_mfb_audit_with_failure_phase("failed", pipeline, Some(path), reason, reason_code, Some(phase));
+    if phase == FileFailurePhase::SourceCleanup {
+        tracing::warn!(target: "fast_img_delete", source = %path.display(), %reason,
+            reason_code, "source cleanup stopped");
+        emit_file_failure_marker(pipeline, path, reason, reason_code, Some(phase));
+        return;
+    }
+    emit_mfb_audit_with_failure_phase(
+        "failed",
+        pipeline,
+        Some(path),
+        reason,
+        reason_code,
+        Some(phase),
+    );
 }
 
 /// Batch pipeline start marker (`mfb::audit` / session logs).
@@ -2341,7 +2364,10 @@ mod ui_contract_tests {
         assert_eq!(marker.source_path, "input/媒体\nfailed.jpg");
         assert_eq!(marker.message, "decoder rejected source\nsecond line");
         assert_eq!(marker.reason_code.as_deref(), Some("img_decode_rejected"));
-        assert_eq!(marker.failure_phase, Some(super::FileFailurePhase::Admission));
+        assert_eq!(
+            marker.failure_phase,
+            Some(super::FileFailurePhase::Admission)
+        );
         assert!(payload.contains(r#""failure_phase":"admission""#));
     }
 
@@ -2377,7 +2403,9 @@ mod ui_contract_tests {
     fn file_failure_marker_rejects_invalid_identity_pipeline_and_size() {
         let path = std::path::Path::new("source.jpg");
         assert!(file_failure_marker("img", path, "failure", None, None, "", "invocation").is_err());
-        assert!(file_failure_marker("cmd", path, "failure", None, None, "run", "invocation").is_err());
+        assert!(
+            file_failure_marker("cmd", path, "failure", None, None, "run", "invocation").is_err()
+        );
         let unresolved = file_failure_marker(
             "img",
             std::path::Path::new(""),

@@ -472,7 +472,7 @@ const ZIGZAG_ORDER: [usize; 64] = [
 /// trailing metadata cannot supply or invalidate its end marker.
 #[must_use]
 pub fn is_jpeg_complete(data: &[u8]) -> bool {
-    match scan_jpeg_primary_image(data, false) {
+    match scan_jpeg_primary_image(data, |_, _, _| Ok(())) {
         Ok((_, saw_scan)) => saw_scan,
         Err((position, reason)) => {
             tracing::debug!(
@@ -771,18 +771,72 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
 pub(crate) fn extract_xmp_from_jpeg_markers(
     data: &[u8],
 ) -> Result<Option<Vec<String>>, (usize, &'static str)> {
-    scan_jpeg_primary_image(data, true).map(|(xmp, _)| xmp)
+    let mut xmp_blocks = Vec::new();
+    scan_jpeg_primary_image(data, |_, marker, payload| {
+        if marker == 0xE1 {
+            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
+                xmp_blocks.push(String::from_utf8_lossy(&payload[29..]).to_string());
+            } else if payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
+                && payload.len() > 35 + 32 + 8
+            {
+                xmp_blocks.push(String::from_utf8_lossy(&payload[(35 + 32 + 8)..]).to_string());
+            }
+        }
+        Ok(())
+    })?;
+    Ok((!xmp_blocks.is_empty()).then_some(xmp_blocks))
+}
+
+/// Detect an 8-bit three-component JFIF image with no additional APP segments
+/// or trailing data. This is only admission to a color-matrix retry; it does
+/// not certify colorimetry or replace the subsequent decoded sample proof.
+#[must_use]
+pub fn is_unprofiled_color_jfif(data: &[u8]) -> bool {
+    let mut saw_jfif = false;
+    let mut saw_frame = false;
+    scan_jpeg_primary_image(data, |position, marker, payload| {
+        match marker {
+            0xE0 if position == 2
+                && payload.len() == 14
+                && payload.starts_with(b"JFIF\0\x01")
+                && payload[6] <= 2
+                && payload[7] <= 2
+                && payload[8..10] != [0, 0]
+                && payload[10..12] != [0, 0]
+                && payload[12..] == [0, 0] =>
+            {
+                saw_jfif = true;
+            }
+            0xE0..=0xEF => return Err((position, "unexpected JPEG application metadata")),
+            0xC0 | 0xC2
+                if !saw_frame
+                    && payload.len() == 15
+                    && payload[0] == 8
+                    && payload[1..3] != [0, 0]
+                    && payload[3..5] != [0, 0]
+                    && payload[5] == 3
+                    && [payload[6], payload[9], payload[12]] == [1, 2, 3] =>
+            {
+                saw_frame = true;
+            }
+            0xC0..=0xCF if !matches!(marker, 0xC4) => {
+                return Err((position, "unexpected JPEG frame or arithmetic coding"));
+            }
+            _ => {}
+        }
+        Ok(())
+    })
+    .is_ok_and(|(end, saw_scan)| end == data.len() && saw_scan && saw_jfif && saw_frame)
 }
 
 fn scan_jpeg_primary_image(
     data: &[u8],
-    collect_xmp: bool,
-) -> Result<(Option<Vec<String>>, bool), (usize, &'static str)> {
+    mut visit_segment: impl FnMut(usize, u8, &[u8]) -> Result<(), (usize, &'static str)>,
+) -> Result<(usize, bool), (usize, &'static str)> {
     if data.get(0..2) != Some(&[0xFF, MARKER_SOI]) {
         return Err((0, "missing SOI marker"));
     }
 
-    let mut xmp_blocks = Vec::new();
     let mut pos = 2;
     let mut in_scan = false;
     let mut saw_eoi = false;
@@ -857,15 +911,7 @@ fn scan_jpeg_primary_image(
             return Err((marker_start, "segment exceeds input boundary"));
         };
 
-        if collect_xmp && marker == 0xE1 {
-            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
-                xmp_blocks.push(String::from_utf8_lossy(&payload[29..]).to_string());
-            } else if payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
-                && payload.len() > 35 + 32 + 8
-            {
-                xmp_blocks.push(String::from_utf8_lossy(&payload[(35 + 32 + 8)..]).to_string());
-            }
-        }
+        visit_segment(marker_start, marker, payload)?;
 
         pos = segment_end;
         in_scan = marker == MARKER_SOS || marker == MARKER_DNL;
@@ -875,7 +921,7 @@ fn scan_jpeg_primary_image(
     if !saw_eoi {
         return Err((pos, "missing EOI marker"));
     }
-    Ok(((!xmp_blocks.is_empty()).then_some(xmp_blocks), saw_scan))
+    Ok((pos, saw_scan))
 }
 
 /// Extract gainmap image from `UltraHDR` JPEG.

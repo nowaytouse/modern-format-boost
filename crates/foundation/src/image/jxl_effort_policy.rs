@@ -24,6 +24,12 @@
 
 use crate::constants;
 
+mod scratch;
+pub use scratch::{
+    JpegScratchInventory, JpegScratchObservation, inspect_jpeg_effort_scratch,
+    list_jpeg_effort_scratch,
+};
+
 /// Keep quality-parameter search separate from effort selection and source-quality inference.
 #[must_use]
 pub fn quality_search_enabled(default: bool) -> bool {
@@ -164,10 +170,61 @@ const JPEG_FULL_EFFORT_ORDER: [u8; 11] = [9, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11];
 pub fn run_jpeg_full_effort_search<T>(
     input: &std::path::Path,
     output: &std::path::Path,
-    mut run: impl FnMut(u8, &std::path::Path) -> anyhow::Result<T>,
+    run: impl FnMut(u8, &std::path::Path) -> anyhow::Result<T>,
+    successful: impl Fn(&T) -> bool,
+    verify_reconstruction: impl FnMut(&std::path::Path) -> anyhow::Result<()>,
+) -> anyhow::Result<(T, u8)> {
+    run_jpeg_full_effort_search_for_worker(
+        input,
+        output,
+        None,
+        run,
+        successful,
+        verify_reconstruction,
+    )
+}
+
+/// Use the full effort search with an optional identified worker scratch reservation.
+/// # Errors
+/// Rejects incomplete encodes, output or source drift, or invalid ownership evidence.
+pub fn run_jpeg_full_effort_search_for_worker<T>(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    attempt: Option<&crate::fast_img_store::JpegExecutionAttempt>,
+    run: impl FnMut(u8, &std::path::Path) -> anyhow::Result<T>,
+    successful: impl Fn(&T) -> bool,
+    verify_reconstruction: impl FnMut(&std::path::Path) -> anyhow::Result<()>,
+) -> anyhow::Result<(T, u8)> {
+    let mut run = run;
+    run_jpeg_full_effort_search_for_worker_observed(
+        input,
+        output,
+        attempt,
+        |effort, path, _| run(effort, path),
+        successful,
+        verify_reconstruction,
+    )
+    .map(|(observation, effort, _)| (observation, effort))
+}
+
+/// Full byte identities observed during the exact JPEG candidate search.
+pub struct JpegFullEffortDigests {
+    pub input_blake3: String,
+    pub winner_blake3: String,
+}
+
+/// Select the full-effort winner and return the exact identities verified before its rename.
+///
+/// # Errors
+/// Rejects incomplete encodes, output or source drift, or invalid ownership evidence.
+pub fn run_jpeg_full_effort_search_for_worker_observed<T>(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    attempt: Option<&crate::fast_img_store::JpegExecutionAttempt>,
+    mut run: impl FnMut(u8, &std::path::Path, &str) -> anyhow::Result<T>,
     successful: impl Fn(&T) -> bool,
     mut verify_reconstruction: impl FnMut(&std::path::Path) -> anyhow::Result<()>,
-) -> anyhow::Result<(T, u8)> {
+) -> anyhow::Result<(T, u8, JpegFullEffortDigests)> {
     use anyhow::Context;
     anyhow::ensure!(
         input != output,
@@ -189,6 +246,15 @@ pub fn run_jpeg_full_effort_search<T>(
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
     )?;
     let result = (|| {
+        if let Some(attempt) = attempt {
+            scratch::reserve(
+                scratch.path(),
+                &identity,
+                attempt.run_id.as_deref(),
+                &attempt.invocation_id,
+            )
+            .context("record JPEG effort scratch owner before encoding")?;
+        }
         crate::log_detail!(&format!(
             "JPEG full effort execution order: {JPEG_FULL_EFFORT_ORDER:?}; every effort remains required; ties prefer lower effort"
         ));
@@ -201,7 +267,7 @@ pub fn run_jpeg_full_effort_search<T>(
             );
             let candidate = scratch.path().join(format!("e{effort}.jxl"));
             let started = std::time::Instant::now();
-            let observation = run(effort, &candidate)
+            let observation = run(effort, &candidate, &identity)
                 .with_context(|| format!("JPEG full effort search incomplete at e{effort}"))?;
             anyhow::ensure!(
                 successful(&observation),
@@ -276,7 +342,14 @@ pub fn run_jpeg_full_effort_search<T>(
         crate::log_detail!(&format!(
             "JPEG full effort selected e{effort}: file={size}B, covered=11/11, equivalent_efforts_skipped=0, winning_file_reused=true; final delivery verification remains required"
         ));
-        Ok((observation, effort))
+        Ok((
+            observation,
+            effort,
+            JpegFullEffortDigests {
+                input_blake3: identity,
+                winner_blake3: verified_hash,
+            },
+        ))
     })();
     let cleanup = scratch
         .close()

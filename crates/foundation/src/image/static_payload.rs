@@ -249,7 +249,10 @@ pub fn verify_jxl_recompression_boxes(source: &Path, candidate: &Path) -> anyhow
         let mut receipts = Vec::new();
         inspect_jxl_boxes(path, |kind, file, size| {
             if !matches!(&kind, b"JXL " | b"jxll" | b"jbrd" | b"jxlc" | b"jxlp") {
-                anyhow::ensure!(receipts.len() < 1024, "too many JXL ancillary boxes to normalize");
+                anyhow::ensure!(
+                    receipts.len() < 1024,
+                    "too many JXL ancillary boxes to normalize"
+                );
                 let mut hasher = blake3::Hasher::new();
                 let read = std::io::copy(&mut file.take(size), &mut hasher)?;
                 anyhow::ensure!(read == size, "truncated JXL ancillary box");
@@ -310,7 +313,11 @@ fn inspect_jxl_boxes(
             "invalid JXL box size"
         );
         let payload = box_size - header_size;
-        inspect([header[4], header[5], header[6], header[7]], &mut file, payload)?;
+        inspect(
+            [header[4], header[5], header[6], header[7]],
+            &mut file,
+            payload,
+        )?;
         match &header[4..8] {
             b"jxlp" => {
                 anyhow::ensure!(payload >= 4, "short JXL jxlp sequence header");

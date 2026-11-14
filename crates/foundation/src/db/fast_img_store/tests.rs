@@ -16,6 +16,67 @@ fn state_guard(root: &Path) -> crate::common_utils::EnvGuard {
     )
 }
 
+#[test]
+fn historical_source_evidence_binds_exact_receipts_and_keeps_legacy_unknown() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().canonicalize()?;
+    let db = root.join("state.sqlite");
+    let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(db.clone());
+    let marker = complete_marker(&root)?;
+    let source = "nested/converted.jpg";
+    write_marker(&marker)?;
+    let _writer = open_store_connection()?;
+
+    let wal = db.with_extension("sqlite-wal");
+    let snapshot = || -> Result<_> {
+        Ok((
+            blake3::hash(&fs::read(&db)?),
+            fs::read(&wal).ok().map(|bytes| blake3::hash(&bytes)),
+        ))
+    };
+    let before = snapshot()?;
+    let primary = read_source_evidence(&marker.working_copy, source)?;
+    assert_eq!(primary.coverage, "recorded");
+    assert_eq!(
+        primary.task_key,
+        key_for_canonical(text(&marker.working_copy)?)
+    );
+    assert_eq!(
+        primary
+            .photos_receipt
+            .context("no primary receipt")?
+            .rel_path,
+        "nested/converted.JXL"
+    );
+    assert!(matches!(
+        primary.outcome,
+        Some(source_evidence::SourceOutcome::Converted { .. })
+    ));
+    assert_eq!(primary.photos_submissions.len(), 1);
+    assert!(primary.cleanup.is_empty());
+    assert_eq!(primary.cleanup_journal, None);
+
+    let original = read_source_evidence(&marker.working_copy, "original.webp")?;
+    assert!(matches!(
+        original.outcome,
+        Some(source_evidence::SourceOutcome::OriginalDelivery)
+    ));
+    assert_eq!(
+        original
+            .photos_receipt
+            .context("no original receipt")?
+            .rel_path,
+        "original.webp"
+    );
+    let absent = read_source_evidence(&marker.working_copy, "nested/Converted.jpg")?;
+    assert_eq!(absent.coverage, "unknown");
+    assert!(absent.outcome.is_none() && absent.photos_submissions.is_empty());
+    assert!(read_source_evidence(&marker.working_copy, "nested/../converted.jpg").is_err());
+    assert!(read_source_evidence(&marker.working_copy, "nested//converted.jpg").is_err());
+    assert_eq!(before, snapshot()?);
+    Ok(())
+}
+
 fn complete_marker(root: &Path) -> Result<WorkingCopyMarker> {
     let root = root.canonicalize()?;
     let source = root.join("source");
@@ -198,6 +259,459 @@ fn complete_dto_roundtrip_uses_normalized_collection_rows() -> Result<()> {
     );
     assert_eq!(header.photos_submission_history().unwrap().intents, []);
     assert_eq!(matching_markers(&marker.src_dir, "jxl")?, [marker]);
+    Ok(())
+}
+
+#[test]
+fn jpeg_execution_receipt_is_atomic_historical_and_rejects_corruption() -> Result<()> {
+    if crate::common_utils::isolated_test_process() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let _state = state_guard(root.path());
+    let mut published = complete_marker(root.path())?;
+    published.stage = FastImgStageName::OutputPrepared;
+    published.photos_imported_assets.clear();
+    published.tier2_imported_assets.clear();
+    let rel = "nested/converted.jpg";
+    let source = published.src_dir.join(rel);
+    let delivery = published.working_copy.join("nested/converted.JXL");
+    fs::create_dir_all(source.parent().unwrap())?;
+    fs::create_dir_all(delivery.parent().unwrap())?;
+    fs::write(&source, b"converted source")?;
+    fs::write(&delivery, b"converted output")?;
+    let mut prior = published.clone();
+    prior.encoded_count = 0;
+    prior.blake3_log.clear();
+    write_marker(&prior)?;
+    assert!(read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?.is_empty());
+    let encoder = JpegEncoderInvocation {
+        executable: "/synthetic/cjxl".to_owned(),
+        executable_blake3: digest(b"encoder"),
+        argv: [
+            source.to_str().unwrap(),
+            "/synthetic/scratch/winner.jxl",
+            "--container=1",
+            "-e",
+            "7",
+            "--num_threads",
+            "1",
+            "--lossless_jpeg=1",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        idle_timeout_seconds: 60,
+        hard_timeout_seconds: 120,
+        exit_code: 0,
+    };
+    let attempt = Some(JpegExecutionAttempt {
+        run_id: Some("synthetic-run".into()),
+        invocation_id: "synthetic-invocation".into(),
+    });
+    let conn = open_store_connection()?;
+    conn.execute_batch(
+        "CREATE TRIGGER reject_synthetic_execution BEFORE INSERT ON fast_img_jpeg_execution
+         BEGIN SELECT RAISE(ABORT,'synthetic JPEG execution write failure'); END",
+    )?;
+    let error = write_marker_with_jpeg_execution(&published, rel, encoder.clone(), attempt.clone())
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("synthetic JPEG execution write failure"),
+        "{error:#}"
+    );
+    assert_eq!(read_marker(&published.working_copy)?, prior);
+    assert!(read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?.is_empty());
+    assert!(
+        read_source_evidence(&published.working_copy, rel)?
+            .primary_result
+            .is_none()
+    );
+    assert_eq!(fs::read(&source)?, b"converted source");
+    assert_eq!(fs::read(&delivery)?, b"converted output");
+    conn.execute_batch("DROP TRIGGER reject_synthetic_execution")?;
+    write_marker_with_jpeg_execution(&published, rel, encoder.clone(), attempt.clone())?;
+    write_marker_with_jpeg_execution(&published, rel, encoder.clone(), attempt.clone())?;
+    let receipts = read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?;
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(table_count(&conn, "fast_img_primary_results")?, 1);
+    let evidence = read_source_evidence(&published.working_copy, rel)?;
+    let primary_result = evidence.primary_result.context("missing primary result")?;
+    assert_eq!(
+        primary_result
+            .observation
+            .context("missing primary observation")?
+            .attempt,
+        attempt
+    );
+    assert_eq!(receipts[0].schema_version, 1);
+    assert!(receipts[0].reconstructed_jpeg_blake3.is_none());
+    assert_eq!(receipts[0].encoder, encoder);
+    assert_eq!(receipts[0].attempt, attempt);
+    assert_eq!(receipts[0].source_blake3, digest(b"converted source"));
+    assert_eq!(receipts[0].output_blake3, digest(b"converted output"));
+    assert_eq!(receipts[0].logical_task_key, receipts[0].task_key);
+    write_marker(&prior)?;
+    write_marker(&published)?;
+    assert!(
+        read_source_evidence(&published.working_copy, rel)?
+            .primary_result
+            .is_none(),
+        "an unobserved matching outcome cannot revive prior attempt attribution"
+    );
+    write_marker(&prior)?;
+    assert_eq!(
+        read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?,
+        receipts
+    );
+    assert!(
+        read_jpeg_execution_receipts_for_source(&published.working_copy, "Nested/converted.jpg")?
+            .is_empty()
+    );
+    assert_eq!(inspect_integrity(&conn)?, inspect_row_count(&conn)?);
+    conn.execute(
+        "UPDATE fast_img_jpeg_execution SET source_rel='wrong.jpg'",
+        [],
+    )?;
+    assert!(read_jpeg_execution_receipts_for_source(&published.working_copy, "wrong.jpg").is_err());
+    assert!(inspect_integrity(&conn).is_err());
+    conn.execute("UPDATE fast_img_jpeg_execution SET source_rel=?1", [rel])?;
+    conn.execute(
+        "INSERT INTO fast_img_jpeg_execution SELECT task_key,'unrelated.jpg',receipt_key,
+         payload,zeroblob(32) FROM fast_img_jpeg_execution WHERE source_rel=?1",
+        [rel],
+    )?;
+    assert_eq!(
+        read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?,
+        receipts
+    );
+    assert!(inspect_integrity(&conn).is_err());
+    conn.execute(
+        "DELETE FROM fast_img_jpeg_execution WHERE source_rel='unrelated.jpg'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE fast_img_jpeg_execution SET payload_blake3=zeroblob(32)",
+        [],
+    )?;
+    assert!(read_jpeg_execution_receipts_for_source(&published.working_copy, rel).is_err());
+    assert!(inspect_integrity(&conn).is_err());
+    assert_eq!(read_marker(&published.working_copy)?, prior);
+    Ok(())
+}
+
+#[test]
+fn reconstructed_jpeg_execution_keeps_jxl_and_encoder_input_evidence_distinct() -> Result<()> {
+    if crate::common_utils::isolated_test_process() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let _state = state_guard(root.path());
+    let mut prior = complete_marker(root.path())?;
+    prior.stage = FastImgStageName::OutputPrepared;
+    prior.photos_imported_assets.clear();
+    prior.tier2_imported_assets.clear();
+    let mut marker = prior.clone();
+    let source_rel = "no-extension";
+    let output_blake3 = digest(b"published JXL");
+    marker.encoded_count += 1;
+    marker.blake3_log.insert(
+        source_rel.into(),
+        Blake3Entry {
+            src: digest(b"admitted JXL"),
+            out: output_blake3.clone(),
+            out_rel: Some("no-extension.JXL".into()),
+            library_asset: None,
+        },
+    );
+    let reconstructed_jpeg_blake3 = digest(b"reconstructed JPEG");
+    let scratch_jpeg = "/synthetic/tmp/mfb-jxl-abc.jpg";
+    let encoder = JpegEncoderInvocation {
+        executable: "/synthetic/cjxl".into(),
+        executable_blake3: digest(b"encoder"),
+        argv: [
+            scratch_jpeg,
+            "/synthetic/tmp/mfb-jpeg-full-effort-abc/e7.jxl",
+            "-e",
+            "7",
+            "--num_threads",
+            "1",
+            "--lossless_jpeg=1",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        idle_timeout_seconds: 60,
+        hard_timeout_seconds: 120,
+        exit_code: 0,
+    };
+    write_marker(&prior)?;
+    let proof = |candidate_blake3: String| ReconstructedJpegExecution {
+        reconstructed_jpeg_blake3: reconstructed_jpeg_blake3.clone(),
+        candidate_blake3,
+        encoder: encoder.clone(),
+    };
+    assert!(write_marker_with_jpeg_execution(&marker, source_rel, encoder.clone(), None).is_err());
+    assert!(
+        write_marker_with_reconstructed_jpeg_execution(
+            &marker,
+            source_rel,
+            proof(digest(b"wrong candidate")),
+            None,
+        )
+        .is_err()
+    );
+    assert_eq!(read_marker(&marker.working_copy)?, prior);
+    assert!(read_jpeg_execution_receipts_for_source(&marker.working_copy, source_rel)?.is_empty());
+    write_marker_with_reconstructed_jpeg_execution(
+        &marker,
+        source_rel,
+        proof(output_blake3.clone()),
+        None,
+    )?;
+    let receipts = read_jpeg_execution_receipts_for_source(&marker.working_copy, source_rel)?;
+    let [receipt] = receipts.as_slice() else {
+        anyhow::bail!("Expected one replacement receipt")
+    };
+    assert_eq!(receipt.schema_version, 2);
+    assert_eq!(receipt.source_blake3, digest(b"admitted JXL"));
+    assert_eq!(
+        receipt.reconstructed_jpeg_blake3.as_ref(),
+        Some(&reconstructed_jpeg_blake3)
+    );
+    assert_eq!(receipt.candidate_blake3.as_ref(), Some(&output_blake3));
+    assert_eq!(receipt.output_blake3, output_blake3);
+    assert_eq!(receipt.encoder, encoder);
+    assert_eq!(read_marker(&marker.working_copy)?, marker);
+    let conn = open_store_connection()?;
+    assert_eq!(inspect_integrity(&conn)?, inspect_row_count(&conn)?);
+    Ok(())
+}
+
+#[test]
+fn avif_execution_receipt_is_atomic_historical_and_rejects_corruption() -> Result<()> {
+    if crate::common_utils::isolated_test_process() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let _state = state_guard(root.path());
+    let src_dir = root.path().canonicalize()?.join("source");
+    fs::create_dir(&src_dir)?;
+    let mut marker = WorkingCopyMarker::new(src_dir, root.path().canonicalize()?.join("output"), 1);
+    marker.strategy = "avif".into();
+    marker.stage = FastImgStageName::OutputPrepared;
+    marker.processing_contract = Some(FastImgProcessingContract {
+        schema: 1,
+        tool_policy: crate::runtime_config::ToolPolicy::Single,
+        fallback_policy: crate::runtime_config::FallbackPolicy::Strict,
+        encoding: FastImgEncodingParameters::Avif {
+            avif_quality: 100,
+            avif_speed: 8,
+            quality_search: crate::runtime_config::QualitySearch::Fixed,
+            avif_metadata_policy: crate::runtime_config::AvifMetadataPolicy::Clear,
+            allow_expert_options: false,
+        },
+    });
+    let before = marker.clone();
+    write_marker(&before)?;
+    let source_rel = "nested/converted.png";
+    let output_blake3 = digest(b"verified candidate");
+    marker.encoded_count = 1;
+    marker.blake3_log.insert(
+        source_rel.into(),
+        Blake3Entry {
+            src: digest(b"original source"),
+            out: output_blake3.clone(),
+            out_rel: Some("nested/converted.AVIF".into()),
+            library_asset: None,
+        },
+    );
+    let encoder = AvifEncoderInvocation {
+        executable: "/synthetic/avifenc".into(),
+        executable_blake3: digest(b"avifenc"),
+        argv: [
+            "--speed",
+            "8",
+            "-q",
+            "100",
+            "--cicp",
+            "1/13/0",
+            "--progressive",
+            "/synthetic/scratch/normalized.png",
+            "/synthetic/scratch/winning.avif",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        idle_timeout_seconds: 60,
+        hard_timeout_seconds: 120,
+        exit_code: 0,
+    };
+    let attempt = Some(JpegExecutionAttempt {
+        run_id: Some("synthetic-run".into()),
+        invocation_id: "synthetic-avif".into(),
+    });
+    let conn = open_store_connection()?;
+    conn.execute_batch(
+        "CREATE TRIGGER reject_synthetic_avif BEFORE INSERT ON fast_img_avif_execution
+         BEGIN SELECT RAISE(ABORT,'synthetic AVIF receipt write failure'); END",
+    )?;
+    let save = |hash: &str| {
+        write_marker_with_avif_execution(
+            &marker,
+            source_rel,
+            hash,
+            encoder.clone(),
+            attempt.clone(),
+        )
+    };
+    assert!(
+        save(&digest(b"wrong candidate"))
+            .unwrap_err()
+            .to_string()
+            .contains("candidate")
+    );
+    assert!(
+        save(&output_blake3)
+            .unwrap_err()
+            .to_string()
+            .contains("synthetic AVIF receipt write failure")
+    );
+    assert_eq!(read_marker(&marker.working_copy)?, before);
+    assert!(
+        read_avif_execution_receipt_page(&marker.working_copy, source_rel, None)?
+            .receipts
+            .is_empty()
+    );
+    conn.execute_batch("DROP TRIGGER reject_synthetic_avif")?;
+    save(&output_blake3)?;
+    save(&output_blake3)?;
+
+    let page = read_avif_execution_receipt_page(&marker.working_copy, source_rel, None)?;
+    assert!(page.next_cursor.is_none());
+    assert_eq!(page.receipts.len(), 1);
+    let receipt = &page.receipts[0];
+    assert_eq!(receipt.encoder, encoder);
+    assert_eq!(receipt.attempt, attempt);
+    assert_eq!(
+        receipt.candidate_blake3.as_deref(),
+        Some(output_blake3.as_str())
+    );
+    assert_eq!(receipt.output_blake3, output_blake3);
+    assert_eq!(receipt.source_blake3, digest(b"original source"));
+    assert_eq!(read_marker(&marker.working_copy)?, marker);
+    assert!(
+        read_avif_execution_receipt_page(&marker.working_copy, "Nested/converted.png", None)?
+            .receipts
+            .is_empty()
+    );
+    assert!(read_jpeg_execution_receipts_for_source(&marker.working_copy, source_rel)?.is_empty());
+    assert_eq!(inspect_integrity(&conn)?, inspect_row_count(&conn)?);
+    conn.execute(
+        "UPDATE fast_img_avif_execution SET payload_blake3=zeroblob(32)",
+        [],
+    )?;
+    assert!(read_avif_execution_receipt_page(&marker.working_copy, source_rel, None).is_err());
+    assert!(inspect_integrity(&conn).is_err());
+    Ok(())
+}
+
+#[test]
+fn jpeg_execution_pages_preserve_order_and_reject_foreign_cursors() -> Result<()> {
+    if crate::common_utils::isolated_test_process() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let _state = state_guard(root.path());
+    let mut marker = complete_marker(root.path())?;
+    marker.stage = FastImgStageName::OutputPrepared;
+    marker.photos_imported_assets.clear();
+    marker.tier2_imported_assets.clear();
+    let mut other = marker.clone();
+    other.working_copy = marker.working_copy.with_file_name("other_output");
+    let rel = "nested/converted.jpg";
+    let source = marker.src_dir.join(rel);
+    let encoder = JpegEncoderInvocation {
+        executable: "/synthetic/cjxl".into(),
+        executable_blake3: digest(b"encoder"),
+        argv: [
+            source.to_str().unwrap(),
+            "/synthetic/scratch/winner.jxl",
+            "--container=1",
+            "-e",
+            "7",
+            "--num_threads",
+            "1",
+            "--lossless_jpeg=1",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        idle_timeout_seconds: 60,
+        hard_timeout_seconds: 120,
+        exit_code: 0,
+    };
+    for index in 0..65 {
+        write_marker_with_jpeg_execution(
+            &marker,
+            rel,
+            encoder.clone(),
+            Some(JpegExecutionAttempt {
+                run_id: None,
+                invocation_id: format!("synthetic-invocation-{index}"),
+            }),
+        )?;
+    }
+    write_marker_with_jpeg_execution(&other, rel, encoder, None)?;
+    let conn = open_store_connection()?;
+    let database = database_path()?;
+    let wal = database.with_extension("sqlite-wal");
+    let before = (fs::read(&database)?, fs::read(&wal)?);
+    let keys = conn
+        .prepare(
+            "SELECT lower(hex(receipt_key)) FROM fast_img_jpeg_execution
+         WHERE task_key=?1 AND source_rel=?2 ORDER BY receipt_key",
+        )?
+        .query_map(
+            rusqlite::params![
+                key_for_canonical(&canonical_text(&marker.working_copy)?),
+                rel
+            ],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let first = read_jpeg_execution_receipt_page(&marker.working_copy, rel, None)?;
+    assert_eq!(first.receipts.len(), 64);
+    assert_eq!(first.next_cursor.as_deref(), Some(keys[63].as_str()));
+    let repeated = read_jpeg_execution_receipt_page(&marker.working_copy, rel, None)?;
+    assert_eq!(repeated.receipts, first.receipts);
+    let second =
+        read_jpeg_execution_receipt_page(&marker.working_copy, rel, first.next_cursor.as_deref())?;
+    assert_eq!(second.receipts.len(), 1);
+    assert!(second.next_cursor.is_none());
+    let invocation_ids = first
+        .receipts
+        .iter()
+        .chain(&second.receipts)
+        .map(|receipt| &receipt.attempt.as_ref().unwrap().invocation_id)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(invocation_ids.len(), 65);
+    let end = read_jpeg_execution_receipt_page(&marker.working_copy, rel, Some(keys[64].as_str()))?;
+    assert!(end.receipts.is_empty() && end.next_cursor.is_none());
+    assert!(read_jpeg_execution_receipts_for_source(&marker.working_copy, rel).is_err());
+    assert!(
+        read_jpeg_execution_receipt_page(&other.working_copy, rel, first.next_cursor.as_deref())
+            .is_err()
+    );
+    assert!(
+        read_jpeg_execution_receipt_page(
+            &marker.working_copy,
+            "Nested/converted.jpg",
+            first.next_cursor.as_deref(),
+        )
+        .is_err()
+    );
+    assert!(read_jpeg_execution_receipt_page(&marker.working_copy, rel, Some("bad")).is_err());
+    assert_eq!((fs::read(&database)?, fs::read(&wal)?), before);
     Ok(())
 }
 

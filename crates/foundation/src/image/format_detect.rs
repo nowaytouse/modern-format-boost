@@ -128,6 +128,13 @@ pub fn detect_true_format(path: &Path) -> Result<FormatKind> {
     detect_open_format(path, &mut std::fs::File::open(path)?)
 }
 
+/// Probe the current contents of a regular file without opening a leaf link.
+/// # Errors
+/// Returns an error for an unavailable, linked or nonregular file.
+pub fn detect_regular_file_format(path: &Path) -> Result<FormatKind> {
+    detect_open_format(path, &mut crate::io_utils::open_regular_nofollow(path)?)
+}
+
 fn detect_open_format(path: &Path, file: &mut std::fs::File) -> Result<FormatKind> {
     use std::io::Read;
 

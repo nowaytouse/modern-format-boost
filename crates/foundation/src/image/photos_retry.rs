@@ -254,6 +254,8 @@ fn probe_candidate<Q, P>(
     identifier: &str,
     query: &mut Q,
     quarantined: &mut P,
+    kind: PhotosSubmissionKind,
+    direct_library: Option<&Path>,
 ) -> Result<Option<LibraryAssetRecord>>
 where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
@@ -287,7 +289,11 @@ where
         rel_path: entry.rel_path.clone(),
         blake3: hash,
         sync_status: super::photos_sync_status(&probe).to_owned(),
-        quarantined: quarantined(&entry.path)?,
+        quarantined: if kind == PhotosSubmissionKind::Original {
+            super::tier2_import_quarantined(&entry.path, &probe.path, direct_library, quarantined)?
+        } else {
+            quarantined(&entry.path)?
+        },
         photos_uuid: Some(probe.uuid),
         library_blake3: None,
         xmp_sidecar_blake3: None,
@@ -346,8 +352,9 @@ where
                 PhotosSubmissionBackend::Applescript { .. } => discovered.clone(),
             };
             let mut matched = false;
+            let direct_library = library.filter(|_| !enriched.contains_key(&entry.rel_path));
             for id in ids {
-                match probe_candidate(entry, &id, query, quarantined)? {
+                match probe_candidate(entry, &id, query, quarantined, kind, direct_library)? {
                     Some(asset) => {
                         let uuid = asset
                             .photos_uuid
@@ -417,10 +424,14 @@ where
             let staged_xmp = enriched.get(&entry.source_rel).map(|(_, _, xmp)| xmp);
             let admitted_xmp = match &admission.xmp {
                 crate::db::fast_img_store::FailedRetrySidecar::Absent => None,
-                crate::db::fast_img_store::FailedRetrySidecar::Present { blake3, .. } => Some(blake3),
+                crate::db::fast_img_store::FailedRetrySidecar::Present { blake3, .. } => {
+                    Some(blake3)
+                }
             };
             if kind != PhotosSubmissionKind::Original || staged_xmp != admitted_xmp {
-                return Err(unresolved("original Photos submission differs from its admitted route or XMP"));
+                return Err(unresolved(
+                    "original Photos submission differs from its admitted route or XMP",
+                ));
             }
         }
         if crate::common_utils::calculate_blake3_hash(&entry.path).map_err(unresolved)?

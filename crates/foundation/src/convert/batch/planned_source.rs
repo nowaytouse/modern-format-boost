@@ -4,6 +4,7 @@ use super::DiscoveredSource;
 use anyhow::{Context, Result, ensure};
 use clap::Args;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const MAX_PROOF_BYTES: usize = 64 * 1024;
@@ -24,7 +25,16 @@ impl PlannedSource {
     /// # Errors
     /// Returns path resolution, serialization or transport-bound errors.
     pub fn encode(source: &DiscoveredSource) -> Result<String> {
-        let proof = Self {
+        let encoded = serde_json::to_string(&Self::from_observation(source)?)?;
+        ensure!(
+            encoded.len() <= MAX_PROOF_BYTES,
+            "planned source exceeds transport bound"
+        );
+        Ok(encoded)
+    }
+
+    fn from_observation(source: &DiscoveredSource) -> Result<Self> {
+        Ok(Self {
             schema_version: 1,
             source: crate::media_conversion_gate::delivery_join_relative_to_cwd_or_err(
                 source.path(),
@@ -34,13 +44,7 @@ impl PlannedSource {
             resolved: source.resolved.clone(),
             identity: source.identity.clone(),
             content_blake3: source.content_blake3(),
-        };
-        let encoded = serde_json::to_string(&proof)?;
-        ensure!(
-            encoded.len() <= MAX_PROOF_BYTES,
-            "planned source exceeds transport bound"
-        );
-        Ok(encoded)
+        })
     }
 
     fn parse(encoded: &str) -> Result<Self> {
@@ -49,6 +53,12 @@ impl PlannedSource {
             "planned source exceeds transport bound"
         );
         let proof: Self = serde_json::from_str(encoded).context("invalid planned source JSON")?;
+        proof.check_structure()?;
+        Ok(proof)
+    }
+
+    fn check_structure(&self) -> Result<()> {
+        let proof = self;
         ensure!(
             proof.schema_version == 1,
             "unsupported planned source schema"
@@ -65,7 +75,7 @@ impl PlannedSource {
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
             "planned source hash is invalid"
         );
-        Ok(proof)
+        Ok(())
     }
 
     /// Check a persisted admission's exact path and content claim without reading media.
@@ -101,7 +111,11 @@ impl PlannedSource {
     /// # Errors
     /// Rejects malformed claims, unavailable files and changed paths or complete bytes.
     pub fn verify(encoded: &str, input: &Path) -> Result<()> {
-        let proof = Self::parse(encoded)?;
+        Self::parse(encoded)?.verify_observation(input)
+    }
+
+    fn verify_observation(&self, input: &Path) -> Result<()> {
+        let proof = self;
         let input = crate::media_conversion_gate::delivery_join_relative_to_cwd_or_err(
             input,
             "check planned worker input",
@@ -128,11 +142,188 @@ impl PlannedSource {
     }
 }
 
+/// The XMP lookup precondition for an IMG worker. This records lookup behavior, not ownership.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+enum PlannedXmp {
+    Absent,
+    Present(PlannedSource),
+    Ambiguous,
+}
+
+impl PlannedXmp {
+    fn parse(encoded: &str) -> Result<Self> {
+        ensure!(
+            encoded.len() <= MAX_PROOF_BYTES,
+            "planned XMP observation exceeds transport bound"
+        );
+        let claim: Self =
+            serde_json::from_str(encoded).context("invalid planned XMP observation")?;
+        if let Self::Present(observed) = &claim {
+            observed.check_structure()?;
+        }
+        Ok(claim)
+    }
+
+    fn check_selection(&self, input: &Path) -> Result<Option<PathBuf>> {
+        let input = std::path::absolute(input).context("resolve planned XMP source")?;
+        let reject = || {
+            crate::UnifiedError::analysis_error(format!(
+                "XMP selection changed, is ambiguous, or is unsafe for {}; source and sidecar retained",
+                input.display()
+            ))
+        };
+        if matches!(self, Self::Ambiguous) {
+            return Err(reject().into());
+        }
+        let actual = crate::metadata::find_xmp_sidecar(&input).map_err(|error| {
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData
+            ) {
+                anyhow::Error::from(reject()).context(error.to_string())
+            } else {
+                anyhow::Error::from(error)
+            }
+        })?;
+        match (self, actual) {
+            (Self::Absent, None) => Ok(None),
+            (Self::Present(expected), Some(path))
+                if path.as_os_str() == expected.source.as_os_str() =>
+            {
+                Ok(Some(path))
+            }
+            _ => Err(reject().into()),
+        }
+    }
+}
+
+/// Serialize the XMP observation already chosen by the launcher. A directory scan
+/// supplies its original observation, and a single-file scan observes that file's
+/// adjacent dependency separately.
+///
+/// # Errors
+/// Refuses transport or serialization failure.
+fn encode_xmp_claim(observed: Option<&DiscoveredSource>, ambiguous: bool) -> Result<String> {
+    let claim = if ambiguous {
+        PlannedXmp::Ambiguous
+    } else if let Some(observed) = observed {
+        let mut proof = PlannedSource::from_observation(observed)?;
+        proof.source = std::path::absolute(observed.path()).context("resolve observed XMP path")?;
+        PlannedXmp::Present(proof)
+    } else {
+        PlannedXmp::Absent
+    };
+    let encoded = serde_json::to_string(&claim)?;
+    ensure!(
+        encoded.len() <= MAX_PROOF_BYTES,
+        "planned XMP observation exceeds transport bound"
+    );
+    Ok(encoded)
+}
+
+/// Lookup of previously observed XMP files using the same keys as metadata delivery.
+#[derive(Default)]
+pub struct PlannedXmpIndex<'a> {
+    by_directory: HashMap<&'a Path, HashMap<String, Vec<&'a DiscoveredSource>>>,
+}
+
+impl<'a> PlannedXmpIndex<'a> {
+    pub fn insert(&mut self, source: &'a DiscoveredSource) {
+        if let Some(key) = crate::metadata::xmp_candidate_key(source.path()) {
+            self.by_directory
+                .entry(crate::media_conversion_gate::path_parent_or_dot(
+                    source.path(),
+                ))
+                .or_default()
+                .entry(key)
+                .or_default()
+                .push(source);
+        }
+    }
+
+    /// Encode the XMP lookup using the original directory inventory.
+    ///
+    /// # Errors
+    /// Rejects unsupported source names or failed encoding.
+    pub fn encode_for(&self, input: &Path) -> Result<String> {
+        let (stem, filename) = crate::metadata::xmp_source_names(input)?;
+        let Some(directory) = self
+            .by_directory
+            .get(crate::media_conversion_gate::path_parent_or_dot(input))
+        else {
+            return encode_xmp_claim(None, false);
+        };
+        let mut candidates = directory.get(&stem).into_iter().flatten();
+        let first = candidates.next().copied();
+        let second = candidates.next().is_some();
+        let exact = if filename != stem {
+            directory.get(&filename).map_or(&[][..], Vec::as_slice)
+        } else {
+            &[]
+        };
+        let ambiguous = second || exact.len() > 1 || (first.is_some() && !exact.is_empty());
+        encode_xmp_claim(first.or_else(|| exact.first().copied()), ambiguous)
+    }
+}
+
+/// Bind the actual dependency adjacent to a single-file selection.
+///
+/// # Errors
+/// Refuses incomplete or failed sidecar reads without claiming absence.
+pub fn encode_single_source_xmp(input: &Path) -> Result<String> {
+    let input = std::path::absolute(input).context("resolve single-file XMP source")?;
+    match crate::metadata::find_xmp_sidecar(&input) {
+        Ok(None) => encode_xmp_claim(None, false),
+        Ok(Some(path)) => {
+            let sidecar =
+                DiscoveredSource::from_metadata(&path, &std::fs::symlink_metadata(&path)?)
+                    .with_context(|| format!("observe adjacent XMP {}", path.display()))?;
+            encode_xmp_claim(Some(&sidecar), false)
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::InvalidData | std::io::ErrorKind::InvalidInput
+            ) =>
+        {
+            encode_xmp_claim(None, true)
+        }
+        Err(error) => Err(error).context("read adjacent XMP selection"),
+    }
+}
+
+/// Check the launcher selection (including absence) and the original XMP
+/// filesystem observation before spawning the worker. The worker checks full bytes.
+///
+/// # Errors
+/// Rejects invalid or stale claims or an unreadable namespace.
+pub fn verify_xmp_claim_before_launch(encoded: &str, input: &Path) -> Result<()> {
+    let claim = PlannedXmp::parse(encoded)?;
+    if let (Some(path), PlannedXmp::Present(expected)) = (claim.check_selection(input)?, claim) {
+        let metadata = std::fs::symlink_metadata(&path)
+            .with_context(|| format!("inspect selected XMP {}", path.display()))?;
+        let identity = super::CachedFileIdentity::from_metadata(&metadata);
+        if !identity.is_ok_and(|identity| identity == expected.identity)
+            || std::fs::canonicalize(&path)? != expected.resolved
+        {
+            return Err(crate::UnifiedError::analysis_error(format!(
+                "XMP identity changed before launch: {}; source and sidecar retained",
+                path.display()
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
 /// Internal invocation evidence, separate from persistent user settings.
 #[derive(Args, Debug, Default)]
 pub struct PlannedSourceArgs {
     #[arg(long, global = true, hide = true)]
     planned_source: Option<String>,
+    #[arg(long, global = true, hide = true, requires = "planned_source")]
+    planned_xmp: Option<String>,
 }
 
 impl PlannedSourceArgs {
@@ -142,10 +333,21 @@ impl PlannedSourceArgs {
     /// Rejects claims on unsupported commands or inputs that no longer match.
     pub fn verify_for_input(&self, input: Option<&Path>) -> Result<()> {
         if let Some(encoded) = &self.planned_source {
-            PlannedSource::verify(
-                encoded,
-                input.context("planned source requires a standard single-file run")?,
-            )?;
+            let input = input.context("planned source requires a standard single-file run")?;
+            PlannedSource::verify(encoded, input)?;
+            if let Some(encoded) = &self.planned_xmp {
+                let claim = PlannedXmp::parse(encoded)?;
+                if let (Some(path), PlannedXmp::Present(expected)) =
+                    (claim.check_selection(input)?, claim)
+                {
+                    expected.verify_observation(&path).with_context(|| {
+                        format!(
+                            "XMP changed after preflight; source retained: {}",
+                            path.display()
+                        )
+                    })?;
+                }
+            }
         }
         Ok(())
     }
@@ -201,9 +403,47 @@ mod tests {
         );
         let args = PlannedSourceArgs {
             planned_source: Some(encoded),
+            ..PlannedSourceArgs::default()
         };
         assert!(args.verify_for_input(None).is_err());
         PlannedSourceArgs::default().verify_for_input(None)?;
+        Ok(())
+    }
+
+    #[test]
+    fn planned_xmp_worker_guard_handles_absent_changed_and_ambiguous_companions() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let input = directory.path().join("Photo.jpg");
+        let sidecar = directory.path().join("pHOTo.JPG.XMP");
+        let ambiguous = directory.path().join("Photo.xmp");
+        std::fs::write(&input, b"synthetic JPEG bytes")?;
+        let observed = DiscoveredSource::from_metadata(&input, &std::fs::metadata(&input)?)?;
+        let mut args = PlannedSourceArgs {
+            planned_source: Some(PlannedSource::encode(&observed)?),
+            planned_xmp: Some(encode_single_source_xmp(&input)?),
+        };
+        args.verify_for_input(Some(&input))?;
+        std::fs::write(&sidecar, b"<xmp>first</xmp>")?;
+        assert!(args.verify_for_input(Some(&input)).is_err());
+
+        let observed = DiscoveredSource::from_metadata(&sidecar, &std::fs::metadata(&sidecar)?)?;
+        let mut index = PlannedXmpIndex::default();
+        index.insert(&observed);
+        args.planned_xmp = Some(index.encode_for(&input)?);
+        let claim = args.planned_xmp.as_deref().expect("XMP claim");
+        verify_xmp_claim_before_launch(claim, &input)?;
+        args.verify_for_input(Some(&input))?;
+        std::fs::write(&ambiguous, b"<xmp>extra</xmp>")?;
+        assert!(verify_xmp_claim_before_launch(claim, &input).is_err());
+        assert!(args.verify_for_input(Some(&input)).is_err());
+        std::fs::remove_file(&ambiguous)?;
+
+        std::fs::write(&sidecar, b"<xmp>other</xmp>")?;
+        assert!(args.verify_for_input(Some(&input)).is_err());
+        std::fs::remove_file(&sidecar)?;
+        assert!(verify_xmp_claim_before_launch(claim, &input).is_err());
+        assert!(args.verify_for_input(Some(&input)).is_err());
+        assert_eq!(std::fs::read(&input)?, b"synthetic JPEG bytes");
         Ok(())
     }
 

@@ -114,9 +114,10 @@ pub(super) fn batch_sizes(import: usize, verify: usize) {
 pub(super) fn resource_sample_due(now: Instant) -> bool {
     CURRENT.with_borrow_mut(|current| {
         let Some(data) = current else { return false };
-        if data.last_resource_sample.is_some_and(|last| {
-            now.saturating_duration_since(last) < Duration::from_secs(30)
-        }) {
+        if data
+            .last_resource_sample
+            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(30))
+        {
             return false;
         }
         data.last_resource_sample = Some(now);
@@ -242,7 +243,9 @@ mod tests {
             let _profile = Profile::start("applescript");
             assert!(resource_sample_due(start));
             for attempt in 0..600 {
-                assert!(!resource_sample_due(start + Duration::from_millis(attempt * 40)));
+                assert!(!resource_sample_due(
+                    start + Duration::from_millis(attempt * 40)
+                ));
             }
             assert!(resource_sample_due(start + Duration::from_secs(30)));
             assert!(!resource_sample_due(start + Duration::from_secs(31)));

@@ -27,7 +27,17 @@ pub struct SystemResources {
     pub cpu_percent: Option<f64>,
 }
 
-pub fn check_system_resources(check_dir: &Path, required_bytes: u64) -> Result<SystemResources> {
+/// Standard launcher disk admission threshold, including its existing two GiB of headroom.
+pub fn minimum_free_disk_bytes(selected_media_bytes: u64) -> Result<u64> {
+    selected_media_bytes
+        .checked_add(2 * 1024 * 1024 * 1024)
+        .ok_or_else(|| anyhow::anyhow!("batch resource byte requirement overflow"))
+}
+
+pub fn check_system_resources(
+    check_dir: &Path,
+    minimum_free_bytes: u64,
+) -> Result<SystemResources> {
     let mut resources = SystemResources::default();
 
     // Disk check via statvfs
@@ -35,9 +45,9 @@ pub fn check_system_resources(check_dir: &Path, required_bytes: u64) -> Result<S
     resources.disk_free_bytes = Some(free);
 
     let free_gb = free as f64 / (1024.0 * 1024.0 * 1024.0);
-    let required_gb = (required_bytes as f64 / (1024.0 * 1024.0 * 1024.0)) + 1.0;
+    let required_gb = minimum_free_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
 
-    if free < required_bytes + 1024 * 1024 * 1024 {
+    if free < minimum_free_bytes {
         bail!(
             "Insufficient disk space on {}: available {:.2} GB, required {:.2} GB",
             check_dir.display(),

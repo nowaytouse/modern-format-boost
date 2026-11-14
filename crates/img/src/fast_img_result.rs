@@ -4,6 +4,7 @@
     reason = "CLI result types remain internal; public visibility conflicts with unreachable_pub"
 )]
 use foundation::ModernLossyStaticCandidate;
+#[cfg(test)]
 use foundation::common_utils::calculate_blake3_hash;
 use foundation::fast_img::PhotosQuarantineLocations;
 use foundation::fast_img_store::{
@@ -11,7 +12,7 @@ use foundation::fast_img_store::{
 };
 use foundation::pipeline::verification::{
     FastImgStageName, GateResult, WorkingCopyMarker, gate1_complete_or_later,
-    gate3_complete_or_later, write_marker_atomic,
+    gate3_complete_or_later, retained_source_blake3, write_marker_atomic,
 };
 use foundation::unified_error::PhotosDeliveryDeferred;
 use std::collections::{BTreeMap, BTreeSet};
@@ -87,6 +88,12 @@ pub(super) fn final_quarantine_count(result: &GateResult) -> Option<usize> {
 }
 
 #[derive(Debug, serde::Serialize)]
+struct FailedSourceProof {
+    invocation_id: String,
+    verified_relative_paths: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
 struct Report {
     schema_version: u8,
     source_directory: std::path::PathBuf,
@@ -106,6 +113,8 @@ struct Report {
     failed_sources_retained: Option<usize>,
     failed_sources_verified: Option<usize>,
     failed_source_verification_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failed_source_proof: Option<FailedSourceProof>,
     retention_unknown_reason: Option<String>,
     primary_cleanup_complete: bool,
     retained_only_complete: bool,
@@ -115,24 +124,8 @@ struct Report {
 }
 
 fn verify_retained_source(root: &std::path::Path, rel: &str, hash: &str) -> anyhow::Result<()> {
-    let mut path = root.to_path_buf();
     anyhow::ensure!(
-        std::fs::symlink_metadata(&path)?.is_dir(),
-        "retained source root is not a real directory"
-    );
-    for component in std::path::Path::new(rel).components() {
-        path.push(component);
-        anyhow::ensure!(
-            !std::fs::symlink_metadata(&path)?.file_type().is_symlink(),
-            "retained source path contains a symlink: {rel}"
-        );
-    }
-    anyhow::ensure!(
-        std::fs::symlink_metadata(&path)?.is_file(),
-        "retained source is not a regular file: {rel}"
-    );
-    anyhow::ensure!(
-        calculate_blake3_hash(&path)? == hash,
+        retained_source_blake3(root, std::path::Path::new(rel))? == hash,
         "retained source no longer matches its recorded content hash: {rel}"
     );
     Ok(())
@@ -154,6 +147,7 @@ impl Report {
             originals,
             probe_failures,
             recorded_failures,
+            None,
         )
     }
 
@@ -164,6 +158,7 @@ impl Report {
         originals: &[ModernLossyStaticCandidate],
         probe_failures: usize,
         recorded_failures: Option<&FileFailures>,
+        invocation_id: Option<&str>,
     ) -> anyhow::Result<Self> {
         marker
             .validate_source_disposition_disjoint()
@@ -315,6 +310,7 @@ impl Report {
             }
             Ok((count, _)) => (Some(count), None),
         };
+        let mut verified_relative_paths = Vec::new();
         let failed_verification = (|| -> anyhow::Result<usize> {
             anyhow::ensure!(
                 unbound_failures == 0 && anonymous_original_failures == 0,
@@ -335,6 +331,9 @@ impl Report {
                 } else {
                     verify_retained_source(&marker.src_dir, rel, &entry.src)?;
                 }
+                if verified_relative_paths.len() < 8 && rel.len() <= 256 {
+                    verified_relative_paths.push(rel.clone());
+                }
             }
             Ok(marker.failed_source_count())
         })();
@@ -342,6 +341,18 @@ impl Report {
         {
             Ok(count) => (Some(count), None),
             Err(error) => (None, Some(format!("{error:#}"))),
+        };
+        let failed_source_proof = if verified_relative_paths.is_empty() {
+            None
+        } else {
+            invocation_id
+                .filter(|id| {
+                    !id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_graphic())
+                })
+                .map(|invocation_id| FailedSourceProof {
+                    invocation_id: invocation_id.to_owned(),
+                    verified_relative_paths,
+                })
         };
         let retained_only_complete =
             recorded_failures.is_some_and(|failures| {
@@ -387,6 +398,7 @@ impl Report {
             failed_sources_retained,
             failed_sources_verified,
             failed_source_verification_error,
+            failed_source_proof,
             retention_unknown_reason,
             primary_cleanup_complete: marker.stage == FastImgStageName::CleanupComplete,
             retained_only_complete,
@@ -469,6 +481,7 @@ pub(super) fn finish(
         .as_ref()
         .err()
         .and_then(|error| error.downcast_ref::<FileFailures>());
+    let invocation_id = std::env::var("MFB_INVOCATION_ID").ok();
     let mut report = Report::from_execution(
         marker,
         retry.map(FailedRetryContext::admissions),
@@ -476,6 +489,7 @@ pub(super) fn finish(
         originals,
         probe_failures,
         recorded_failures,
+        invocation_id.as_deref(),
     )
     .map_err(|error| match execution.as_ref() {
         Ok(()) => error,
@@ -483,7 +497,11 @@ pub(super) fn finish(
     })?;
     report.record_execution(&execution, photos);
     report.ignored = ignored;
-    println!("MFB_FAST_IMG_RESULT={}", serde_json::to_string(&report)?);
+    let mut payload = serde_json::to_string(&report)?;
+    if payload.len() > 16_384 && report.failed_source_proof.take().is_some() {
+        payload = serde_json::to_string(&report)?;
+    }
+    println!("MFB_FAST_IMG_RESULT={payload}");
     print_processor_counts(
         report.succeeded,
         report.skipped,
@@ -665,12 +683,22 @@ mod tests {
         assert_eq!(report.failed_sources_verified, Some(1));
         assert_eq!(report.failed_source_verification_error, None);
         assert_eq!(serde_json::to_value(&report)?["failed_sources_verified"], 1);
+        let proof = Report::from_execution(&marker, None, false, &[], 0, None, Some("worker-1"))?
+            .failed_source_proof
+            .context("matching source should have file-scoped proof")?;
+        assert_eq!(proof.invocation_id, "worker-1");
+        assert_eq!(proof.verified_relative_paths, ["invalid.jpg"]);
 
         std::fs::write(&source, b"changed failed source")?;
         let report = Report::from_marker(&marker, false, &[], 0, None)?;
         assert_eq!(report.failed_sources_retained, Some(1));
         assert_eq!(report.failed_sources_verified, None);
         assert!(report.failed_source_verification_error.is_some());
+        assert!(
+            Report::from_execution(&marker, None, false, &[], 0, None, Some("worker-1"))?
+                .failed_source_proof
+                .is_none()
+        );
 
         std::fs::remove_file(&source)?;
         std::fs::create_dir(&source)?;
@@ -1078,6 +1106,7 @@ mod tests {
                 &[],
                 0,
                 Some(&FileFailures::originals(1)),
+                None,
             )
         };
         let report = build(&marker)?;
@@ -1089,7 +1118,7 @@ mod tests {
         assert_eq!(report.failed_sources_verified, Some(2));
         std::fs::write(src.join("retained.xmp"), b"unexpected companion")?;
         assert_eq!(build(&marker)?.failed_sources_verified, None);
-        assert!(Report::from_execution(&marker, None, true, &[], 0, None).is_err());
+        assert!(Report::from_execution(&marker, None, true, &[], 0, None, None).is_err());
         Ok(())
     }
 

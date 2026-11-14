@@ -593,7 +593,11 @@ pub struct CompletedWithFileFailures {
 
 impl std::fmt::Display for CompletedWithFileFailures {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "batch completed with {} failed source(s); failed originals verified and retained", self.failed)
+        write!(
+            formatter,
+            "batch completed with {} failed source(s); failed originals verified and retained",
+            self.failed
+        )
     }
 }
 impl std::error::Error for CompletedWithFileFailures {}
@@ -608,18 +612,32 @@ pub fn completed_file_failure_count(error: &anyhow::Error) -> Option<usize> {
 
 /// Summarize the observed outcome without inventing a child crash or success.
 pub fn print_pipeline_failure_panel(completed_failures: Option<usize>) {
-    println!("\n{}", render_pipeline_failure_panel(colors_enabled(), completed_failures));
+    println!(
+        "\n{}",
+        render_pipeline_failure_panel(colors_enabled(), completed_failures)
+    );
     flush();
 }
 
 fn render_pipeline_failure_panel(colored: bool, completed_failures: Option<usize>) -> String {
     let (heading, detail) = match completed_failures {
-        Some(failed) => ("COMPLETED WITH FILE ERRORS", format!(
-            "Processing finished; {failed} file(s) failed and their originals were retained. Review the per-file reasons above.")),
-        None => ("PROCESSING FAILED", "The batch did not complete. Review the error details above.".into()),
+        Some(failed) => (
+            "COMPLETED WITH FILE ERRORS",
+            format!(
+                "Processing finished; {failed} file(s) failed and their originals were retained. Review the per-file reasons above."
+            ),
+        ),
+        None => (
+            "PROCESSING FAILED",
+            "The batch did not complete. Review the error details above.".into(),
+        ),
     };
     if colored {
-        let color = if completed_failures.is_some() { YELLOW } else { RED };
+        let color = if completed_failures.is_some() {
+            YELLOW
+        } else {
+            RED
+        };
         format!(
             "{color}{BOLD}╭──────────────────────────────────────────────────────────────╮{RESET}\n\
              {color}{BOLD}│  {heading:<58}│{RESET}\n\

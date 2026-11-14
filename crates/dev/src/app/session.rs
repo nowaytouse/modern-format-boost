@@ -9,7 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::app::worker::{ToolSnapshotBindings, WorkerSession};
-use crate::infra::drag_drop::{OutputCleanupReceipt, PhotosQuarantineBlocked};
+use crate::infra::drag_drop::{
+    FastImgIndependentVerificationUnavailable, OutputCleanupReceipt, PhotosQuarantineBlocked,
+};
 use crate::infra::history_store::{self, HistorySessionLease};
 use crate::infra::log_paths::{
     append_jsonl_audit_record, archive_drag_drop_session_bundle_with_label, ensure_unified_log_dir,
@@ -291,7 +293,11 @@ impl AppSession {
     ///
     /// # Errors
     /// Returns malformed, oversized, duplicate or conflicting result and persistence errors.
-    pub fn record_fast_img_result(&self, text: &str, stats: &ProcessorStats) -> Result<Option<serde_json::Value>> {
+    pub fn record_fast_img_result(
+        &self,
+        text: &str,
+        stats: &ProcessorStats,
+    ) -> Result<Option<serde_json::Value>> {
         let mut reports = text
             .lines()
             .filter(|line| line.contains("MFB_FAST_IMG_RESULT="));
@@ -807,21 +813,53 @@ pub fn run_with_history(
             false
         };
         let completed_with_file_errors = !cancelled
-            && result.as_ref().err().and_then(completed_file_failure_count).is_some();
+            && result
+                .as_ref()
+                .err()
+                .and_then(completed_file_failure_count)
+                .is_some();
         let photos_quarantine_blocked = if cancelled {
             None
         } else {
-            result.as_ref().err().and_then(PhotosQuarantineBlocked::from_error).map(|error| error.count)
+            result
+                .as_ref()
+                .err()
+                .and_then(PhotosQuarantineBlocked::from_error)
+                .map(|error| error.count)
+        };
+        let verification_unavailable = if cancelled
+            || completed_with_file_errors
+            || photos_quarantine_blocked.is_some()
+        {
+            None
+        } else {
+            result
+                .as_ref()
+                .err()
+                .and_then(|error| error.downcast_ref::<FastImgIndependentVerificationUnavailable>())
+                .map(|error| error.0)
         };
         let finished = (|| {
             session.append_history_event("MFB_HISTORY_FINISHED", serde_json::json!({
-            "schema_version": 1,
-            "outcome": if cancelled { "cancelled" } else if result.is_err() { "failed" } else { "completed" },
-            "completed_with_file_errors": completed_with_file_errors,
-            "photos_quarantine_blocked": photos_quarantine_blocked,
-            "error": result.as_ref().err().map(|error| format!("{error:#}")),
-            "output_sequence": history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
-        }))
+                "schema_version": 1,
+                "outcome": if cancelled { "cancelled" } else if result.is_err() { "failed" } else { "completed" },
+                "completed_with_file_errors": completed_with_file_errors,
+                "photos_quarantine_blocked": photos_quarantine_blocked,
+                "verification_unavailable": verification_unavailable,
+                "error": result.as_ref().err().map(|error| format!("{error:#}")),
+                "output_sequence": history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
+            }))?;
+            if let Some((reason, run_id)) = verification_unavailable.zip(session.run_id.as_deref())
+            {
+                let payload =
+                    serde_json::json!({"schema_version": 1, "run_id": run_id, "reason": reason});
+                writeln!(
+                    io::stdout().lock(),
+                    "MFB_BATCH_VERIFICATION_UNAVAILABLE={payload}"
+                )
+                .context("write independent verification unavailable marker")?;
+            }
+            Ok::<_, anyhow::Error>(())
         })();
         if let Err(error) = finished {
             if result.is_ok() || completed_with_file_errors || photos_quarantine_blocked.is_some() {

@@ -39,7 +39,8 @@ pub use exif::preserve_internal;
 pub use source_cleanup::SourceDirectoryCleanupSnapshot;
 
 /// A phase-scoped namespace observation; file contents still require fresh proof.
-pub(crate) struct XmpSidecarIndex {
+pub struct XmpSidecarIndex {
+    include_aae: bool,
     directories:
         std::collections::BTreeMap<PathBuf, std::sync::Mutex<xmp_sidecar_index::DirectoryView>>,
 }
@@ -62,7 +63,7 @@ pub(crate) fn verify_output_embedded_metadata_with_explicit_xmp(
 }
 pub use output_audit::{
     MetadataOutputPolicy, OutputMetadataAudit, embedded_metadata_is_clear,
-    verify_output_embedded_metadata,
+    has_embedded_icc_profile, verify_output_embedded_metadata,
 };
 
 /// Measure the file emitted by `ExifTool` after removing all embedded metadata.
@@ -315,12 +316,21 @@ fn system_time_diff_label(
 /// Returns an error when the source metadata cannot be read or the destination
 /// timestamps cannot be fully restored after file mutations.
 pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
+    apply_file_timestamps_inner(src, dst, None)
+}
+
+fn apply_file_timestamps_inner(
+    src: &Path,
+    dst: &Path,
+    handles: Option<(&std::fs::File, &std::fs::File)>,
+) -> io::Result<()> {
     log_detail!(format!(
         "Metadata Audit: Initiating timestamp synchronization flow from {src_path} -> {dst_path}",
         src_path = src.display(),
         dst_path = dst.display(),
     ));
-    let m = std::fs::metadata(src).map_err(|e| {
+    let m = handles.map_or_else(|| std::fs::metadata(src), |(source, _)| source.metadata());
+    let m = m.map_err(|e| {
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_METADATA,
             crate::infra::static_logs::messages::MSG_METADATA_SRC_FAIL
@@ -336,7 +346,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
     let mut failures = Vec::new();
 
     #[cfg(target_os = "macos")]
-    let source_added_time = match macos::get_added_time(src) {
+    let source_added_time = match handles.map_or_else(
+        || macos::get_added_time(src),
+        |(source, _)| macos::get_added_time_on_file(source),
+    ) {
         Ok(added) => Some(added),
         // macOS reports a sentinel when Date Added was never set (e.g. volumes that
         // don't track it). That is absence, not failure: skip the field, never
@@ -365,6 +378,21 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
         }
     };
 
+    #[cfg(target_os = "macos")]
+    let set_creation_time = |time| {
+        handles.map_or_else(
+            || macos::set_creation_time(dst, time),
+            |(_, target)| macos::set_creation_time_on_file(target, time),
+        )
+    };
+    #[cfg(target_os = "macos")]
+    let set_added_time = |time| {
+        handles.map_or_else(
+            || macos::set_added_time(dst, time),
+            |(_, target)| macos::set_added_time_on_file(target, time),
+        )
+    };
+
     // Platform-specific creation time preservation FIRST (before atime/mtime)
     // This is critical because filetime::set_file_times may reset creation time on
     // some systems
@@ -377,7 +405,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                     &crate::infra::static_logs::messages::MSG_METADATA_CREATION_TIME
                         .replace(TOKEN_DEBUG, &format!("{created:?}")),
                 );
-                if let Err(e) = macos::set_creation_time(dst, created) {
+                if let Err(e) = set_creation_time(created) {
                     crate::media_conversion_gate::delivery_metadata_batch_audit(
                         "delivery_metadata_timestamp",
                         crate::infra::static_logs::messages::MSG_METADATA_SET_CREATION_FAIL
@@ -403,7 +431,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
             }
         }
         if let Some(added) = source_added_time {
-            if let Err(e) = macos::set_added_time(dst, added) {
+            if let Err(e) = set_added_time(added) {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_METADATA,
                     &crate::infra::static_logs::messages::MSG_METADATA_SET_ADDED_FAIL
@@ -475,7 +503,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
     // Set atime/mtime AFTER creation time
     let atime = filetime::FileTime::from_last_access_time(&m);
     let mtime = filetime::FileTime::from_last_modification_time(&m);
-    if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
+    if let Err(e) = handles.map_or_else(
+        || filetime::set_file_times(dst, atime, mtime),
+        |(_, target)| filetime::set_file_handle_times(target, Some(atime), Some(mtime)),
+    ) {
         crate::media_conversion_gate::delivery_metadata_batch_audit(
             "delivery_metadata",
             crate::infra::static_logs::messages::MSG_METADATA_SET_FILE_TIMES_FAIL
@@ -503,7 +534,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
                     &crate::infra::static_logs::messages::MSG_METADATA_REAPPLY_CREATION
                         .replace(TOKEN_DEBUG, &format!("{created:?}")),
                 );
-                if let Err(e) = macos::set_creation_time(dst, created) {
+                if let Err(e) = set_creation_time(created) {
                     crate::media_conversion_gate::delivery_metadata_batch_audit(
                         "delivery_metadata_timestamp",
                         crate::infra::static_logs::messages::MSG_METADATA_REAPPLY_CREATION_FAIL
@@ -524,7 +555,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
             }
         }
         if let Some(added) = source_added_time
-            && let Err(e) = macos::set_added_time(dst, added)
+            && let Err(e) = set_added_time(added)
         {
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata_timestamp",
@@ -542,7 +573,9 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
     // Verify creation time was preserved (macOS only)
     #[cfg(target_os = "macos")]
     {
-        match (m.created(), std::fs::metadata(dst)) {
+        let target_metadata =
+            handles.map_or_else(|| std::fs::metadata(dst), |(_, target)| target.metadata());
+        match (m.created(), target_metadata) {
             (Ok(expected_created), Ok(dst_meta)) => match dst_meta.created() {
                 Ok(actual_created) => {
                     log_detail!(format!(
@@ -614,7 +647,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) -> io::Result<()> {
             }
         }
         if let Some(expected_added) = source_added_time {
-            match macos::get_added_time(dst) {
+            match handles.map_or_else(
+                || macos::get_added_time(dst),
+                |(_, target)| macos::get_added_time_on_file(target),
+            ) {
                 Ok(actual_added) => {
                     log_detail!(format!(
                         "Metadata Audit: Verifying Finder added time integrity ({label}) -> \
@@ -1378,33 +1414,33 @@ fn format_overlay_id(hash: &str) -> io::Result<String> {
 fn djxl_version_for_overlay_audit() -> String {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let probe = || {
-            let path = crate::common_utils::resolve_tool_path_or_audit(crate::constants::TOOL_DJXL);
-            let mut command = std::process::Command::new(path);
-            command.arg("--version");
-            let Ok(output) = crate::process_runner::run_command_with_liveness_timeout(
-                &mut command,
-                std::time::Duration::from_secs(5),
-                std::time::Duration::from_secs(15),
-                "JXL XMP overlay djxl version probe",
-            ) else {
-                return "unavailable".to_string();
-            };
-            if !output.status.success() {
-                return "unavailable".to_string();
-            }
-            let diagnostic = if output.stdout.is_empty() {
-                output.stderr
-            } else {
-                output.stdout
-            };
-            String::from_utf8_lossy(&diagnostic)
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .map_or_else(
-                    || "unavailable".to_string(),
-                    |line| line.chars().take(256).collect(),
-                )
+        let path = crate::common_utils::resolve_tool_path_or_audit(crate::constants::TOOL_DJXL);
+        let mut command = std::process::Command::new(path);
+        command.arg("--version");
+        let Ok(output) = crate::process_runner::run_command_with_liveness_timeout(
+            &mut command,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(15),
+            "JXL XMP overlay djxl version probe",
+        ) else {
+            return "unavailable".to_string();
+        };
+        if !output.status.success() {
+            return "unavailable".to_string();
+        }
+        let diagnostic = if output.stdout.is_empty() {
+            output.stderr
+        } else {
+            output.stdout
+        };
+        String::from_utf8_lossy(&diagnostic)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map_or_else(
+                || "unavailable".to_string(),
+                |line| line.chars().take(256).collect(),
+            )
     };
     if crate::common_utils::verification_cache_disabled() {
         probe()
@@ -1617,7 +1653,63 @@ fn jxl_last_xml_payload_matches(
     Ok(true)
 }
 
-fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u64> {
+pub(crate) fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u64> {
+    validate_xmp_document_with(file, path, false)
+}
+
+/// Check extra XML syntax for the read-only preflight without changing archive admission.
+pub(crate) fn validate_xmp_preview_document(
+    file: &mut std::fs::File,
+    path: &Path,
+) -> io::Result<u64> {
+    validate_xmp_document_with(file, path, true)
+}
+
+fn validate_xmp_preview_event(
+    event: &quick_xml::events::Event<'_>,
+    depth: usize,
+) -> Result<(), &'static str> {
+    use quick_xml::events::Event;
+    match event {
+        Event::Start(element) | Event::Empty(element) => {
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|_| "invalid or duplicate XML attribute")?;
+                if attribute.value.contains('<')
+                    || quick_xml::escape::unescape(&attribute.value).is_err()
+                {
+                    return Err("invalid XML attribute value");
+                }
+            }
+        }
+        Event::Text(text) => {
+            if (depth == 0
+                && !text
+                    .bytes()
+                    .all(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n')))
+                || text.contains("]]>")
+            {
+                return Err("invalid XML character data");
+            }
+        }
+        Event::CData(_) if depth == 0 => return Err("CDATA outside the XML root"),
+        Event::GeneralRef(reference) => {
+            if depth == 0
+                || !(matches!(reference.resolve_char_ref(), Ok(Some(_)))
+                    || quick_xml::escape::resolve_xml_entity(reference.as_ref()).is_some())
+            {
+                return Err("invalid or undefined XML entity reference");
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_xmp_document_with(
+    file: &mut std::fs::File,
+    path: &Path,
+    preview: bool,
+) -> io::Result<u64> {
     let payload_size = file.metadata()?.len();
     if payload_size == 0 {
         return Err(io::Error::new(
@@ -1627,7 +1719,7 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
     }
     if payload_size > XMP_OVERLAY_MAX_BYTES {
         return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
+            io::ErrorKind::FileTooLarge,
             format!(
                 "XMP sidecar exceeds the {}-byte archive safety limit: {}",
                 XMP_OVERLAY_MAX_BYTES,
@@ -1636,17 +1728,28 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
         ));
     }
 
-    let mut reader = quick_xml::Reader::from_reader(BufReader::new(&mut *file));
+    let mut reader =
+        quick_xml::Reader::from_reader(BufReader::new((&mut *file).take(payload_size)));
+    reader.config_mut().check_comments = preview;
     let mut buffer = Vec::new();
     let mut depth = 0_usize;
     let mut roots = 0_usize;
     let mut event_count = 0_usize;
     loop {
-        match reader.read_event_into(&mut buffer) {
+        let event = reader.read_event_into(&mut buffer);
+        if preview && let Ok(event) = &event {
+            validate_xmp_preview_event(event, depth).map_err(|reason| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}: {reason}", path.display()),
+                )
+            })?;
+        }
+        match event {
             Ok(quick_xml::events::Event::Start(_)) => {
                 if depth >= XMP_OVERLAY_MAX_DEPTH {
                     return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
+                        io::ErrorKind::FileTooLarge,
                         format!("XMP nesting exceeds the safety limit: {}", path.display()),
                     ));
                 }
@@ -1675,6 +1778,9 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
             }
             Ok(quick_xml::events::Event::Eof) => break,
             Ok(_) => {}
+            Err(quick_xml::Error::Io(error)) => {
+                return Err(io::Error::new(error.kind(), error));
+            }
             Err(error) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -1687,7 +1793,7 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
             .ok_or_else(|| io::Error::other("XMP event counter overflow"))?;
         if event_count > XMP_OVERLAY_MAX_EVENTS {
             return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
+                io::ErrorKind::FileTooLarge,
                 format!(
                     "XMP event count exceeds the safety limit: {}",
                     path.display()
@@ -1696,7 +1802,13 @@ fn validate_xmp_document(file: &mut std::fs::File, path: &Path) -> io::Result<u6
         }
         buffer.clear();
     }
-    drop(reader);
+    let unread = reader.into_inner().into_inner().limit();
+    if unread != 0 || file.metadata()?.len() != payload_size {
+        return Err(io::Error::other(format!(
+            "XMP sidecar changed while validating XML: {}",
+            path.display()
+        )));
+    }
     if roots != 1 || depth != 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -2044,16 +2156,7 @@ fn require_regular_sidecar(path: PathBuf, label: &str) -> io::Result<PathBuf> {
 /// Returns an error for ambiguous/non-regular matches or incomplete discovery.
 pub fn find_aae_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
     let parent = crate::media_conversion_gate::path_parent_or_dot(src);
-    let stem = src
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "AAE source has no supported file stem",
-            )
-        })?;
-    let stem_lower = stem.to_lowercase();
+    let stem_lower = aae_source_stem(src)?;
     let mut matches = Vec::new();
     for entry in std::fs::read_dir(parent).map_err(|e| {
         crate::media_conversion_gate::delivery_metadata_path_audit(
@@ -2074,18 +2177,7 @@ pub fn find_aae_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
     })? {
         let entry = entry?;
         let path = entry.path();
-        let is_aae = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("aae"));
-        if !is_aae {
-            continue;
-        }
-        let stem_matches = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .is_some_and(|candidate_stem| candidate_stem.to_lowercase() == stem_lower);
-        if stem_matches {
+        if aae_candidate_key(&path).is_some_and(|candidate| candidate == stem_lower) {
             matches.push(path);
         }
     }
@@ -2104,6 +2196,26 @@ pub fn find_aae_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
     } else {
         Ok(None)
     }
+}
+
+fn aae_source_stem(src: &Path) -> io::Result<String> {
+    src.file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::to_lowercase)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "AAE source has no supported file stem",
+            )
+        })
+}
+
+fn aae_candidate_key(path: &Path) -> Option<String> {
+    path.extension()
+        .filter(|ext| ext.eq_ignore_ascii_case("aae"))
+        .and_then(|_| path.file_stem())
+        .and_then(|stem| stem.to_str())
+        .map(str::to_lowercase)
 }
 
 /// Compute where an AAE sidecar belongs after conversion.
@@ -2134,6 +2246,23 @@ pub fn aae_sidecar_destination(aae: &Path, output: &Path) -> io::Result<PathBuf>
         ));
     }
     Ok(output.with_extension(ext))
+}
+
+/// Verify complete, current AAE bytes without following either file's leaf link.
+/// # Errors
+/// Rejects unreadable, nonregular, changed, or unequal companions.
+pub fn verify_aae_sidecar_copy(source: &Path, destination: &Path) -> io::Result<()> {
+    use crate::pipeline::verification::FinalInputObservation;
+    let source = FinalInputObservation::capture(source)?;
+    let destination = FinalInputObservation::capture(destination)?;
+    if source.blake3() != destination.blake3() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "AAE companion bytes differ",
+        ));
+    }
+    source.verify_unchanged()?;
+    destination.verify_unchanged()
 }
 
 fn regular_files_have_same_contents(left: &Path, right: &Path) -> io::Result<bool> {
@@ -2333,8 +2462,6 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
     use std::collections::HashMap;
 
     let mut dir_metadata: HashMap<std::path::PathBuf, std::fs::Metadata> = HashMap::new();
-    let mut failures = Vec::new();
-
     let meta = require_existing_directory(src_dir, "source")?;
     dir_metadata.insert(src_dir.to_path_buf(), meta);
 
@@ -2361,12 +2488,51 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
         require_existing_directory(&target, "destination mirror")?;
     }
 
+    apply_existing_directory_metadata(&directories, src_dir, dst_dir)
+}
+
+fn apply_existing_directory_metadata(
+    directories: &[(PathBuf, std::fs::Metadata)],
+    src_dir: &Path,
+    dst_dir: &Path,
+) -> io::Result<()> {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    let destination_root = crate::io_utils::open_directory_nofollow(dst_dir)?;
+    let mut failures = Vec::new();
     for (src_path, metadata) in directories.iter().rev() {
         let rel_path = src_path.strip_prefix(src_dir).map_err(io::Error::other)?;
         let dst_path = dst_dir.join(rel_path);
         require_existing_directory(src_path, "source mirror")?;
-        require_existing_directory(&dst_path, "destination mirror")?;
-        if let Err(error) = copy_dir_xattrs(src_path, &dst_path) {
+        let observed = require_existing_directory(&dst_path, "destination mirror")?;
+        #[cfg(unix)]
+        let destination = {
+            let file =
+                crate::io_utils::open_descendant_nofollow(&destination_root, rel_path, true)?;
+            crate::io_utils::check_open_file_identity(&observed, &file.metadata()?)?;
+            file
+        };
+        #[cfg(unix)]
+        let prior_permissions = observed.permissions();
+        #[cfg(unix)]
+        let failure_count = failures.len();
+        #[cfg(unix)]
+        let retry_write =
+            prior_permissions.mode() & 0o200 == 0 && metadata.permissions().mode() & 0o200 != 0;
+        // A previous delivery may have mirrored the source's restrictive mode.
+        #[cfg(unix)]
+        if retry_write {
+            destination.set_permissions(std::fs::Permissions::from_mode(
+                prior_permissions.mode() | 0o200,
+            ))?;
+        }
+        #[cfg(unix)]
+        let copied = copy_dir_xattrs_to_handle(src_path, &dst_path, &destination);
+        #[cfg(not(unix))]
+        let copied = copy_xattrs_with_policy(src_path, &dst_path, should_preserve_xattr);
+        if let Err(error) = copied {
             failures.push(format!(
                 "failed to preserve directory xattrs on {}: {error}",
                 dst_path.display()
@@ -2375,11 +2541,7 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
 
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = metadata.permissions().mode();
-            if let Err(e) =
-                std::fs::set_permissions(&dst_path, std::fs::Permissions::from_mode(mode))
-            {
+            if let Err(e) = destination.set_permissions(metadata.permissions()) {
                 crate::media_conversion_gate::delivery_metadata_path_audit(
                     "delivery_metadata",
                     &dst_path,
@@ -2546,35 +2708,56 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
                 dst_path.display()
             ));
         }
-        let actual = require_existing_directory(&dst_path, "verified destination mirror")?;
-        if filetime::FileTime::from_last_access_time(&actual) != atime
-            || filetime::FileTime::from_last_modification_time(&actual) != mtime
-        {
+        let verify = (|| -> io::Result<()> {
+            let actual = require_existing_directory(&dst_path, "verified destination mirror")?;
+            #[cfg(unix)]
+            crate::io_utils::check_open_file_identity(&observed, &actual)?;
+            if filetime::FileTime::from_last_access_time(&actual) != atime
+                || filetime::FileTime::from_last_modification_time(&actual) != mtime
+            {
+                failures.push(format!(
+                    "directory timestamps differ after preservation: {}",
+                    dst_path.display()
+                ));
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(error) = macos::verify_directory_acl(src_path, &dst_path) {
+                    failures.push(format!(
+                        "failed to verify directory ACL on {}: {error}",
+                        dst_path.display()
+                    ));
+                }
+                if actual.created()? != metadata.created()? {
+                    failures.push(format!(
+                        "directory creation time differs: {}",
+                        dst_path.display()
+                    ));
+                }
+                if macos::get_added_time(&dst_path)? != macos::get_added_time(src_path)? {
+                    failures.push(format!(
+                        "directory Finder added time differs: {}",
+                        dst_path.display()
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = verify {
             failures.push(format!(
-                "directory timestamps differ after preservation: {}",
+                "failed to recheck directory metadata on {}: {error}",
                 dst_path.display()
             ));
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(unix)]
+        if retry_write
+            && failures.len() != failure_count
+            && let Err(error) = destination.set_permissions(prior_permissions)
         {
-            if let Err(error) = macos::verify_directory_acl(src_path, &dst_path) {
-                failures.push(format!(
-                    "failed to verify directory ACL on {}: {error}",
-                    dst_path.display()
-                ));
-            }
-            if actual.created()? != metadata.created()? {
-                failures.push(format!(
-                    "directory creation time differs: {}",
-                    dst_path.display()
-                ));
-            }
-            if macos::get_added_time(&dst_path)? != macos::get_added_time(src_path)? {
-                failures.push(format!(
-                    "directory Finder added time differs: {}",
-                    dst_path.display()
-                ));
-            }
+            failures.push(format!(
+                "failed to restore previous directory mode on {}: {error}",
+                dst_path.display()
+            ));
         }
     }
 
@@ -2708,7 +2891,10 @@ where
     let mut first_error: Option<io::Error> = None;
 
     require_existing_directory(src_root, "source root")?;
+    #[cfg(not(unix))]
     require_existing_directory(dst_root, "destination root")?;
+    #[cfg(unix)]
+    let destination_root = crate::io_utils::open_directory_nofollow(dst_root)?;
 
     for (src_path, (atime, mtime)) in saved {
         let rel_path = src_path.strip_prefix(src_root).map_err(|e| {
@@ -2727,7 +2913,11 @@ where
             ))
         })?;
         let dst_path = dst_root.join(rel_path);
-        let dst_metadata = match std::fs::symlink_metadata(&dst_path) {
+        #[cfg(unix)]
+        let target = crate::io_utils::open_descendant_nofollow(&destination_root, rel_path, true);
+        #[cfg(not(unix))]
+        let target = require_existing_directory(&dst_path, "destination mirror").map(|_| ());
+        let target = match target {
             Ok(metadata) => metadata,
             Err(e) => {
                 failed_count += 1_i32;
@@ -2754,27 +2944,21 @@ where
                 continue;
             }
         };
-        if !dst_metadata.is_dir() {
-            failed_count += 1_i32;
-            if first_error.is_none() {
-                first_error = Some(io::Error::other(format!(
-                    "missing destination directory mirror: {} is not a directory",
-                    dst_path.display()
-                )));
-            }
-            crate::media_conversion_gate::delivery_metadata_path_audit(
-                "delivery_metadata",
-                &dst_path,
-                format!(
-                    "Metadata Audit: Missing destination directory mirror for saved timestamp \
-                     path {}: destination is not a directory",
-                    src_path.display(),
-                ),
-            );
-            continue;
-        }
         total_count += 1_i32;
-        if let Err(e) = filetime::set_file_times(&dst_path, *atime, *mtime) {
+        #[cfg(unix)]
+        let update = (|| {
+            let before = target.metadata()?;
+            filetime::set_file_handle_times(&target, Some(*atime), Some(*mtime))?;
+            let current =
+                crate::io_utils::open_descendant_nofollow(&destination_root, rel_path, true)?;
+            crate::io_utils::check_open_file_identity(&before, &current.metadata()?)
+        })();
+        #[cfg(not(unix))]
+        let update = {
+            let () = target;
+            filetime::set_file_times(&dst_path, *atime, *mtime)
+        };
+        if let Err(e) = update {
             failed_count += 1_i32;
             if first_error.is_none() {
                 first_error = Some(io::Error::new(e.kind(), e.to_string()));
@@ -2808,29 +2992,22 @@ where
         )));
     }
 
+    #[cfg(unix)]
+    crate::io_utils::check_open_file_identity(
+        &destination_root.metadata()?,
+        &crate::io_utils::open_directory_nofollow(dst_root)?.metadata()?,
+    )?;
     Ok(())
-}
-
-fn copy_file_timestamps_only(src: &Path, dst: &Path) -> io::Result<()> {
-    apply_file_timestamps(src, dst).map_err(|e| {
-        crate::media_conversion_gate::delivery_metadata_path_audit(
-            "delivery_metadata_timestamp",
-            src,
-            format!(
-                "Failed to restore file timestamps from {} to {}: {}",
-                src.display(),
-                dst.display(),
-                e
-            ),
-        );
-        e
-    })
 }
 
 fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) -> io::Result<()> {
     const SOURCE_EXTENSIONS: &[&str] = &[
         "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "tiff", "tif", "bmp", "jxl",
     ];
+    #[cfg(unix)]
+    let source_root = crate::io_utils::open_directory_nofollow(src_root)?;
+    #[cfg(unix)]
+    let destination_root = crate::io_utils::open_directory_nofollow(dst_root)?;
     let mut failed_count = 0_u32;
     let mut first_error: Option<io::Error> = None;
     for entry in walkdir::WalkDir::new(dst_root).follow_links(false) {
@@ -2853,33 +3030,83 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) -> io
                 continue;
             }
         };
-        let dst_path = entry.path();
-        if !dst_path.is_file() {
+        if !entry.file_type().is_file() {
             continue;
         }
+        let dst_path = entry.path();
         let Ok(rel) = dst_path.strip_prefix(dst_root) else {
             continue;
         };
-        let parent = crate::media_conversion_gate::path_relative_parent_or_self(rel);
-        let stem = crate::media_conversion_gate::path_file_stem_or_empty(
-            dst_path,
-            "metadata:timestamp_restore",
-        );
-        if stem.is_empty() {
+        if rel.file_stem().is_none() {
             continue;
         }
-        let src_parent = src_root.join(parent);
+        let source_path = src_root.join(rel);
+        #[cfg(unix)]
+        let source_parent = match crate::io_utils::open_descendant_nofollow(
+            &source_root,
+            rel.parent()
+                .ok_or_else(|| io::Error::other("missing timestamp source parent"))?,
+            true,
+        ) {
+            Ok(parent) => parent,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
         for ext in SOURCE_EXTENSIONS {
-            let src_file = src_parent.join(format!("{stem}.{ext}"));
-            if src_file.exists() && src_file.is_file() {
-                if let Err(e) = copy_file_timestamps_only(&src_file, dst_path) {
+            let src_file = source_path.with_extension(ext);
+            #[cfg(unix)]
+            let result = (|| {
+                use std::os::unix::fs::MetadataExt;
+                let name = src_file
+                    .file_name()
+                    .ok_or_else(|| io::Error::other("missing timestamp source name"))?;
+                let source = match crate::io_utils::open_entry_nofollow(&source_parent, name, false)
+                {
+                    Ok(file) if file.metadata()?.is_file() => file,
+                    Ok(_) => return Ok(false),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+                    Err(error) => return Err(error),
+                };
+                let target =
+                    crate::io_utils::open_descendant_nofollow(&destination_root, rel, false)?;
+                let metadata = target.metadata()?;
+                if !metadata.is_file() || metadata.nlink() != 1 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "timestamp destination must be a standalone file",
+                    ));
+                }
+                apply_file_timestamps_inner(&src_file, dst_path, Some((&source, &target)))?;
+                let current =
+                    crate::io_utils::open_descendant_nofollow(&destination_root, rel, false)?;
+                crate::io_utils::check_open_file_identity(&metadata, &current.metadata()?)?;
+                Ok(true)
+            })();
+            #[cfg(not(unix))]
+            let result = if src_file.is_file() {
+                apply_file_timestamps(&src_file, dst_path).map(|()| true)
+            } else {
+                Ok(false)
+            };
+            match result {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(error) => {
+                    crate::media_conversion_gate::delivery_metadata_path_audit(
+                        "delivery_metadata_timestamp",
+                        dst_path,
+                        format!(
+                            "Failed to restore timestamps from {}: {error}",
+                            src_file.display()
+                        ),
+                    );
                     failed_count += 1;
                     if first_error.is_none() {
-                        first_error = Some(e);
+                        first_error = Some(error);
                     }
                 }
-                break;
             }
+            break;
         }
     }
 
@@ -2894,19 +3121,30 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) -> io
         )));
     }
 
+    #[cfg(unix)]
+    crate::io_utils::check_open_file_identity(
+        &destination_root.metadata()?,
+        &crate::io_utils::open_directory_nofollow(dst_root)?.metadata()?,
+    )?;
     Ok(())
 }
 
-/// Restore timestamps from source directory to output directory.
+/// Copy directory and matched file timestamps from the source tree to the output tree.
 ///
 /// # Errors
 /// Returns an `io::Result` if restoration fails.
 pub fn restore_timestamps_from_source_to_output(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
+    let source = src_dir.canonicalize()?;
+    let destination = dst_dir.canonicalize()?;
+    if destination.starts_with(&source) || source.starts_with(&destination) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source and destination timestamp trees overlap",
+        ));
+    }
     let saved = save_directory_timestamps(src_dir)?;
     apply_saved_timestamps_to_dst(&saved, src_dir, dst_dir)?;
-    copy_file_timestamps_from_source_tree(src_dir, dst_dir)?;
-    restore_directory_timestamps(&saved)?;
-    Ok(())
+    copy_file_timestamps_from_source_tree(src_dir, dst_dir)
 }
 
 /// Restore source and destination directory metadata after a destructive
@@ -2950,6 +3188,90 @@ where
 {
     preserve_directory(src_dir, dst_dir)?;
     apply_saved_timestamps_to_dst(saved, src_dir, dst_dir)
+}
+
+/// Apply source directory metadata only to existing delivery ancestors.
+/// # Errors
+/// Rejects invalid, linked and non-directory ancestors before writing metadata.
+/// Missing directories may only be skipped under the caller's verified recovery or Gate 1 scope.
+pub fn apply_scoped_delivery_directory_metadata(
+    saved: &DirectoryTimestampsMap,
+    src_root: &Path,
+    dst_root: &Path,
+    ancestors: &std::collections::BTreeSet<PathBuf>,
+    scope: ScopedDeliveryDirectoryMetadata,
+) -> io::Result<()> {
+    use crate::pipeline::verification::validate_no_symlink_components;
+
+    let mut directories = Vec::with_capacity(ancestors.len());
+    let mut timestamps = DirectoryTimestampsMap::with_capacity(ancestors.len());
+    for relative in ancestors {
+        validate_no_symlink_components(src_root, relative).map_err(io::Error::other)?;
+        validate_no_symlink_components(dst_root, relative).map_err(io::Error::other)?;
+        let source = src_root.join(relative);
+        let destination = dst_root.join(relative);
+        let times = saved.get(&source);
+        let source_metadata = scoped_delivery_directory(
+            &source,
+            scope.allow_removed_source && !relative.as_os_str().is_empty() && times.is_none(),
+        )?;
+        let destination_metadata = scoped_delivery_directory(
+            &destination,
+            scope.defer_missing_output_to_gate && !relative.as_os_str().is_empty(),
+        )?;
+        let Some(metadata) = source_metadata else {
+            continue;
+        };
+        let times = times.ok_or_else(|| {
+            io::Error::other(format!(
+                "missing saved source directory timestamps: {}",
+                source.display()
+            ))
+        })?;
+        if destination_metadata.is_none() {
+            continue;
+        }
+        timestamps.insert(source.clone(), *times);
+        directories.push((source, metadata));
+    }
+    if directories.is_empty() {
+        return Ok(());
+    }
+    directories.sort_by_key(|(path, _)| path.components().count());
+    apply_existing_directory_metadata(&directories, src_root, dst_root)?;
+    apply_saved_timestamps_to_dst(&timestamps, src_root, dst_root)
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ScopedDeliveryDirectoryMetadata {
+    /// Only after existing cleanup admission accepts previously removed source files.
+    pub allow_removed_source: bool,
+    /// Only when the next Gate 1 will verify the recorded outputs itself.
+    pub defer_missing_output_to_gate: bool,
+}
+
+fn scoped_delivery_directory(
+    path: &Path,
+    allow_missing: bool,
+) -> io::Result<Option<std::fs::Metadata>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(Some(metadata)),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "scoped delivery path is not a directory: {}",
+                path.display(),
+            ),
+        )),
+        Err(error) if allow_missing && error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io::Error::new(
+            error.kind(),
+            format!(
+                "inspect scoped delivery directory {}: {error}",
+                path.display(),
+            ),
+        )),
+    }
 }
 
 fn collect_dir_timestamps<S>(
@@ -3022,6 +3344,17 @@ fn copy_xattrs_with_policy(
     dst: &Path,
     should_copy: impl Fn(&str) -> bool,
 ) -> io::Result<()> {
+    copy_xattrs_using(src, dst, should_copy, |name, value| {
+        xattr::set(dst, name, value)
+    })
+}
+
+fn copy_xattrs_using(
+    src: &Path,
+    dst: &Path,
+    should_copy: impl Fn(&str) -> bool,
+    set: impl Fn(&str, &[u8]) -> io::Result<()>,
+) -> io::Result<()> {
     const AUDIT: &str = "delivery_metadata";
     let mut failures = Vec::new();
     match xattr::list(src) {
@@ -3035,7 +3368,7 @@ fn copy_xattrs_with_policy(
                 }
                 match xattr::get(src, name_str) {
                     Ok(Some(value)) => {
-                        if let Err(e) = xattr::set(dst, name_str, &value) {
+                        if let Err(e) = set(name_str, &value) {
                             crate::media_conversion_gate::delivery_metadata_path_audit(
                                 AUDIT,
                                 dst,
@@ -3099,8 +3432,17 @@ fn copy_xattrs_with_policy(
     }
 }
 
-fn copy_dir_xattrs(src: &Path, dst: &Path) -> io::Result<()> {
-    copy_xattrs_with_policy(src, dst, should_preserve_xattr)
+#[cfg(unix)]
+fn copy_dir_xattrs_to_handle(
+    src: &Path,
+    dst: &Path,
+    destination: &std::fs::File,
+) -> io::Result<()> {
+    use xattr::FileExt;
+
+    copy_xattrs_using(src, dst, should_preserve_xattr, |name, value| {
+        destination.set_xattr(name, value)
+    })
 }
 
 /// All non-skipped xattrs (Linux/Windows and macOS fallback).
@@ -3309,7 +3651,7 @@ fn xmp_candidate_matches_source(path: &Path, stem: &str, full_name: &str) -> boo
     xmp_candidate_key(path).is_some_and(|candidate| candidate == stem || candidate == full_name)
 }
 
-fn xmp_candidate_key(path: &Path) -> Option<String> {
+pub(crate) fn xmp_candidate_key(path: &Path) -> Option<String> {
     if !path
         .extension()
         .is_some_and(|value| value.eq_ignore_ascii_case("xmp"))
@@ -3324,7 +3666,7 @@ fn xmp_candidate_key(path: &Path) -> Option<String> {
     Some(candidate_stem.to_lowercase())
 }
 
-fn xmp_source_names(src: &Path) -> io::Result<(String, String)> {
+pub(crate) fn xmp_source_names(src: &Path) -> io::Result<(String, String)> {
     let stem = src
         .file_stem()
         .and_then(|value| value.to_str())

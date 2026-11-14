@@ -191,17 +191,24 @@ def check_anti_patterns(workflow_files):
 def check_rust_specific(workflow_files):
     print_status(BLUE, "🔍 Checking Rust-specific issues...")
     rust_issues = 0
+    channel = None
     rust_toolchain = Path("rust-toolchain.toml")
     if rust_toolchain.exists():
         try:
             with open(rust_toolchain) as f:
                 content = f.read()
-            if "channel" not in content:
+            match = re.search(
+                r"""^\s*channel\s*=\s*(["'])([\w.-]+)\1[ \t]*(?:#.*)?$""",
+                content,
+                re.MULTILINE,
+            )
+            if match is None:
                 print_status(
                     YELLOW, "⚠️  rust-toolchain.toml missing channel specification"
                 )
                 rust_issues += 1
             else:
+                channel = match.group(2)
                 print_status(GREEN, "✅ rust-toolchain.toml looks good")
         except Exception as e:  # noqa: BLE001
             print_status(RED, f"Error reading rust-toolchain.toml: {e}")
@@ -218,15 +225,16 @@ def check_rust_specific(workflow_files):
         try:
             with open(file) as f:
                 content = f.read()
-            if "dtolnay/rust-toolchain" in content:  # noqa: SIM102
-                if (
-                    "channel" in content
-                    and "nightly" in content
-                    and "nightly" not in file.name
-                ):
+            selectors = re.findall(
+                r"""^[ \t]*(?:toolchain|RUST_TOOLCHAIN|RUSTUP_TOOLCHAIN):[ \t]*["']?([\w.-]+)["']?[ \t]*(?:#.*)?$""",
+                content,
+                re.MULTILINE,
+            )
+            for toolchain in sorted(set(selectors)):
+                if channel is not None and toolchain != channel:
                     print_status(
                         YELLOW,
-                        f"⚠️  Using nightly Rust in {file.name} (consider stable for reliability)",
+                        f"⚠️  Rust {toolchain} in {file.name} differs from the repository's {channel} channel",
                     )
                     toolchain_inconsistency += 1
         except Exception as e:  # noqa: BLE001

@@ -1,10 +1,12 @@
 //! Read-only launcher routing plans. A plan is not a conversion or delivery proof.
 
-use crate::infra::drag_drop::{ProcessingFilter, ScanRoute, inspect_content};
+use crate::infra::drag_drop::{ProcessingFilter, ScanEntry, ScanRoute, inspect_content};
 use anyhow::{Context, Result, ensure};
+use foundation::image::live_photo::{LivePhotoIdentifierEvidence, inspect_identifier_pair};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize)]
 pub struct RoutingPlan {
@@ -21,6 +23,14 @@ pub struct RoutingPlan {
     pub entries: Vec<PlannedEntry>,
     pub relationships: Vec<RelationshipObservation>,
     pub storage: StorageObservation,
+    pub storage_scope: StorageScope,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageScope {
+    Input,
+    Output,
 }
 
 /// Destination filesystem capacity only, not a required-space estimate or reservation.
@@ -86,11 +96,25 @@ pub struct PlannedEntry {
     pub selected: bool,
     pub bytes: u64,
     pub content_blake3: String,
+    pub xmp_xml: Option<XmpXmlObservation>,
     pub action: &'static str,
     pub reason: &'static str,
 }
 
-/// Filename candidates only; these observations never authorize delivery or cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum XmpXmlObservation {
+    Checked,
+    Rejected,
+    Unavailable,
+}
+
+// Keep the additional XML work bounded even on a large sidecar inventory.
+const MAX_XMP_PREVIEW_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_XMP_PREVIEW_FILES: usize = 128;
+
+/// Filename candidates with optional Live Photo identifier evidence.
+/// These observations never authorize delivery or cleanup.
 #[derive(Debug, Serialize)]
 pub struct RelationshipObservation {
     pub kind: &'static str,
@@ -105,12 +129,17 @@ pub struct RelationshipObservation {
 
 // Bound ambiguous groups without hiding their full candidate counts.
 const MAX_RELATIONSHIP_CANDIDATES: usize = 64;
+const MAX_LIVE_PHOTO_PREVIEW_PAIRS: usize = 8;
+const MAX_LIVE_PHOTO_PREVIEW_TIME: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct StemCandidates<'a> {
-    media: Vec<&'a PlannedEntry>,
     image_count: usize,
     videos: Vec<&'a PlannedEntry>,
+}
+
+fn live_stem_key(path: &Path) -> Option<PathBuf> {
+    Some(path.parent()?.join(path.file_stem()?.to_ascii_lowercase()))
 }
 
 fn observe_relationship(
@@ -144,14 +173,19 @@ fn observe_relationship(
 
 fn filename_relationships(entries: &[PlannedEntry]) -> Vec<RelationshipObservation> {
     let mut by_filename = BTreeMap::new();
-    let mut by_stem: BTreeMap<PathBuf, StemCandidates<'_>> = BTreeMap::new();
+    let mut by_stem: BTreeMap<PathBuf, Vec<&PlannedEntry>> = BTreeMap::new();
+    let mut live_by_stem: BTreeMap<PathBuf, StemCandidates<'_>> = BTreeMap::new();
     for entry in entries {
         if matches!(entry.route, ScanRoute::Image | ScanRoute::Video) {
             by_filename.insert(entry.relative_path.as_path(), entry);
-            let group = by_stem
+            by_stem
                 .entry(entry.relative_path.with_extension(""))
-                .or_default();
-            group.media.push(entry);
+                .or_default()
+                .push(entry);
+            let Some(stem) = live_stem_key(&entry.relative_path) else {
+                continue;
+            };
+            let group = live_by_stem.entry(stem).or_default();
             if entry.route == ScanRoute::Image {
                 group.image_count += 1;
             } else {
@@ -174,9 +208,7 @@ fn filename_relationships(entries: &[PlannedEntry]) -> Vec<RelationshipObservati
                         false,
                     ));
                 } else {
-                    let candidates = by_stem
-                        .get(&stem_path)
-                        .map_or(&[][..], |group| group.media.as_slice());
+                    let candidates = by_stem.get(&stem_path).map_or(&[][..], Vec::as_slice);
                     observations.push(observe_relationship(
                         "xmp_filename",
                         entry,
@@ -187,7 +219,8 @@ fn filename_relationships(entries: &[PlannedEntry]) -> Vec<RelationshipObservati
                 }
             }
             ScanRoute::Image => {
-                if let Some(group) = by_stem.get(&stem_path)
+                if let Some(group) =
+                    live_stem_key(&entry.relative_path).and_then(|stem| live_by_stem.get(&stem))
                     && !group.videos.is_empty()
                 {
                     observations.push(observe_relationship(
@@ -205,6 +238,60 @@ fn filename_relationships(entries: &[PlannedEntry]) -> Vec<RelationshipObservati
     observations
 }
 
+fn enrich_live_photo_relationships(
+    observations: &mut [RelationshipObservation],
+    scanned: &[ScanEntry],
+    probe: impl Fn(&Path, &Path, Instant) -> LivePhotoIdentifierEvidence,
+) {
+    let mut candidates = observations
+        .iter_mut()
+        .filter(|item| item.kind == "live_photo_filename" && item.status == "candidate")
+        .take(MAX_LIVE_PHOTO_PREVIEW_PAIRS)
+        .peekable();
+    if candidates.peek().is_none() {
+        return;
+    }
+    let sources: BTreeMap<_, _> = scanned
+        .iter()
+        .map(|entry| (entry.relative_path.as_path(), &entry.source))
+        .collect();
+    let deadline = Instant::now() + MAX_LIVE_PHOTO_PREVIEW_TIME;
+    for observation in candidates {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let (Some(image), Some(video)) = (
+            sources.get(observation.source_relative_path.as_path()),
+            observation
+                .candidate_relative_paths
+                .first()
+                .and_then(|candidate| sources.get(candidate.as_path())),
+        ) else {
+            continue;
+        };
+        let metadata_current = || {
+            image.verify_discovery_metadata().is_ok() && video.verify_discovery_metadata().is_ok()
+        };
+        let evidence = if metadata_current() {
+            let evidence = probe(image.path(), video.path(), deadline);
+            if metadata_current() {
+                evidence
+            } else {
+                LivePhotoIdentifierEvidence::Unavailable
+            }
+        } else {
+            LivePhotoIdentifierEvidence::Unavailable
+        };
+        observation.match_basis = "apple_content_identifier";
+        observation.status = match evidence {
+            LivePhotoIdentifierEvidence::Match => "identifier_match",
+            LivePhotoIdentifierEvidence::Mismatch => "identifier_mismatch",
+            LivePhotoIdentifierEvidence::Unavailable => "identifier_unavailable",
+        };
+        observation.verified = evidence == LivePhotoIdentifierEvidence::Match;
+    }
+}
+
 impl RoutingPlan {
     /// Uses the execution scanner's content, hidden-file, and link policies.
     /// Does not create output, logs, databases, locks, or launch workers.
@@ -216,13 +303,9 @@ impl RoutingPlan {
     ) -> Result<Self> {
         let scan = inspect_content(input, filter)?;
         let mut entries = Vec::with_capacity(scan.entries.len());
-        for entry in scan.entries {
-            entry.source.verify_discovery_metadata().with_context(|| {
-                format!(
-                    "preflight source changed before plan publication: {}",
-                    entry.source.path().display()
-                )
-            })?;
+        let mut remaining_xmp_files = MAX_XMP_PREVIEW_FILES;
+        let mut remaining_xmp_bytes = MAX_XMP_PREVIEW_BYTES;
+        for entry in &scan.entries {
             let (action, reason) = match (entry.route, entry.selected) {
                 (ScanRoute::Image, true) => ("submit_img", "content_routed_to_image_worker"),
                 (ScanRoute::Video, true) => ("submit_vid", "content_routed_to_video_worker"),
@@ -241,12 +324,34 @@ impl RoutingPlan {
                     "non_media_copy_is_conditional_on_successful_adjacent_processing",
                 ),
             };
+            let xmp_xml = (entry.route == ScanRoute::Sidecar).then(|| {
+                let bytes = entry.source.bytes();
+                if remaining_xmp_files == 0 || bytes > remaining_xmp_bytes {
+                    return XmpXmlObservation::Unavailable;
+                }
+                remaining_xmp_files -= 1;
+                remaining_xmp_bytes -= bytes;
+                match entry.source.validate_xmp_xml() {
+                    Ok(()) => XmpXmlObservation::Checked,
+                    Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                        XmpXmlObservation::Rejected
+                    }
+                    Err(_) => XmpXmlObservation::Unavailable,
+                }
+            });
+            entry.source.verify_discovery_metadata().with_context(|| {
+                format!(
+                    "preflight source changed before plan publication: {}",
+                    entry.source.path().display()
+                )
+            })?;
             entries.push(PlannedEntry {
-                relative_path: entry.relative_path,
+                relative_path: entry.relative_path.clone(),
                 route: entry.route,
                 selected: entry.selected,
                 bytes: entry.source.bytes(),
                 content_blake3: entry.source.content_blake3(),
+                xmp_xml,
                 action,
                 reason,
             });
@@ -275,7 +380,8 @@ impl RoutingPlan {
             accounted == scan.total_files,
             "preflight inventory categories do not reconcile"
         );
-        let relationships = filename_relationships(&entries);
+        let mut relationships = filename_relationships(&entries);
+        enrich_live_photo_relationships(&mut relationships, &scan.entries, inspect_identifier_pair);
         Ok(Self {
             input: input.to_path_buf(),
             output_requested: output.map(Path::to_path_buf),
@@ -290,6 +396,11 @@ impl RoutingPlan {
             entries,
             relationships,
             storage: StorageObservation::default(),
+            storage_scope: if output.is_some() && !in_place {
+                StorageScope::Output
+            } else {
+                StorageScope::Input
+            },
         })
     }
 }
@@ -302,6 +413,8 @@ pub struct PreflightReport {
     pub execution_started: bool,
     pub plans: Vec<RoutingPlan>,
     pub workers: Vec<WorkerObservation>,
+    pub launcher_minimum_free_bytes: Option<u64>,
+    pub scratch_storage: Option<StorageObservation>,
 }
 
 /// A readable executable-file observation, not an encoder capability or execution proof.
@@ -380,15 +493,32 @@ impl WorkerObservation {
 
 impl PreflightReport {
     #[must_use]
-    pub const fn new(plans: Vec<RoutingPlan>, workers: Vec<WorkerObservation>) -> Self {
-        Self {
-            schema_version: 3,
+    pub fn new(
+        plans: Vec<RoutingPlan>,
+        workers: Vec<WorkerObservation>,
+        scratch_directory: impl FnOnce() -> Result<PathBuf>,
+    ) -> Result<Self> {
+        let selected_bytes = plans.iter().try_fold(0_u64, |sum, plan| {
+            sum.checked_add(plan.selected_media_bytes)
+                .context("selected media byte count overflow")
+        })?;
+        let has_selected_media = plans
+            .iter()
+            .any(|plan| plan.selected_images > 0 || plan.selected_videos > 0);
+        let launcher_minimum_free_bytes = has_selected_media
+            .then(|| crate::infra::system_checks::minimum_free_disk_bytes(selected_bytes))
+            .transpose()?;
+        Ok(Self {
+            schema_version: 6,
             scope: "launcher_routing_snapshot",
             read_only: true,
             execution_started: false,
             plans,
             workers,
-        }
+            launcher_minimum_free_bytes,
+            scratch_storage: has_selected_media
+                .then(|| StorageObservation::observe(scratch_directory())),
+        })
     }
 }
 
@@ -472,6 +602,7 @@ mod tests {
             selected: false,
             bytes: 1,
             content_blake3: blake3::hash(b"x").to_hex().to_string(),
+            xmp_xml: None,
             action: "retain",
             reason: "synthetic_inventory",
         }
@@ -571,7 +702,7 @@ mod tests {
     fn live_photo_candidates_require_routed_images_and_videos_and_remain_bounded() {
         let mut entries = vec![
             planned("one/pair.bin", ScanRoute::Image),
-            planned("one/pair.weird", ScanRoute::Video),
+            planned("one/PAIR.weird", ScanRoute::Video),
             planned("one/pair.mov", ScanRoute::CopyOnly),
             planned("two/pair.mp4", ScanRoute::Video),
             planned("three/ambiguous.jpg", ScanRoute::Image),
@@ -591,7 +722,7 @@ mod tests {
         assert_eq!(observations[0].status, "candidate");
         assert_eq!(
             observations[0].candidate_relative_paths,
-            [PathBuf::from("one/pair.weird")]
+            [PathBuf::from("one/PAIR.weird")]
         );
         assert_eq!(observations[1].status, "ambiguous");
         assert_eq!(observations[2].status, "ambiguous");
@@ -617,6 +748,50 @@ mod tests {
             assert!(observation.candidates_truncated);
             assert!(!observation.verified);
         }
+    }
+
+    #[test]
+    fn live_photo_preview_limits_probes_and_rejects_stale_evidence() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut scanned = Vec::new();
+        let mut entries = Vec::new();
+        for index in 0..=MAX_LIVE_PHOTO_PREVIEW_PAIRS {
+            for (extension, route) in [("jpg", ScanRoute::Image), ("mov", ScanRoute::Video)] {
+                let relative = format!("pair{index}.{extension}");
+                let path = temp.path().join(&relative);
+                fs::write(&path, b"synthetic input")?;
+                let source = foundation::batch::DiscoveredSource::from_metadata(
+                    &path,
+                    &fs::metadata(&path)?,
+                )?;
+                scanned.push(ScanEntry {
+                    relative_path: PathBuf::from(&relative),
+                    route,
+                    selected: true,
+                    source,
+                });
+                entries.push(planned(relative, route));
+            }
+        }
+        let mut observations = filename_relationships(&entries);
+        enrich_live_photo_relationships(&mut observations, &scanned, |_, motion, _| {
+            if motion.ends_with("pair0.mov") {
+                fs::write(motion, b"intentionally changed synthetic input").unwrap();
+            }
+            LivePhotoIdentifierEvidence::Match
+        });
+        assert_eq!(observations[0].status, "identifier_unavailable");
+        assert!(!observations[0].verified);
+        for observation in &observations[1..MAX_LIVE_PHOTO_PREVIEW_PAIRS] {
+            assert_eq!(observation.status, "identifier_match");
+            assert!(observation.verified);
+        }
+        assert_eq!(
+            observations[MAX_LIVE_PHOTO_PREVIEW_PAIRS].status,
+            "candidate"
+        );
+        assert!(!observations[MAX_LIVE_PHOTO_PREVIEW_PAIRS].verified);
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -668,8 +843,20 @@ mod tests {
         assert_eq!(plan.entries[2].action, "submit_img");
         assert_eq!(plan.relationships.len(), plan.sidecars);
         assert_eq!(plan.relationships[0].status, "unmatched");
-        let document = serde_json::to_value(PreflightReport::new(vec![plan], Vec::new()))?;
-        assert_eq!(document["schema_version"], 3);
+        let report = PreflightReport::new(vec![plan], Vec::new(), || {
+            Ok(temp.path().join("absent-scratch"))
+        })?;
+        let document = serde_json::to_value(report)?;
+        assert_eq!(document["schema_version"], 6);
+        assert_eq!(
+            document["launcher_minimum_free_bytes"],
+            2_147_483_648_u64 + u64::try_from(jpeg.len())?
+        );
+        assert_eq!(document["plans"][0]["storage_scope"], "output");
+        assert_eq!(document["scratch_storage"]["status"], "unknown");
+        assert!(!temp.path().join("absent-scratch").exists());
+        assert_eq!(document["plans"][0]["entries"][0]["xmp_xml"], "rejected");
+        assert!(document["plans"][0]["entries"][2]["xmp_xml"].is_null());
         for entry in document["plans"][0]["entries"].as_array().unwrap() {
             let path = input.join(entry["relative_path"].as_str().unwrap());
             assert_eq!(
@@ -693,6 +880,107 @@ mod tests {
         );
         assert_eq!(filtered.selected_images, 0);
         assert_eq!(filtered.filtered_media, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn preflight_xmp_xml_observation_keeps_ownership_unverified_and_bounds_work() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path();
+        fs::write(input.join("a-photo.jpg"), b"\xff\xd8\xff\xe0synthetic")?;
+        let packet = b"<x:xmpmeta xmlns:x='adobe:ns:meta/'><sample/></x:xmpmeta>";
+        fs::write(input.join("a-photo.xmp"), packet)?;
+        fs::write(input.join("b-malformed.xmp"), b"<x:xmpmeta>")?;
+        fs::write(input.join("c-prohibited.xmp"), b"<!DOCTYPE x><x/>")?;
+        fs::File::create(input.join("d-large.xmp"))?.set_len(MAX_XMP_PREVIEW_BYTES + 1)?;
+        let mut deep_xml = "<x>".repeat(300);
+        deep_xml.push_str(&"</x>".repeat(300));
+        fs::write(input.join("e-depth.xmp"), deep_xml)?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(input.join("a-photo.xmp"), input.join("f-link.xmp"))?;
+        for index in 0..MAX_XMP_PREVIEW_FILES {
+            fs::write(input.join(format!("z-{index:03}.xmp")), packet)?;
+        }
+        let plan = RoutingPlan::inspect(input, None, ProcessingFilter::Both, true)?;
+        let observations = plan
+            .entries
+            .iter()
+            .map(|entry| (entry.relative_path.as_path(), entry.xmp_xml))
+            .collect::<BTreeMap<_, _>>();
+        let observation = |path| observations[Path::new(path)];
+        assert_eq!(observation("a-photo.jpg"), None);
+        assert_eq!(observation("a-photo.xmp"), Some(XmpXmlObservation::Checked));
+        assert_eq!(
+            observation("b-malformed.xmp"),
+            Some(XmpXmlObservation::Rejected)
+        );
+        assert_eq!(
+            observation("c-prohibited.xmp"),
+            Some(XmpXmlObservation::Rejected)
+        );
+        assert_eq!(
+            observation("d-large.xmp"),
+            Some(XmpXmlObservation::Unavailable)
+        );
+        assert_eq!(
+            observation("e-depth.xmp"),
+            Some(XmpXmlObservation::Unavailable)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            observation("f-link.xmp"),
+            Some(XmpXmlObservation::Unavailable)
+        );
+        assert_eq!(
+            observations[Path::new(&format!("z-{:03}.xmp", MAX_XMP_PREVIEW_FILES - 1))],
+            Some(XmpXmlObservation::Unavailable)
+        );
+        let candidate = &plan.relationships[0];
+        assert_eq!(candidate.status, "candidate");
+        assert_eq!(
+            candidate.candidate_relative_paths,
+            [PathBuf::from("a-photo.jpg")]
+        );
+        assert!(!candidate.verified);
+        assert_eq!(fs::read(input.join("a-photo.xmp"))?, packet);
+        Ok(())
+    }
+
+    #[test]
+    fn preflight_rejects_malformed_xmp_lexical_content_without_changing_routes() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path();
+        let valid = b"<?xpacket begin='synthetic'?><!--metadata--><x sample='&lt; &#65;'>&amp;&#x41;<![CDATA[& literal]]></x><?xpacket end='w'?>";
+        fs::write(input.join("valid.xmp"), valid)?;
+        let malformed: &[(&str, &[u8])] = &[
+            ("bad-attribute.xmp", b"<x attr=/>"),
+            ("duplicate-attribute.xmp", b"<x attr='a' attr='b'/>"),
+            ("bad-attribute-entity.xmp", b"<x attr='&unknown;'/>"),
+            ("raw-attribute-markup.xmp", b"<x attr='<'/>"),
+            ("bad-entity.xmp", b"<x>&unknown;</x>"),
+            ("bad-character-ref.xmp", b"<x>&#not-a-number;</x>"),
+            ("outside-text.xmp", b"extra<x/>"),
+            ("outside-cdata.xmp", b"<x/><![CDATA[ ]]>"),
+            ("outside-reference.xmp", b"<x/>&#32;"),
+            ("bad-comment.xmp", b"<x><!--bad--comment--></x>"),
+        ];
+        for (name, packet) in malformed {
+            fs::write(input.join(name), packet)?;
+        }
+        let plan = RoutingPlan::inspect(input, None, ProcessingFilter::Both, true)?;
+        assert_eq!(plan.sidecars, malformed.len() + 1);
+        for entry in &plan.entries {
+            assert_eq!(entry.action, "preserve_sidecar");
+            assert!(!entry.selected);
+            let expected = if entry.relative_path == Path::new("valid.xmp") {
+                XmpXmlObservation::Checked
+            } else {
+                XmpXmlObservation::Rejected
+            };
+            assert_eq!(entry.xmp_xml, Some(expected), "{:?}", entry.relative_path);
+        }
+        assert!(plan.relationships.iter().all(|entry| !entry.verified));
+        assert_eq!(fs::read(input.join("valid.xmp"))?, valid);
         Ok(())
     }
 

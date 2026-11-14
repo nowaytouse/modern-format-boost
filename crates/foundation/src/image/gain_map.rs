@@ -462,6 +462,53 @@ fn source(jpeg: &[u8]) -> Result<Option<Source>> {
     }))
 }
 
+/// A bundle verified against one complete JPEG observation in a full effort search.
+pub(crate) struct PreparedJpegGainMap(Option<Vec<u8>>);
+
+impl PreparedJpegGainMap {
+    pub(crate) fn new(jpeg: &Path, expected_blake3: &str) -> Result<Self> {
+        let bytes = std::fs::read(jpeg)?;
+        ensure!(
+            blake3::hash(&bytes).to_hex().as_str() == expected_blake3,
+            "JPEG changed before gain-map preparation"
+        );
+        let Some(source) = source(&bytes)? else {
+            return Ok(Self(None));
+        };
+        #[cfg(feature = "jpegxl-ffi")]
+        {
+            let bundle = native::encode(&source)?;
+            native::verify(&source, &bundle)?;
+            Ok(Self(Some(bundle)))
+        }
+        #[cfg(not(feature = "jpegxl-ffi"))]
+        {
+            let _ = source;
+            bail!("native JPEG XL gain-map support is disabled in this build")
+        }
+    }
+
+    pub(crate) fn attach(&self, candidate: &Path) -> Result<bool> {
+        let Some(bundle) = &self.0 else {
+            return Ok(false);
+        };
+        #[cfg(feature = "jpegxl-ffi")]
+        {
+            crate::metadata::append_gain_map_to_jxl(candidate, bundle)?;
+            ensure!(
+                crate::metadata::read_gain_map_from_jxl(candidate)? == *bundle,
+                "JXL gain map changed during candidate enrichment"
+            );
+            Ok(true)
+        }
+        #[cfg(not(feature = "jpegxl-ffi"))]
+        {
+            let _ = (bundle, candidate);
+            bail!("native JPEG XL gain-map support is disabled in this build")
+        }
+    }
+}
+
 /// Attach and verify a native `jhgm` without changing any existing JXL bytes.
 /// Returns false for ordinary JPEGs. Does not modify the source JPEG.
 ///

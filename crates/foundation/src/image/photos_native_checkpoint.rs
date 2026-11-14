@@ -1,7 +1,7 @@
 //! `PhotoKit` transactions reuse the existing UUID/original-byte custody gates.
 use super::{
-    BTreeMap, Duration, FastImgLibraryAssetProbe, ImgQualityError, LibraryHandle, Path, PathBuf,
-    PhotosImportCheckpointPlan, PhotosImportPendingEntry, Result, WorkingCopyMarker,
+    BTreeMap, BTreeSet, Duration, FastImgLibraryAssetProbe, ImgQualityError, LibraryHandle, Path,
+    PathBuf, PhotosImportCheckpointPlan, PhotosImportPendingEntry, Result, WorkingCopyMarker,
     checkpoint_photos_import_window, library_records_from_pending_import,
     osxphotos_uuid_from_photos_import_identifier, require_active_photos_library,
     resolve_osascript_command, run_photos_import_applescript_session_mode_in_library,
@@ -254,6 +254,7 @@ struct ImportTask {
     identity: String,
     expected: usize,
     relocated_originals: bool,
+    enriched_originals: BTreeSet<String>,
 }
 
 fn import_task(marker: &WorkingCopyMarker, library: Option<&Path>) -> anyhow::Result<ImportTask> {
@@ -267,6 +268,7 @@ fn import_task(marker: &WorkingCopyMarker, library: Option<&Path>) -> anyhow::Re
         .to_string(),
         expected: marker.expected_output_count(),
         relocated_originals: false,
+        enriched_originals: BTreeSet::new(),
     })
 }
 
@@ -298,6 +300,7 @@ pub(super) fn try_import_originals(
         task.identity.push_str("-originals");
         task.expected = plan.proven_assets.len() + plan.pending_entries.len();
         task.relocated_originals = true;
+        task.enriched_originals.extend(enriched.keys().cloned());
         let result = try_import_inner(
             &task,
             &plan,
@@ -535,6 +538,7 @@ fn finish_import(
 pub(super) fn try_import<Q, P>(
     marker: &mut WorkingCopyMarker,
     plan: &PhotosImportCheckpointPlan,
+    held: usize,
     query: &mut Q,
     quarantined: &mut P,
     library: Option<&Path>,
@@ -544,7 +548,12 @@ where
     P: FnMut(&Path) -> Result<bool>,
 {
     let profile = photos_import_metrics::Profile::start("native");
-    let result = import_task(marker, library).and_then(|task| {
+    let result = import_task(marker, library).and_then(|mut task| {
+        // The caller can hold an uncertain AppleScript submission while
+        // independently checkpointing the remaining native media.
+        task.expected = task.expected.checked_sub(held).ok_or_else(|| {
+            anyhow::anyhow!("held Photos submissions exceed expected media count")
+        })?;
         try_import_inner(
             &task,
             plan,
@@ -608,6 +617,9 @@ where
     P: FnMut(&Path) -> Result<bool>,
     C: for<'a> FnMut(&[PhotosImportPendingEntry], PhotosImportCheckpointUpdate<'a>) -> Result<()>,
 {
+    let direct_library = |rel: &str| {
+        library.filter(|_| task.relocated_originals && !task.enriched_originals.contains(rel))
+    };
     let backend = if let Some(config) = crate::infra::runtime_config::active() {
         match config.photos.backend {
             crate::infra::runtime_config::PhotosBackend::Auto => "auto".to_string(),
@@ -693,7 +705,9 @@ where
     for asset in &plan.proven_assets {
         anyhow::ensure!(
             !pending.contains_key(&asset.rel_path)
-                && imported.insert(asset.rel_path.clone(), asset.clone()).is_none(),
+                && imported
+                    .insert(asset.rel_path.clone(), asset.clone())
+                    .is_none(),
             "duplicate checkpointed asset path during Photos reconciliation"
         );
     }
@@ -742,6 +756,7 @@ where
                 &recovered_pairs,
                 query,
                 quarantined,
+                direct_library,
             )?;
             checkpoint_with_progress(&recovered_entries, &proofs, checkpoint, &mut progress)?;
             for entry in recovered_entries {
@@ -844,8 +859,13 @@ where
                             Ok((entry.rel_path.clone(), identifier.clone()))
                         })
                         .collect::<anyhow::Result<Vec<_>>>()?;
-                    let mut proofs =
-                        library_records_from_pending_import(entries, &pairs, query, quarantined)?;
+                    let mut proofs = library_records_from_pending_import(
+                        entries,
+                        &pairs,
+                        query,
+                        quarantined,
+                        direct_library,
+                    )?;
                     checkpoint_with_progress(entries, &proofs, checkpoint, &mut progress)?;
                     for entry in entries {
                         identifiers.remove(&entry.rel_path);
@@ -1246,6 +1266,7 @@ mod tests {
                 identity: "cancelled-test".into(),
                 expected: 1,
                 relocated_originals: false,
+                enriched_originals: BTreeSet::new(),
             },
             &PhotosImportCheckpointPlan {
                 pending_entries: vec![entry],
@@ -1316,12 +1337,18 @@ mod tests {
             },
         )]);
         require_checkpointed_journal_identity(&imported, entry_id, "synthetic-uuid/L0/001")?;
-        assert!(require_checkpointed_journal_identity(
-            &imported, "other/fixture.jxl", "synthetic-uuid/L0/001",
-        ).is_err());
-        assert!(require_checkpointed_journal_identity(
-            &imported, entry_id, "another-uuid/L0/001",
-        ).is_err());
+        assert!(
+            require_checkpointed_journal_identity(
+                &imported,
+                "other/fixture.jxl",
+                "synthetic-uuid/L0/001",
+            )
+            .is_err()
+        );
+        assert!(
+            require_checkpointed_journal_identity(&imported, entry_id, "another-uuid/L0/001",)
+                .is_err()
+        );
         Ok(())
     }
 

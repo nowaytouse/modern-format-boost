@@ -146,7 +146,7 @@ struct Args {
     #[arg(long, short = 'u')]
     update: bool,
 
-    /// Build the native macOS GUI and sync the .app bundle
+    /// Incrementally refresh all App binaries and the native macOS host
     #[arg(long)]
     gui: bool,
 
@@ -172,6 +172,18 @@ struct Args {
     /// Fast path after a manual cargo build.
     #[arg(long, short = 's', conflicts_with_all = ["gui", "all"])]
     sync: bool,
+}
+
+impl Args {
+    fn wants_app_build(&self) -> bool {
+        (self.gui || self.all) && !self.rust_only
+    }
+
+    fn quiet_app_check(&self) -> bool {
+        self.wants_app_build()
+            && self.quiet
+            && !(self.force || self.clean || self.verbose || self.update)
+    }
 }
 
 fn command_exists(cmd: &str) -> bool {
@@ -550,10 +562,9 @@ fn quiet_can_skip(args: &Args, project_root: &Path, targets: &[(&str, String, bo
     let resources = project_root.join("Modern Format Boost.app/Contents/Resources");
     args.quiet
         && !args.force
-        && (!(args.gui || args.all)
-            || args.rust_only
-            || (!gui_needs_rebuild(project_root) && !gui_needs_publication(project_root)))
-        && (!resources.is_dir() || app_bundle_changed_bins(project_root, &resources).is_empty())
+        && !args.wants_app_build()
+        && (!resources.is_dir()
+            || app_bundle_changed_bins(project_root, &resources, false).is_empty())
         && targets.iter().all(|(project_dir, binary_name, _)| {
             decide_build_action(project_root, project_dir, binary_name, false).0 == "skip"
         })
@@ -650,6 +661,20 @@ fn decide_build_action(
     }
 
     ("skip", "")
+}
+
+fn selected_build_action(
+    project_root: &Path,
+    project_dir: &str,
+    binary_name: &str,
+    args: &Args,
+) -> (&'static str, &'static str) {
+    let action = decide_build_action(project_root, project_dir, binary_name, args.force);
+    if action.0 == "skip" && args.wants_app_build() {
+        // A successful link can postdate an edit rustc did not see. Ask Cargo which units are fresh.
+        return ("check", "cargo-fingerprint");
+    }
+    action
 }
 
 fn set_artifact_target(command: &mut Command, project_root: &Path) {
@@ -788,15 +813,14 @@ fn build_project(
     Ok(true)
 }
 
-/// Compile several changed single-binary workspace members in one Cargo
-/// invocation. This keeps the common img + vid + verify path incremental while
-/// avoiding repeated Cargo process startup and dependency graph resolution.
+/// Ask Cargo to resolve and build the selected single-binary targets together.
+/// Returns the release artifacts that changed, or None on a failed build.
 fn build_workspace_projects(
     project_root: &Path,
     projects: &[(&str, String, bool)],
     args: &Args,
     style: Style,
-) -> Result<bool> {
+) -> Result<Option<Vec<String>>> {
     if projects.len() < 2
         || projects
             .iter()
@@ -809,6 +833,10 @@ fn build_workspace_projects(
         Ok(d) => d.as_secs_f64(),
         Err(_err) => 0.0,
     };
+    let before: Vec<_> = projects
+        .iter()
+        .map(|(_, name, _)| release_artifact_observation(&get_binary_path(project_root, name)))
+        .collect();
     let toolchain = resolve_rust_toolchain_from(&current_toolchain_input());
     let manifest = project_root.join("Cargo.toml");
     let mut packages = Vec::new();
@@ -853,6 +881,9 @@ fn build_workspace_projects(
         .arg("--locked")
         .arg("--manifest-path")
         .arg(&manifest);
+    if args.quiet_app_check() {
+        command.arg("--quiet");
+    }
     for package in packages {
         command.arg("-p").arg(package);
     }
@@ -868,44 +899,55 @@ fn build_workspace_projects(
             projects.len(),
             style.reset
         );
-        return Ok(false);
+        return Ok(None);
     }
 
+    let mut changed = Vec::new();
     let mut any_updated = false;
     let mut newest_mtime = 0.0_f64;
-    for (_, binary_name, _) in projects {
+    for ((_, binary_name, _), previous) in projects.iter().zip(before) {
         let path = get_binary_path(project_root, binary_name);
         if !path.is_file() {
             println!(
                 "{}ERROR: TIMESTAMP VERIFICATION FAILED: Binary not found{}",
                 style.red, style.reset
             );
-            return Ok(false);
+            return Ok(None);
+        }
+        if release_artifact_observation(&path) != previous {
+            changed.push(binary_name.clone());
         }
         let mtime = get_mtime(&path);
         newest_mtime = newest_mtime.max(mtime);
         any_updated |= mtime >= (compile_start_time - 2.0);
     }
-    if !any_updated && !args.force {
+    if !any_updated && !args.force && !args.wants_app_build() {
         println!(
             "{}FAILURE: Cargo returned success but did not refresh an expected binary{}",
             style.red, style.reset
         );
-        return Ok(false);
+        return Ok(None);
     }
-    let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
-        .checked_add(std::time::Duration::from_secs_f64(newest_mtime))
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-        .into();
-    println!(
-        "   {}\u{2713} batched outputs ready{}  {}{}{}",
-        style.green,
-        style.reset,
-        style.dim,
-        datetime.format("%Y-%m-%d %H:%M:%S"),
-        style.reset
-    );
-    Ok(true)
+    if !args.quiet_app_check() || !changed.is_empty() {
+        let datetime: chrono::DateTime<chrono::Local> = std::time::SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs_f64(newest_mtime))
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .into();
+        println!(
+            "   {}\u{2713} batched outputs ready{}  {}{}{}",
+            style.green,
+            style.reset,
+            style.dim,
+            datetime.format("%Y-%m-%d %H:%M:%S"),
+            style.reset
+        );
+    }
+    Ok(Some(changed))
+}
+
+fn release_artifact_observation(path: &Path) -> Option<(SystemTime, u64)> {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 
 fn run_update_step(label: &str, cmd: &mut Command, style: &Style, required: bool) -> bool {
@@ -1186,16 +1228,95 @@ fn bundle_file_needs_sync(src: &Path, dest: &Path) -> bool {
     }
 }
 
-fn app_bundle_changed_bins(project_root: &Path, resources: &Path) -> Vec<&'static str> {
+fn app_bundle_changed_bins(
+    project_root: &Path,
+    resources: &Path,
+    compare_images: bool,
+) -> Vec<&'static str> {
     let release = project_root.join("target/release");
     APP_BUNDLE_RESOURCE_BINARIES
         .iter()
         .copied()
         .filter(|bin| {
             let source = release.join(bin);
-            source.is_file() && bundle_file_needs_sync(&source, &resources.join(bin))
+            let destination = resources.join(bin);
+            source.is_file()
+                && if compare_images {
+                    app_binary_needs_sync(&source, &destination)
+                } else {
+                    bundle_file_needs_sync(&source, &destination)
+                }
         })
         .collect()
+}
+
+fn app_artifacts_current(project_root: &Path) -> Result<bool> {
+    let app = project_root.join("Modern Format Boost.app");
+    let resources = app.join("Contents/Resources");
+    let dylib_name = if cfg!(target_os = "macos") {
+        "libfoundation.dylib"
+    } else if cfg!(target_os = "windows") {
+        "foundation.dll"
+    } else {
+        "libfoundation.so"
+    };
+    let dylib = project_root.join("target/release").join(dylib_name);
+    let shared = foundation::process_lock::get_mfb_root()?
+        .join("artifacts")
+        .join(dylib_name);
+    Ok(dylib.is_file()
+        && [
+            shared,
+            resources.join(dylib_name),
+            app.join("Contents/Frameworks").join(dylib_name),
+        ]
+        .iter()
+        .all(|path| !bundle_file_needs_sync(&dylib, path))
+        && NATIVE_APP_BUNDLE_RESOURCES.iter().all(|(source, name)| {
+            let source = project_root.join(source);
+            source.is_file() && !bundle_file_needs_sync(&source, &resources.join(name))
+        })
+        && app_bundle_changed_bins(project_root, &resources, true).is_empty())
+}
+
+fn app_binary_needs_sync(source: &Path, destination: &Path) -> bool {
+    if bundle_file_needs_sync(source, destination) {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Signing changes bytes but preserves the Mach-O image UUID.
+        return match (macho_image_ids(source), macho_image_ids(destination)) {
+            (Some(source), Some(destination)) => source != destination,
+            _ => true,
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn macho_image_ids(path: &Path) -> Option<Vec<String>> {
+    let output = Command::new("/usr/bin/dwarfdump")
+        .arg("--uuid")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut identities = String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .map(|line| {
+            let parts = line.strip_prefix("UUID: ")?;
+            let (uuid, rest) = parts.split_once(" (")?;
+            let (architecture, _) = rest.split_once(") ")?;
+            Some(format!("{uuid} {architecture}"))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    identities.sort_unstable();
+    (!identities.is_empty()).then_some(identities)
 }
 
 fn sync_foundation_dylib_artifact(
@@ -1277,7 +1398,12 @@ fn sync_app_bundle(
     style: &Style,
     force: bool,
     native_build: bool,
+    source_baseline: Option<&[f64]>,
+    quiet: bool,
 ) -> Result<()> {
+    if quiet && !native_build && app_artifacts_current(project_root)? {
+        return Ok(());
+    }
     let _production_lease = foundation::production_lock::acquire_production_lease()
         .context("cannot refresh app artifacts while a production task is active")?;
     let native_bundle = if native_build {
@@ -1310,7 +1436,8 @@ fn sync_app_bundle(
     }
 
     let target_release = project_root.join("target/release");
-    let changed_bins = app_bundle_changed_bins(project_root, &app_res_dir);
+    let changed_bins =
+        app_bundle_changed_bins(project_root, &app_res_dir, source_baseline.is_some());
     let dylib_name = foundation
         .file_name()
         .context("foundation dylib has no filename")?;
@@ -1331,7 +1458,9 @@ fn sync_app_bundle(
         resources_changed |= bundle_file_needs_sync(&source, &app_res_dir.join(name));
     }
     if !native_build && changed_bins.is_empty() && !foundation_changed && !resources_changed {
-        println!("{}App Bundle already current.{}", style.dim, style.reset);
+        if !quiet {
+            println!("{}App Bundle already current.{}", style.dim, style.reset);
+        }
         return Ok(());
     }
 
@@ -1382,6 +1511,9 @@ fn sync_app_bundle(
     sync_native_app_bundle_resources(project_root, &staged_resources)?;
     sign_app_bundle(project_root, &staged, style, &changed_bins)?;
     verify_app_bundle_signature(&staged)?;
+    if let Some(source_baseline) = source_baseline {
+        require_current_app_bundle_targets(project_root, source_baseline)?;
+    }
     ensure_app_bundle_idle(project_root, &app_bundle)?;
 
     let backups = foundation::process_lock::get_mfb_root()?.join("backups");
@@ -2054,6 +2186,45 @@ fn bin_name_to_crate_dir(name: &str) -> Result<&'static str> {
     }
 }
 
+fn include_app_bundle_targets(targets: &mut Vec<(&str, String, bool)>) -> Result<()> {
+    for &binary in APP_BUNDLE_RESOURCE_BINARIES {
+        if !targets.iter().any(|(_, name, _)| name == binary) {
+            targets.push((bin_name_to_crate_dir(binary)?, binary.to_owned(), false));
+        }
+    }
+    Ok(())
+}
+
+fn app_bundle_source_baseline(project_root: &Path) -> Result<Vec<f64>> {
+    APP_BUNDLE_RESOURCE_BINARIES
+        .iter()
+        .map(|binary| {
+            let project = bin_name_to_crate_dir(binary)?;
+            Ok(get_newest_binary_source_mtime(
+                project_root,
+                project,
+                binary,
+            ))
+        })
+        .collect()
+}
+
+fn require_current_app_bundle_targets(project_root: &Path, baseline: &[f64]) -> Result<()> {
+    let current = app_bundle_source_baseline(project_root)?;
+    anyhow::ensure!(
+        current == baseline,
+        "App sources changed during this build; run Smart Build again"
+    );
+    for (&binary, source_mtime) in APP_BUNDLE_RESOURCE_BINARIES.iter().zip(current) {
+        let artifact = get_binary_path(project_root, binary);
+        anyhow::ensure!(
+            artifact.is_file() && get_mtime(&artifact) >= source_mtime,
+            "App publication requires a current {binary} binary; run Smart Build again"
+        );
+    }
+    Ok(())
+}
+
 fn process_cmd_joined_lower(process: &sysinfo::Process) -> String {
     process
         .cmd()
@@ -2220,15 +2391,13 @@ fn main() -> Result<()> {
             "{}{}[sync mode]{} Syncing binaries to app bundle (no build).",
             style.cyan, style.bold, style.reset
         );
-        sync_app_bundle(&project_root, &style, args.force, false)?;
+        sync_app_bundle(&project_root, &style, args.force, false, None, false)?;
         return Ok(());
     }
 
     let mut targets_to_build: Vec<(&str, String, bool)> = Vec::new();
     if args.all {
-        // Check every app-bundled tool, but still compile only binaries whose own
-        // sources are newer. This makes --all complete without turning it into a
-        // forced workspace rebuild.
+        // Select every bundled tool. For App publication Cargo checks the whole selection incrementally.
         for binary_name in APP_BUNDLE_RESOURCE_BINARIES {
             let crate_dir = bin_name_to_crate_dir(binary_name)?;
             targets_to_build.push((crate_dir, (*binary_name).to_string(), false));
@@ -2258,36 +2427,46 @@ fn main() -> Result<()> {
         targets_to_build.push(("crates/dev", "drag_and_drop_processor".to_string(), false));
     }
 
+    let wants_gui = args.wants_app_build();
+    if wants_gui {
+        include_app_bundle_targets(&mut targets_to_build)?;
+    }
+
     if quiet_can_skip(&args, &project_root, &targets_to_build) {
         return Ok(());
     }
+    let app_sources = wants_gui
+        .then(|| app_bundle_source_baseline(&project_root))
+        .transpose()?;
 
-    // Print header
-    println!();
-    println!(
-        "{}{}{} Smart Build System v{} (Rust Edition){}",
-        style.cyan,
-        style.bold,
-        pick_symbol("📦", "[BUILD]"),
-        env!("CARGO_PKG_VERSION"),
-        style.reset
-    );
-    println!(
-        "{}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{}",
-        style.dim, style.reset
-    );
-    println!(
-        "{}Building:{} {}{}{}\n",
-        style.cyan,
-        style.reset,
-        style.bold,
-        targets_to_build
-            .iter()
-            .map(|(_, binary_name, _)| binary_name.as_str())
-            .collect::<Vec<_>>()
-            .join(" "),
-        style.reset
-    );
+    let quiet_app_check = args.quiet_app_check();
+    if !quiet_app_check {
+        println!();
+        println!(
+            "{}{}{} Smart Build System v{} (Rust Edition){}",
+            style.cyan,
+            style.bold,
+            pick_symbol("📦", "[BUILD]"),
+            env!("CARGO_PKG_VERSION"),
+            style.reset
+        );
+        println!(
+            "{}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{}",
+            style.dim, style.reset
+        );
+        println!(
+            "{}Building:{} {}{}{}\n",
+            style.cyan,
+            style.reset,
+            style.bold,
+            targets_to_build
+                .iter()
+                .map(|(_, binary_name, _)| binary_name.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            style.reset
+        );
+    }
 
     if args.clean {
         println!("{}Cleaning build artifacts...{}", style.yellow, style.reset);
@@ -2315,7 +2494,7 @@ fn main() -> Result<()> {
     let mut pending_projects = Vec::new();
     for (project_dir, binary_name, build_all_bins) in &targets_to_build {
         let (action, reason) =
-            decide_build_action(&project_root, project_dir, binary_name, args.force);
+            selected_build_action(&project_root, project_dir, binary_name, &args);
 
         if action == "skip" {
             println!(
@@ -2324,10 +2503,17 @@ fn main() -> Result<()> {
             );
             skipped += 1;
         } else {
-            println!(
-                "[BUILD] {}{}{} {}({}){}",
-                style.bold, binary_name, style.reset, style.dim, reason, style.reset
-            );
+            if !quiet_app_check {
+                let label = if action == "check" {
+                    "[CHECK]"
+                } else {
+                    "[BUILD]"
+                };
+                println!(
+                    "{label} {}{}{} {}({}){}",
+                    style.bold, binary_name, style.reset, style.dim, reason, style.reset
+                );
+            }
             pending_projects.push((*project_dir, binary_name.clone(), *build_all_bins));
         }
     }
@@ -2337,14 +2523,26 @@ fn main() -> Result<()> {
             .iter()
             .all(|(_, _, build_all_bins)| !build_all_bins)
     {
-        if build_workspace_projects(&project_root, &pending_projects, &args, style)? {
+        if let Some(changed) =
+            build_workspace_projects(&project_root, &pending_projects, &args, style)?
+        {
             for (_, binary_name, _) in &pending_projects {
-                println!(
-                    "[OK] {}{}{} - compiled",
-                    style.bold, binary_name, style.reset
-                );
+                if !wants_gui || changed.contains(binary_name) {
+                    println!(
+                        "[OK] {}{}{} - compiled",
+                        style.bold, binary_name, style.reset
+                    );
+                    rebuilt += 1;
+                } else {
+                    if !quiet_app_check {
+                        println!(
+                            "[OK] {}{}{} (Cargo up-to-date)",
+                            style.bold, binary_name, style.reset
+                        );
+                    }
+                    skipped += 1;
+                }
             }
-            rebuilt += pending_projects.len();
         } else {
             failed += pending_projects.len();
         }
@@ -2369,10 +2567,12 @@ fn main() -> Result<()> {
         }
     }
 
-    println!(
-        "\n{}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{}",
-        style.dim, style.reset
-    );
+    if !quiet_app_check || failed > 0 || rebuilt > 0 {
+        println!(
+            "\n{}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{}",
+            style.dim, style.reset
+        );
+    }
 
     if failed > 0 {
         println!(
@@ -2385,21 +2585,30 @@ fn main() -> Result<()> {
     // Build the GUI only when its own native inputs changed. Running it after
     // native compilation ensures the generated app receives the current bundled
     // binaries during the following sync step.
-    let wants_gui = (args.gui || args.all) && !args.rust_only;
+    if let Some(source_baseline) = app_sources.as_deref() {
+        require_current_app_bundle_targets(&project_root, source_baseline)?;
+    }
     let publish_gui = wants_gui
         && (args.force || gui_needs_rebuild(&project_root) || gui_needs_publication(&project_root));
     if publish_gui {
-        sync_app_bundle(&project_root, &style, args.force, true)?;
-    } else if wants_gui {
-        println!("[OK] GUI bundle up-to-date (skipped)");
+        sync_app_bundle(
+            &project_root,
+            &style,
+            args.force,
+            true,
+            app_sources.as_deref(),
+            false,
+        )?;
+    } else if wants_gui && !quiet_app_check {
+        println!("[OK] native GUI host up-to-date");
     }
 
-    if rebuilt == 0 {
+    if rebuilt == 0 && !quiet_app_check {
         println!(
             "{}OK: All binaries up-to-date (skipped {}){}",
             style.green, skipped, style.reset
         );
-    } else {
+    } else if rebuilt > 0 {
         println!(
             "{}OK: Built {}, skipped {}{}",
             style.green, rebuilt, skipped, style.reset
@@ -2433,7 +2642,14 @@ fn main() -> Result<()> {
     }
 
     if !publish_gui {
-        sync_app_bundle(&project_root, &style, args.force, false)?;
+        sync_app_bundle(
+            &project_root,
+            &style,
+            args.force,
+            false,
+            app_sources.as_deref(),
+            args.quiet_app_check(),
+        )?;
     }
 
     Ok(())
@@ -2485,6 +2701,63 @@ mod tests {
     }
 
     #[test]
+    fn gui_build_refreshes_every_bundled_tool_before_publication() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let release = root.join("target/release");
+        fs::create_dir_all(&release)?;
+        let mut targets = vec![("crates/dev", "verify".to_owned(), false)];
+        include_app_bundle_targets(&mut targets)?;
+        assert_eq!(targets.len(), APP_BUNDLE_RESOURCE_BINARIES.len());
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|(_, name, _)| name == "verify")
+                .count(),
+            1
+        );
+
+        let set_mtime = |path: &Path, seconds| {
+            fs::OpenOptions::new().write(true).open(path)?.set_times(
+                fs::FileTimes::new()
+                    .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(seconds)),
+            )
+        };
+        for (_, name, _) in &targets {
+            let binary = release.join(name);
+            fs::write(&binary, b"synthetic binary")?;
+            set_mtime(&binary, 1_600_000_100)?;
+        }
+        let source = root.join("crates/foundation/src/lib.rs");
+        fs::create_dir_all(source.parent().context("fixture source parent")?)?;
+        fs::write(&source, b"// shared state changed")?;
+        set_mtime(&source, 1_600_000_000)?;
+        let baseline = app_bundle_source_baseline(root)?;
+        require_current_app_bundle_targets(root, &baseline)?;
+
+        let cache_cleaner = release.join("cache_cleaner");
+        set_mtime(&cache_cleaner, 1_599_999_999)?;
+        let error = require_current_app_bundle_targets(root, &baseline).unwrap_err();
+        assert!(error.to_string().contains("cache_cleaner binary"));
+        set_mtime(&cache_cleaner, 1_600_000_100)?;
+        require_current_app_bundle_targets(root, &baseline)?;
+
+        fs::remove_file(release.join("merge_xmp"))?;
+        let error = require_current_app_bundle_targets(root, &baseline).unwrap_err();
+        assert!(error.to_string().contains("merge_xmp binary"));
+
+        fs::write(release.join("merge_xmp"), b"replacement binary")?;
+        set_mtime(&source, 1_600_000_001)?;
+        let error = require_current_app_bundle_targets(root, &baseline).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("sources changed during this build")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn incomplete_native_build_cannot_be_reused() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let root = tempdir.path();
@@ -2515,9 +2788,18 @@ mod tests {
             fs::copy(contents.join(file), destination)?;
         }
         assert!(!quiet_can_skip(&quiet_gui, root, &targets));
-        fs::copy(root.join("target/release/img"), published.join("Resources/img"))?;
-        assert!(quiet_can_skip(&quiet_gui, root, &targets));
-        assert!(quiet_can_skip(&quiet_all, root, &targets));
+        fs::copy(
+            root.join("target/release/img"),
+            published.join("Resources/img"),
+        )?;
+        assert!(!quiet_can_skip(&quiet_gui, root, &targets));
+        assert!(!quiet_can_skip(&quiet_all, root, &targets));
+        for args in [&quiet_gui, &quiet_all] {
+            assert_eq!(
+                selected_build_action(root, "crates/img", "img", args),
+                ("check", "cargo-fingerprint")
+            );
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
         let input = native_gui_dir(root).join("main.swift");
         fs::create_dir_all(input.parent().unwrap())?;
@@ -2546,6 +2828,38 @@ mod tests {
         assert!(gui_needs_publication(root.path()));
         fs::copy(assembled.join(marker), published.join(marker))?;
         assert!(!gui_needs_publication(root.path()));
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_binary_changes_publish_with_an_unchanged_native_host() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let project = root.path();
+        let assembled = native_app_bundle_path(project).join("Contents");
+        let published = project.join("Modern Format Boost.app/Contents");
+        for directory in [&assembled, &published] {
+            fs::create_dir_all(directory.join("MacOS"))?;
+            fs::create_dir_all(directory.join("Resources"))?;
+            fs::write(
+                directory.join("MacOS/Modern Format Boost"),
+                b"same native host",
+            )?;
+        }
+        let marker = "Resources/native-build-complete.txt";
+        fs::write(assembled.join(marker), b"1\n")?;
+        fs::copy(assembled.join(marker), published.join(marker))?;
+        let release = project.join("target/release/img");
+        let resources = published.join("Resources");
+        let bundled = resources.join("img");
+        fs::copy("/usr/bin/true", &release)?;
+        fs::copy("/usr/bin/false", &bundled)?;
+        assert!(!gui_needs_rebuild(project));
+        assert!(!gui_needs_publication(project));
+        assert!(!bundle_file_needs_sync(&release, &bundled));
+        assert_eq!(app_bundle_changed_bins(project, &resources, true), ["img"]);
+        fs::copy(&release, &bundled)?;
+        assert!(app_bundle_changed_bins(project, &resources, true).is_empty());
         Ok(())
     }
 

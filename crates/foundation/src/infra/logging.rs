@@ -308,12 +308,12 @@ fn escape_mfb_audit_token(value: &str) -> String {
     let needs_quote = value.is_empty()
         || value
             .chars()
-            .any(|c| c.is_whitespace() || c == '=' || c == '"');
-    if !needs_quote {
-        return value.to_string();
+            .any(|c| c.is_whitespace() || c.is_control() || c == '=' || c == '"');
+    if needs_quote {
+        serde_json::Value::String(value.to_owned()).to_string()
+    } else {
+        value.to_owned()
     }
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 fn format_mfb_audit_line(collector: AuditKvCollector) -> String {
@@ -1988,6 +1988,15 @@ mod tests {
             line.contains(r#"reason="not routed""#),
             "expected quoted reason, got {line}"
         );
+    }
+
+    #[test]
+    fn mfb_audit_tokens_keep_control_characters_on_one_line() {
+        let path = "a \"\\\n名.jpg";
+        let encoded = escape_mfb_audit_token(path);
+        assert!(!encoded.contains('\n'));
+        assert_eq!(serde_json::from_str::<String>(&encoded).unwrap(), path);
+        assert_eq!(escape_mfb_audit_token("normal.jpg"), "normal.jpg");
     }
 
     #[test]

@@ -10,6 +10,8 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 // JXL is also protected as an archived still, not a claim of native Live playback.
 const LIVE_STILL_EXTENSIONS: &[&str] =
@@ -129,18 +131,24 @@ fn parse_content_identifier_json(stdout: &[u8]) -> anyhow::Result<Option<String>
     Ok(identifier)
 }
 
+const CONTENT_IDENTIFIER_ARGS: [&str; 4] = [
+    "-j",
+    "-G1",
+    "-Apple:ContentIdentifier",
+    "-Keys:ContentIdentifier",
+];
+
 fn content_identifier(path: &Path) -> anyhow::Result<Option<String>> {
     let mut builder = crate::ExiftoolBuilder::new();
-    builder
-        .arg("-j")
-        .arg("-G1")
-        .arg("-Apple:ContentIdentifier")
-        .arg("-Keys:ContentIdentifier")
-        .input(path);
+    builder.args(CONTENT_IDENTIFIER_ARGS).input(path);
     let output = builder
         .build()
         .output()
         .with_context(|| format!("failed to read Live Photo identity from {}", path.display()))?;
+    read_content_identifier(path, &output)
+}
+
+fn read_content_identifier(path: &Path, output: &Output) -> anyhow::Result<Option<String>> {
     anyhow::ensure!(
         output.status.success(),
         "ExifTool could not read Live Photo identity from {}: {}",
@@ -148,6 +156,77 @@ fn content_identifier(path: &Path) -> anyhow::Result<Option<String>> {
         String::from_utf8_lossy(&output.stderr).trim()
     );
     parse_content_identifier_json(&output.stdout)
+}
+
+/// Read-only evidence about two candidate files. It does not verify Photos
+/// playback, successful import, or eligibility for cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePhotoIdentifierEvidence {
+    Match,
+    Mismatch,
+    Unavailable,
+}
+
+/// Verify identifier evidence only for actual JPEG/HEIF and QuickTime contents.
+/// A missing identifier, probe error or timeout leaves the relationship unknown.
+#[must_use]
+pub fn inspect_identifier_pair(
+    image: &Path,
+    video: &Path,
+    deadline: Instant,
+) -> LivePhotoIdentifierEvidence {
+    use crate::image::format_detect::{FormatKind, detect_regular_file_format};
+
+    if deadline <= Instant::now()
+        || !matches!(
+            detect_regular_file_format(image),
+            Ok(FormatKind::Jpeg | FormatKind::Heic | FormatKind::Heif)
+        )
+        || !matches!(detect_regular_file_format(video), Ok(FormatKind::Mov))
+    {
+        return LivePhotoIdentifierEvidence::Unavailable;
+    }
+
+    // A health smoke test would launch an unbounded ExifTool process before
+    // the deadline. The actual read below checks execution within the budget.
+    let Some(exiftool) =
+        crate::common_utils::resolve_tool_path_with_health(crate::constants::TOOL_EXIFTOOL, |_| {
+            true
+        })
+    else {
+        return LivePhotoIdentifierEvidence::Unavailable;
+    };
+    let probe = |path: &Path| {
+        let timeout = deadline
+            .checked_duration_since(Instant::now())?
+            .min(Duration::from_millis(500));
+        let mut command = Command::new(&exiftool);
+        // Disable executable Perl from ExifTool configuration. This must be
+        // the first option, before either the read arguments or input path.
+        command
+            .args(["-config", ""])
+            .args(CONTENT_IDENTIFIER_ARGS)
+            .arg(crate::safe_path_arg(path).as_ref());
+        let output = crate::process_runner::run_command_with_liveness_timeout(
+            &mut command,
+            timeout,
+            timeout,
+            "preflight Live Photo identifier",
+        )
+        .ok()?;
+        read_content_identifier(path, &output).ok().flatten()
+    };
+    match probe(image) {
+        Some(image_identifier) => {
+            let video_identifier = probe(video);
+            match content_identifiers_agree(Some(&image_identifier), video_identifier.as_deref()) {
+                Some(true) => LivePhotoIdentifierEvidence::Match,
+                Some(false) => LivePhotoIdentifierEvidence::Mismatch,
+                None => LivePhotoIdentifierEvidence::Unavailable,
+            }
+        }
+        None => LivePhotoIdentifierEvidence::Unavailable,
+    }
 }
 
 fn content_identifiers_agree(left: Option<&str>, right: Option<&str>) -> Option<bool> {

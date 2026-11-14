@@ -141,6 +141,35 @@ impl DiscoveredSource {
         Ok(())
     }
 
+    /// Validate the observed source as one bounded XMP XML document without opening a leaf link.
+    ///
+    /// # Errors
+    /// Returns an error for stale identity, unsafe paths, unreadable XML, or rejected content.
+    pub fn validate_xmp_xml(&self) -> io::Result<()> {
+        if !fs::symlink_metadata(&self.path)?.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "XMP preview source is not a regular non-symlink file",
+            ));
+        }
+        let mut file = crate::io_utils::open_regular_nofollow(&self.resolved)?;
+        if CachedFileIdentity::from_metadata(&file.metadata()?)? != self.identity {
+            return Err(io::Error::other(
+                "XMP preview source changed before reading",
+            ));
+        }
+        let validation = crate::metadata::validate_xmp_preview_document(&mut file, &self.path);
+        if CachedFileIdentity::from_metadata(&file.metadata()?)? != self.identity
+            || !fs::symlink_metadata(&self.path)?.is_file()
+        {
+            return Err(io::Error::other(
+                "XMP preview source changed during reading",
+            ));
+        }
+        self.verify_discovery_metadata()?;
+        validation.map(|_| ())
+    }
+
     /// Re-read the complete source and reject stale content before worker launch.
     /// Workers must still validate the actual input and final artifact they consume.
     pub fn verify_unchanged(&self) -> io::Result<()> {
@@ -1855,8 +1884,8 @@ mod tests {
             let video = scan_video_tree_snapshot(&empty, &["mp4"], true)?;
             save_cached_video_tree(&video)?;
             assert!(load_cached_video_tree(&empty, &["mp4"], true).is_some());
-            let connection = crate::mfb_sqlite_store::open_store_connection()?;
-            connection.execute("UPDATE store_metadata SET value = 99", [])?;
+            let connection = crate::mfb_sqlite_store::open_cache_store_connection()?;
+            connection.execute("UPDATE cache_metadata SET schema_version = 99", [])?;
             assert!(load_cached_video_tree(&empty, &["mp4"], true).is_none());
             Ok(())
         })?;

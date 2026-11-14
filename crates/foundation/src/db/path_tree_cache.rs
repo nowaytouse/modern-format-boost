@@ -1,4 +1,4 @@
-//! Reconstructable path-tree scan snapshots in the shared local SQLite store.
+//! Reconstructable path-tree scan snapshots in the local cache SQLite store.
 //! Advanced analysis databases are not dependencies of directory discovery.
 
 use anyhow::{Context, Result};
@@ -145,9 +145,9 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let connection = mfb_sqlite_store::open_store_connection().unwrap();
+        let connection = mfb_sqlite_store::open_cache_store_connection().unwrap();
         connection
-            .execute("UPDATE store_metadata SET value = 99", [])
+            .execute("UPDATE cache_metadata SET schema_version = 99", [])
             .unwrap();
         let inaccessible = load_path_tree_snapshot_with_status::<Vec<String>>("invalid", 4)
             .err()
@@ -294,18 +294,30 @@ mod tests {
             None
         );
         assert!(load_path_tree_snapshot::<Vec<String>>("invalid", u32::MAX).is_err());
-        let conn = mfb_sqlite_store::open_store_connection().unwrap();
+        let conn = mfb_sqlite_store::open_cache_store_connection().unwrap();
         conn.execute_batch(
-            "CREATE TRIGGER reject_cache BEFORE INSERT ON blob_store
-            WHEN NEW.namespace = 'path_tree' BEGIN SELECT RAISE(ABORT, 'test write failure'); END;",
+            "CREATE TRIGGER unexpected_cache_object BEFORE INSERT ON blob_store
+            BEGIN SELECT RAISE(ABORT, 'unexpected trigger'); END;",
         )
         .unwrap();
-        assert!(save_path_tree_snapshot("new", root.path(), 2, &vec!["new"]).is_err());
+        let error = save_path_tree_snapshot("new", root.path(), 2, &vec!["new"]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Unexpected rebuildable cache SQLite schema")
+        );
+        let error = load_path_tree_snapshot::<Vec<String>>("new", 2).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Unexpected rebuildable cache SQLite schema")
+        );
+        conn.execute_batch("DROP TRIGGER unexpected_cache_object;")
+            .unwrap();
         assert_eq!(
             load_path_tree_snapshot::<Vec<String>>("new", 2).unwrap(),
             None
         );
-        conn.execute_batch("DROP TRIGGER reject_cache;").unwrap();
         save_path_tree_snapshot("new", root.path(), 2, &vec!["new"]).unwrap();
         assert_eq!(
             load_path_tree_snapshot::<Vec<String>>("new", 2).unwrap(),

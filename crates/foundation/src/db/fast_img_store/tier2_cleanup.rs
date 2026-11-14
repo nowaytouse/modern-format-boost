@@ -396,12 +396,14 @@ pub fn verify_tier2_cleanup_complete(marker: &WorkingCopyMarker) -> Result<()> {
     if !marker.tier2_cleanup_journal || marker.tier2_imported_assets.is_empty() {
         return Ok(());
     }
-    ensure!(marker.is_terminal(), "Tier-2 original cleanup is still pending");
+    ensure!(
+        marker.is_terminal(),
+        "Tier-2 original cleanup is still pending"
+    );
     let conn = open_readonly()?.context("Tier-2 cleanup store is unavailable")?;
     let key = key_for_canonical(&canonical_text(&marker.working_copy)?);
     in_snapshot(&conn, |conn| {
-        let saved =
-            read_snapshot(conn, &key)?.context("Tier-2 cleanup checkpoint is missing")?;
+        let saved = read_snapshot(conn, &key)?.context("Tier-2 cleanup checkpoint is missing")?;
         ensure!(
             &saved == marker,
             "Tier-2 cleanup checkpoint changed during verification"
@@ -427,6 +429,7 @@ pub struct Tier2CleanupJournal<'a> {
     revision: i64,
     assets: BTreeMap<&'a str, &'a LibraryAssetRecord>,
     admissions: Option<BTreeMap<String, FailedRetryAdmission>>,
+    full_admissions: Option<FastImgAdmissionPlan>,
     entries: Entries,
     pending: SourceEntries,
     pending_source: Option<String>,
@@ -443,7 +446,7 @@ impl<'a> Tier2CleanupJournal<'a> {
         );
         let key = key_for_canonical(&canonical_text(&marker.working_copy)?);
         let conn = open_store_connection()?;
-        let (revision, entries, admissions) = in_snapshot(&conn, |conn| {
+        let (revision, entries, admissions, full_admissions) = in_snapshot(&conn, |conn| {
             let saved =
                 read_snapshot(conn, &key)?.context("Tier-2 cleanup task was not committed")?;
             ensure!(
@@ -459,6 +462,7 @@ impl<'a> Tier2CleanupJournal<'a> {
                 revision,
                 read_entries(conn, &key, marker)?,
                 admissions(conn, &key, marker)?,
+                super::admission::read_validated(conn, &key, marker)?,
             ))
         })?;
         let assets: BTreeMap<_, _> = marker
@@ -477,6 +481,7 @@ impl<'a> Tier2CleanupJournal<'a> {
             revision,
             assets,
             admissions,
+            full_admissions,
             entries,
             pending: SourceEntries::new(),
             pending_source: None,
@@ -526,6 +531,32 @@ impl<'a> Tier2CleanupJournal<'a> {
                 pending,
                 admission(self.admissions.as_ref(), source)?,
             )?;
+            if let Some(plan) = &self.full_admissions {
+                let admitted = plan
+                    .get(source)
+                    .context("Tier-2 cleanup source was never admitted")?;
+                ensure!(
+                    admitted.route == FastImgAdmissionRoute::Original
+                        && asset.blake3 == admitted.source_blake3,
+                    "Tier-2 cleanup media differs from its immutable admission"
+                );
+                ensure!(
+                    admitted
+                        .aae
+                        .as_ref()
+                        .is_none_or(|aae| matches!(aae, FastImgAdmissionSidecar::Absent)),
+                    "Tier-2 cleanup requires admitted AAE absence; source and companion retained"
+                );
+                if let Some(xmp) = &admitted.xmp {
+                    let observed = pending.iter().find(|(_, entry)| entry.kind == "xmp");
+                    ensure!(
+                        xmp.matches_observation(
+                            observed.map(|(rel, entry)| (rel.as_str(), entry.hash.as_str()))
+                        ),
+                        "Tier-2 cleanup XMP differs from its immutable admission; source and companion retained"
+                    );
+                }
+            }
             if let Some(saved) = saved {
                 ensure!(
                     saved == pending,

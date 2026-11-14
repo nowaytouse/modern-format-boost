@@ -191,6 +191,13 @@ and explicit stream orientation, before atomic publication. Later batch,
 delivery and deletion gates remain independent. Encoder partial bytes are not
 published merely because they have a final extension.
 
+Within one full reversible JPEG effort search, the complete source BLAKE3
+binds a single gain-map preparation. UltraHDR gain-map encoding and semantic
+verification run once. Each E1–E11 candidate still receives and reads back the
+exact gain-map box, runs its normal roundtrip, and verifies current filesystem
+and XMP metadata. Publication keeps its fresh complete integrity proof. The
+prepared bundle is discarded with the attempt.
+
 Fast AVIF Meme Mode deliberately clears removable embedded metadata. It is not
 the maximal-preservation archival route. Filesystem precision/policy exclusions
 also remain explicit; verified Photos local resource custody does not certify
@@ -204,6 +211,12 @@ unimplemented switch. Gate 1 requires an explicit supported metadata policy;
 container type alone cannot grant permission to clear metadata. Policy version
 4 binds progressive output to new AVIF reuse. Version 3 outputs need fresh
 progressive proof before reuse.
+
+Matching decoded samples cannot establish color equivalence after an embedded
+ICC profile is removed. Fast AVIF under Clear therefore keeps such inputs.
+An older output cannot be reused for import or used as cleanup evidence while
+its source still has a profile. This also applies to embedded sRGB profiles
+until equivalence can be established.
 
 ## Fast IMG Saved-Task Choice And Recovery Boundaries
 
@@ -416,8 +429,11 @@ quality only when search is fixed; automatic search retains but does not use it.
 The existing progressive-output policy requires the fixed quality to be at least
 10; general encoder support for non-progressive Q0 does not relax that policy.
 `img.avif_speed` (0..10, default 0) selects the final domain for lossless and
-quality probes. The locator remains Speed6 and its candidate is discarded before
-re-probing in that final domain. Confirmed-lossless input still attempts the
+quality probes. The locator remains Speed6. A different final Speed requires
+fresh probes. At final Speed6, a repeated coordinate can reuse same-run
+proof of the candidate and its exact input and encoder parameters. Reuse
+preserves the final search's coordinates and keeps delivery verification
+independent. Confirmed-lossless input still attempts the
 existing true-lossless route first. A verified progressive AVIF can be adopted
 with its encoded media intact. A non-progressive AVIF with a proven, compatible
 8-bit RGB layout can be normalized in the selected final speed domain if its
@@ -521,3 +537,25 @@ because this document or individual controls exist.
 Encoder success, a smaller output and matching counts never authorize deletion
 on their own. Source cleanup still requires the owning route's verified delivery
 and durable proof.
+
+### Synthetic JPEG Effort Comparison
+
+On macOS arm64 with cjxl/djxl `0.14.0 9e020710` and one codec thread,
+66 direct encodes and 66 independent reconstructions covered E1–E11 on six
+generated JPEGs (549–114,887 bytes). Every reconstructed JPEG matched its
+input byte for byte. Replaying the resulting sizes with the project's
+`(file size, effort)` tie rule selected E9 on four fixtures and E8 on two.
+The count of candidates that improved the current best was 22 in ascending
+order, 20 in descending order, and 9 in the project's reference-first order.
+These counts compare the same measured candidate files. This experiment
+excludes project metadata enrichment, final delivery checks, and Photos,
+so it does not measure end-to-end speed or justify changing the search order.
+## Standard IMG AVIF Fallback
+
+The standard extreme AVIF fallback can retain one direct, pixel-verified
+candidate of at most 64 MiB in private temporary storage. It reuses the chosen
+quality only when the original source, encoder input, XMP association,
+effective encoder command and candidate bytes still match. A changed or
+unavailable candidate falls back to the normal final encode. A changed input
+or associated sidecar prevents publication from that search. The standard
+metadata-preservation and final pure-payload check still run before publication.

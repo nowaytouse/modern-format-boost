@@ -21,13 +21,17 @@ use foundation::avif_quality_search::{
     AVIF_HANDOFF_QUALITY_FLOOR as JXL_AVIF_HANDOFF_QUALITY_FLOOR,
     search_highest_fitting_avif_quality_with,
 };
+use foundation::fast_img_store::{
+    AvifEncoderInvocation, JpegEncoderInvocation, ReconstructedJpegExecution,
+};
 use foundation::ffprobe_json::ColorInfo;
 use foundation::image_analyzer::{ConversionColorContext, ConversionColorRole};
 use foundation::image_jpeg_analysis::is_jpeg_complete;
 use foundation::infra::runtime_config::{self, FallbackPolicy, ToolPolicy};
 use foundation::jxl_effort_policy::JxlEffortPlan;
+use foundation::process_runner::ProcessOutput;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
 use std::time::Duration;
@@ -1808,6 +1812,18 @@ fn jpeg_search_sidecar_identity(input: &Path) -> anyhow::Result<Option<(PathBuf,
         .transpose()
 }
 
+struct JpegEncodeOutput {
+    process: ProcessOutput,
+    invocation: Option<JpegEncoderInvocation>,
+}
+
+#[derive(Clone, Copy)]
+enum JpegInvocationObservation<'a> {
+    Disabled,
+    CurrentExecutable,
+    SearchExecutable { path: &'a Path, digest: &'a str },
+}
+
 fn run_cjxl_jpeg_encode_with_effort(
     input: &Path,
     temp_output: &Path,
@@ -1815,11 +1831,13 @@ fn run_cjxl_jpeg_encode_with_effort(
     max_threads: usize,
     allow_jpeg_reconstruction: Option<u8>,
     effort: u8,
-) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    observation: JpegInvocationObservation<'_>,
+) -> anyhow::Result<JpegEncodeOutput> {
     let run = |selected_effort: u8,
                allow_expert: bool,
                apple_compat: bool|
-     -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+     -> anyhow::Result<JpegEncodeOutput> {
+        use anyhow::Context;
         let mut builder = foundation::CjxlBuilder::new();
         builder
             .input(input)
@@ -1835,14 +1853,78 @@ fn run_cjxl_jpeg_encode_with_effort(
         }
 
         let mut command = builder.build();
-        foundation::process_runner::ManagedProcess::spawn(&mut command)?.wait_liveness_timeout(
-            cjxl_timeout()?,
-            foundation::process_runner::image_process_hard_timeout(),
-            "cjxl JPEG lossless transcode",
-        )
+        let idle = cjxl_timeout()?;
+        let hard = foundation::process_runner::image_process_hard_timeout();
+        let executable = PathBuf::from(command.get_program());
+        let digest = match observation {
+            JpegInvocationObservation::Disabled => None,
+            JpegInvocationObservation::CurrentExecutable => {
+                anyhow::ensure!(
+                    executable.is_absolute(),
+                    "cannot identify the resolved cjxl executable"
+                );
+                Some(foundation::common_utils::calculate_blake3_hash(
+                    &executable,
+                )?)
+            }
+            JpegInvocationObservation::SearchExecutable { path, digest } => {
+                anyhow::ensure!(
+                    executable == path,
+                    "cjxl resolution changed before JPEG candidate execution"
+                );
+                Some(digest.to_owned())
+            }
+        };
+        let argv = digest
+            .as_ref()
+            .map(|_| {
+                command
+                    .get_args()
+                    .map(|arg| {
+                        arg.to_str()
+                            .map(str::to_owned)
+                            .context("cjxl argument is not UTF-8")
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()
+            })
+            .transpose()?;
+        let process = foundation::process_runner::ManagedProcess::spawn(&mut command)?
+            .wait_liveness_timeout(idle, hard, "cjxl JPEG lossless transcode")?;
+        let invocation = if let (Some(executable_blake3), Some(argv)) = (digest, argv)
+            && process.status.success()
+        {
+            if matches!(observation, JpegInvocationObservation::CurrentExecutable) {
+                anyhow::ensure!(
+                    foundation::common_utils::calculate_blake3_hash(&executable)?
+                        == executable_blake3,
+                    "cjxl executable changed during the recorded JPEG invocation"
+                );
+            }
+            Some(JpegEncoderInvocation {
+                executable: executable
+                    .into_os_string()
+                    .into_string()
+                    .ok()
+                    .context("cjxl executable path is not UTF-8")?,
+                executable_blake3,
+                argv,
+                idle_timeout_seconds: idle.as_secs(),
+                hard_timeout_seconds: hard.as_secs(),
+                exit_code: process
+                    .status
+                    .code()
+                    .context("successful cjxl has no exit code")?,
+            })
+        } else {
+            None
+        };
+        Ok(JpegEncodeOutput {
+            process,
+            invocation,
+        })
     };
 
-    run_cjxl_jpeg_encode_attempts(
+    run_cjxl_jpeg_encode_attempts_observed(
         input,
         temp_output,
         effort,
@@ -1858,19 +1940,56 @@ fn run_cjxl_jpeg_full_effort_search(
     temp_output: &Path,
     options: &ConvertOptions,
     max_threads: usize,
-) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    record_invocation: bool,
+) -> anyhow::Result<(
+    JpegEncodeOutput,
+    foundation::jxl_effort_policy::JpegFullEffortDigests,
+)> {
     use anyhow::Context;
     let tool = foundation::common_utils::resolve_tool_path("cjxl")
         .context("JPEG full effort search requires cjxl")?;
     let tool_hash = foundation::common_utils::calculate_blake3_hash(&tool)?;
     let sidecar = jpeg_search_sidecar_identity(input)?;
+    let invocation_observation = if record_invocation {
+        JpegInvocationObservation::SearchExecutable {
+            path: &tool,
+            digest: &tool_hash,
+        }
+    } else {
+        JpegInvocationObservation::Disabled
+    };
     log_detail!(&format!(
         "JPEG full effort search: E1..E11, exact requested efforts, complete JXL bytes after delivery metadata; cjxl_blake3={tool_hash}; compatibility retries disabled"
     ));
-    foundation::jxl_effort_policy::run_jpeg_full_effort_search(
+    let attempt = if record_invocation {
+        match (
+            std::env::var("MFB_RUN_ID"),
+            std::env::var("MFB_INVOCATION_ID"),
+        ) {
+            (Ok(run_id), Ok(invocation_id)) => {
+                Some(foundation::fast_img_store::JpegExecutionAttempt {
+                    run_id: Some(run_id),
+                    invocation_id,
+                })
+            }
+            (Err(std::env::VarError::NotPresent), Ok(invocation_id)) => {
+                Some(foundation::fast_img_store::JpegExecutionAttempt {
+                    run_id: None,
+                    invocation_id,
+                })
+            }
+            (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => None,
+            _ => anyhow::bail!("Fast IMG JPEG scratch worker identity is incomplete"),
+        }
+    } else {
+        None
+    };
+    let mut metadata = None;
+    foundation::jxl_effort_policy::run_jpeg_full_effort_search_for_worker_observed(
         input,
         temp_output,
-        |effort, candidate| {
+        attempt.as_ref(),
+        |effort, candidate, input_blake3| {
             anyhow::ensure!(
                 jpeg_search_sidecar_identity(input)? == sidecar,
                 "JPEG full effort search incomplete: XMP sidecar changed"
@@ -1882,13 +2001,23 @@ fn run_cjxl_jpeg_full_effort_search(
                 max_threads,
                 None,
                 effort,
+                invocation_observation,
             )?;
             anyhow::ensure!(
-                observation.status.success(),
+                observation.process.status.success(),
                 "JPEG full effort search incomplete at E{effort}: {}",
-                cjxl_failure_summary("full effort candidate", &observation)
+                cjxl_failure_summary("full effort candidate", &observation.process)
             );
-            foundation::conversion::enrich_reconstructible_jxl_candidate(input, candidate)?;
+            if metadata.is_none() {
+                metadata = Some(foundation::conversion::JpegEffortMetadata::prepare(
+                    input,
+                    input_blake3,
+                )?);
+            }
+            metadata
+                .as_ref()
+                .context("JPEG full effort metadata preparation")?
+                .enrich(candidate)?;
             anyhow::ensure!(
                 jpeg_search_sidecar_identity(input)? == sidecar,
                 "JPEG full effort search incomplete: XMP sidecar changed during metadata delivery"
@@ -1900,22 +2029,25 @@ fn run_cjxl_jpeg_full_effort_search(
             );
             Ok(observation)
         },
-        |observation| observation.status.success(),
+        |observation| observation.process.status.success(),
         |candidate| {
             foundation::fast_img::verify_jxl_roundtrip_integrity(input, candidate)?;
             Ok(())
         },
     )
-    .map(|(observation, _)| observation)
+    .map(|(observation, _, digests)| (observation, digests))
 }
 
 /// The result of comparing an existing JPEG-reconstructible JXL to the full effort winner.
 pub enum ExistingJxlCandidate {
     Keep(String),
-    Replace(tempfile::TempPath),
+    Replace {
+        candidate: tempfile::TempPath,
+        execution: Option<ReconstructedJpegExecution>,
+    },
 }
 
-fn reconstruct_existing_jxl(input: &Path) -> anyhow::Result<tempfile::NamedTempFile> {
+fn reconstruct_existing_jxl(input: &Path) -> anyhow::Result<(tempfile::NamedTempFile, String)> {
     use anyhow::Context;
     let jpeg = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "existing_jxl_reconstruction",
@@ -1923,13 +2055,15 @@ fn reconstruct_existing_jxl(input: &Path) -> anyhow::Result<tempfile::NamedTempF
         Some(".jpg"),
     )?;
     foundation::image::jxl_utils::run_exact_jpeg_reconstruction(
-        input, jpeg.path(), "existing JXL exact JPEG reconstruction",
+        input,
+        jpeg.path(),
+        "existing JXL exact JPEG reconstruction",
     )
-        .map_err(anyhow::Error::msg)?;
-    foundation::image::jxl_utils::verify_reconstructed_jpeg_bytes(input, jpeg.path())
+    .map_err(anyhow::Error::msg)?;
+    let hash = foundation::image::jxl_utils::verify_reconstructed_jpeg_bytes(input, jpeg.path())
         .map_err(anyhow::Error::msg)
         .context("verify complete reconstruction independently")?;
-    Ok(jpeg)
+    Ok((jpeg, hash))
 }
 
 fn verify_existing_jxl_candidate(input: &Path, jpeg: &Path, output: &Path) -> anyhow::Result<()> {
@@ -1942,7 +2076,9 @@ fn verify_existing_jxl_candidate(input: &Path, jpeg: &Path, output: &Path) -> an
         .map_err(anyhow::Error::msg)?;
     foundation::image::static_payload::verify_jxl_recompression_boxes(input, output)?;
     foundation::metadata::verify_output_embedded_metadata(
-        input, output, foundation::metadata::MetadataOutputPolicy::Preserve,
+        input,
+        output,
+        foundation::metadata::MetadataOutputPolicy::Preserve,
     )?;
     anyhow::ensure!(
         matches!(
@@ -1966,7 +2102,7 @@ pub fn verify_existing_jxl_replacement(input: &Path, output: &Path) -> anyhow::R
         "JXL filesystem metadata differs: {}",
         filesystem.mismatches.join("; ")
     );
-    let jpeg = reconstruct_existing_jxl(input)?;
+    let (jpeg, _) = reconstruct_existing_jxl(input)?;
     verify_existing_jxl_candidate(input, jpeg.path(), output)
 }
 
@@ -1977,15 +2113,22 @@ pub fn verify_existing_jxl_replacement(input: &Path, output: &Path) -> anyhow::R
 pub fn prepare_existing_jxl(
     input: &Path,
     options: &ConvertOptions,
+    record_invocation: bool,
 ) -> anyhow::Result<ExistingJxlCandidate> {
     use anyhow::Context;
     use foundation::common_utils::calculate_blake3_hash;
     let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
     let source = fs::symlink_metadata(input)?;
-    anyhow::ensure!(source.file_type().is_file(), "existing JXL must be a regular file");
+    anyhow::ensure!(
+        source.file_type().is_file(),
+        "existing JXL must be a regular file"
+    );
     let source_hash = calculate_blake3_hash(input)?;
-    let jpeg = reconstruct_existing_jxl(input)?;
-    anyhow::ensure!(is_jpeg_complete(&fs::read(jpeg.path())?), "reconstructed JPEG is incomplete");
+    let (jpeg, reconstructed_jpeg_blake3) = reconstruct_existing_jxl(input)?;
+    anyhow::ensure!(
+        is_jpeg_complete(&fs::read(jpeg.path())?),
+        "reconstructed JPEG is incomplete"
+    );
     foundation::image::orientation::read_exif_orientation(jpeg.path())
         .context("verify reconstructed JPEG orientation before effort search")?;
     let output = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
@@ -1994,7 +2137,17 @@ pub fn prepare_existing_jxl(
         Some(".JXL"),
     )?
     .into_temp_path();
-    run_cjxl_jpeg_full_effort_search(jpeg.path(), &output, options, jpeg_encode_threads(options))?;
+    let (winner, digests) = run_cjxl_jpeg_full_effort_search(
+        jpeg.path(),
+        &output,
+        options,
+        jpeg_encode_threads(options),
+        record_invocation,
+    )?;
+    anyhow::ensure!(
+        digests.input_blake3 == reconstructed_jpeg_blake3,
+        "reconstructed JPEG changed before searching JPEG efforts"
+    );
     verify_existing_jxl_candidate(input, jpeg.path(), &output)?;
     let candidate_size = fs::metadata(&output)?.len();
     let keep = candidate_size >= source.len()
@@ -2008,32 +2161,73 @@ pub fn prepare_existing_jxl(
             "existing JXL verified; full E1–E11 winner is not smaller ({candidate_size} B)"
         )))
     } else {
-        Ok(ExistingJxlCandidate::Replace(output))
+        let execution = record_invocation
+            .then(|| {
+                Ok::<_, anyhow::Error>(ReconstructedJpegExecution {
+                    reconstructed_jpeg_blake3,
+                    candidate_blake3: digests.winner_blake3,
+                    encoder: winner
+                        .invocation
+                        .context("Missing actual cjxl winning invocation")?,
+                })
+            })
+            .transpose()?;
+        Ok(ExistingJxlCandidate::Replace {
+            candidate: output,
+            execution,
+        })
     }
 }
 
+#[cfg(test)]
 fn run_cjxl_jpeg_encode_attempts(
+    input: &Path,
+    temp_output: &Path,
+    effort: u8,
+    allow_expert: bool,
+    apple_compat: bool,
+    allow_same_semantics: bool,
+    mut run: impl FnMut(u8, bool, bool) -> anyhow::Result<ProcessOutput>,
+) -> anyhow::Result<ProcessOutput> {
+    run_cjxl_jpeg_encode_attempts_observed(
+        input,
+        temp_output,
+        effort,
+        allow_expert,
+        apple_compat,
+        allow_same_semantics,
+        |effort, expert, apple| {
+            Ok(JpegEncodeOutput {
+                process: run(effort, expert, apple)?,
+                invocation: None,
+            })
+        },
+    )
+    .map(|output| output.process)
+}
+
+fn run_cjxl_jpeg_encode_attempts_observed(
     input: &Path,
     temp_output: &Path,
     effort: u8,
     mut allow_expert: bool,
     mut apple_compat: bool,
     allow_same_semantics: bool,
-    mut run: impl FnMut(u8, bool, bool) -> anyhow::Result<foundation::process_runner::ProcessOutput>,
-) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    mut run: impl FnMut(u8, bool, bool) -> anyhow::Result<JpegEncodeOutput>,
+) -> anyhow::Result<JpegEncodeOutput> {
     let mut selected_effort = effort;
     loop {
         let output = run(selected_effort, allow_expert, apple_compat)?;
-        if output.status.success() {
+        if output.process.status.success() {
             return Ok(output);
         }
         // Lossless-JPEG e11 itself requires the expert switch in CjxlBuilder,
         // even when the broader expert-options flag is off.
         if allow_same_semantics
-            && (cjxl_rejected_expert_option(selected_effort, &output.stderr)
+            && (cjxl_rejected_expert_option(selected_effort, &output.process.stderr)
                 || (allow_expert
                     && cjxl_rejected_option(
-                        &output.stderr,
+                        &output.process.stderr,
                         foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS,
                     )))
         {
@@ -2055,7 +2249,9 @@ fn run_cjxl_jpeg_encode_attempts(
             allow_expert = false;
             continue;
         }
-        if allow_same_semantics && apple_compat && cjxl_rejected_apple_compat_option(&output.stderr)
+        if allow_same_semantics
+            && apple_compat
+            && cjxl_rejected_apple_compat_option(&output.process.stderr)
         {
             foundation::media_conversion_gate::delivery_remove_file_or_audit(
                 "cjxl_apple_compat_retry",
@@ -2141,6 +2337,27 @@ fn run_cjxl_jpeg_encode_with_plan_mode(
     allow_jpeg_reconstruction: Option<u8>,
     mode: JpegLosslessTranscodePlanMode,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    run_cjxl_jpeg_encode_with_plan_observed(
+        input,
+        temp_output,
+        options,
+        max_threads,
+        allow_jpeg_reconstruction,
+        mode,
+        false,
+    )
+    .map(|output| output.process)
+}
+
+fn run_cjxl_jpeg_encode_with_plan_observed(
+    input: &Path,
+    temp_output: &Path,
+    options: &ConvertOptions,
+    max_threads: usize,
+    allow_jpeg_reconstruction: Option<u8>,
+    mode: JpegLosslessTranscodePlanMode,
+    record_invocation: bool,
+) -> anyhow::Result<JpegEncodeOutput> {
     foundation::image::orientation::read_exif_orientation(input).map_err(|error| {
         anyhow::anyhow!(
             "JPEG source orientation could not be proven; encoding was not started: {error}"
@@ -2157,7 +2374,14 @@ fn run_cjxl_jpeg_encode_with_plan_mode(
                 )
                 && allow_jpeg_reconstruction != Some(0)
             {
-                return run_cjxl_jpeg_full_effort_search(input, temp_output, options, max_threads);
+                return run_cjxl_jpeg_full_effort_search(
+                    input,
+                    temp_output,
+                    options,
+                    max_threads,
+                    record_invocation,
+                )
+                .map(|(observation, _)| observation);
             }
             let efforts = if matches!(
                 mode,
@@ -2184,9 +2408,14 @@ fn run_cjxl_jpeg_encode_with_plan_mode(
                         max_threads,
                         allow_jpeg_reconstruction,
                         selected,
+                        if record_invocation {
+                            JpegInvocationObservation::CurrentExecutable
+                        } else {
+                            JpegInvocationObservation::Disabled
+                        },
                     )
                 },
-                |observation| observation.status.success(),
+                |observation| observation.process.status.success(),
                 |candidate| {
                     foundation::fast_img::verify_jxl_roundtrip_integrity(input, candidate)?;
                     foundation::image::static_payload::jxl(candidate)
@@ -2795,6 +3024,27 @@ pub fn convert_jpeg_to_jxl(
     options: &ConvertOptions,
     _color_context: Option<&ConversionColorContext>,
 ) -> Result<TaskResult> {
+    convert_jpeg_to_jxl_at(input, options, None)
+}
+
+pub fn convert_jpeg_to_jxl_at(
+    input: &Path,
+    options: &ConvertOptions,
+    reserved_output: Option<&Path>,
+) -> Result<TaskResult> {
+    convert_jpeg_to_jxl_at_observed(input, options, reserved_output, None)
+}
+
+/// Run the same JPEG conversion while capturing its actual successful cjxl invocation.
+///
+/// # Errors
+/// Returns the conversion error, including failure to establish encoder identity.
+pub fn convert_jpeg_to_jxl_at_observed(
+    input: &Path,
+    options: &ConvertOptions,
+    reserved_output: Option<&Path>,
+    mut invocation: Option<&mut Option<JpegEncoderInvocation>>,
+) -> Result<TaskResult> {
     resolved_jxl_distance_for_source(
         0.0,
         options.ultimate(),
@@ -2805,7 +3055,7 @@ pub fn convert_jpeg_to_jxl(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if !options.force() && is_already_processed(input) {
+    if reserved_output.is_none() && !options.force() && is_already_processed(input) {
         return Ok(TaskResult::skipped_duplicate(input)?);
     }
 
@@ -2842,7 +3092,15 @@ pub fn convert_jpeg_to_jxl(
         ));
     }
 
-    let output = get_output_path(input, EXT_JXL, options)?;
+    let output = match reserved_output {
+        Some(path) => {
+            foundation::ensure_parent_dir_exists(path)?;
+            foundation::conversion::validate_output_path(path, options.base_dir.as_deref())
+                .map_err(ImgQualityError::ConversionError)?;
+            path.to_path_buf()
+        }
+        None => get_output_path(input, EXT_JXL, options)?,
+    };
 
     if output.exists() && !options.force() {
         return Ok(TaskResult::skipped_exists(input, &output)?);
@@ -2858,13 +3116,14 @@ pub fn convert_jpeg_to_jxl(
         JpegLosslessTranscodePlanMode::Policy
     };
 
-    let result = run_cjxl_jpeg_encode_with_plan_mode(
+    let result = run_cjxl_jpeg_encode_with_plan_observed(
         input,
         &temp_output,
         options,
         max_threads,
         None,
         encode_plan_mode,
+        invocation.is_some(),
     );
 
     let output_cmd = match result {
@@ -2904,8 +3163,8 @@ pub fn convert_jpeg_to_jxl(
         }
     };
 
-    if output_cmd.status.success() {
-        return commit_jpeg_to_jxl_success(
+    if output_cmd.process.status.success() {
+        let result = commit_jpeg_to_jxl_success(
             input,
             &temp_output,
             &output,
@@ -2913,9 +3172,17 @@ pub fn convert_jpeg_to_jxl(
             options,
             "JPEG lossless",
             JpegTranscodeProof::BitstreamReconstruction,
-        );
+        )?;
+        if result.success
+            && !result.skipped
+            && let Some(invocation) = invocation.as_deref_mut()
+        {
+            *invocation = output_cmd.invocation;
+        }
+        return Ok(result);
     }
 
+    let output_cmd = output_cmd.process;
     let stderr = output_cmd.stderr.clone();
     let primary_failure = cjxl_failure_summary("primary JPEG lossless", &output_cmd);
     cleanup_temp_output(&temp_output, input);
@@ -3217,7 +3484,7 @@ fn detect_avif_input_color_model(input: &Path) -> AvifencInputColorModel {
     }
 }
 
-fn build_avifenc_command(
+fn avifenc_builder(
     input: &Path,
     output: &Path,
     quality: Option<u8>,
@@ -3225,7 +3492,7 @@ fn build_avifenc_command(
     metadata_policy: AvifencMetadataPolicy,
     speed: Option<u8>,
     progressive: bool,
-) -> std::process::Command {
+) -> foundation::AvifencBuilder {
     let mut builder = foundation::AvifencBuilder::new();
     let effective_speed = speed.unwrap_or(AVIFENC_PRODUCTION_SPEED);
     builder.speed(effective_speed).jobs("all");
@@ -3255,19 +3522,97 @@ fn build_avifenc_command(
     }
 
     builder.input(input).output(output);
-    builder.build()
+    builder
+}
+
+fn build_avifenc_command(
+    input: &Path,
+    output: &Path,
+    quality: Option<u8>,
+    lossless: bool,
+    metadata_policy: AvifencMetadataPolicy,
+    speed: Option<u8>,
+    progressive: bool,
+) -> std::process::Command {
+    avifenc_builder(
+        input,
+        output,
+        quality,
+        lossless,
+        metadata_policy,
+        speed,
+        progressive,
+    )
+    .build()
 }
 
 fn run_avifenc_command(
-    command: &mut std::process::Command,
+    command: &mut Command,
     timeout: Duration,
     operation: &str,
-) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
-    foundation::process_runner::ManagedProcess::spawn_captured(command)?.wait_liveness_timeout(
-        timeout,
-        foundation::process_runner::image_process_hard_timeout(),
-        operation,
-    )
+    invocation: Option<&mut Option<AvifEncoderInvocation>>,
+) -> anyhow::Result<ProcessOutput> {
+    use anyhow::Context;
+
+    let hard_timeout = foundation::process_runner::image_process_hard_timeout();
+    let evidence = invocation
+        .map(|invocation| {
+            *invocation = None;
+            let executable = command
+                .get_program()
+                .to_str()
+                .context("avifenc executable path is not UTF-8")?;
+            anyhow::ensure!(
+                Path::new(executable).is_absolute(),
+                "cannot identify the resolved avifenc executable"
+            );
+            let executable_blake3 =
+                foundation::common_utils::calculate_blake3_hash(Path::new(executable))?;
+            let argv = command
+                .get_args()
+                .map(|arg| {
+                    arg.to_str()
+                        .map(str::to_owned)
+                        .context("avifenc argument is not UTF-8")
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok::<_, anyhow::Error>((invocation, executable.to_owned(), executable_blake3, argv))
+        })
+        .transpose()?;
+    let output = foundation::process_runner::ManagedProcess::spawn_captured(command)?
+        .wait_liveness_timeout(timeout, hard_timeout, operation)?;
+    if let Some((invocation, executable, executable_blake3, argv)) = evidence
+        && output.status.success()
+    {
+        anyhow::ensure!(
+            foundation::common_utils::calculate_blake3_hash(Path::new(&executable))?
+                == executable_blake3,
+            "avifenc executable changed during the recorded invocation"
+        );
+        *invocation = Some(AvifEncoderInvocation {
+            executable,
+            executable_blake3,
+            argv,
+            idle_timeout_seconds: timeout.as_secs(),
+            hard_timeout_seconds: hard_timeout.as_secs(),
+            exit_code: output
+                .status
+                .code()
+                .context("successful avifenc has no exit code")?,
+        });
+    }
+    Ok(output)
+}
+
+/// Record the actual successful invocation used to create an AVIF candidate.
+pub fn run_avifenc_command_observed(
+    command: &mut Command,
+    timeout: Duration,
+    operation: &str,
+) -> anyhow::Result<(ProcessOutput, Option<AvifEncoderInvocation>)> {
+    let mut invocation = None;
+    let output = run_avifenc_command(command, timeout, operation, Some(&mut invocation))?;
+    Ok((output, invocation))
 }
 
 fn try_normalize_icc_to_srgb_png(
@@ -3384,6 +3729,8 @@ fn run_avifenc_with_malformed_xmp_retry(
     operation: &str,
     metadata_retry: &mut AvifencMetadataRetryState,
     progressive: bool,
+    mut invocation: Option<&mut Option<AvifEncoderInvocation>>,
+    reuse: Option<(&jxl_probe_identity::JxlProbeIdentity, &mut Option<String>)>,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
     let mut command = build_avifenc_command(
         input,
@@ -3394,8 +3741,15 @@ fn run_avifenc_with_malformed_xmp_retry(
         speed,
         progressive,
     );
-    let output = run_avifenc_command(&mut command, timeout, operation)?;
+    let reuse = reuse.and_then(|(identity, decision)| {
+        let key = identity.prepare_and_key(&mut command, temp_output).ok()?;
+        Some((decision, key))
+    });
+    let output = run_avifenc_command(&mut command, timeout, operation, invocation.as_deref_mut())?;
     if output.status.success() {
+        if let Some((slot, key)) = reuse {
+            *slot = Some(key);
+        }
         return Ok(output);
     }
 
@@ -3428,7 +3782,12 @@ fn run_avifenc_with_malformed_xmp_retry(
                     speed,
                     progressive,
                 );
-                match run_avifenc_command(&mut srgb_retry, timeout, operation) {
+                match run_avifenc_command(
+                    &mut srgb_retry,
+                    timeout,
+                    operation,
+                    invocation.as_deref_mut(),
+                ) {
                     Ok(srgb_out) if srgb_out.status.success() => {
                         log_detail!(&format!(
                             "Successfully encoded sRGB-normalized image to AVIF for {} (color profile & visual gamma preserved in sRGB space)",
@@ -3489,7 +3848,7 @@ fn run_avifenc_with_malformed_xmp_retry(
         speed,
         progressive,
     );
-    run_avifenc_command(&mut retry, timeout, operation)
+    run_avifenc_command(&mut retry, timeout, operation, invocation)
 }
 
 /// Convert an image to AVIF format with specified quality.
@@ -3608,6 +3967,8 @@ pub fn convert_to_avif_from_encoder_input_with_speed_and_state(
         "official avifenc encode",
         metadata_retry,
         options.avif_progressive(),
+        None,
+        None,
     );
 
     match result {
@@ -3737,6 +4098,121 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
     metadata_retry: &mut AvifencMetadataRetryState,
     options: &ConvertOptions,
 ) -> Result<(PathBuf, u64)> {
+    avif_quality_probe(
+        source,
+        encoder_input,
+        quality,
+        speed,
+        metadata_retry,
+        options,
+        false,
+        None,
+        None,
+    )
+}
+
+struct AvifProbeReuse<'a> {
+    identity: &'a jxl_probe_identity::JxlProbeIdentity,
+    output: &'a Path,
+    decision: &'a mut Option<(String, String)>,
+    require_bound_inputs: bool,
+}
+
+/// Private candidate custody shared by the Speed 6 locator and final probe.
+pub struct AvifProbeReuseContext {
+    identity: jxl_probe_identity::JxlProbeIdentity,
+    scratch: tempfile::TempDir,
+}
+
+/// A verified direct encode, eligible for same-context reuse once.
+#[derive(Debug)]
+pub struct AvifProbeReuseProof {
+    key: String,
+    hash: String,
+}
+
+impl AvifProbeReuseContext {
+    /// Keep successful search output alive through publication.
+    pub fn into_scratch(self) -> tempfile::TempDir {
+        self.scratch
+    }
+
+    pub fn new(
+        source: &Path,
+        encoder_input: &Path,
+        metadata_retry: &AvifencMetadataRetryState,
+        options: &ConvertOptions,
+    ) -> std::io::Result<Self> {
+        if !metadata_retry.ignore_xmp {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Fast AVIF probe reuse requires the Clear metadata policy",
+            ));
+        }
+        let scratch = foundation::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
+            "Fast AVIF locator reuse",
+            "mfb-avif-locator-",
+        )?;
+        let command = build_avifenc_command(
+            encoder_input,
+            &scratch.path().join("selected.avif"),
+            None,
+            false,
+            metadata_retry.policy(),
+            None,
+            options.avif_progressive(),
+        );
+        let identity = jxl_probe_identity::JxlProbeIdentity::new_without_external_xmp(
+            source,
+            encoder_input,
+            &command,
+        )?;
+        Ok(Self { identity, scratch })
+    }
+
+    /// Revalidation may reuse the exact temporary candidate only while this
+    /// per-source context is live. The caller must still verify final delivery.
+    pub fn matches(
+        &self,
+        proof: &AvifProbeReuseProof,
+        candidate: &Path,
+        encoder_input: &Path,
+        quality: u8,
+        speed: u8,
+        metadata_retry: &AvifencMetadataRetryState,
+        options: &ConvertOptions,
+    ) -> bool {
+        if !metadata_retry.ignore_xmp {
+            return false;
+        }
+        let mut command = build_avifenc_command(
+            encoder_input,
+            candidate,
+            Some(quality),
+            false,
+            metadata_retry.policy(),
+            Some(speed),
+            options.avif_progressive(),
+        );
+        self.identity
+            .prepare_and_key(&mut command, candidate)
+            .is_ok_and(|key| key == proof.key)
+            && jxl_probe_cache::fingerprint(candidate)
+                .is_ok_and(|observed| observed.is_some_and(|(_, hash)| hash == proof.hash))
+    }
+}
+
+fn avif_quality_probe(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    speed: Option<u8>,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+    retry_unprofiled_jfif: bool,
+    mut invocation: Option<&mut Option<AvifEncoderInvocation>>,
+    mut reuse: Option<AvifProbeReuse<'_>>,
+) -> Result<(PathBuf, u64)> {
     let input = source;
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
@@ -3748,16 +4224,26 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    let output = get_output_path(input, EXT_AVIF, options)?;
-    let temp_output =
-        foundation::path_safety::isolated_temp_path_for_search(&output).map_err(|e| {
-            ImgQualityError::ConversionError(format!(
-                "isolated_temp_path_for_search failed for {}: {}",
-                input.display(),
-                e
-            ))
-        })?;
+    let temp_output = match &reuse {
+        Some(reuse) => reuse.output.to_path_buf(),
+        None => {
+            foundation::path_safety::isolated_temp_path_for_search(&input.with_extension(EXT_AVIF))
+                .map_err(|error| {
+                    ImgQualityError::ConversionError(format!(
+                        "isolated_temp_path_for_search failed for {}: {error}",
+                        input.display(),
+                    ))
+                })?
+        }
+    };
+    if let Some(reuse) = &reuse
+        && reuse.require_bound_inputs
+    {
+        reuse.identity.validate_inputs()?;
+        reuse.identity.validate_sidecar_association()?;
+    }
 
+    let mut direct_key = None;
     let result = run_avifenc_with_malformed_xmp_retry(
         encoder_input,
         &temp_output,
@@ -3768,6 +4254,10 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
         "official avifenc quality probe",
         metadata_retry,
         options.avif_progressive(),
+        invocation.as_deref_mut(),
+        reuse
+            .as_ref()
+            .map(|reuse| (reuse.identity, &mut direct_key)),
     );
 
     match result {
@@ -3785,19 +4275,61 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
                     "AVIF health check failed at q={quality}: {e}"
                 )));
             }
-            if let Err(e) = foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
+            let proof = foundation::fast_img::verify_pixel_equivalence_integrity(
                 encoder_input,
                 &temp_output,
-            ) {
-                cleanup_temp_output(&temp_output, input);
-                log_detail!(&format!(
-                    "convert_to_avif_probe: AVIF pixel equivalence failed for {} at q={quality}: {}",
-                    input.display(),
-                    e
-                ));
-                return Err(ImgQualityError::ConversionError(format!(
-                    "AVIF pixel equivalence failed at q={quality}: {e}"
-                )));
+                foundation::format_detect::FormatKind::Avif,
+            );
+            let proof = match proof {
+                Ok(proof) => proof,
+                Err(error) => {
+                    let e = format!("AVIF pixel verification failed: {error}");
+                    cleanup_temp_output(&temp_output, input);
+                    if retry_unprofiled_jfif
+                        && quality == 100
+                        && options.avif_progressive()
+                        && source == encoder_input
+                        && e.starts_with(
+                            "AVIF pixel verification failed: Analysis error: pixel-equivalence: proof failed for ",
+                        )
+                        && let Some(candidate) = retry_avif_with_jfif_rgb_matrix(
+                            input,
+                            &temp_output,
+                            speed,
+                            metadata_retry.policy(),
+                            invocation,
+                        )
+                    {
+                        return Ok(candidate);
+                    }
+                    log_detail!(&format!(
+                        "convert_to_avif_probe: AVIF pixel equivalence failed for {} at q={quality}: {}",
+                        input.display(),
+                        e
+                    ));
+                    return Err(ImgQualityError::ConversionError(format!(
+                        "AVIF pixel equivalence failed at q={quality}: {e}"
+                    )));
+                }
+            };
+            if let Some(reuse) = reuse.as_mut()
+                && let Some(key) = direct_key
+                && let foundation::fast_img::IntegrityResult::JxlPixelEquivalent {
+                    output_hash, ..
+                } = proof
+            {
+                let command = build_avifenc_command(
+                    encoder_input,
+                    &temp_output,
+                    Some(quality),
+                    false,
+                    metadata_retry.policy(),
+                    speed,
+                    options.avif_progressive(),
+                );
+                if reuse.identity.validate_association(&command).is_ok() {
+                    *reuse.decision = Some((key, output_hash));
+                }
             }
             Ok((temp_output, output_size))
         }
@@ -3827,6 +4359,79 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
     }
 }
 
+fn retry_avif_with_jfif_rgb_matrix(
+    source: &Path,
+    temp_output: &Path,
+    speed: Option<u8>,
+    metadata_policy: AvifencMetadataPolicy,
+    invocation: Option<&mut Option<AvifEncoderInvocation>>,
+) -> Option<(PathBuf, u64)> {
+    // The whole JPEG is needed to rule out late APP segments. Limit this optional
+    // retry's extra allocation while parallel sources may be probing AVIF.
+    const MAX_JFIF_RETRY_BYTES: u64 = 16 * foundation::constants::MB;
+    let mut jpeg = Vec::new();
+    fs::File::open(source)
+        .ok()?
+        .take(MAX_JFIF_RETRY_BYTES + 1)
+        .read_to_end(&mut jpeg)
+        .ok()?;
+    if u64::try_from(jpeg.len()).ok()? > MAX_JFIF_RETRY_BYTES
+        || !foundation::image_jpeg_analysis::is_unprofiled_color_jfif(&jpeg)
+    {
+        return None;
+    }
+    let result = (|| -> anyhow::Result<u64> {
+        let mut validated_jpeg =
+            foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+                "avif_jfif_rgb_retry",
+                None,
+                Some(".jpg"),
+            )?;
+        validated_jpeg.write_all(&jpeg)?;
+        drop(jpeg);
+        // Keep the standard JPEG route's primaries, transfer and full range.
+        // The identity matrix avoids an additional RGB/YCbCr conversion.
+        let mut command = avifenc_builder(
+            validated_jpeg.path(),
+            temp_output,
+            Some(100),
+            false,
+            metadata_policy,
+            speed,
+            true,
+        )
+        .cicp("1/13/0")
+        .build();
+        let output = run_avifenc_command(
+            &mut command,
+            avifenc_probe_timeout()?,
+            "official avifenc JFIF RGB matrix retry",
+            invocation,
+        )?;
+        anyhow::ensure!(output.status.success(), "{}", output.stderr.trim());
+        foundation::quality_verifier_enhanced::verify_avif_health(temp_output)
+            .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            !foundation::fast_img::existing_avif_meme_needs_progressive(temp_output)?,
+            "AVIF RGB matrix retry did not produce progressive output"
+        );
+        foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
+            validated_jpeg.path(),
+            temp_output,
+        )
+        .map_err(anyhow::Error::msg)?;
+        Ok(fs::metadata(temp_output)?.len())
+    })();
+    match result {
+        Ok(output_size) => Some((temp_output.to_path_buf(), output_size)),
+        Err(error) => {
+            cleanup_temp_output(temp_output, source);
+            tracing::debug!(source = %source.display(), %error, "JFIF RGB matrix retry rejected");
+            None
+        }
+    }
+}
+
 /// Probe and fingerprint an AVIF candidate whose pixel proof must survive a
 /// later selection phase before commit.
 pub fn convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state(
@@ -3837,13 +4442,132 @@ pub fn convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state(
     metadata_retry: &mut AvifencMetadataRetryState,
     options: &ConvertOptions,
 ) -> Result<(PathBuf, u64, String)> {
-    let (temp_output, output_size) = convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+    verified_avif_quality_probe(
         source,
         encoder_input,
         quality,
         speed,
         metadata_retry,
         options,
+        None,
+    )
+}
+
+/// Return the invocation of the verified candidate, including any successful retry.
+pub fn convert_to_avif_verified_probe_from_encoder_input_with_speed_and_state_observed(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    speed: Option<u8>,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64, String, AvifEncoderInvocation)> {
+    let mut invocation = None;
+    let candidate = verified_avif_quality_probe(
+        source,
+        encoder_input,
+        quality,
+        speed,
+        metadata_retry,
+        options,
+        Some(&mut invocation),
+    )?;
+    with_avif_invocation(source, candidate, invocation)
+}
+
+/// Record same-search reuse evidence for the direct attempt only.
+pub fn probe_fast_avif_with_reuse(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    speed: u8,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+    context: &AvifProbeReuseContext,
+) -> Result<(
+    PathBuf,
+    u64,
+    String,
+    AvifEncoderInvocation,
+    Option<AvifProbeReuseProof>,
+)> {
+    let mut invocation = None;
+    let mut decision = None;
+    let path = tempfile::Builder::new()
+        .prefix("probe-")
+        .suffix(".avif")
+        .tempfile_in(context.scratch.path())?
+        .into_temp_path();
+    let (temp_output, output_size) = avif_quality_probe(
+        source,
+        encoder_input,
+        quality,
+        Some(speed),
+        metadata_retry,
+        options,
+        true,
+        Some(&mut invocation),
+        Some(AvifProbeReuse {
+            identity: &context.identity,
+            output: &path,
+            decision: &mut decision,
+            require_bound_inputs: false,
+        }),
+    )?;
+    let (hash, proof) = if let Some((key, hash)) = decision {
+        (hash.clone(), Some(AvifProbeReuseProof { key, hash }))
+    } else {
+        match foundation::common_utils::calculate_blake3_hash(&temp_output) {
+            Ok(hash) => (hash, None),
+            Err(error) => {
+                cleanup_temp_output(&temp_output, source);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "AVIF verified candidate fingerprint failed at q={quality}: {error}"
+                )));
+            }
+        }
+    };
+    let (candidate, size, hash, invocation) =
+        with_avif_invocation(source, (temp_output, output_size, hash), invocation)?;
+    // The search owns cleanup after a verified candidate becomes selectable.
+    path.keep().map_err(|error| error.error)?;
+    Ok((candidate, size, hash, invocation, proof))
+}
+
+fn with_avif_invocation(
+    source: &Path,
+    (candidate, size, blake3): (PathBuf, u64, String),
+    invocation: Option<AvifEncoderInvocation>,
+) -> Result<(PathBuf, u64, String, AvifEncoderInvocation)> {
+    if let Some(invocation) = invocation {
+        Ok((candidate, size, blake3, invocation))
+    } else {
+        cleanup_temp_output(&candidate, source);
+        Err(ImgQualityError::ConversionError(
+            "verified AVIF candidate is missing its encoder observation".to_owned(),
+        ))
+    }
+}
+
+fn verified_avif_quality_probe(
+    source: &Path,
+    encoder_input: &Path,
+    quality: u8,
+    speed: Option<u8>,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+    invocation: Option<&mut Option<AvifEncoderInvocation>>,
+) -> Result<(PathBuf, u64, String)> {
+    let (temp_output, output_size) = avif_quality_probe(
+        source,
+        encoder_input,
+        quality,
+        speed,
+        metadata_retry,
+        options,
+        true,
+        invocation,
+        None,
     )?;
     let content_blake3 = match foundation::common_utils::calculate_blake3_hash(&temp_output) {
         Ok(hash) => hash,
@@ -3866,17 +4590,48 @@ pub fn convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and
     metadata_retry: &mut AvifencMetadataRetryState,
     options: &ConvertOptions,
 ) -> Result<(PathBuf, u64, String)> {
+    verified_avif_lossless_probe(source, encoder_input, speed, metadata_retry, options, None)
+}
+
+/// Return the invocation of the lossless candidate after pixel and custody checks.
+pub fn convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and_state_observed(
+    source: &Path,
+    encoder_input: &Path,
+    speed: u8,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+) -> Result<(PathBuf, u64, String, AvifEncoderInvocation)> {
+    let mut invocation = None;
+    let candidate = verified_avif_lossless_probe(
+        source,
+        encoder_input,
+        speed,
+        metadata_retry,
+        options,
+        Some(&mut invocation),
+    )?;
+    with_avif_invocation(source, candidate, invocation)
+}
+
+fn verified_avif_lossless_probe(
+    source: &Path,
+    encoder_input: &Path,
+    speed: u8,
+    metadata_retry: &mut AvifencMetadataRetryState,
+    options: &ConvertOptions,
+    invocation: Option<&mut Option<AvifEncoderInvocation>>,
+) -> Result<(PathBuf, u64, String)> {
     if let Err(error) = foundation::conversion::validate_input_file(source) {
         return Err(ImgQualityError::ConversionError(error));
     }
-    let output = get_output_path(source, EXT_AVIF, options)?;
     let temp_output =
-        foundation::path_safety::isolated_temp_path_for_search(&output).map_err(|error| {
-            ImgQualityError::ConversionError(format!(
-                "lossless AVIF probe temp path failed for {}: {error}",
-                source.display()
-            ))
-        })?;
+        foundation::path_safety::isolated_temp_path_for_search(&source.with_extension(EXT_AVIF))
+            .map_err(|error| {
+                ImgQualityError::ConversionError(format!(
+                    "lossless AVIF probe temp path failed for {}: {error}",
+                    source.display()
+                ))
+            })?;
     let result = run_avifenc_with_malformed_xmp_retry(
         encoder_input,
         &temp_output,
@@ -3887,6 +4642,8 @@ pub fn convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and
         "official avifenc lossless Meme probe",
         metadata_retry,
         options.avif_progressive(),
+        invocation,
+        None,
     );
     match result {
         Ok(output) if output.status.success() => {
@@ -3971,8 +4728,34 @@ pub fn finalize_meme_avif_probe(
     options: &ConvertOptions,
     metadata_policy: runtime_config::AvifMetadataPolicy,
 ) -> Result<TaskResult> {
+    finalize_meme_avif_probe_at(
+        source,
+        temp_output,
+        expected_content_blake3,
+        options,
+        metadata_policy,
+        None,
+    )
+}
+
+pub fn finalize_meme_avif_probe_at(
+    source: &Path,
+    temp_output: &Path,
+    expected_content_blake3: &str,
+    options: &ConvertOptions,
+    metadata_policy: runtime_config::AvifMetadataPolicy,
+    reserved_output: Option<&Path>,
+) -> Result<TaskResult> {
     let input_size = fs::metadata(source)?.len();
-    let output = get_output_path(source, EXT_AVIF, options)?;
+    let output = match reserved_output {
+        Some(path) => {
+            foundation::ensure_parent_dir_exists(path)?;
+            foundation::conversion::validate_output_path(path, options.base_dir.as_deref())
+                .map_err(ImgQualityError::ConversionError)?;
+            path.to_path_buf()
+        }
+        None => get_output_path(source, EXT_AVIF, options)?,
+    };
 
     if let Err(error) =
         verify_avif_probe_custody(temp_output, expected_content_blake3, "before commit")
@@ -4064,6 +4847,36 @@ fn try_jxl_to_avif_extreme_handoff(
         "Extreme handoff: JXL could not beat the source; finding the exact AVIF quality boundary",
     );
 
+    let jxl_guard = foundation::conversion::TempOutputGuard::new(jxl_temp_output.to_path_buf());
+    let mut metadata_retry = AvifencMetadataRetryState::default();
+    let reuse_context = (|| -> std::io::Result<_> {
+        let scratch = foundation::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
+            "AVIF handoff candidate reuse",
+            "mfb-avif-handoff-",
+        )?;
+        let identity = jxl_probe_identity::JxlProbeIdentity::new(
+            input,
+            encoder_input,
+            None,
+            &build_avifenc_command(
+                encoder_input,
+                jxl_temp_output,
+                None,
+                false,
+                metadata_retry.policy(),
+                None,
+                options.avif_progressive(),
+            ),
+        )?;
+        Ok((scratch, identity))
+    })()
+    .inspect_err(|error| {
+        log_detail!(&format!(
+            "AVIF handoff candidate reuse unavailable: {error}"
+        ));
+    })
+    .ok();
+    let mut retained = jxl_probe_cache::JxlProbeCache::new(1, 64 * 1024 * 1024);
     let input_payload_size =
         foundation::image::static_payload::measure(input).map_err(|error| {
             ImgQualityError::ConversionError(format!(
@@ -4071,7 +4884,6 @@ fn try_jxl_to_avif_extreme_handoff(
             ))
         })?;
     let mut last_error = None;
-    let mut metadata_retry = AvifencMetadataRetryState::default();
     let active_policy = options.effective_size_policy();
     let (quality, probe_count) = search_highest_fitting_avif_quality_with(
         input_payload_size,
@@ -4081,18 +4893,47 @@ fn try_jxl_to_avif_extreme_handoff(
                 "JXL->AVIF exact quality probe: q={quality}, speed=0 for {}",
                 input.display()
             ));
-            match convert_to_avif_probe_from_encoder_input_with_speed_and_state(
+            let mut reuse_decision = None;
+            let probe_path = reuse_context
+                .as_ref()
+                .map(|(scratch, _)| scratch.path().join(format!("probe-{quality}.avif")));
+            match avif_quality_probe(
                 input,
                 encoder_input,
                 quality,
                 None,
                 &mut metadata_retry,
                 options,
+                false,
+                None,
+                reuse_context.as_ref().zip(probe_path.as_ref()).map(
+                    |((_, identity), probe_path)| AvifProbeReuse {
+                        identity,
+                        output: probe_path,
+                        decision: &mut reuse_decision,
+                        require_bound_inputs: true,
+                    },
+                ),
             ) {
                 Ok((temp_path, output_size)) => {
                     let payload_result =
                         measure_avif_probe_payload(&temp_path, quality, output_size);
-                    cleanup_temp_output(&temp_path, input);
+                    if let (Ok(payload_size), Some((key, hash))) = (&payload_result, reuse_decision)
+                        && (options.require_output_delivery()
+                            || active_policy.fits(*payload_size, input_payload_size))
+                    {
+                        match retained.retain_verified(key, temp_path, *payload_size, &hash) {
+                            Ok(true) => {}
+                            Ok(false) => log_detail!(
+                                "AVIF handoff candidate exceeded the temporary reuse budget"
+                            ),
+                            Err(error) => log_detail!(&format!(
+                                "AVIF handoff candidate could not be retained: {error}"
+                            )),
+                        }
+                    } else {
+                        cleanup_temp_output(&temp_path, input);
+                    }
                     match payload_result {
                         Ok(payload_size) => {
                             log_detail!(&format!(
@@ -4132,11 +4973,46 @@ fn try_jxl_to_avif_extreme_handoff(
                     .map_or_else(String::new, |reason| format!("; last error: {reason}"))
             ),
         );
-        cleanup_temp_output(jxl_temp_output, input);
         return jxl_avif_handoff_exhausted_result(input, input_size, options);
     };
 
-    let (avif_temp_output, avif_size) =
+    foundation::batch_control::checkpoint()?;
+    let reused = if let Some((scratch, identity)) = &reuse_context {
+        identity.validate_inputs()?;
+        identity.validate_sidecar_association()?;
+        let path = scratch.path().join("selected.avif");
+        let mut command = build_avifenc_command(
+            encoder_input,
+            &path,
+            Some(quality),
+            false,
+            metadata_retry.policy(),
+            None,
+            options.avif_progressive(),
+        );
+        identity
+            .prepare_and_key(&mut command, &path)
+            .and_then(|key| retained.take(&key, &path))
+            .inspect_err(|error| {
+                log_detail!(&format!(
+                    "AVIF handoff candidate reuse invalidated: {error}"
+                ));
+            })
+            .ok()
+            .flatten()
+            .map(|_| path)
+    } else {
+        None
+    };
+    drop(retained);
+
+    let (avif_temp_output, avif_size) = if let Some(path) = reused {
+        let size = fs::metadata(&path)?.len();
+        log_detail!(&format!(
+            "AVIF handoff q={quality} reused its verified candidate"
+        ));
+        (path, size)
+    } else {
         match convert_to_avif_probe_from_encoder_input_with_speed_and_state(
             input,
             encoder_input,
@@ -4152,13 +5028,18 @@ fn try_jxl_to_avif_extreme_handoff(
                     input,
                     format!("final AVIF q={quality} encode failed: {err}"),
                 );
-                cleanup_temp_output(jxl_temp_output, input);
                 return jxl_avif_handoff_exhausted_result(input, input_size, options);
             }
-        };
+        }
+    };
+    let avif_guard = foundation::conversion::TempOutputGuard::new(avif_temp_output.clone());
+    foundation::batch_control::checkpoint()?;
+    if let Some((_, identity)) = &reuse_context {
+        identity.validate_inputs()?;
+        identity.validate_sidecar_association()?;
+    }
     let avif_payload_size = foundation::image::static_payload::isobmff_mdat(&avif_temp_output)
         .map_err(|error| {
-            cleanup_temp_output(&avif_temp_output, input);
             ImgQualityError::ConversionError(format!(
                 "Final AVIF payload measurement failed without complete-file fallback: {error}"
             ))
@@ -4166,7 +5047,6 @@ fn try_jxl_to_avif_extreme_handoff(
     if !options.require_output_delivery()
         && !active_policy.fits(avif_payload_size, input_payload_size)
     {
-        cleanup_temp_output(&avif_temp_output, input);
         foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
             "jxl_to_avif_extreme_final_size_drift",
             input,
@@ -4174,12 +5054,11 @@ fn try_jxl_to_avif_extreme_handoff(
                 "final AVIF q={quality} pure payload was not smaller ({avif_payload_size}B vs {input_payload_size}B source)"
             ),
         );
-        cleanup_temp_output(jxl_temp_output, input);
         return jxl_avif_handoff_exhausted_result(input, input_size, options);
     }
 
     let output = get_output_path(input, EXT_AVIF, options)?;
-    cleanup_temp_output(jxl_temp_output, input);
+    drop(jxl_guard);
     let selection = avif_handoff_selection_label(quality);
     let extra_info =
         format!("(JXL exhausted; AVIF {selection} q={quality}, speed=0, probes={probe_count})");
@@ -4195,7 +5074,7 @@ fn try_jxl_to_avif_extreme_handoff(
     ) {
         Ok(result) => Ok(result),
         Err(error) => {
-            cleanup_temp_output(&avif_temp_output, input);
+            drop(avif_guard);
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
                 "jxl_to_avif_extreme_finalization_failed",
                 input,
@@ -4390,6 +5269,8 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
         "official avifenc lossless encode",
         &mut metadata_retry,
         options.avif_progressive(),
+        None,
+        None,
     );
 
     match result {
@@ -6671,6 +7552,104 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "--ignore-xmp"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn avif_invocation_evidence_is_from_the_successful_metadata_retry() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD: &str = "MFB_TEST_AVIF_METADATA_INVOCATION";
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir()?;
+            let output = Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "lossless_converter::tests::avif_invocation_evidence_is_from_the_successful_metadata_retry",
+                ])
+                .env(CHILD, "1")
+                .env("MFB_HOME_ROOT", root.path())
+                .env("MFB_LOG_DIR", root.path().join("logs"))
+                .output()?;
+            anyhow::ensure!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+
+        let root = tempfile::tempdir()?;
+        let executable = root.path().join("avifenc");
+        fs::write(
+            &executable,
+            r#"#!/bin/sh
+case "${1-}" in
+    --version|-version) printf '%s\n' 'synthetic avifenc'; exit 0 ;;
+esac
+previous=
+ignore=
+for arg; do
+    [ "$arg" = --ignore-xmp ] && ignore=1
+    previous=$arg
+done
+if [ "$ignore" = 1 ]; then
+    printf '%s\n' synthetic > "$previous"
+    exit 0
+fi
+printf '%s\n' 'Pass --ignore-xmp' >&2
+exit 1
+"#,
+        )?;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
+        let executable = executable.canonicalize()?;
+        let mut config = runtime_config::RuntimeConfig::default();
+        config
+            .tools
+            .paths
+            .insert("avifenc".to_owned(), executable.clone());
+        runtime_config::install(config)?;
+
+        let source = root.path().join("source.jpg");
+        let output = root.path().join("candidate.avif");
+        let timeout = Duration::from_secs(15);
+        let mut invocation = None;
+        let output_status = run_avifenc_with_malformed_xmp_retry(
+            &source,
+            &output,
+            Some(95),
+            false,
+            Some(6),
+            timeout,
+            "synthetic AVIF metadata retry",
+            &mut AvifencMetadataRetryState::default(),
+            true,
+            Some(&mut invocation),
+            None,
+        )?;
+        assert!(output_status.status.success(), "{}", output_status.stderr);
+        let receipt = invocation.expect("successful retry must be observed");
+        assert_eq!(Path::new(&receipt.executable), executable);
+        assert_eq!(
+            receipt.executable_blake3,
+            foundation::common_utils::calculate_blake3_hash(&executable)?
+        );
+        assert_eq!(receipt.exit_code, 0);
+        assert_eq!(receipt.idle_timeout_seconds, 15);
+        assert!(receipt.argv.contains(&"--ignore-xmp".to_owned()));
+        assert!(receipt.argv.contains(&"--progressive".to_owned()));
+        assert!(receipt.argv.windows(2).any(|pair| pair == ["--speed", "6"]));
+        assert_eq!(
+            receipt.argv[receipt.argv.len() - 2..],
+            [
+                source.to_str().expect("synthetic UTF-8 path"),
+                output.to_str().expect("synthetic UTF-8 path"),
+            ]
+        );
+        assert_eq!(fs::read(output)?, b"synthetic\n");
+        Ok(())
+    }
+
     #[test]
     fn incompatible_icc_retry_detects_gray_and_invalid_profiles() {
         assert!(avifenc_rejects_incompatible_icc(
@@ -6902,13 +7881,13 @@ mod tests {
         image::RgbImage::from_pixel(64, 64, image::Rgb([0, 0, 255])).save(&png_input)?;
         let source_bytes = fs::read(&png_input)?;
 
+        let output_dir = temp_dir.path().join("uncreated-output");
         let options = ConvertOptions {
-            output_dir: Some(temp_dir.path().to_path_buf()),
+            output_dir: Some(output_dir.clone()),
             flags: ConvertFlags::FORCE,
             ..Default::default()
         };
 
-        let output = get_output_path(&png_input, EXT_AVIF, &options)?;
         let mut metadata_retry =
             AvifencMetadataRetryState::for_policy(runtime_config::AvifMetadataPolicy::Clear);
         let (temp_avif, output_size, content_blake3) =
@@ -6944,19 +7923,22 @@ mod tests {
             image::open(&png_input)?.to_rgba16(),
             "true-lossless AVIF must preserve every decoded source sample"
         );
-        assert!(!output.exists(), "a probe must not publish an output");
+        assert!(
+            !output_dir.exists(),
+            "a probe must not create the output directory"
+        );
         fs::remove_file(&temp_avif)?;
 
         let error = convert_to_avif_probe(&png_input, 85, &options)
             .expect_err("q85 sample drift must not inherit exact pixel proof");
         assert!(
+            !output_dir.exists(),
+            "a rejected probe must not create the output directory"
+        );
+        assert!(
             error
                 .to_string()
                 .contains("AVIF pixel equivalence failed at q=85")
-        );
-        assert!(
-            !output.exists(),
-            "a rejected probe must not publish an output"
         );
         assert_eq!(fs::read(&png_input)?, source_bytes, "source bytes changed");
         Ok(())
@@ -7226,6 +8208,8 @@ mod tests {
     #[test]
     fn jpeg_full_search_matches_all_final_metadata_candidates_and_shared_delivery()
     -> anyhow::Result<()> {
+        use anyhow::Context;
+
         const CHILD: &str = "MFB_TEST_JPEG_FULL_SEARCH";
         if std::env::var_os(CHILD).is_none() {
             for tool in ["magick", "cjxl", "djxl", "jxlinfo", "exiftool"] {
@@ -7285,8 +8269,16 @@ mod tests {
         let mut reference: Option<(u8, Vec<u8>)> = None;
         for effort in 1..=11 {
             let candidate = root.path().join("reference.jxl");
-            let encoded =
-                run_cjxl_jpeg_encode_with_effort(&input, &candidate, &options, 1, None, effort)?;
+            let encoded = run_cjxl_jpeg_encode_with_effort(
+                &input,
+                &candidate,
+                &options,
+                1,
+                None,
+                effort,
+                JpegInvocationObservation::Disabled,
+            )?
+            .process;
             anyhow::ensure!(
                 encoded.status.success(),
                 "reference E{effort}: {}",
@@ -7310,7 +8302,12 @@ mod tests {
             fs::create_dir_all(&directory)?;
             options.output_dir = Some(directory);
             options.flags.set(ConvertFlags::ULTIMATE, mode == "fast");
-            let result = convert_jpeg_to_jxl(&input, &options, None)?;
+            let mut observed = None;
+            let result = if mode == "fast" {
+                convert_jpeg_to_jxl_at_observed(&input, &options, None, Some(&mut observed))?
+            } else {
+                convert_jpeg_to_jxl(&input, &options, None)?
+            };
             anyhow::ensure!(
                 result.success && !result.skipped,
                 "{mode}: {}",
@@ -7323,6 +8320,31 @@ mod tests {
                 "{mode}: final metadata changed candidate ranking or the winner was re-encoded"
             );
             foundation::fast_img::verify_final_jxl_delivery_integrity(&input, &output)?;
+            if mode == "fast" {
+                let invocation = observed
+                    .expect("fast JPEG conversion must report the actual winning invocation");
+                assert_eq!(invocation.exit_code, 0);
+                assert_eq!(invocation.argv[0], input.to_str().unwrap());
+                assert!(
+                    invocation
+                        .argv
+                        .windows(2)
+                        .any(|pair| pair[0] == "-e" && pair[1] == expected_effort.to_string())
+                );
+                assert!(
+                    invocation
+                        .argv
+                        .windows(2)
+                        .any(|pair| pair == ["--num_threads", "1"])
+                );
+                assert!(invocation.argv.iter().any(|arg| arg == "--lossless_jpeg=1"));
+                assert_eq!(
+                    invocation.executable_blake3,
+                    foundation::common_utils::calculate_blake3_hash(Path::new(
+                        &invocation.executable
+                    ))?,
+                );
+            }
             delivered = Some(output);
         }
         let prepared = root.path().join("prepared-winner.jxl");
@@ -7367,6 +8389,67 @@ mod tests {
         eprintln!(
             "JPEG full-search synthetic reference: covered=11/11, selected=E{expected_effort}, complete_bytes={}",
             expected_bytes.len()
+        );
+
+        let hdr = root.path().join("synthetic-hdr.jpg");
+        let gain_map = root.path().join("gain-map.jpg");
+        image::GrayImage::from_fn(16, 16, |x, y| {
+            image::Luma([u8::try_from((x + y) * 8).expect("gain-map fixture fits u8")])
+        })
+        .save(&gain_map)?;
+        fs::write(
+            &hdr,
+            make_ultrahdr_jpeg(&fs::read(&input)?, &fs::read(&gain_map)?, true),
+        )?;
+        let candidate = root.path().join("hdr-reference.jxl");
+        let mut hdr_reference: Option<(u8, Vec<u8>)> = None;
+        let baseline_start = std::time::Instant::now();
+        for effort in 1..=11 {
+            let encoded = run_cjxl_jpeg_encode_with_effort(
+                &hdr,
+                &candidate,
+                &options,
+                1,
+                None,
+                effort,
+                JpegInvocationObservation::Disabled,
+            )?
+            .process;
+            anyhow::ensure!(
+                encoded.status.success(),
+                "UltraHDR reference E{effort}: {}",
+                encoded.stderr
+            );
+            foundation::conversion::enrich_reconstructible_jxl_candidate(&hdr, &candidate)?;
+            let bytes = fs::read(&candidate)?;
+            if hdr_reference
+                .as_ref()
+                .is_none_or(|(_, best)| bytes.len() < best.len())
+            {
+                hdr_reference = Some((effort, bytes));
+            }
+            fs::remove_file(&candidate)?;
+        }
+        let baseline_duration = baseline_start.elapsed();
+        let output = root.path().join("hdr-selected.jxl");
+        let search_start = std::time::Instant::now();
+        let (_, digests) = run_cjxl_jpeg_full_effort_search(&hdr, &output, &options, 1, false)?;
+        let search_duration = search_start.elapsed();
+        let (effort, expected) = hdr_reference.context("missing UltraHDR reference")?;
+        assert_eq!(fs::read(&output)?, expected);
+        assert_eq!(
+            foundation::common_utils::calculate_blake3_hash(&output)?,
+            digests.winner_blake3
+        );
+        foundation::fast_img::verify_final_jxl_delivery_integrity(&hdr, &output)?;
+        assert!(
+            foundation::conversion::JpegEffortMetadata::prepare(&hdr, &"0".repeat(64),).is_err()
+        );
+        eprintln!(
+            "JPEG full-search UltraHDR reference: covered=11/11, selected=E{effort}, complete_bytes={}, per_candidate_preparation_ms={}, shared_preparation_search_ms={} (only the latter includes in-search reconstruction checks)",
+            expected.len(),
+            baseline_duration.as_millis(),
+            search_duration.as_millis()
         );
         Ok(())
     }
@@ -8819,6 +9902,132 @@ mod tests {
         assert!(error.contains("ISOBMFF"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn standard_avif_handoff_reuses_verified_winner_or_reencodes_changed_candidate()
+    -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD: &str = "MFB_TEST_STANDARD_AVIF_HANDOFF_REUSE";
+        let Some(case) = std::env::var_os(CHILD) else {
+            let root = tempdir()?;
+            for case in ["reused", "changed"] {
+                let state = root.path().join(case);
+                let output = Command::new(std::env::current_exe()?)
+                    .args([
+                        "--exact",
+                        "lossless_converter::tests::standard_avif_handoff_reuses_verified_winner_or_reencodes_changed_candidate",
+                    ])
+                    .env(CHILD, case)
+                    .env("MFB_HOME_ROOT", &state)
+                    .env("MFB_LOG_DIR", state.join("logs"))
+                    .output()?;
+                anyhow::ensure!(
+                    output.status.success()
+                        && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                    "{case}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+            return Ok(());
+        };
+
+        let root = tempdir()?;
+        let root = root.path().canonicalize()?;
+        let source = root.join("source.png");
+        let pixels = image::RgbImage::from_pixel(256, 256, image::Rgb([0, 0, 0]));
+        let mut png = fs::File::create(&source)?;
+        image::ImageEncoder::write_image(
+            image::codecs::png::PngEncoder::new_with_quality(
+                &mut png,
+                image::codecs::png::CompressionType::Uncompressed,
+                image::codecs::png::FilterType::NoFilter,
+            ),
+            pixels.as_raw(),
+            pixels.width(),
+            pixels.height(),
+            image::ExtendedColorType::Rgb8,
+        )?;
+        drop(png);
+
+        let encoder = foundation::common_utils::resolve_tool_path("avifenc")
+            .ok_or_else(|| anyhow::anyhow!("avifenc is required for this synthetic test"))?;
+        let wrapper = root.join("avifenc");
+        std::os::unix::fs::symlink(encoder, wrapper.with_extension("real"))?;
+        fs::write(
+            &wrapper,
+            r#"#!/bin/sh
+case "$1" in
+    --version|-version) exec "$0.real" "$@" ;;
+esac
+quality=
+for arg; do
+    [ "$previous" = "-q" ] && quality="$arg"
+    previous="$arg"
+done
+printf '%s\n' "$quality" >> "$0.calls"
+case "$quality" in
+    75|85) ;;
+    *) exit 1 ;;
+esac
+if [ "$quality" = 85 ]; then
+    printf 'first' > "$0.q85"
+    if [ -e "$0.inject-change" ] && [ -f "${previous%/*}/probe-75.avif" ]; then
+        printf 'changed' >> "${previous%/*}/probe-75.avif"
+    fi
+    exit 1
+fi
+exec "$0.real" "$@"
+"#,
+        )?;
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700))?;
+        let changed = case == "changed";
+        if changed {
+            fs::write(wrapper.with_extension("inject-change"), [])?;
+        }
+        let mut config = runtime_config::RuntimeConfig::default();
+        config.tools.paths.insert("avifenc".into(), wrapper.clone());
+        runtime_config::install(config)?;
+        let baseline = root.join("baseline.jxl");
+        fs::write(&baseline, b"synthetic exhausted JXL placeholder")?;
+        let output_dir = root.join("output");
+        fs::create_dir_all(&output_dir)?;
+        let options = ConvertOptions {
+            output_dir: Some(output_dir),
+            flags: ConvertFlags::COMPRESS,
+            ..Default::default()
+        };
+        let source_before = fs::read(&source)?;
+        let result = try_jxl_to_avif_extreme_handoff(
+            &source,
+            &source,
+            &baseline,
+            u64::try_from(source_before.len())?,
+            &options,
+        )?;
+        anyhow::ensure!(result.success && !result.skipped, "{result:?}");
+        let output = result
+            .output_path
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("AVIF handoff did not publish"))?;
+        foundation::quality_verifier_enhanced::verify_avif_pixel_equivalence(
+            &source,
+            Path::new(output),
+        )
+        .map_err(anyhow::Error::msg)?;
+        let calls = fs::read_to_string(wrapper.with_extension("calls"))?;
+        let qualities: Vec<_> = calls.lines().collect();
+        assert_eq!(
+            qualities.iter().filter(|&&quality| quality == "75").count(),
+            if changed { 2 } else { 1 },
+            "{qualities:?}"
+        );
+        assert_eq!(fs::read(&source)?, source_before);
+        assert!(!baseline.exists());
+        Ok(())
+    }
+
     #[test]
     fn extreme_jxl_fallback_precedes_final_avif_handoff_contract() {
         let source = include_str!("lossless_converter.rs");
@@ -9300,6 +10509,8 @@ mod tests {
                 "synthetic_channel_regression",
                 &mut retry_state,
                 true,
+                None,
+                None,
             )
             .expect("run avifenc");
             assert!(

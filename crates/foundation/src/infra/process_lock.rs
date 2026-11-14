@@ -202,7 +202,7 @@ impl Drop for DirLock {
     }
 }
 
-/// Initializes Ghost Mode (Zero Pollution) by setting up the MFB tmp layout.
+/// Initializes the private temporary layout used for search and tool scratch files.
 ///
 /// **Call exactly once at process startup** (`img`/`vid` `main` before `rayon`
 /// or thread pools). `TMPDIR` and `PATH` are mutated inside a
@@ -461,27 +461,15 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<DirLock> {
     acquire_canonical_dir_lock(abs_path)
 }
 
-/// Lock an adjacent output before creating it, using the same identity as an existing directory.
+/// Lock a prospective output using the same identity as an existing directory.
 pub fn acquire_output_dir_lock(dir_path: &Path) -> Result<DirLock> {
-    let absolute = match fs::symlink_metadata(dir_path) {
-        Ok(metadata) if metadata.file_type().is_dir() => dir_path.canonicalize()?,
-        Ok(_) => {
-            return Err(anyhow!(
-                "Output lock target is not a real directory: {}",
+    let absolute = crate::pipeline::verification::canonical_working_copy_path(dir_path)
+        .with_context(|| {
+            format!(
+                "Inspect prospective output lock target {}",
                 dir_path.display()
-            ));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let parent = dir_path
-                .parent()
-                .context("Output lock target has no parent")?;
-            let name = dir_path
-                .file_name()
-                .context("Output lock target has no file name")?;
-            parent.canonicalize()?.join(name)
-        }
-        Err(error) => return Err(error).context("Inspect prospective output lock target"),
-    };
+            )
+        })?;
     acquire_canonical_dir_lock(absolute)
 }
 

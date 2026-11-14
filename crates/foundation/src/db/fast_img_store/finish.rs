@@ -5,8 +5,8 @@ use super::{
     FailedRetryContext, FailedRetryDeliveryIntent, FailedRetryFinishEvidence,
     FailedRetrySourceRootObservation, as_io, cleanup, current_family, in_snapshot,
     key_for_canonical, matching_markers_in_snapshot, open_readonly, open_store_connection,
-    read_snapshot, read_snapshot_base, retry, snapshot_digest, text, tier2_cleanup, validate_locator,
-    write_snapshot_at_with_finish,
+    read_snapshot, read_snapshot_base, retry, snapshot_digest, text, tier2_cleanup,
+    validate_locator, write_snapshot_at_with_finish,
 };
 use crate::image::fast_img::VerifiedFailedRetryFinish;
 use crate::pipeline::verification::{FastImgStageName, WorkingCopyMarker};
@@ -418,6 +418,7 @@ pub fn finalize_failed_retry_finish(
             text(&next.src_dir)?,
             true,
             Some((expected, &evidence)),
+            None,
         )?;
         ensure!(
             read_snapshot(&tx, expected.task_key())?.as_ref() == Some(&next),

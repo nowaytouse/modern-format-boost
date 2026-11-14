@@ -391,6 +391,112 @@ fn failed_retry_delivery_request_is_immutable_and_first_photos_binding_is_allowe
 }
 
 #[test]
+fn failed_retry_photos_places_new_children_in_private_state_without_touching_source_parent()
+-> Result<()> {
+    if crate::common_utils::isolated_test_process() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let _env = crate::common_utils::EnvGuard::set(
+        crate::constants::ENV_MFB_HOME_ROOT,
+        root.path().join("state").to_str().unwrap(),
+    );
+    let request = FailedRetryDeliveryIntent::Photos {
+        library_path: None,
+        naming_policy: "[null,null,true]".into(),
+    };
+    for (name, private_parent) in [("adjacent", false), ("private", true)] {
+        let scope = root.path().join(name);
+        std::fs::create_dir(&scope)?;
+        let (marker, adjacent, admission) = fixture_with(&scope, |marker| {
+            if private_parent {
+                let private =
+                    crate::pipeline::verification::photos_working_copy_base(&marker.src_dir)
+                        .expect("synthetic private parent");
+                marker.working_copy = private;
+            }
+        })?;
+        let parent_before = std::fs::metadata(&scope)?.modified()?;
+        let selected = inspect_failed_retry_parent_for_delivery(&marker.working_copy, true)?;
+        let base = crate::pipeline::verification::photos_working_copy_base(&marker.src_dir)?;
+        assert_eq!(selected.child_working_copy().parent(), base.parent());
+        assert_ne!(
+            selected.child_working_copy().parent(),
+            marker.src_dir.parent()
+        );
+        assert_eq!(selected.request_key(), adjacent.request_key());
+        assert_eq!(
+            selected
+                .child_working_copy()
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some(format!("retry_{}", selected.request_key()).as_str())
+        );
+        assert!(find_failed_retry_child(&selected, &request)?.is_none());
+        let child = create_or_resume_failed_retry(
+            &adjacent,
+            std::slice::from_ref(&admission),
+            &request,
+            None,
+        )?;
+        assert_eq!(child.working_copy.as_path(), selected.child_working_copy());
+        assert_eq!(
+            find_failed_retry_child(&selected, &request)?,
+            Some(child.clone())
+        );
+        assert_eq!(
+            inspect_failed_retry_parent_for_delivery(&marker.working_copy, true)?
+                .child_working_copy(),
+            child.working_copy.as_path(),
+        );
+        assert_eq!(std::fs::metadata(&scope)?.modified()?, parent_before);
+        assert!(!child.working_copy.exists());
+        assert!(!base.parent().expect("private path parent").exists());
+    }
+    inspect_integrity(&open_store_connection()?)?;
+    Ok(())
+}
+
+#[test]
+fn failed_retry_photos_reuses_exact_historical_adjacent_reservation() -> Result<()> {
+    if crate::common_utils::isolated_test_process() {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let _env = crate::common_utils::EnvGuard::set(
+        crate::constants::ENV_MFB_HOME_ROOT,
+        root.path().join("state").to_str().unwrap(),
+    );
+    let (marker, legacy, admission) = fixture(root.path())?;
+    let request = FailedRetryDeliveryIntent::Photos {
+        library_path: None,
+        naming_policy: "[null,null,true]".into(),
+    };
+    let child = create_or_resume_failed_retry_at(
+        &legacy,
+        std::slice::from_ref(&admission),
+        &request,
+        None,
+        false,
+    )?;
+    assert_eq!(child.working_copy.as_path(), legacy.child_working_copy());
+    let selected = inspect_failed_retry_parent_for_delivery(&marker.working_copy, true)?;
+    assert_eq!(selected.child_working_copy(), child.working_copy.as_path());
+    assert_eq!(selected.request_key(), legacy.request_key());
+    assert_eq!(
+        find_failed_retry_child(&selected, &request)?,
+        Some(child.clone())
+    );
+    assert_eq!(
+        create_or_resume_failed_retry(&selected, &[admission], &request, None)?,
+        child
+    );
+    assert_eq!(read_marker(&marker.working_copy)?, marker);
+    assert_eq!(row_count(&open_store_connection()?)?, 2);
+    Ok(())
+}
+
+#[test]
 fn failed_retry_photos_receipts_bind_exact_per_file_custody() -> Result<()> {
     if crate::common_utils::isolated_test_process() {
         return Ok(());
@@ -409,8 +515,12 @@ fn failed_retry_photos_receipts_bind_exact_per_file_custody() -> Result<()> {
         create_or_resume_failed_retry(&parent, std::slice::from_ref(&admission), &request, None)?;
     child.stage = FastImgStageName::Importing;
     let output_rel = "failed.JXL";
-    let output_hash = blake3::hash(b"synthetic encoded output").to_hex().to_string();
-    let wrong_hash = blake3::hash(b"different synthetic bytes").to_hex().to_string();
+    let output_hash = blake3::hash(b"synthetic encoded output")
+        .to_hex()
+        .to_string();
+    let wrong_hash = blake3::hash(b"different synthetic bytes")
+        .to_hex()
+        .to_string();
     let mut original = LibraryAssetRecord {
         rel_path: admission.source_rel.clone(),
         blake3: wrong_hash.clone(),
@@ -420,8 +530,13 @@ fn failed_retry_photos_receipts_bind_exact_per_file_custody() -> Result<()> {
     let mut wrong_original = child.clone();
     wrong_original.tier2_imported_assets.push(original.clone());
     let error = write_marker(&wrong_original).expect_err("original receipt has different bytes");
-    assert!(error.to_string().contains("admitted source bytes"), "{error}");
-    original.blake3.clone_from(&admission.admitted_source_blake3);
+    assert!(
+        error.to_string().contains("admitted source bytes"),
+        "{error}"
+    );
+    original
+        .blake3
+        .clone_from(&admission.admitted_source_blake3);
     let mut valid_original = child.clone();
     valid_original.tier2_imported_assets.push(original.clone());
     write_marker(&valid_original)?;
@@ -445,16 +560,24 @@ fn failed_retry_photos_receipts_bind_exact_per_file_custody() -> Result<()> {
     let mut conflicting_original = child.clone();
     conflicting_original.tier2_imported_assets.push(original);
     let error = write_marker(&conflicting_original).expect_err("source has two delivery outcomes");
-    assert!(error.to_string().contains("both a converted output"), "{error}");
+    assert!(
+        error.to_string().contains("both a converted output"),
+        "{error}"
+    );
     write_marker(&child)?;
     let mut no_uuid = child.clone();
     no_uuid.photos_imported_assets[0].photos_uuid = None;
     let error = write_marker(&no_uuid).expect_err("output receipt has no UUID");
     assert!(error.to_string().contains("has no Photos UUID"), "{error}");
     let mut wrong_output = child.clone();
-    wrong_output.photos_imported_assets[0].blake3.clone_from(&wrong_hash);
+    wrong_output.photos_imported_assets[0]
+        .blake3
+        .clone_from(&wrong_hash);
     let error = write_marker(&wrong_output).expect_err("output receipt has different bytes");
-    assert!(error.to_string().contains("recorded output bytes"), "{error}");
+    assert!(
+        error.to_string().contains("recorded output bytes"),
+        "{error}"
+    );
     assert_eq!(read_marker(&child.working_copy)?, child);
 
     let conn = open_store_connection()?;
@@ -472,8 +595,12 @@ fn failed_retry_photos_receipts_bind_exact_per_file_custody() -> Result<()> {
         "UPDATE fast_img_tasks SET snapshot_blake3=?2 WHERE task_key=?1",
         params![key, digest.as_bytes().as_slice()],
     )?;
-    let error = read_marker(&child.working_copy).expect_err("cold read accepted wrong output bytes");
-    assert!(error.to_string().contains("recorded output bytes"), "{error}");
+    let error =
+        read_marker(&child.working_copy).expect_err("cold read accepted wrong output bytes");
+    assert!(
+        error.to_string().contains("recorded output bytes"),
+        "{error}"
+    );
     Ok(())
 }
 
@@ -533,9 +660,8 @@ fn failed_retry_new_avif_attempt_derives_metadata_version_without_rewriting_fail
 #[test]
 fn routed_original_retry_requires_exact_settlement_and_preserves_parent() -> Result<()> {
     let root = tempfile::tempdir()?;
-    let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(
-        root.path().join("state.sqlite"),
-    );
+    let _store =
+        crate::mfb_sqlite_store::set_test_store_path_for_tests(root.path().join("state.sqlite"));
     let (parent_marker, parent, mut admission) = fixture_with(root.path(), |marker| {
         marker.src_jpeg_count = 0;
         marker.blake3_log.clear();
@@ -543,10 +669,16 @@ fn routed_original_retry_requires_exact_settlement_and_preserves_parent() -> Res
     })?;
     let captured = super::super::capture_failed_retry_admissions(&parent)?;
     assert_eq!(captured, [admission.clone()]);
-    assert!(create_or_resume_failed_retry(&parent, &captured, &FailedRetryDeliveryIntent::Local, None).is_err());
+    assert!(
+        create_or_resume_failed_retry(&parent, &captured, &FailedRetryDeliveryIntent::Local, None)
+            .is_err()
+    );
     admission.route = Some(FailedRetrySourceRoute::Original);
     let admissions = std::slice::from_ref(&admission);
-    assert!(create_or_resume_failed_retry(&parent, admissions, &FailedRetryDeliveryIntent::Local, None).is_err());
+    assert!(
+        create_or_resume_failed_retry(&parent, admissions, &FailedRetryDeliveryIntent::Local, None)
+            .is_err()
+    );
     let delivery = FailedRetryDeliveryIntent::Photos {
         library_path: Some(root.path().canonicalize()?.join("Synthetic.photoslibrary")),
         naming_policy: "[null,null,false]".into(),
@@ -556,20 +688,42 @@ fn routed_original_retry_requires_exact_settlement_and_preserves_parent() -> Res
     assert_eq!(child.primary_source_count(), 0);
     assert!(child.tier2_cleanup_journal);
     assert_eq!(
-        failed_retry_context(&child.working_copy)?.unwrap().admissions().get(&admission.source_rel),
+        failed_retry_context(&child.working_copy)?
+            .unwrap()
+            .admissions()
+            .get(&admission.source_rel),
         Some(&admission)
     );
     child.stage = FastImgStageName::CleanupComplete;
-    assert!(write_marker(&child).is_err(), "missing original outcome must block completion");
-    child.tier2_failed_sources.insert(admission.source_rel.clone(), SkippedSourceEntry {
-        src: blake3::hash(b"wrong original").to_hex().to_string(),
-        reason: "synthetic pre-submit failure".into(),
-    });
-    assert!(write_marker(&child).is_err(), "wrong original hash must block completion");
-    child.tier2_failed_sources.get_mut(&admission.source_rel).unwrap().src.clone_from(&admission.admitted_source_blake3);
+    assert!(
+        write_marker(&child).is_err(),
+        "missing original outcome must block completion"
+    );
+    child.tier2_failed_sources.insert(
+        admission.source_rel.clone(),
+        SkippedSourceEntry {
+            src: blake3::hash(b"wrong original").to_hex().to_string(),
+            reason: "synthetic pre-submit failure".into(),
+        },
+    );
+    assert!(
+        write_marker(&child).is_err(),
+        "wrong original hash must block completion"
+    );
+    child
+        .tier2_failed_sources
+        .get_mut(&admission.source_rel)
+        .unwrap()
+        .src
+        .clone_from(&admission.admitted_source_blake3);
     write_marker(&child)?;
     assert_eq!(read_marker(&child.working_copy)?, child);
     assert_eq!(read_marker(&parent_marker.working_copy)?, parent_marker);
-    assert_eq!(inspect_failed_retry_parent(&child.working_copy)?.marker().failed_source_count(), 1);
+    assert_eq!(
+        inspect_failed_retry_parent(&child.working_copy)?
+            .marker()
+            .failed_source_count(),
+        1
+    );
     Ok(())
 }

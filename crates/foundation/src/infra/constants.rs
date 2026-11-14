@@ -3582,7 +3582,8 @@ pub const PNG_CHUNK_PLTE: &[u8] = b"PLTE";
 pub const PNG_CHUNK_IDAT: &[u8] = b"IDAT";
 pub const PNG_CHUNK_IEND: &[u8] = b"IEND";
 pub const PNG_CHUNK_TRNS: &[u8] = b"tRNS";
-pub const AVIF_MEME_MIN_QUALITY: u8 = 0;
+/// Minimum color quality accepted by avifenc in progressive mode.
+pub const AVIF_MEME_MIN_QUALITY: u8 = 10;
 pub const MAX_AVIF_BOXES: u32 = 2048;
 
 #[cfg(test)]

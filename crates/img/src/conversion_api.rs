@@ -535,6 +535,7 @@ fn finalize_conversion_output(
 
     if config.delete_original() {
         if let Some(integrity) = jpeg_integrity.as_ref() {
+            foundation::metadata::handle_aae_sidecar(input_path, output_path)?;
             foundation::fast_img::safe_delete_jpeg_source(input_path, output_path, integrity)?;
         } else {
             foundation::conversion::safe_delete_original(

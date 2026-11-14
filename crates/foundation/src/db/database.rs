@@ -1034,8 +1034,8 @@ pub fn connect_pg_with_str(conn_str: &str) -> Result<Client> {
                 crate::media_conversion_gate::delivery_db_batch_audit(
                     "delivery_db_connect",
                     format!(
-                        "Database connectivity failed: {e}. Check if PostgreSQL service is \
-                         running and accessible via {conn_str}"
+                        "Database connectivity failed: {e}. Check the PostgreSQL service and \
+                         the configured connection settings"
                     ),
                 );
                 crate::log_info!(
@@ -1047,7 +1047,7 @@ pub fn connect_pg_with_str(conn_str: &str) -> Result<Client> {
                     crate::infra::static_logs::messages::MSG_DB_INIT_HINT
                 );
             }
-            Err(e).with_context(|| format!("Failed to connect to PostgreSQL: {conn_str}"))
+            Err(e).context("Failed to connect to PostgreSQL")
         }
     }
 }
@@ -5687,6 +5687,20 @@ mod tests {
     use super::*;
     use crate::loop_intent::{LoopColorFlags, LoopFlags, LoopMemeFlags, LoopStreamFlags};
     use std::process::Command;
+
+    #[test]
+    fn postgres_connection_failure_omits_connection_credentials() {
+        let secret = "synthetic-password-do-not-display";
+        let result = connect_pg_with_str(&format!(
+            "host=/mfb-nonexistent-fixture-socket password={secret} invalid_option=1"
+        ));
+        let Err(error) = result else {
+            panic!("invalid PostgreSQL configuration unexpectedly connected");
+        };
+        assert_eq!(error.to_string(), "Failed to connect to PostgreSQL");
+        assert!(!format!("{error:#}").contains(secret));
+        assert!(!format!("{error:?}").contains(secret));
+    }
 
     fn base_meta() -> LoopMeta {
         let frames = 24;

@@ -842,11 +842,12 @@ impl UncachedVerificationScope {
     pub fn new() -> Result<Self> {
         use std::sync::atomic::Ordering;
         UNCACHED_VERIFICATION_SCOPES
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| active.checked_add(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                active.checked_add(1)
+            })
             .map_err(|_| anyhow::anyhow!("uncached verification scope counter overflow"))?;
         Ok(Self { _private: () })
     }
-
 }
 
 #[must_use]
@@ -856,9 +857,12 @@ pub fn verification_cache_disabled() -> bool {
 
 impl Drop for UncachedVerificationScope {
     fn drop(&mut self) {
-        let previous = UNCACHED_VERIFICATION_SCOPES
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        assert!(previous > 0, "uncached verification scope counter underflow");
+        let previous =
+            UNCACHED_VERIFICATION_SCOPES.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            previous > 0,
+            "uncached verification scope counter underflow"
+        );
     }
 }
 
@@ -925,7 +929,10 @@ fn multimedia_tool_is_healthy(path: &std::path::Path) -> bool {
         successes.retain(|_, probe| {
             checked_at.duration_since(probe.checked_at) < TOOL_HEALTH_SUCCESS_TTL
         });
-        if successes.get(path).is_some_and(|probe| probe.identity == identity) {
+        if successes
+            .get(path)
+            .is_some_and(|probe| probe.identity == identity)
+        {
             return true;
         }
         successes.remove(path);
@@ -961,7 +968,13 @@ fn multimedia_tool_is_healthy(path: &std::path::Path) -> bool {
                 successes.lock(),
             );
             if successes.len() < 64 {
-                successes.insert(path.to_path_buf(), ToolHealthProbe { identity, checked_at });
+                successes.insert(
+                    path.to_path_buf(),
+                    ToolHealthProbe {
+                        identity,
+                        checked_at,
+                    },
+                );
             }
         }
     } else {
@@ -2333,8 +2346,12 @@ mod tests {
         }
         assert_eq!(fs::read_to_string(counter)?, "xxxx");
         assert!(!failures.lock().expect("cache lock").contains_key(&tool));
-        HEALTHY_TOOL_IDENTITIES.get().expect("health memo initialized")
-            .lock().expect("health memo lock").remove(&tool);
+        HEALTHY_TOOL_IDENTITIES
+            .get()
+            .expect("health memo initialized")
+            .lock()
+            .expect("health memo lock")
+            .remove(&tool);
         assert!(!multimedia_tool_is_healthy(&tool));
         fs::remove_file(&tool)?;
         assert!(!multimedia_tool_is_healthy(&tool));
@@ -2355,15 +2372,30 @@ mod tests {
         assert!(multimedia_tool_is_healthy(&tool));
         assert!(multimedia_tool_is_healthy(&tool));
         assert_eq!(fs::read_to_string(tmp.path().join("djxl.count"))?, "x");
-        let successes = HEALTHY_TOOL_IDENTITIES.get().expect("health memo initialized");
-        successes.lock().expect("health memo lock").get_mut(&tool)
-            .expect("successful probe").checked_at = std::time::Instant::now()
-            .checked_sub(TOOL_HEALTH_SUCCESS_TTL).expect("representable deadline");
+        let successes = HEALTHY_TOOL_IDENTITIES
+            .get()
+            .expect("health memo initialized");
+        successes
+            .lock()
+            .expect("health memo lock")
+            .get_mut(&tool)
+            .expect("successful probe")
+            .checked_at = std::time::Instant::now()
+            .checked_sub(TOOL_HEALTH_SUCCESS_TTL)
+            .expect("representable deadline");
         assert!(multimedia_tool_is_healthy(&tool));
         assert_eq!(fs::read_to_string(tmp.path().join("djxl.count"))?, "xx");
-        fs::write(&tool, "#!/bin/sh\necho 'dyld: Library not loaded' >&2\nexit 1\n")?;
+        fs::write(
+            &tool,
+            "#!/bin/sh\necho 'dyld: Library not loaded' >&2\nexit 1\n",
+        )?;
         assert!(!multimedia_tool_is_healthy(&tool));
-        assert!(!successes.lock().expect("health memo lock").contains_key(&tool));
+        assert!(
+            !successes
+                .lock()
+                .expect("health memo lock")
+                .contains_key(&tool)
+        );
         Ok(())
     }
 
@@ -2379,8 +2411,11 @@ mod tests {
                 .env(CHILD, "1")
                 .output()?;
             let stdout = String::from_utf8_lossy(&output.stdout);
-            anyhow::ensure!(output.status.success() && stdout.contains("1 passed"),
-                "uncached verification child failed: {stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+            anyhow::ensure!(
+                output.status.success() && stdout.contains("1 passed"),
+                "uncached verification child failed: {stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             return Ok(());
         }
         let tmp = TempDir::new()?;
@@ -2403,20 +2438,31 @@ mod tests {
             let _inner = UncachedVerificationScope::new()?;
             let worker_good = good.clone();
             let worker_bad = bad.clone();
-            assert_eq!(std::thread::spawn(move || (
-                multimedia_tool_is_healthy(&worker_good),
-                multimedia_tool_is_healthy(&worker_bad),
-            )).join().expect("verification worker"), (false, true));
+            assert_eq!(
+                std::thread::spawn(move || (
+                    multimedia_tool_is_healthy(&worker_good),
+                    multimedia_tool_is_healthy(&worker_bad),
+                ))
+                .join()
+                .expect("verification worker"),
+                (false, true)
+            );
         }
         assert!(verification_cache_disabled());
         assert!(!multimedia_tool_is_healthy(&good));
         assert!(multimedia_tool_is_healthy(&bad));
         assert_eq!(fs::read_to_string(tmp.path().join("good.count"))?, "xxx");
         assert_eq!(fs::read_to_string(tmp.path().join("bad.count"))?, "xxx");
-        assert_eq!(HEALTHY_TOOL_IDENTITIES.get().unwrap().lock().unwrap()[&good].checked_at,
-            good_receipt.checked_at, "final checks wrote a reusable success");
-        assert_eq!(FAILED_TOOL_IDENTITIES.get().unwrap().lock().unwrap()[&bad].checked_at,
-            bad_receipt.checked_at, "final checks wrote a reusable failure");
+        assert_eq!(
+            HEALTHY_TOOL_IDENTITIES.get().unwrap().lock().unwrap()[&good].checked_at,
+            good_receipt.checked_at,
+            "final checks wrote a reusable success"
+        );
+        assert_eq!(
+            FAILED_TOOL_IDENTITIES.get().unwrap().lock().unwrap()[&bad].checked_at,
+            bad_receipt.checked_at,
+            "final checks wrote a reusable failure"
+        );
         drop(outer);
         assert!(!verification_cache_disabled());
         Ok(())

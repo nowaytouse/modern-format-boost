@@ -1,4 +1,4 @@
-//! Per-exploration identity for direct cjxl candidates; no persistent cache state.
+//! Per-exploration identity for direct encoder candidates.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -144,7 +144,7 @@ pub(super) struct JxlProbeIdentity {
     source: BoundFile,
     actual: Option<BoundFile>,
     icc: Option<BoundFile>,
-    sidecar: Option<BoundFile>,
+    sidecar: Option<Option<BoundFile>>,
     encoder: BoundFile,
     environment: Environment,
     cwd: PathBuf,
@@ -157,6 +157,26 @@ impl JxlProbeIdentity {
         actual_input: &Path,
         icc: Option<&Path>,
         command: &Command,
+    ) -> io::Result<Self> {
+        Self::from_command(input, actual_input, icc, command, true)
+    }
+
+    /// Fast AVIF's Clear policy ignores external XMP. Its pixel probe consumes
+    /// only the admitted source and the exact encoder input bound below.
+    pub(super) fn new_without_external_xmp(
+        input: &Path,
+        actual_input: &Path,
+        command: &Command,
+    ) -> io::Result<Self> {
+        Self::from_command(input, actual_input, None, command, false)
+    }
+
+    fn from_command(
+        input: &Path,
+        actual_input: &Path,
+        icc: Option<&Path>,
+        command: &Command,
+        bind_sidecar: bool,
     ) -> io::Result<Self> {
         let cwd = fs::canonicalize(
             foundation::media_conversion_gate::delivery_cwd_or_err("JXL probe identity")
@@ -173,7 +193,9 @@ impl JxlProbeIdentity {
         let icc = icc
             .map(|path| BoundFile::read(&absolute(path, &cwd)))
             .transpose()?;
-        let sidecar = selected_sidecar(&source.path)?;
+        let sidecar = bind_sidecar
+            .then(|| selected_sidecar(&source.path))
+            .transpose()?;
         let effective = effective_environment(&environment, command);
         let command_cwd = effective_cwd(&cwd, command)?;
         let encoder = BoundFile::read(&resolve_program(command, &effective, &command_cwd)?)?;
@@ -217,7 +239,11 @@ impl JxlProbeIdentity {
         let mut key = Vec::new();
         field(&mut key, b"mfb-jxl-probe-v1");
         self.source.append(&mut key);
-        for file in [&self.actual, &self.icc, &self.sidecar] {
+        for file in [
+            self.actual.as_ref(),
+            self.icc.as_ref(),
+            self.sidecar.as_ref().and_then(Option::as_ref),
+        ] {
             field(&mut key, &[u8::from(file.is_some())]);
             if let Some(file) = file {
                 file.append(&mut key);
@@ -253,16 +279,7 @@ impl JxlProbeIdentity {
     }
 
     pub(super) fn validate(&self, command: &Command) -> io::Result<()> {
-        self.source.validate()?;
-        if let Some(actual) = &self.actual {
-            actual.validate()?;
-        }
-        if let Some(icc) = &self.icc {
-            icc.validate()?;
-        }
-        if let Some(sidecar) = &self.sidecar {
-            sidecar.validate()?;
-        }
+        self.validate_inputs()?;
         let environment = effective_environment(&self.environment, command);
         let cwd = effective_cwd(&self.cwd, command)?;
         if resolve_program(command, &environment, &cwd)? != self.encoder.path {
@@ -271,10 +288,30 @@ impl JxlProbeIdentity {
         self.encoder.validate()
     }
 
+    pub(super) fn validate_inputs(&self) -> io::Result<()> {
+        self.source.validate()?;
+        if let Some(actual) = &self.actual {
+            actual.validate()?;
+        }
+        if let Some(icc) = &self.icc {
+            icc.validate()?;
+        }
+        if let Some(Some(sidecar)) = &self.sidecar {
+            sidecar.validate()?;
+        }
+        Ok(())
+    }
+
     /// Direct pixel probes do not consume sidecars; rediscover their association at search boundaries.
     pub(super) fn validate_association(&self, command: &Command) -> io::Result<()> {
         self.validate(command)?;
-        if selected_sidecar(&self.source.path)? != self.sidecar {
+        self.validate_sidecar_association()
+    }
+
+    pub(super) fn validate_sidecar_association(&self) -> io::Result<()> {
+        if let Some(expected) = &self.sidecar
+            && selected_sidecar(&self.source.path)?.as_ref() != expected.as_ref()
+        {
             return Err(invalid(
                 "JXL probe source XMP association or contents changed",
             ));

@@ -30,7 +30,7 @@ struct Request {
     token: String,
 }
 
-fn control_path() -> io::Result<Option<PathBuf>> {
+pub(crate) fn control_path() -> io::Result<Option<PathBuf>> {
     let Some(path) = std::env::var_os(CONTROL_ENV) else {
         return Ok(None);
     };
