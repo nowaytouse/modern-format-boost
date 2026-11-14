@@ -1,2 +1,2 @@
-//! Image Analyzer - Re-exports from `shared_utils`
-pub use shared_utils::image_analyzer::*;
+//! Image Analyzer - Re-exports from `foundation`
+pub use foundation::image_analyzer::*;

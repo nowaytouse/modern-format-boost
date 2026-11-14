@@ -1,0 +1,1981 @@
+//! Format-specific utilities and helpers
+// Note: pub mod tiff (pure IFD byte-parser) removed — zero callers.
+// All TIFF/DNG lossless detection uses tiff_family::is_lossless_tiff_family
+// (exiftool-based, with disciplined main-IFD selection).
+
+/// Known container semantics that a single pixel-encoded JXL cannot replace.
+/// JPEG is handled separately by its byte-identical reconstruction contract.
+///
+/// # Errors
+/// Returns an error if container identity or structural evidence is unreadable.
+pub fn original_archive_reason(
+    path: &std::path::Path,
+) -> crate::unified_error::Result<Option<&'static str>> {
+    use crate::image::format_detect::{FormatKind, detect_true_format};
+    use crate::unified_error::ImgQualityError;
+    use std::io::Read;
+
+    let format = detect_true_format(path)?;
+    if format == FormatKind::Jpeg {
+        return Ok(None);
+    }
+    if let Some(reason) = crate::xmp_merger::protected_container_reason(path, format)
+        .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?
+    {
+        return Ok(Some(reason));
+    }
+    match format {
+        FormatKind::Tiff if tiff_family::requires_original_archive(path)? => Ok(Some(
+            "TIFF sample, channel or directory semantics require original-container archival",
+        )),
+        FormatKind::Ico => {
+            let mut header = [0_u8; 6];
+            std::fs::File::open(path)?.read_exact(&mut header)?;
+            let kind = u16::from_le_bytes([header[2], header[3]]);
+            let count = u16::from_le_bytes([header[4], header[5]]);
+            if header[..2] != [0, 0] || !matches!(kind, 1 | 2) || count == 0 {
+                return Err(ImgQualityError::AnalysisError(
+                    "Invalid ICO/CUR archive directory".into(),
+                ));
+            }
+            Ok((kind == 2 || count != 1).then_some("Cursor hotspot or multiple icon representations require original-container archival"))
+        }
+        _ => Ok(None),
+    }
+}
+
+pub mod jpeg {
+    use crate::unified_error::Result;
+    use std::path::Path;
+
+    /// Estimate JPEG quality using standard forensic analysis.
+    ///
+    /// # Errors
+    /// Returns an error if the JPEG markers cannot be parsed.
+    pub fn estimate_quality(path: &Path) -> Result<u8> {
+        crate::image_jpeg_analysis::analyze_jpeg_file(path)
+            .map(|a| a.estimated_quality)
+            .map_err(crate::unified_error::ImgQualityError::AnalysisError)
+    }
+}
+
+pub mod webp {
+    use crate::unified_error::{ImgQualityError, Result};
+    use std::fs;
+    use std::path::Path;
+
+    #[derive(Clone, Copy)]
+    struct RiffChunk<'a> {
+        id: [u8; 4],
+        payload: &'a [u8],
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum FrameCodec {
+        Lossy,
+        Lossless,
+    }
+
+    fn parse_chunk<'a>(
+        data: &'a [u8],
+        pos: usize,
+        end: usize,
+        context: &str,
+    ) -> Result<(RiffChunk<'a>, usize)> {
+        if end > data.len() || end.saturating_sub(pos) < 8 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP {context}: truncated chunk header at offset {pos}"
+            )));
+        }
+
+        let id = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
+        let size = crate::numeric_cast::u32_to_usize_strict(
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]),
+            "webp_chunk_size",
+        )
+        .ok_or_else(|| {
+            ImgQualityError::NumericError(format!(
+                "WebP {context}: chunk size at offset {pos} does not fit usize"
+            ))
+        })?;
+        let payload_start = pos.checked_add(8).ok_or_else(|| {
+            ImgQualityError::NumericError(format!(
+                "WebP {context}: chunk header offset overflow at {pos}"
+            ))
+        })?;
+        let payload_end = payload_start.checked_add(size).ok_or_else(|| {
+            ImgQualityError::NumericError(format!(
+                "WebP {context}: chunk payload offset overflow at {pos}"
+            ))
+        })?;
+        if payload_end > end {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP {context}: chunk at offset {pos} claims {size} payload bytes beyond boundary {end}"
+            )));
+        }
+
+        let next = payload_end.checked_add(size & 1).ok_or_else(|| {
+            ImgQualityError::NumericError(format!(
+                "WebP {context}: padded chunk offset overflow at {pos}"
+            ))
+        })?;
+        if next > end {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP {context}: odd-sized chunk at offset {pos} is missing its RIFF padding byte"
+            )));
+        }
+        if size & 1 == 1 && data[payload_end] != 0 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP {context}: non-zero RIFF padding byte at offset {payload_end}"
+            )));
+        }
+
+        Ok((
+            RiffChunk {
+                id,
+                payload: &data[payload_start..payload_end],
+            },
+            next,
+        ))
+    }
+
+    fn validate_chunks(data: &[u8], start: usize, end: usize, context: &str) -> Result<()> {
+        let mut pos = start;
+        while pos < end {
+            let (_, next) = parse_chunk(data, pos, end, context)?;
+            pos = next;
+        }
+        Ok(())
+    }
+
+    fn validated_webp_end(data: &[u8]) -> Result<usize> {
+        if data.len() < 12 || data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
+            return Err(ImgQualityError::AnalysisError(
+                "WebP: invalid or truncated RIFF/WEBP header".to_string(),
+            ));
+        }
+        let riff_size = crate::numeric_cast::u32_to_usize_strict(
+            u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+            "webp_riff_size",
+        )
+        .ok_or_else(|| {
+            ImgQualityError::NumericError("WebP: RIFF size does not fit usize".to_string())
+        })?;
+        if riff_size < 4 {
+            return Err(ImgQualityError::AnalysisError(
+                "WebP: RIFF size is smaller than the WEBP FourCC".to_string(),
+            ));
+        }
+        let end = 8usize.checked_add(riff_size).ok_or_else(|| {
+            ImgQualityError::NumericError("WebP: RIFF boundary overflow".to_string())
+        })?;
+        if end > data.len() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP: RIFF declares {end} bytes but input contains only {}",
+                data.len()
+            )));
+        }
+        validate_chunks(data, 12, end, "RIFF")?;
+        Ok(end)
+    }
+
+    /// Return whether a validated WebP RIFF contains the requested top-level
+    /// chunk. C2PA manifests use this to prevent metadata edits from
+    /// invalidating an existing provenance signature.
+    pub(crate) fn contains_top_level_chunk(data: &[u8], wanted: [u8; 4]) -> Result<bool> {
+        let end = validated_webp_end(data)?;
+        let mut pos = 12;
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
+            if chunk.id == wanted {
+                return Ok(true);
+            }
+            pos = next;
+        }
+        Ok(false)
+    }
+
+    fn frame_codec(payload: &[u8]) -> Result<FrameCodec> {
+        if payload.len() < 16 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "WebP ANMF: frame payload is {} bytes; expected at least 16",
+                payload.len()
+            )));
+        }
+        validate_chunks(payload, 16, payload.len(), "ANMF")?;
+
+        let mut pos = 16;
+        let mut codec = None;
+        while pos < payload.len() {
+            let (chunk, next) = parse_chunk(payload, pos, payload.len(), "ANMF")?;
+            let candidate = match &chunk.id {
+                b"VP8 " => Some(FrameCodec::Lossy),
+                b"VP8L" => Some(FrameCodec::Lossless),
+                _ => None,
+            };
+            if let Some(candidate) = candidate
+                && codec.replace(candidate).is_some()
+            {
+                return Err(ImgQualityError::AnalysisError(
+                    "WebP ANMF: frame contains more than one VP8/VP8L bitstream".to_string(),
+                ));
+            }
+            pos = next;
+        }
+
+        codec.ok_or_else(|| {
+            ImgQualityError::AnalysisError(
+                "WebP ANMF: frame contains no VP8 or VP8L bitstream".to_string(),
+            )
+        })
+    }
+
+    fn animation_timing_ms(data: &[u8]) -> Result<Option<(u32, u64)>> {
+        let end = validated_webp_end(data)?;
+        let mut pos = 12;
+        let mut has_anim = false;
+        let mut frame_count = 0u32;
+        let mut total_ms = 0u64;
+
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
+            match &chunk.id {
+                b"ANIM" => {
+                    if chunk.payload.len() < 6 {
+                        return Err(ImgQualityError::AnalysisError(
+                            "WebP ANIM: payload is shorter than 6 bytes".to_string(),
+                        ));
+                    }
+                    has_anim = true;
+                }
+                b"ANMF" => {
+                    frame_codec(chunk.payload)?;
+                    frame_count = frame_count.checked_add(1).ok_or_else(|| {
+                        ImgQualityError::NumericError(
+                            "WebP animation frame count overflow".to_string(),
+                        )
+                    })?;
+                    let duration_ms = u32::from(chunk.payload[12])
+                        | (u32::from(chunk.payload[13]) << 8)
+                        | (u32::from(chunk.payload[14]) << 16);
+                    total_ms = total_ms
+                        .checked_add(u64::from(duration_ms))
+                        .ok_or_else(|| {
+                            ImgQualityError::NumericError(
+                                "WebP animation duration overflow".to_string(),
+                            )
+                        })?;
+                }
+                _ => {}
+            }
+            pos = next;
+        }
+
+        if frame_count == 0 {
+            return Ok(None);
+        }
+        if !has_anim {
+            return Err(ImgQualityError::AnalysisError(
+                "WebP animation contains ANMF frames without an ANIM chunk".to_string(),
+            ));
+        }
+        Ok(Some((frame_count, total_ms)))
+    }
+
+    /// Detect WebP animated compression by traversing all ANMF (animation
+    /// frame) chunks.
+    ///
+    /// WebP animation: RIFF header → VP8X → ANIM → ANMF* frames.
+    /// Each ANMF payload contains frame data starting with VP8/VP8L sub-chunk.
+    /// Any VP8 (lossy) frame → Lossy. All VP8L → Lossless.
+    /// Detect if a WebP animation is lossless.
+    ///
+    /// # Errors
+    /// Returns an error if the WebP stream is invalid or truncated.
+    pub fn detect_webp_animation_is_lossless(data: &[u8]) -> Result<bool> {
+        let end = validated_webp_end(data)?;
+        let mut pos = 12;
+        let mut found_any_frame = false;
+        let mut all_frames_lossless = true;
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
+            if chunk.id == *b"ANMF" {
+                found_any_frame = true;
+                if frame_codec(chunk.payload)? == FrameCodec::Lossy {
+                    all_frames_lossless = false;
+                }
+            }
+            pos = next;
+        }
+        if !found_any_frame {
+            return Err(ImgQualityError::AnalysisError(
+                "Animated WebP: no ANMF frames found".to_string(),
+            ));
+        }
+        Ok(all_frames_lossless)
+    }
+
+    /// Refuse to forge an encoder quality from a decoded WebP bitstream.
+    ///
+    /// # Errors
+    /// Returns an error if the format is unsupported, data is corrupted, or
+    /// bounds are violated.
+    pub fn estimate_quality_from_bytes(data: &[u8]) -> Result<u8> {
+        validated_webp_end(data)?;
+        Err(ImgQualityError::AnalysisError(
+            "WebP encoder quality is not stored as a recoverable container field; preserving it as unknown"
+                .to_string(),
+        ))
+    }
+
+    /// Estimate image quality for lossy formats.
+    ///
+    /// # Errors
+    /// Returns an error if detection is not possible for the format.
+    pub fn estimate_quality(path: &Path) -> Result<u8> {
+        let bytes = fs::read(path).map_err(crate::unified_error::UnifiedError::IoError)?;
+        estimate_quality_from_bytes(&bytes)
+    }
+
+    /// Determine whether a WebP bitstream is lossless (VP8L).
+    ///
+    /// Fail-closed: an unparseable RIFF structure or a stream with no
+    /// VP8/VP8L bitstream yields `Err` instead of a silent "lossy" guess —
+    /// callers must never re-encode a possibly-lossless file based on a
+    /// forged default. Static and animated streams are both covered.
+    ///
+    /// # Errors
+    /// Returns an error if the RIFF/WebP structure is invalid, truncated, or
+    /// carries no decodable VP8/VP8L bitstream.
+    pub fn is_lossless_from_bytes(data: &[u8]) -> Result<bool> {
+        let end = validated_webp_end(data)?;
+        if let Some(features) = ::webp::BitstreamFeatures::new(data) {
+            if features.has_animation() {
+                return detect_webp_animation_is_lossless(data);
+            }
+            if let Some(format) = features.format() {
+                match format {
+                    ::webp::BitstreamFormat::Lossless => return Ok(true),
+                    ::webp::BitstreamFormat::Lossy => return Ok(false),
+                    ::webp::BitstreamFormat::Undefined => {}
+                }
+            }
+        }
+        let mut pos = 12;
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
+            if chunk.id == *b"VP8L" {
+                return Ok(true);
+            }
+            if chunk.id == *b"VP8 " {
+                return Ok(false);
+            }
+            if chunk.id == *b"ANMF" {
+                return detect_webp_animation_is_lossless(data);
+            }
+            pos = next;
+        }
+        Err(ImgQualityError::AnalysisError(format!(
+            "WebP: no VP8/VP8L bitstream chunk found in {} bytes; cannot determine losslessness",
+            data.len()
+        )))
+    }
+
+    #[must_use]
+    pub fn is_animated_from_bytes(data: &[u8]) -> bool {
+        // Authoritative path: libwebp BitstreamFeatures.
+        // On parse failure (truncated/corrupted), conservative answer = not animated.
+        // The raw `data.windows(4).any(|w| w == b"ANIM")` scan was removed:
+        // it could false-positive on VP8/VP8L payload bytes that happen to spell "ANIM".
+        if let Some(features) = ::webp::BitstreamFeatures::new(data)
+            && features.has_animation()
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Canvas dimensions reported by the installed libwebp decoder.
+    #[must_use]
+    pub fn dimensions_from_bytes(data: &[u8]) -> Option<(u32, u32)> {
+        let features = ::webp::BitstreamFeatures::new(data)?;
+        let dimensions = (features.width(), features.height());
+        (dimensions.0 > 0 && dimensions.1 > 0).then_some(dimensions)
+    }
+
+    /// Read up to 1MiB and parse WebP canvas dimensions when ffprobe reports
+    /// 0×0.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be opened or read.
+    pub fn dimensions_from_path(path: &Path) -> std::io::Result<Option<(u32, u32)>> {
+        use std::io::Read;
+
+        const PREFIX: usize = 1024 * 1024;
+        let mut file = std::fs::File::open(path).map_err(|err| {
+            crate::media_conversion_gate::probe_layer_audit(
+                "webp_dimension_open_failed",
+                path,
+                format!("failed to open WebP for dimension probe: {err}"),
+            );
+            err
+        })?;
+        let mut buf = vec![0u8; PREFIX];
+        let n = file.read(&mut buf).map_err(|err| {
+            crate::media_conversion_gate::probe_layer_audit(
+                "webp_dimension_read_failed",
+                path,
+                format!("failed to read WebP for dimension probe: {err}"),
+            );
+            err
+        })?;
+        Ok(buf.get(..n).and_then(dimensions_from_bytes))
+    }
+
+    /// Canvas dimensions for animated/static WebP when ffprobe returns 0×0.
+    ///
+    /// Tries a 1MiB prefix first, then a full-file parse for Safari-style
+    /// exports where canvas size only appears in a late ANMF chunk.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be opened or read.
+    pub fn canvas_dimensions_from_path(path: &Path) -> std::io::Result<Option<(u32, u32)>> {
+        match dimensions_from_path(path) {
+            Ok(Some(v)) => Ok(Some(v)),
+            Ok(None) => {
+                let data = std::fs::read(path).map_err(|err| {
+                    crate::media_conversion_gate::probe_layer_audit(
+                        "webp_canvas_full_read_failed",
+                        path,
+                        format!("failed to read full WebP for canvas probe: {err}"),
+                    );
+                    err
+                })?;
+                Ok(dimensions_from_bytes(&data))
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Count ANMF animation frames using RIFF-aware chunk traversal.
+    ///
+    /// The previous implementation used `data.windows(4).filter(ANMF)` which
+    /// can false-positive on ANMF byte sequences inside VP8 payload data.
+    /// RIFF traversal follows chunk boundaries exactly.
+    ///
+    /// # Errors
+    /// Returns an error if a chunk size value overflows usize or data is
+    /// malformed.
+    pub fn count_frames_from_bytes(data: &[u8]) -> crate::unified_error::Result<u32> {
+        match animation_timing_ms(data)? {
+            Some((frame_count, _)) => Ok(frame_count),
+            None => Ok(0),
+        }
+    }
+
+    /// Parse animated WebP RIFF/ANMF chunks and return total duration in
+    /// seconds.
+    ///
+    /// ANMF payload: 16-byte header, bytes 12..15 = frame duration in ms
+    /// (24-bit LE). Returns None if not animated WebP or no ANMF chunks
+    /// with valid durations.
+    /// # Errors
+    /// Returns an error if RIFF frame traversal fails.
+    pub fn duration_secs_from_bytes(data: &[u8]) -> crate::unified_error::Result<Option<f32>> {
+        let Some((_, total_ms)) = animation_timing_ms(data)? else {
+            return Ok(None);
+        };
+        if total_ms == 0 {
+            return Ok(None);
+        }
+        Ok(Some(crate::numeric_cast::f64_to_f32_lossy(
+            crate::numeric_cast::u64_to_f64(total_ms) / crate::constants::MS_PER_SEC_F64,
+        )))
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct WebpTimingStats {
+        pub frame_count: u32,
+        pub duration_secs: f64,
+        pub fps: f64,
+    }
+
+    /// Aggregate animation timing from ANMF frame delays (same source as
+    /// [`duration_secs_from_bytes`]).
+    ///
+    /// # Errors
+    /// Returns an error if RIFF frame traversal fails.
+    pub fn timing_stats_from_bytes(
+        data: &[u8],
+    ) -> crate::unified_error::Result<Option<WebpTimingStats>> {
+        let Some((frame_count, total_ms)) = animation_timing_ms(data)? else {
+            return Ok(None);
+        };
+        if frame_count <= 1 || total_ms == 0 {
+            return Ok(None);
+        }
+        let duration_secs =
+            crate::numeric_cast::u64_to_f64(total_ms) / crate::constants::MS_PER_SEC_F64;
+        if !duration_secs.is_finite() || duration_secs <= 0.0_f64 {
+            return Ok(None);
+        }
+        let fps = f64::from(frame_count) / duration_secs;
+        if !fps.is_finite() || fps <= 0.0_f64 {
+            return Ok(None);
+        }
+        Ok(Some(WebpTimingStats {
+            frame_count,
+            duration_secs,
+            fps,
+        }))
+    }
+
+    /// Detects if a WebP file is lossless by reading it from disk.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read or if the WebP stream is
+    /// invalid, truncated, or carries no VP8/VP8L bitstream (fail-closed; no
+    /// silent "lossy" default).
+    pub fn is_lossless(path: &Path) -> Result<bool> {
+        let b = fs::read(path)?;
+        is_lossless_from_bytes(&b)
+    }
+
+    /// Detects if a WebP file is animated by reading it from disk.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read or if the WebP header is
+    /// corrupted.
+    pub fn is_animated(path: &Path) -> Result<bool> {
+        let b = fs::read(path)?;
+        Ok(is_animated_from_bytes(&b))
+    }
+
+    pub(super) fn archival_feature_hash_from_bytes(data: &[u8]) -> Result<String> {
+        let end = validated_webp_end(data)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut pos = 12;
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "archival proof")?;
+            // ExifTool may add VP8X solely to advertise a new XMP chunk. Its
+            // dimensions and feature flags are independently covered by the
+            // outer proof and by the referenced ICCP/ALPH/EXIF/ANIM chunks.
+            if !matches!(&chunk.id, b"XMP " | b"VP8X") {
+                hasher.update(&chunk.id);
+                let payload_len = u64::try_from(chunk.payload.len()).map_err(|_| {
+                    ImgQualityError::NumericError(
+                        "WebP archival chunk length does not fit u64".to_string(),
+                    )
+                })?;
+                hasher.update(&payload_len.to_le_bytes());
+                hasher.update(chunk.payload);
+            }
+            pos = next;
+        }
+        // Bytes outside the declared RIFF extent are not metadata and must not
+        // disappear during an XMP-only rewrite.
+        hasher.update(&data[end..]);
+        Ok(hasher.finalize().to_hex().to_string())
+    }
+
+    /// Fingerprint every WebP chunk except mutable XMP and its VP8X directory.
+    ///
+    /// Codec, ICC, alpha, EXIF, animation and unknown chunks remain byte-covered;
+    /// the outer proof covers dimensions, frame count and decoded image data.
+    ///
+    /// # Errors
+    /// Returns an error for malformed RIFF structure or unreadable input.
+    pub fn archival_feature_hash(path: &Path) -> Result<String> {
+        archival_feature_hash_from_bytes(&fs::read(path)?)
+    }
+
+    /// Minimal animated WebP with two ANMF frames (100 ms + 200 ms) for unit
+    /// tests only.
+    #[cfg(test)]
+    pub(crate) fn synthetic_two_frame_animated_webp_for_test() -> Vec<u8> {
+        fn anmf_chunk(duration_ms: u32) -> Vec<u8> {
+            let mut payload = vec![0u8; 16];
+            payload[12] = crate::numeric_cast::u32_shifted_byte_to_u8(duration_ms, 0);
+            payload[13] = crate::numeric_cast::u32_shifted_byte_to_u8(duration_ms, 8);
+            payload[14] = crate::numeric_cast::u32_shifted_byte_to_u8(duration_ms, 16);
+            payload.extend_from_slice(b"VP8L\x00\x00\x00\x00");
+            let size = u32::try_from(payload.len()).expect("test anmf payload fits u32");
+            let mut chunk = b"ANMF".to_vec();
+            chunk.extend_from_slice(&size.to_le_bytes());
+            chunk.extend(payload);
+            if !chunk.len().is_multiple_of(2) {
+                chunk.push(0);
+            }
+            chunk
+        }
+
+        let vp8x = [
+            b'V', b'P', b'8', b'X', 10, 0, 0, 0, 0x02, 0, 0, 0, 99, 0, 0, 79, 0, 0,
+        ];
+        let anim = [b'A', b'N', b'I', b'M', 6, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut body = Vec::new();
+        body.extend_from_slice(&vp8x);
+        body.extend_from_slice(&anim);
+        body.extend(anmf_chunk(100));
+        body.extend(anmf_chunk(200));
+
+        let riff_size = u32::try_from(body.len() + 4).expect("test webp body fits u32");
+        let mut out = vec![b'R', b'I', b'F', b'F'];
+        out.extend_from_slice(&riff_size.to_le_bytes());
+        out.extend_from_slice(b"WEBP");
+        out.extend(body);
+        out
+    }
+}
+
+pub mod gif {
+    use crate::unified_error::{ImgQualityError, Result};
+    use std::fs;
+    use std::path::Path;
+
+    const C2PA_EXTENSION: &[u8] = b"\x21\xFF\x0BC2PA_GIF\x01\x00\x00";
+
+    /// Return whether a GIF carries the C2PA application extension defined by
+    /// the C2PA asset-format specification.
+    pub(crate) fn has_c2pa_application_extension(data: &[u8]) -> Result<bool> {
+        if !matches!(data.get(..6), Some(b"GIF87a" | b"GIF89a")) {
+            return Err(ImgQualityError::AnalysisError(
+                "GIF: invalid or truncated signature while probing C2PA".to_string(),
+            ));
+        }
+        Ok(data
+            .windows(C2PA_EXTENSION.len())
+            .any(|window| window == C2PA_EXTENSION))
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct GifTimingStats {
+        pub frame_count: u32,
+        pub duration_secs: f64,
+        pub average_delay_ms: f64,
+        pub frame_delay_variation: f64,
+        pub fps: f64,
+    }
+
+    /// Count GIF frames from raw bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the GIF is malformed or decoding fails.
+    pub fn count_frames_from_bytes(data: &[u8]) -> crate::unified_error::Result<u32> {
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::Indexed);
+
+        let mut decoder = options.read_info(data).map_err(|err| {
+            ImgQualityError::ResultAnomaly(format!("Failed to decode GIF frame stream: {err}"))
+        })?;
+
+        let mut count = 0u32;
+        loop {
+            match decoder.read_next_frame() {
+                Ok(Some(_)) => count = count.saturating_add(1),
+                Ok(None) => break,
+                Err(err) => {
+                    return Err(ImgQualityError::ResultAnomaly(format!(
+                        "Failed to decode GIF frame during frame count: {err}"
+                    )));
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
+    /// Parse GIF frame delays from raw bytes and return aggregate timing
+    /// statistics.
+    ///
+    /// # Errors
+    /// Returns an error if GIF decoding fails.
+    pub fn timing_stats_from_bytes(
+        data: &[u8],
+    ) -> crate::unified_error::Result<Option<GifTimingStats>> {
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::Indexed);
+
+        let mut decoder = options.read_info(data).map_err(|err| {
+            ImgQualityError::ResultAnomaly(format!("Failed to decode GIF timing stream: {err}"))
+        })?;
+        let mut delays_secs = Vec::new();
+
+        loop {
+            match decoder.read_next_frame() {
+                Ok(Some(frame)) => {
+                    delays_secs.push(
+                        crate::numeric_cast::u64_to_f64(u64::from(frame.delay))
+                            / crate::constants::CENTISECS_PER_SEC_F64,
+                    );
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    return Err(ImgQualityError::ResultAnomaly(format!(
+                        "Failed to decode GIF frame during timing parse: {err}"
+                    )));
+                }
+            }
+        }
+
+        let frame_count = u32::try_from(delays_secs.len()).map_err(|err| {
+            ImgQualityError::NumericError(format!("GIF timing frame count overflow: {err}"))
+        })?;
+        if frame_count == 0 {
+            return Ok(None);
+        }
+
+        let duration_secs = delays_secs.iter().sum::<f64>();
+        if !duration_secs.is_finite() || duration_secs <= 0.0_f64 {
+            return Ok(None);
+        }
+
+        let mean_secs = duration_secs / f64::from(frame_count);
+        if !mean_secs.is_finite() || mean_secs <= f64::EPSILON {
+            return Ok(None);
+        }
+
+        let variance = delays_secs
+            .iter()
+            .map(|delay| (delay - mean_secs).powi(2))
+            .sum::<f64>()
+            / f64::from(frame_count);
+        let std_dev = variance.sqrt();
+        let fps = f64::from(frame_count) / duration_secs;
+        if !fps.is_finite() || fps <= 0.0_f64 {
+            return Ok(None);
+        }
+
+        Ok(Some(GifTimingStats {
+            frame_count,
+            duration_secs,
+            average_delay_ms: mean_secs * crate::constants::MS_PER_SEC_F64,
+            frame_delay_variation: (std_dev / mean_secs).clamp(0.0, 1.0),
+            fps,
+        }))
+    }
+
+    /// Parse GIF Graphic Control Extension (GCE) blocks and return total
+    /// duration in seconds. Returns None if no GCE blocks found or data is
+    /// truncated. # Errors
+    /// Returns an error if GIF timing parsing fails.
+    pub fn duration_secs_from_bytes(data: &[u8]) -> crate::unified_error::Result<Option<f32>> {
+        Ok(timing_stats_from_bytes(data)?
+            .map(|stats| crate::numeric_cast::f64_to_f32_lossy(stats.duration_secs)))
+    }
+
+    /// # Errors
+    /// Returns an error if the file cannot be read or GIF timing parsing fails.
+    pub fn get_duration_secs(path: &Path) -> crate::unified_error::Result<Option<f32>> {
+        let b = fs::read(path)?;
+        duration_secs_from_bytes(&b)
+    }
+
+    /// # Errors
+    /// Returns an error if the file cannot be read or GIF timing parsing fails.
+    pub fn get_timing_stats(path: &Path) -> crate::unified_error::Result<Option<GifTimingStats>> {
+        let b = fs::read(path)?;
+        timing_stats_from_bytes(&b)
+    }
+
+    /// # Errors
+    /// Returns an error if the animation detection fails due to invalid data.
+    pub fn is_animated_from_bytes(data: &[u8]) -> crate::unified_error::Result<bool> {
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::Indexed);
+        let mut decoder = options.read_info(data).map_err(|err| {
+            ImgQualityError::ResultAnomaly(format!("Failed to decode GIF animation stream: {err}"))
+        })?;
+
+        let has_first_frame = decoder
+            .read_next_frame()
+            .map_err(|err| {
+                ImgQualityError::ResultAnomaly(format!(
+                    "Failed to decode GIF frame during animation detection: {err}"
+                ))
+            })?
+            .is_some();
+        if !has_first_frame {
+            return Ok(false);
+        }
+
+        Ok(decoder
+            .read_next_frame()
+            .map_err(|err| {
+                ImgQualityError::ResultAnomaly(format!(
+                    "Failed to decode GIF frame during animation detection: {err}"
+                ))
+            })?
+            .is_some())
+    }
+
+    /// # Errors
+    /// Returns an error if the file cannot be read or animation detection
+    /// fails.
+    pub fn is_animated(path: &Path) -> crate::unified_error::Result<bool> {
+        let b = fs::read(path)?;
+        is_animated_from_bytes(&b)
+    }
+
+    /// # Errors
+    /// Returns an error if the file cannot be read or frame count detection
+    /// fails.
+    pub fn get_frame_count(path: &Path) -> crate::unified_error::Result<usize> {
+        let b = fs::read(path)?;
+        let count = count_frames_from_bytes(&b)?;
+        crate::numeric_cast::u32_to_usize_strict(count, "gif_frame_count")
+            .ok_or_else(|| ImgQualityError::NumericError("GIF frame count overflow".to_string()))
+    }
+}
+
+pub mod avif {
+    use crate::common_utils::find_all_box_data_recursive;
+    use crate::unified_error::{ImgQualityError, Result};
+    use std::fs;
+    use std::path::Path;
+
+    /// Classify AVIF compression from container/codec evidence.
+    ///
+    /// Evidence rules (positive proof only):
+    /// - `av1C` chroma subsampling 4:2:0 / 4:2:2 → `Lossy`. Subsampling
+    ///   discards chroma information; that is positive evidence of loss
+    ///   regardless of how the AV1 bitstream itself is coded.
+    /// - 4:4:4 (and monochrome without subsampling flags) → `Unknown`.
+    ///   Pixel-format properties — 4:4:4, 8/10/12-bit depth, identity `colr`
+    ///   matrix, `pixi` depths — describe the pixel format, not AV1
+    ///   quantization. A 4:4:4 12-bit AVIF can still be lossy, and a true
+    ///   lossless AVIF carries no container-level proof. The AV1 frame-level
+    ///   `coded_lossless` derivation is not recoverable from `av1C`, so
+    ///   compression semantics stay unproven.
+    ///
+    /// # Errors
+    /// Returns an error if no `av1C` box exists (malformed still AVIF) or the
+    /// box walker cannot parse the container.
+    pub fn classify_compression(
+        data: &[u8],
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
+        use crate::image_detection::CompressionType;
+
+        let av1c_boxes = find_all_box_data_recursive(data, *b"av1C");
+        if av1c_boxes.is_empty() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "AVIF: no av1C configuration box found; cannot determine compression — {}",
+                path.display()
+            )));
+        }
+
+        // AVIF may carry several AV1 item-property configurations (primary,
+        // alpha, thumbnails). A single lossy auxiliary item does not prove the
+        // primary image lossy, so every av1C record must independently carry
+        // positive subsampling evidence before this destructive-route probe
+        // returns Lossy.
+        for av1c_data in av1c_boxes {
+            if av1c_data.len() < 3 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "AVIF: av1C box is {} bytes (minimum 3 required); cannot determine compression — {}",
+                    av1c_data.len(),
+                    path.display()
+                )));
+            }
+            if av1c_data[0] != 0x81 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "AVIF: invalid av1C marker/version byte 0x{:02x}; cannot determine compression — {}",
+                    av1c_data[0],
+                    path.display()
+                )));
+            }
+
+            let byte2 = av1c_data[2];
+            let chroma_subsampling_x = (byte2 >> 3) & 0x01;
+            let chroma_subsampling_y = (byte2 >> 2) & 0x01;
+            let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
+            let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
+
+            if !is_420 && !is_422 {
+                // 4:4:4/monochrome is ambiguous. The reserved x=0,y=1
+                // combination is invalid rather than positive lossy evidence.
+                return Ok(CompressionType::Unknown);
+            }
+        }
+
+        Ok(CompressionType::Lossy)
+    }
+
+    /// Classifies the compression of an AVIF file on disk.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read, or if the AVIF container
+    /// is missing the `av1C` configuration box.
+    pub fn classify_compression_from_path(
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
+        let b = fs::read(path)?;
+        classify_compression(&b, path)
+    }
+}
+
+pub mod jxl {
+    use crate::common_utils::find_any_box_recursive;
+    use crate::unified_error::{ImgQualityError, Result};
+    use std::fs;
+    use std::path::Path;
+
+    /// Classify JXL compression from codestream evidence.
+    ///
+    /// Evidence rules (positive proof only):
+    /// - `jbrd` box → `JpegReconstruction`: the container stores the original
+    ///   JPEG bitstream for bit-exact reconstruction. Its own semantics — not
+    ///   plain `Lossless`.
+    /// - `xyb_encoded` (XYB color transform, `VarDCT` path) → `Lossy`. The XYB
+    ///   transform itself is not information-preserving.
+    /// - Any `VarDCT` frame with `xyb_encoded == false` → `Lossy` (`VarDCT`
+    ///   quantizes DCT coefficients).
+    /// - All-`Modular` with `xyb_encoded == false` → `Unknown`. `Modular` mode
+    ///   covers both true lossless and `Modular`-lossy (quantized modular
+    ///   streams); the available parsers expose no field that separates them,
+    ///   so compression semantics stay unproven instead of guessed.
+    ///
+    /// # Errors
+    /// Returns an error if the data is too short or jxl-oxide cannot parse
+    /// the codestream (malformed/truncated).
+    pub fn classify_compression(
+        data: &[u8],
+        path: &Path,
+    ) -> Result<crate::image_detection::CompressionType> {
+        use crate::image_detection::CompressionType;
+        use std::io::Cursor;
+
+        if data.len() < 4 {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JXL: file too short — {}",
+                path.display()
+            )));
+        }
+
+        let is_naked = data.get(0..2) == Some(b"\xFF\x0A");
+
+        if !is_naked && find_any_box_recursive(data, *b"jbrd") {
+            return Ok(CompressionType::JpegReconstruction);
+        }
+
+        match ::jxl_oxide::JxlImage::builder().read(Cursor::new(data)) {
+            Ok(image) => {
+                if image.image_header().metadata.xyb_encoded {
+                    return Ok(CompressionType::Lossy);
+                }
+                // Include non-displayed frames (LF/reference-only): a single
+                // VarDCT frame anywhere in the codestream is lossy evidence.
+                for frame_index in 0..image.num_loaded_frames() {
+                    let Some(frame) = image.frame(frame_index) else {
+                        return Ok(CompressionType::Unknown);
+                    };
+                    if frame.header().encoding == ::jxl_oxide::frame::Encoding::VarDct {
+                        return Ok(CompressionType::Lossy);
+                    }
+                }
+                Ok(CompressionType::Unknown)
+            }
+            Err(e) => Err(ImgQualityError::AnalysisError(format!(
+                "JXL: jxl-oxide failed to parse — {} ({})",
+                path.display(),
+                e
+            ))),
+        }
+    }
+
+    /// Verifies if a file starts with a valid JXL codestream signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened or read.
+    pub fn verify_signature(path: &Path) -> std::io::Result<bool> {
+        use std::io::Read;
+        let mut file = fs::File::open(path)?;
+        let mut sig = [0u8; 2];
+        file.read_exact(&mut sig)?;
+        Ok(sig == [0xFF, 0x0A] || sig == [0x00, 0x00])
+    }
+
+    /// Verifies if a file starts with a valid JXL codestream signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened or read.
+    pub fn is_valid(path: &Path) -> std::io::Result<bool> {
+        verify_signature(path)
+    }
+}
+
+pub mod tiff_family {
+    use crate::unified_error::{ImgQualityError, Result};
+    use serde_json::Value;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::path::Path;
+    use std::process::Command;
+
+    const fn tiff_u16(bytes: [u8; 2], little_endian: bool) -> u16 {
+        if little_endian {
+            u16::from_le_bytes(bytes)
+        } else {
+            u16::from_be_bytes(bytes)
+        }
+    }
+
+    const fn tiff_u32(bytes: [u8; 4], little_endian: bool) -> u32 {
+        if little_endian {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        }
+    }
+
+    const fn tiff_u64(bytes: [u8; 8], little_endian: bool) -> u64 {
+        if little_endian {
+            u64::from_le_bytes(bytes)
+        } else {
+            u64::from_be_bytes(bytes)
+        }
+    }
+
+    fn read_tiff_u16(file: &mut std::fs::File, little_endian: bool) -> Result<u16> {
+        let mut bytes = [0_u8; 2];
+        file.read_exact(&mut bytes)?;
+        Ok(tiff_u16(bytes, little_endian))
+    }
+
+    fn read_tiff_u32(file: &mut std::fs::File, little_endian: bool) -> Result<u32> {
+        let mut bytes = [0_u8; 4];
+        file.read_exact(&mut bytes)?;
+        Ok(tiff_u32(bytes, little_endian))
+    }
+
+    fn read_tiff_u64(file: &mut std::fs::File, little_endian: bool) -> Result<u64> {
+        let mut bytes = [0_u8; 8];
+        file.read_exact(&mut bytes)?;
+        Ok(tiff_u64(bytes, little_endian))
+    }
+
+    /// Traverse the classic TIFF or `BigTIFF` main-IFD chain and report whether
+    /// it contains `wanted_tag`.
+    pub(crate) fn contains_ifd_tag(path: &Path, wanted_tag: u16) -> Result<bool> {
+        probe_ifds(path, Some(wanted_tag))
+    }
+
+    /// Whether TIFF requires original-container archival.
+    ///
+    /// Only a single gray/RGB raster with optional straight alpha is eligible.
+    /// Unknown/private image tags are retained, not guessed to be metadata.
+    pub fn requires_original_archive(path: &Path) -> Result<bool> {
+        probe_ifds(path, None)
+    }
+
+    // Some(tag) keeps the existing provenance/RAW lookup; None audits the
+    // primary raster contract using the same bounded TIFF/BigTIFF traversal.
+    fn probe_ifds(path: &Path, wanted_tag: Option<u16>) -> Result<bool> {
+        let mut file = std::fs::File::open(path)?;
+        let file_len = file.metadata()?.len();
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header)?;
+        let little_endian = match &header[..2] {
+            b"II" => true,
+            b"MM" => false,
+            _ => {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: invalid byte order while probing protected provenance".to_string(),
+                ));
+            }
+        };
+        let magic = tiff_u16([header[2], header[3]], little_endian);
+        let (big_tiff, mut ifd_offset) = match magic {
+            42 => (
+                false,
+                u64::from(tiff_u32(
+                    [header[4], header[5], header[6], header[7]],
+                    little_endian,
+                )),
+            ),
+            43 => {
+                if tiff_u16([header[4], header[5]], little_endian) != 8
+                    || tiff_u16([header[6], header[7]], little_endian) != 0
+                {
+                    return Err(ImgQualityError::AnalysisError(
+                        "BigTIFF: invalid offset-size header while probing protected provenance"
+                            .to_string(),
+                    ));
+                }
+                (true, read_tiff_u64(&mut file, little_endian)?)
+            }
+            _ => {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: invalid magic while probing protected provenance".to_string(),
+                ));
+            }
+        };
+
+        let (count_size, entry_size, next_size) = if big_tiff {
+            (8_u64, 20_u64, 8_u64)
+        } else {
+            (2_u64, 12_u64, 4_u64)
+        };
+        let mut visited = std::collections::HashSet::new();
+        let mut photometric = None;
+        let mut samples = 1;
+        let mut bits = vec![1];
+        let mut sample_format = vec![1];
+        let mut extra_samples = Vec::new();
+        while ifd_offset != 0 {
+            if !visited.insert(ifd_offset) || visited.len() > 4096 {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: cyclic or excessive IFD chain while probing protected provenance"
+                        .to_string(),
+                ));
+            }
+            if ifd_offset >= file_len {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: IFD offset is outside the file while probing protected provenance"
+                        .to_string(),
+                ));
+            }
+            if wanted_tag.is_none() && visited.len() > 1 {
+                return Ok(true);
+            }
+            file.seek(SeekFrom::Start(ifd_offset))?;
+            let entry_count = if big_tiff {
+                read_tiff_u64(&mut file, little_endian)?
+            } else {
+                u64::from(read_tiff_u16(&mut file, little_endian)?)
+            };
+            let table_size = entry_count
+                .checked_mul(entry_size)
+                .and_then(|size| size.checked_add(count_size))
+                .and_then(|size| size.checked_add(next_size))
+                .ok_or_else(|| {
+                    ImgQualityError::NumericError(
+                        "TIFF: IFD table size overflow while probing protected provenance"
+                            .to_string(),
+                    )
+                })?;
+            if ifd_offset
+                .checked_add(table_size)
+                .is_none_or(|end| end > file_len)
+            {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: truncated IFD while probing protected provenance".to_string(),
+                ));
+            }
+            let mut archive_tags = std::collections::HashSet::new();
+            for index in 0..entry_count {
+                let entry_offset = ifd_offset + count_size + index * entry_size;
+                file.seek(SeekFrom::Start(entry_offset))?;
+                let tag = read_tiff_u16(&mut file, little_endian)?;
+                if let Some(wanted) = wanted_tag {
+                    if tag == wanted {
+                        return Ok(true);
+                    }
+                    continue;
+                }
+                if !archive_tags.insert(tag) {
+                    return Err(ImgQualityError::AnalysisError(
+                        "TIFF: duplicate archive descriptor".into(),
+                    ));
+                }
+                match tag {
+                    258 | 262 | 277 | 297 | 338 | 339 => {
+                        let field_type = read_tiff_u16(&mut file, little_endian)?;
+                        let count = if big_tiff {
+                            read_tiff_u64(&mut file, little_endian)?
+                        } else {
+                            u64::from(read_tiff_u32(&mut file, little_endian)?)
+                        };
+                        if field_type != 3 || !(1..=4).contains(&count) {
+                            return Ok(true);
+                        }
+                        let inline_size = if big_tiff { 8 } else { 4 };
+                        if count * 2 > inline_size {
+                            let offset = if big_tiff {
+                                read_tiff_u64(&mut file, little_endian)?
+                            } else {
+                                u64::from(read_tiff_u32(&mut file, little_endian)?)
+                            };
+                            if offset
+                                .checked_add(count * 2)
+                                .is_none_or(|end| end > file_len)
+                            {
+                                return Err(ImgQualityError::AnalysisError(
+                                    "TIFF: sample descriptor outside file".into(),
+                                ));
+                            }
+                            file.seek(SeekFrom::Start(offset))?;
+                        }
+                        let values = (0..count)
+                            .map(|_| read_tiff_u16(&mut file, little_endian))
+                            .collect::<Result<Vec<_>>>()?;
+                        match tag {
+                            258 => bits = values,
+                            262 if count == 1 => photometric = Some(values[0]),
+                            277 if count == 1 => samples = values[0],
+                            297 if values == [0, 1] => {}
+                            338 => extra_samples = values,
+                            339 => sample_format = values,
+                            _ => return Ok(true),
+                        }
+                    }
+                    // Encoding/layout fields plus metadata copied and audited by
+                    // the existing delivery contract. SubIFDs, masks, CFA, spot
+                    // colors, GeoTIFF, Photoshop layers and unknown tags stay native.
+                    256
+                    | 257
+                    | 259
+                    | 266
+                    | 269..=274
+                    | 278
+                    | 279
+                    | 282..=284
+                    | 286
+                    | 287
+                    | 296
+                    | 305
+                    | 306
+                    | 315..=319
+                    | 322..=325
+                    | 340
+                    | 341
+                    | 700
+                    | 33432
+                    | 33723
+                    | 34665
+                    | 34675
+                    | 34853 => {}
+                    _ => return Ok(true),
+                }
+            }
+            let next_offset = ifd_offset + count_size + entry_count * entry_size;
+            file.seek(SeekFrom::Start(next_offset))?;
+            ifd_offset = if big_tiff {
+                read_tiff_u64(&mut file, little_endian)?
+            } else {
+                u64::from(read_tiff_u32(&mut file, little_endian)?)
+            };
+        }
+        if wanted_tag.is_some() {
+            return Ok(false);
+        }
+        let color_samples = match photometric {
+            Some(0 | 1) => 1,
+            Some(2) => 3,
+            _ => return Ok(true),
+        };
+        let has_alpha = samples == color_samples + 1 && extra_samples == [2];
+        let ordinary_channels = (samples == color_samples && extra_samples.is_empty()) || has_alpha;
+        let unsigned = sample_format.iter().all(|value| *value == 1)
+            && bits.iter().all(|value| matches!(value, 1 | 2 | 4 | 8 | 16));
+        let float32 =
+            sample_format.iter().all(|value| *value == 3) && bits.iter().all(|value| *value == 32);
+        Ok(visited.is_empty()
+            || !ordinary_channels
+            || !(unsigned || float32)
+            || !(bits.len() == 1 || bits.len() == usize::from(samples))
+            || !(sample_format.len() == 1 || sample_format.len() == usize::from(samples)))
+    }
+
+    /// Return whether a TIFF-family payload identifies itself as Digital Negative (DNG).
+    ///
+    /// DNG is a camera-RAW archive even when its filename carries an ordinary raster
+    /// extension, so callers must route it by the mandatory `DNGVersion` tag rather
+    /// than trusting the suffix.
+    pub fn is_dng_container(path: &Path) -> Result<bool> {
+        const DNG_VERSION_TAG: u16 = 0xC612;
+        contains_ifd_tag(path, DNG_VERSION_TAG)
+    }
+
+    /// Helper to parse array values or space-separated strings as the first u64
+    fn parse_first_u64(val: &Value) -> Result<u64> {
+        if let Some(n) = val.as_u64() {
+            return Ok(n);
+        }
+        if let Some(s) = val.as_str()
+            && let Some(num_str) = s.split_whitespace().next()
+        {
+            return num_str
+                .parse()
+                .map_err(|e| ImgQualityError::AnalysisError(format!("Failed to parse u64: {e}")));
+        }
+        if let Some(arr) = val.as_array()
+            && let Some(v) = arr.first()
+        {
+            if let Some(num) = v.as_u64() {
+                return Ok(num);
+            }
+            if let Some(s) = v.as_str() {
+                return s.parse().map_err(|e| {
+                    ImgQualityError::AnalysisError(format!("Failed to parse u64: {e}"))
+                });
+            }
+        }
+        Err(ImgQualityError::AnalysisError(
+            "Value is not a valid u64 or u64 string".into(),
+        ))
+    }
+
+    /// Detect if a TIFF-family file (TIFF, DNG) is lossless using `exiftool` to target the main image IFD.
+    pub fn is_lossless_tiff_family(path: &Path) -> Result<bool> {
+        let exiftool = crate::common_utils::resolve_tool_path("exiftool").ok_or_else(|| {
+            ImgQualityError::AnalysisError(
+                "exiftool was not found or failed its runtime health check".to_string(),
+            )
+        })?;
+        let output = Command::new(exiftool)
+            .arg("-n")
+            .arg("-j")
+            .arg("-G1")
+            .arg("-a")
+            .arg("-Compression")
+            .arg("-PhotometricInterpretation")
+            .arg("-SubfileType")
+            .arg("-ImageWidth")
+            .arg("-ImageHeight")
+            .arg("-StripOffsets")
+            .arg("-StripByteCounts")
+            .arg("-TileOffsets")
+            .arg("-TileByteCounts")
+            .arg(crate::path_safety::exiftool_path_arg(path).as_ref())
+            .output()
+            .map_err(|e| {
+                ImgQualityError::AnalysisError(format!("Failed to execute exiftool: {e}"))
+            })?;
+
+        if !output.status.success() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "exiftool failed with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        let parsed: Value = serde_json::from_str(&json_str).map_err(|e| {
+            ImgQualityError::AnalysisError(format!("Failed to parse exiftool JSON: {e}"))
+        })?;
+
+        let obj = parsed
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|val| val.as_object())
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError("Invalid exiftool JSON structure".into())
+            })?;
+
+        // Group ExifTool keys by their IFD namespace (e.g., IFD0, SubIFD)
+        let mut ifds: std::collections::HashMap<&str, std::collections::HashMap<&str, &Value>> =
+            std::collections::HashMap::new();
+
+        for (key, val) in obj {
+            if let Some((prefix, tag)) = key.split_once(':') {
+                ifds.entry(prefix).or_default().insert(tag, val);
+            }
+        }
+
+        let mut best_ifd = None;
+        let mut max_pixels = 0u64;
+
+        for tags in ifds.values() {
+            let photo_interp = tags
+                .get("PhotometricInterpretation")
+                .map(|v| parse_first_u64(v))
+                .transpose()?;
+            let is_raw = photo_interp == Some(32803) || photo_interp == Some(34892);
+
+            let subfile_type = tags
+                .get("SubfileType")
+                .map(|v| parse_first_u64(v))
+                .transpose()?;
+            let is_full_res = subfile_type == Some(0) || subfile_type.is_none();
+
+            if (is_raw || is_full_res)
+                && let (Some(w), Some(h)) = (
+                    tags.get("ImageWidth")
+                        .map(|v| parse_first_u64(v))
+                        .transpose()?,
+                    tags.get("ImageHeight")
+                        .map(|v| parse_first_u64(v))
+                        .transpose()?,
+                )
+            {
+                let pixels = w.saturating_mul(h);
+                if pixels >= max_pixels && w > 0 && h > 0 {
+                    max_pixels = pixels;
+                    best_ifd = Some(tags);
+                }
+            }
+        }
+
+        // Fallback: pick largest image if none match raw/full-res precisely
+        if best_ifd.is_none() {
+            for tags in ifds.values() {
+                if let (Some(w), Some(h)) = (
+                    tags.get("ImageWidth")
+                        .map(|v| parse_first_u64(v))
+                        .transpose()?,
+                    tags.get("ImageHeight")
+                        .map(|v| parse_first_u64(v))
+                        .transpose()?,
+                ) {
+                    let pixels = w.saturating_mul(h);
+                    if pixels > max_pixels && w > 0 && h > 0 {
+                        max_pixels = pixels;
+                        best_ifd = Some(tags);
+                    }
+                }
+            }
+        }
+
+        let main_ifd = best_ifd.ok_or_else(|| {
+            ImgQualityError::AnalysisError("Could not identify main raw IFD in DNG".into())
+        })?;
+
+        let is_raw_photo = main_ifd
+            .get("PhotometricInterpretation")
+            .map(|v| parse_first_u64(v))
+            .transpose()?
+            .is_some_and(|p| p == 32803 || p == 34892);
+
+        let compression = main_ifd
+            .get("Compression")
+            .map(|v| parse_first_u64(v))
+            .transpose()?
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError("TIFF main IFD missing Compression tag".into())
+            })?;
+
+        match compression {
+            // Lossless compressions (pixel-exact round-trip):
+            //   1  = Uncompressed
+            //   5  = LZW (lossless)
+            //   8  = Deflate/ZIP (lossless)
+            //  32773 = PackBits (lossless RLE)
+            1 | 5 | 8 | 32773 => Ok(true),
+            // Compression 7 is lossless Huffman JPEG in DNG (raw context),
+            // but standard lossy JPEG in normal TIFF files.
+            7 => Ok(is_raw_photo),
+            // Lossy compressions:
+            //   6     = Old-style JPEG (lossy)
+            //  34892  = Lossy JPEG in DNG
+            //  50001  = PIXARLOG — log-quantized, NOT pixel-exact
+            //  34676  = SGILog — log-encoded, lossy
+            //  34677  = SGILog24 — log-encoded, lossy
+            6 | 34892 | 50001 | 34676 | 34677 => Ok(false),
+            52546 => {
+                // JPEG XL
+                let offset_val = match main_ifd.get("StripOffsets") {
+                    Some(v) => Some(v),
+                    None => main_ifd.get("TileOffsets"),
+                };
+                let offset = offset_val
+                    .map(|v| parse_first_u64(v))
+                    .transpose()?
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "DNG with JPEG XL missing StripOffsets/TileOffsets".into(),
+                        )
+                    })?;
+
+                let length_val = match main_ifd.get("StripByteCounts") {
+                    Some(v) => Some(v),
+                    None => main_ifd.get("TileByteCounts"),
+                };
+                let length = length_val
+                    .map(|v| parse_first_u64(v))
+                    .transpose()?
+                    .ok_or_else(|| {
+                        ImgQualityError::AnalysisError(
+                            "DNG with JPEG XL missing StripByteCounts/TileByteCounts".into(),
+                        )
+                    })?;
+
+                let mut f = std::fs::File::open(path)?;
+                f.seek(SeekFrom::Start(offset))?;
+
+                let safe_length = std::cmp::min(length, 10 * 1024 * 1024); // max 10MB to read header
+                let buffer_size =
+                    crate::numeric_cast::u64_to_usize_strict(safe_length, "jxl_buffer_size")
+                        .ok_or_else(|| {
+                            ImgQualityError::AnalysisError("JXL buffer size overflow".to_string())
+                        })?;
+                let mut buffer = vec![0u8; buffer_size];
+                let bytes_read = f.read(&mut buffer)?;
+                buffer.truncate(bytes_read);
+
+                match crate::image_formats::jxl::classify_compression(&buffer, path)? {
+                    // A reversible (jbrd) or proven-lossless embedded codestream
+                    // keeps the TIFF strip pixel-exact.
+                    crate::image_detection::CompressionType::Lossless
+                    | crate::image_detection::CompressionType::JpegReconstruction => Ok(true),
+                    crate::image_detection::CompressionType::Lossy => Ok(false),
+                    // Modular-but-unproven embedded JXL: refuse to fabricate a
+                    // TIFF lossless/lossy verdict from unproven semantics.
+                    crate::image_detection::CompressionType::Unknown => {
+                        Err(ImgQualityError::AnalysisError(format!(
+                            "TIFF-embedded JPEG XL compression semantics unproven — {}",
+                            path.display()
+                        )))
+                    }
+                }
+            }
+            _ => {
+                // Conservative fallback for unknown compressions
+                Ok(false)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_webp_lossless_detection() {
+        let webp_lossless = b"RIFF\x12\x00\x00\x00WEBPVP8L\x05\x00\x00\x00\x2f\x00\x00\x00\x00\x00";
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(webp_lossless)
+            .unwrap_or_else(|_| panic!("Failed to write to file"));
+
+        assert!(
+            webp::is_lossless(file.path()).expect("VP8L lossless probe should parse"),
+            "VP8L chunk should be detected as lossless"
+        );
+    }
+
+    #[test]
+    fn test_webp_lossy_detection() {
+        let webp_lossy = b"RIFF\x0c\x00\x00\x00WEBPVP8 \x00\x00\x00\x00";
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(webp_lossy)
+            .unwrap_or_else(|_| panic!("Failed to write to file"));
+
+        assert!(
+            !webp::is_lossless(file.path()).expect("VP8 lossy probe should parse"),
+            "VP8 chunk should be detected as lossy"
+        );
+    }
+
+    #[test]
+    fn webp_archival_hash_allows_xmp_overlay_but_covers_unknown_chunks() {
+        fn webp(chunks: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
+            let mut body = Vec::new();
+            for (kind, payload) in chunks {
+                body.extend_from_slice(*kind);
+                body.extend_from_slice(
+                    &u32::try_from(payload.len())
+                        .expect("test WebP payload fits u32")
+                        .to_le_bytes(),
+                );
+                body.extend_from_slice(payload);
+                if !payload.len().is_multiple_of(2) {
+                    body.push(0);
+                }
+            }
+            let mut bytes = b"RIFF".to_vec();
+            bytes.extend_from_slice(
+                &u32::try_from(body.len() + 4)
+                    .expect("test WebP body fits u32")
+                    .to_le_bytes(),
+            );
+            bytes.extend_from_slice(b"WEBP");
+            bytes.extend(body);
+            bytes
+        }
+
+        let before = webp(&[(b"VP8L", b"codec"), (b"UNKN", b"archive")]);
+        let after = webp(&[
+            (b"VP8X", &[0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            (b"VP8L", b"codec"),
+            (b"UNKN", b"archive"),
+            (b"XMP ", b"sidecar"),
+        ]);
+        assert_eq!(
+            webp::archival_feature_hash_from_bytes(&before).unwrap(),
+            webp::archival_feature_hash_from_bytes(&after).unwrap()
+        );
+
+        let changed = webp(&[(b"VP8L", b"codec"), (b"UNKN", b"changed")]);
+        assert_ne!(
+            webp::archival_feature_hash_from_bytes(&before).unwrap(),
+            webp::archival_feature_hash_from_bytes(&changed).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_webp_lossless_probe_fails_closed_on_truncated_riff() {
+        // RIFF size declares 0x99 bytes but the payload stops after "WEBP":
+        // structurally invalid → Err, never a silent "lossy" verdict.
+        let truncated = b"RIFF\x99\x00\x00\x00WEBP";
+        let err =
+            webp::is_lossless_from_bytes(truncated).expect_err("truncated RIFF must fail closed");
+        assert!(
+            err.to_string().contains("RIFF"),
+            "error should name the RIFF structure problem: {err}"
+        );
+    }
+
+    #[test]
+    fn test_webp_lossless_probe_fails_closed_without_vp8_bitstream() {
+        // Valid RIFF structure carrying only an unknown chunk: no VP8/VP8L
+        // bitstream → inconclusive → Err instead of guessing lossy.
+        let mut data = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
+        let body = b"XXXX\x04\x00\x00\x00junk";
+        let riff_size = u32::try_from(body.len() + 4).unwrap();
+        data[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        data.extend_from_slice(body);
+
+        let err =
+            webp::is_lossless_from_bytes(&data).expect_err("bitstream-less WebP must fail closed");
+        assert!(
+            err.to_string().contains("no VP8/VP8L"),
+            "error should state the missing bitstream: {err}"
+        );
+    }
+
+    #[test]
+    fn test_webp_animated_lossless_probe_uses_frame_codecs() {
+        // All-VP8L animation frames → lossless animation (positive evidence).
+        let animated = webp::synthetic_two_frame_animated_webp_for_test();
+        assert!(
+            webp::detect_webp_animation_is_lossless(&animated).expect("VP8L animation must parse"),
+            "all-VP8L ANMF frames must classify as lossless animation"
+        );
+        assert!(
+            webp::is_lossless_from_bytes(&animated).expect("VP8L animation must parse"),
+            "lossless animation routes through the same positive evidence"
+        );
+    }
+
+    #[test]
+    fn test_webp_animated_lossy_probe_detects_vp8_frame() {
+        // One VP8 (lossy) frame in an otherwise VP8L animation → lossy.
+        let mut animated = webp::synthetic_two_frame_animated_webp_for_test();
+        // Replace the first VP8L sub-chunk marker inside the first ANMF
+        // payload with VP8 (lossy). Locate "VP8L" after the ANMF header.
+        let Some(idx) = animated.windows(4).position(|window| window == b"VP8L") else {
+            panic!("synthetic animation must contain a VP8L sub-chunk");
+        };
+        animated[idx + 3] = b' ';
+
+        assert!(
+            !webp::detect_webp_animation_is_lossless(&animated)
+                .expect("mixed-codec animation must parse"),
+            "any VP8 frame makes the animation lossy"
+        );
+    }
+
+    #[test]
+    fn test_webp_detect_compression_classifies_mixed_animation_as_lossy() {
+        let mut animated = webp::synthetic_two_frame_animated_webp_for_test();
+        let Some(idx) = animated.windows(4).position(|window| window == b"VP8L") else {
+            panic!("synthetic animation must contain a VP8L sub-chunk");
+        };
+        animated[idx + 3] = b' ';
+
+        let mut file = NamedTempFile::new().expect("temporary WebP file");
+        file.write_all(&animated).expect("write synthetic WebP");
+        assert_eq!(
+            crate::image_detection::detect_compression(
+                &crate::image_detection::DetectedFormat::WebP,
+                file.path(),
+            )
+            .expect("mixed-codec WebP animation must parse"),
+            crate::image_detection::CompressionType::Lossy,
+            "detect_compression must inspect every ANMF frame, not only the first codec",
+        );
+    }
+
+    #[test]
+    fn test_jxl_jbrd_container_classifies_as_jpeg_reconstruction() {
+        // JXL container signature box + jbrd box: reversible-to-JPEG semantics.
+        let mut data = Vec::new();
+        data.extend_from_slice(&[
+            0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A,
+        ]);
+        let jbrd_payload = [0u8; 4];
+        let size = u32::try_from(jbrd_payload.len() + 8).expect("jbrd size fits u32");
+        data.extend_from_slice(&size.to_be_bytes());
+        data.extend_from_slice(b"jbrd");
+        data.extend_from_slice(&jbrd_payload);
+
+        assert_eq!(
+            jxl::classify_compression(&data, std::path::Path::new("jbrd.jxl"))
+                .expect("jbrd container must parse"),
+            crate::image_detection::CompressionType::JpegReconstruction,
+            "jbrd must keep its own reconstruction semantics, not plain lossless"
+        );
+    }
+
+    #[test]
+    fn tiff_archive_gate_distinguishes_samples_and_directory_topology() {
+        for big in [false, true] {
+            for little in [false, true] {
+                let short = |value: u16| {
+                    if little {
+                        value.to_le_bytes()
+                    } else {
+                        value.to_be_bytes()
+                    }
+                };
+                let long = |value: u32| {
+                    if little {
+                        value.to_le_bytes()
+                    } else {
+                        value.to_be_bytes()
+                    }
+                };
+                let long8 = |value: u64| {
+                    if little {
+                        value.to_le_bytes()
+                    } else {
+                        value.to_be_bytes()
+                    }
+                };
+                let fixture = |tags: &[(u16, u16)], next: bool| {
+                    let mut bytes = if little {
+                        b"II".to_vec()
+                    } else {
+                        b"MM".to_vec()
+                    };
+                    bytes.extend(short(if big { 43 } else { 42 }));
+                    if big {
+                        bytes.extend(short(8));
+                        bytes.extend(short(0));
+                        bytes.extend(long8(16));
+                        bytes.extend(long8(u64::try_from(tags.len()).unwrap()));
+                    } else {
+                        bytes.extend(long(8));
+                        bytes.extend(short(u16::try_from(tags.len()).unwrap()));
+                    }
+                    for (tag, value) in tags {
+                        bytes.extend(short(*tag));
+                        bytes.extend(short(3));
+                        if big {
+                            bytes.extend(long8(1));
+                        } else {
+                            bytes.extend(long(1));
+                        }
+                        bytes.extend(short(*value));
+                        bytes.extend(vec![0; if big { 6 } else { 2 }]);
+                    }
+                    if big {
+                        bytes.extend(long8(if next { 16 } else { 0 }));
+                    } else {
+                        bytes.extend(long(if next { 8 } else { 0 }));
+                    }
+                    bytes
+                };
+                let base = [(258, 16), (262, 2), (277, 3), (339, 1)];
+                let mut file = NamedTempFile::new().unwrap();
+                file.write_all(&fixture(&base, false)).unwrap();
+                assert!(!tiff_family::requires_original_archive(file.path()).unwrap());
+                for (tag, value) in [(262, 5), (339, 2), (330, 8), (65000, 1), (52545, 1)] {
+                    let mut tags = base.to_vec();
+                    tags.retain(|(existing, _)| *existing != tag);
+                    tags.push((tag, value));
+                    std::fs::write(file.path(), fixture(&tags, false)).unwrap();
+                    assert!(
+                        tiff_family::requires_original_archive(file.path()).unwrap(),
+                        "tag={tag} value={value}"
+                    );
+                }
+                for extra in [0, 1, 2] {
+                    let tags = [(258, 16), (262, 2), (277, 4), (338, extra), (339, 1)];
+                    std::fs::write(file.path(), fixture(&tags, false)).unwrap();
+                    assert_eq!(
+                        tiff_family::requires_original_archive(file.path()).unwrap(),
+                        extra != 2
+                    );
+                }
+                std::fs::write(file.path(), fixture(&base, true)).unwrap();
+                assert!(tiff_family::requires_original_archive(file.path()).is_err());
+                let mut truncated = fixture(&base, false);
+                truncated.pop();
+                std::fs::write(file.path(), truncated).unwrap();
+                assert!(tiff_family::requires_original_archive(file.path()).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn test_jxl_truncated_codestream_fails_closed() {
+        let error =
+            jxl::classify_compression(&[0xFF, 0x0A, 0x00], std::path::Path::new("truncated.jxl"))
+                .expect_err("truncated JXL codestream must not fabricate a verdict");
+        assert!(
+            error.to_string().contains("jxl-oxide failed")
+                || error.to_string().contains("too short"),
+            "error should name the parse failure: {error}"
+        );
+    }
+
+    #[test]
+    fn test_gif_frame_count() {
+        let mut gif_data = Vec::new();
+        {
+            let mut encoder =
+                ::gif::Encoder::new(&mut gif_data, 1, 1, &[0, 0, 0, 255, 255, 255]).unwrap();
+            let frame1 = ::gif::Frame {
+                delay: 10,
+                width: 1,
+                height: 1,
+                buffer: std::borrow::Cow::Borrowed(&[0]),
+                ..Default::default()
+            };
+            encoder.write_frame(&frame1).unwrap();
+            let frame2 = ::gif::Frame {
+                delay: 10,
+                width: 1,
+                height: 1,
+                buffer: std::borrow::Cow::Borrowed(&[1]),
+                ..Default::default()
+            };
+            encoder.write_frame(&frame2).unwrap();
+        }
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temp file"));
+        file.write_all(&gif_data)
+            .unwrap_or_else(|_| panic!("Failed to write"));
+
+        let count = gif::get_frame_count(file.path()).unwrap();
+        assert_eq!(count, 2, "Expected 2 frames, got: {count}");
+        assert!(
+            gif::is_animated(file.path()).unwrap(),
+            "2-frame GIF should be detected as animated"
+        );
+    }
+
+    #[test]
+    fn test_gif_timing_stats() {
+        let mut gif_data = Vec::new();
+        {
+            let mut encoder =
+                ::gif::Encoder::new(&mut gif_data, 1, 1, &[0, 0, 0, 255, 255, 255]).unwrap();
+            let frame1 = ::gif::Frame {
+                delay: 10,
+                width: 1,
+                height: 1,
+                buffer: std::borrow::Cow::Borrowed(&[0]),
+                ..Default::default()
+            };
+            let frame2 = ::gif::Frame {
+                delay: 20,
+                width: 1,
+                height: 1,
+                buffer: std::borrow::Cow::Borrowed(&[1]),
+                ..Default::default()
+            };
+            encoder.write_frame(&frame1).unwrap();
+            encoder.write_frame(&frame2).unwrap();
+        }
+
+        let stats = gif::timing_stats_from_bytes(&gif_data)
+            .expect("timing stats should parse")
+            .expect("animated GIF timing stats");
+        assert_eq!(stats.frame_count, 2);
+        assert!((stats.duration_secs - 0.3).abs() < 1.0e-6);
+        assert!((stats.average_delay_ms - 150.0).abs() < 1.0e-6);
+        assert!((stats.fps - (2.0 / 0.3)).abs() < 1.0e-6);
+        assert!(stats.frame_delay_variation > 0.0);
+    }
+
+    #[test]
+    fn webp_timing_stats_from_anmf_frame_delays() {
+        let data = webp::synthetic_two_frame_animated_webp_for_test();
+        let stats = webp::timing_stats_from_bytes(&data)
+            .expect("animated WebP timing probe")
+            .expect("animated WebP timing");
+        assert_eq!(stats.frame_count, 2);
+        assert!((stats.duration_secs - 0.3).abs() < 1.0e-6);
+        assert!((stats.fps - (2.0 / 0.3)).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn webp_riff_parser_ignores_payload_markers_and_rejects_nonzero_padding() {
+        let mut data = b"RIFF\x12\x00\x00\x00WEBPJUNK\x05\x00\x00\x00ANMF!\x00".to_vec();
+        assert_eq!(webp::count_frames_from_bytes(&data).unwrap(), 0);
+        assert_eq!(webp::duration_secs_from_bytes(&data).unwrap(), None);
+
+        *data.last_mut().expect("padding byte") = 1;
+        assert!(webp::count_frames_from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn webp_canvas_dimensions_missing_file_returns_error_not_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.webp");
+
+        let err = webp::canvas_dimensions_from_path(&missing)
+            .expect_err("missing WebP path must be an error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn gif_timing_stats_malformed_bytes_returns_error_not_none() {
+        let err = gif::timing_stats_from_bytes(b"GIF89a")
+            .expect_err("malformed GIF timing must be an error");
+
+        assert!(err.to_string().contains("GIF"));
+    }
+
+    #[test]
+    fn gif_get_timing_stats_missing_file_returns_error_not_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.gif");
+
+        let err = gif::get_timing_stats(&missing).expect_err("missing GIF path must be an error");
+
+        assert!(err.to_string().contains("No such file") || err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_jxl_codestream_signature() {
+        let jxl_codestream: &[u8] = &[0xFF, 0x0A, 0x00, 0x00];
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(jxl_codestream)
+            .unwrap_or_else(|_| panic!("Failed to write to file"));
+
+        assert!(
+            jxl::verify_signature(file.path())
+                .expect("JXL codestream signature probe should parse"),
+            "JXL codestream signature should be recognized"
+        );
+    }
+
+    #[test]
+    fn test_error_handling_nonexistent_file() {
+        let path = std::path::Path::new("/nonexistent/file.test");
+
+        assert!(
+            webp::is_lossless(path).is_err(),
+            "Non-existent file must surface an Err (no silent forgery)"
+        );
+        assert!(
+            webp::is_animated(path).is_err(),
+            "Non-existent file must surface an Err (no silent forgery)"
+        );
+        assert!(
+            gif::is_animated(path).is_err(),
+            "Non-existent file must surface an Err (no silent forgery)"
+        );
+        assert!(
+            gif::get_frame_count(path).is_err(),
+            "Non-existent file must surface an Err (no silent forgery)"
+        );
+        assert!(
+            jxl::verify_signature(path).is_err(),
+            "Non-existent file should return false"
+        );
+    }
+}

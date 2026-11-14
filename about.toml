@@ -1,0 +1,23 @@
+# cargo-about configuration
+# Accepted licenses for notice generation. CI separately enforces deny.toml.
+# See docs/LICENSING.md for the distribution report and release review.
+
+accepted = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "Zlib",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "MPL-2.0",
+  "NCSA",
+  "IJG",
+  "Unicode-3.0",
+  "GPL-3.0-or-later",
+  "LGPL-3.0-or-later",
+  "LGPL-2.1-or-later",
+  "ISC",
+  "CC0-1.0",
+]
+
+# jpegxl-rs and jpegxl-sys are GPL-3.0-or-later and enabled in the default build.

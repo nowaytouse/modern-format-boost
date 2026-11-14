@@ -1,0 +1,2 @@
+"NSAppDataUsageDescription" = "Modern Format Boost reads user-selected media folders and Photos metadata only when processing or importing media.";
+"NSAppleEventsUsageDescription" = "Modern Format Boost sends Apple Events to Photos only when you request a media import. No files are read or modified without an action you initiate.";

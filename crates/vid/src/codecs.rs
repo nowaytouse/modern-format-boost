@@ -1,5 +1,5 @@
 //! Codec information module
 //!
-//! Re-exports from `shared_utils::codecs` to eliminate duplication.
+//! Re-exports from `foundation::codecs` to eliminate duplication.
 
-pub use shared_utils::codecs::*;
+pub use foundation::codecs::*;

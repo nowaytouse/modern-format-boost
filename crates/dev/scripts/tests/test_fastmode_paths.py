@@ -1,0 +1,289 @@
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+RUST_BIN_DIR = SCRIPT_DIR.parent / "src" / "bin"
+RUST_INFRA_DIR = SCRIPT_DIR.parent / "src" / "infra"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import fastmode_paths
+import mfb_log_paths
+
+
+class TestFastModePaths(unittest.TestCase):
+    def test_fastmode_state_root_defaults_to_user_home_for_app_launch(self):
+        with tempfile.TemporaryDirectory() as home:  # noqa: SIM117
+            with patch.dict(os.environ, {"HOME": home, "FROM_APP": "1"}, clear=True):
+                self.assertEqual(
+                    fastmode_paths.default_mfb_state_root(),
+                    Path(home) / ".modern_format_boost",
+                )
+
+    def test_fastmode_state_root_uses_system_temp_without_home(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                fastmode_paths.default_mfb_state_root(),
+                Path(tempfile.gettempdir()) / ".modern_format_boost",
+            )
+
+    def test_fastmode_uses_smart_build_without_force(self):
+        self.assertIs(fastmode_paths.FAST_IMG_FORCE_SMART_BUILD, False)
+
+    def test_fastmode_normal_command_uses_local_jxl_delivery(self):
+        command = fastmode_paths.build_fast_img_command(
+            Path("/opt/mfb/img"),
+            Path("/Users/example/Pictures/Album"),
+            shortest_path=False,
+            archive=False,
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "/opt/mfb/img",
+                "fast-img",
+                "/Users/example/Pictures/Album",
+                "--recursive",
+            ],
+        )
+        self.assertEqual(
+            fastmode_paths.build_fast_img_restore_command(
+                Path("/opt/mfb/img"),
+                Path("/Users/example/Pictures/debug.photoslibrary"),
+            ),
+            [
+                "/opt/mfb/img",
+                "restore-jpeg",
+                "/Users/example/Pictures/debug.photoslibrary",
+                "--recursive",
+            ],
+        )
+        self.assertNotIn("--shortest-path", command)
+        self.assertNotIn("--auto-import", command)
+        self.assertNotIn("--archive", command)
+        self.assertNotIn("--retry", command)
+
+    def test_fastmode_archive_command_requests_archive_quality(self):
+        command = fastmode_paths.build_fast_img_command(
+            Path("/opt/mfb/img"),
+            Path("/Users/example/Pictures/Album"),
+            shortest_path=False,
+            archive=True,
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "/opt/mfb/img",
+                "fast-img",
+                "/Users/example/Pictures/Album",
+                "--recursive",
+                "--archive",
+            ],
+        )
+
+    def test_fastmode_shortest_path_command_uses_single_delivery_flag(self):
+        command = fastmode_paths.build_fast_img_command(
+            Path("/opt/mfb/img"),
+            Path("/Users/example/Pictures/Album"),
+            shortest_path=True,
+            archive=True,
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "/opt/mfb/img",
+                "fast-img",
+                "/Users/example/Pictures/Album",
+                "--recursive",
+                "--archive",
+                "--shortest-path",
+            ],
+        )
+        self.assertNotIn("--auto-import", command)
+
+    def test_fastmode_retry_flag_is_explicit(self):
+        command = fastmode_paths.build_fast_img_command(
+            Path("/opt/mfb/img"),
+            Path("/Users/example/Pictures/Album"),
+            shortest_path=False,
+            archive=False,
+            retry=True,
+        )
+
+        self.assertIn("--retry", command)
+
+    def test_fastmode_restore_jpeg_dir_uses_adjacent_suffix(self):
+        src = Path("/Users/example/Pictures/Album")
+
+        self.assertEqual(
+            fastmode_paths.fast_img_restore_output_dir_for_target(src),
+            Path("/Users/example/Pictures/Album_restored_jpeg"),
+        )
+
+    def test_fastmode_restore_jpeg_dir_is_stable_when_output_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Album"
+            expected = Path(tmp) / "Album_restored_jpeg"
+            expected.mkdir()
+
+            self.assertEqual(
+                fastmode_paths.fast_img_restore_output_dir_for_target(src), expected
+            )
+
+    def test_fastmode_restore_jpeg_command_uses_rust_restore_subcommand(self):
+        command = fastmode_paths.build_fast_img_restore_command(
+            Path("/opt/mfb/img"),
+            Path("/Users/example/Pictures/Album_optimized"),
+            output_dir=Path("/Users/example/Pictures/Album_restored_jpeg"),
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "/opt/mfb/img",
+                "restore-jpeg",
+                "/Users/example/Pictures/Album_optimized",
+                "--recursive",
+                "--output",
+                "/Users/example/Pictures/Album_restored_jpeg",
+            ],
+        )
+
+    def test_fast_vid_dirs_use_adjacent_suffixes(self):
+        src = Path("/Users/example/Movies/Clips")
+
+        self.assertEqual(
+            fastmode_paths.fast_vid_output_dir_for_target(src),
+            Path("/Users/example/Movies/Clips_optimized"),
+        )
+
+    def test_fast_vid_command_uses_full_loop_intent_run_pipeline(self):
+        command = fastmode_paths.build_fast_vid_command(
+            Path("/opt/mfb/vid"),
+            Path("/Users/example/Movies/Clips"),
+            output_dir=Path("/Users/example/Movies/Clips_optimized"),
+            shortest_path=False,
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "/opt/mfb/vid",
+                "run",
+                "/Users/example/Movies/Clips",
+                "--output",
+                "/Users/example/Movies/Clips_optimized",
+                "--base-dir",
+                "/Users/example/Movies/Clips",
+                "--recursive",
+                "--apple-compat",
+                "--ultimate",
+                "--archive",
+            ],
+        )
+
+    def test_fast_vid_shortest_path_command_stays_on_full_run_pipeline(self):
+        command = fastmode_paths.build_fast_vid_command(
+            Path("/opt/mfb/vid"),
+            Path("/Users/example/Movies/Clips"),
+            output_dir=Path("/Users/example/Movies/Clips_optimized"),
+            shortest_path=True,
+        )
+
+        self.assertIn("run", command)
+        self.assertNotIn("fast-gif", command)
+        self.assertNotIn("--shortest-path", command)
+        self.assertNotIn("--auto-import", command)
+
+    def test_drag_processor_wires_shortest_path_fastmode_to_rust_flags(self):
+        rust_source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("choose_fast_img_action(strategy)?", rust_source)
+        self.assertIn("FastImgAction::ShortestPath", rust_source)
+        self.assertIn("build_fast_img_command(", rust_source)
+        self.assertIn("args.shortest_path", rust_source)
+        self.assertIn("args.archive", rust_source)
+
+    def test_drag_processor_defaults_to_cli_shell(self):
+        source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("default_value_t = LaunchMode::Auto", source)
+        self.assertNotIn("vue: bool", source)
+        self.assertIn("plan_cli_invocations", source)
+
+    def test_drag_processor_rust_ui_choice_defaults_to_shortest_path(self):
+        source = (RUST_INFRA_DIR / "drag_drop.rs").read_text(encoding="utf-8")
+
+        self.assertIn("pub fn choose_fast_img_action", source)
+        self.assertIn("Enter = Shortest Path", source)
+        self.assertIn('"3" if strategy != "avif" => FastImgAction::RestoreJpeg', source)
+        self.assertIn("_ => FastImgAction::ShortestPath", source)
+
+    def test_drag_processor_archives_session_logs(self):
+        source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
+            encoding="utf-8"
+        )
+        session = (SCRIPT_DIR.parent / "src" / "app" / "session.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("AppSession::start()", source)
+        self.assertIn("session.archive()", source)
+        self.assertIn("ensure_unified_log_dir", session)
+        self.assertIn("archive_drag_drop_session_bundle", session)
+        self.assertIn("SESSION_ARCHIVE_DONE", session)
+
+    def test_named_session_archive_preserves_collision_and_legacy_fallback(self):
+        stamp = "20261007_120000"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log = root / f"MFB_Photos_{stamp}.log"
+            log.write_text("new session", encoding="utf-8")
+            existing = root / f"Photos_Bundle_{stamp}"
+            existing.mkdir()
+            (existing / "manifest.json").write_text("old session", encoding="utf-8")
+            archived = mfb_log_paths.archive_drag_drop_session_bundle(
+                root, stamp, session_log=log
+            )
+            self.assertEqual(archived, root / f"Photos_Bundle_{stamp}_1")
+            self.assertEqual((existing / "manifest.json").read_text(encoding="utf-8"), "old session")
+            self.assertEqual((archived / log.name).read_text(encoding="utf-8"), "new session")
+            with self.assertRaises(ValueError):
+                mfb_log_paths.archive_drag_drop_session_bundle(root, "../escape")
+
+        self.assertEqual(
+            mfb_log_paths._session_bundle_name(Path(f"MFB_Session_{stamp}.log"), stamp),
+            f"Bundle_{stamp}",
+        )
+        long_name = "é" * 100
+        self.assertEqual(
+            mfb_log_paths._session_bundle_name(Path(f"MFB_{long_name}_{stamp}.log"), stamp),
+            f"{'é' * 32}_Bundle_{stamp}",
+        )
+
+    def test_drag_processor_rust_ui_runs_fastmode_verify_summary_after_success(self):
+        source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("fn run_fast_img_post_success", source)
+        self.assertIn("run_fast_img_post_success(", source)
+        self.assertIn("VerifyFastImgMode::Delivery", source)
+
+    def test_drag_processor_wires_videos_only_fastmode_to_full_vid_run(self):
+        rust_source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("choose_fast_vid_shortest_path(strategy)?", rust_source)
+        self.assertIn("LaunchMode::FastVid", rust_source)
+        self.assertIn("build_fast_vid_command(", rust_source)

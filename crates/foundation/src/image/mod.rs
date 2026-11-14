@@ -1,0 +1,67 @@
+//! `image` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
+
+pub mod image_analyzer;
+
+pub mod image_detection;
+
+pub mod image_formats;
+
+pub mod image_heic_analysis;
+
+pub mod image_jpeg_analysis;
+
+pub mod image_metrics;
+
+pub mod image_quality_db;
+
+pub mod image_quality_detector;
+
+pub mod image_builders;
+
+pub mod jxl_builder;
+
+pub mod jxl_effort_policy;
+
+pub mod jxl_explorer;
+
+pub mod jxl_utils;
+
+pub mod gain_map;
+
+pub mod live_photo;
+
+pub mod loop_intent;
+
+#[cfg(feature = "jpegxl-ffi")]
+pub mod depth_channel;
+
+pub mod animated_image_quality_features;
+
+pub mod candidate_comparator;
+
+pub mod fast_img;
+
+mod photos_import_metrics;
+
+#[cfg(any(target_os = "macos", test))]
+mod photos_import_schedule;
+
+#[cfg(target_os = "macos")]
+mod photos_native;
+
+pub mod format_detect;
+
+pub mod format_identity;
+
+pub mod modern_lossy_static;
+
+pub mod png_validation;
+
+pub mod photos_jxl_audit;
+
+pub mod orientation;
+
+pub mod siegfried;
+
+pub mod static_payload;

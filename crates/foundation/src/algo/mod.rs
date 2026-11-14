@@ -1,0 +1,12 @@
+//! `algo` — grouped implementation modules (crate root re-exports via
+//! `lib.rs`).
+
+pub mod algorithm_audit;
+
+pub mod algorithm_runtime;
+
+pub mod algorithm_seal;
+
+pub mod avif_quality_search;
+
+pub mod exploration_policy;

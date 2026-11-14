@@ -1,0 +1,14874 @@
+import AppKit
+import CoreServices
+import Darwin
+import Foundation
+import UserNotifications
+
+let isBackgroundSelfTest = CommandLine.arguments.contains("--self-test")
+
+private var isDebugWindow: Bool { ApplicationSession.current?.isDebug == true }
+private var guiPreferences: UserDefaults { ApplicationSession.activePreferences }
+private func nativeChildEnvironment() -> [String: String] {
+    ApplicationSession.current?.childEnvironment() ?? ProcessInfo.processInfo.environment
+}
+
+private let processorName = "drag_and_drop_processor"
+private let maxProcessLogChunkBytes = 64 * 1024
+private let maxProcessLogBatchBytes = 256 * 1024
+private let maxProcessLogBatchEntries = 256
+private let languagePreferenceKey = "MFBGuiLanguage"
+private let appearancePreferenceKey = "MFBGuiAppearance"
+private let developerPreferenceKey = "MFBGuiDeveloperMode"
+private let zoomPreferenceKey = "MFBGuiInterfaceZoom"
+private let interfaceZoomSteps = Array(stride(from: 90, through: 150, by: 10))
+private let defaultInterfaceZoom = 100
+private func savedInterfaceZoom(_ preferences: UserDefaults) -> Int {
+    let value = preferences.integer(forKey: zoomPreferenceKey)
+    return interfaceZoomSteps.contains(value) ? value : defaultInterfaceZoom
+}
+private let historyPreferenceKey = "MFBGuiHistoryDirectory"
+
+@MainActor
+private final class ProcessingResultNotifier: NSObject, UNUserNotificationCenterDelegate {
+    private let preferences: UserDefaults
+    private let runtimeEnabled: Bool
+    private let center: UNUserNotificationCenter?
+    private let unreadKey = "MFBGuiUnreadResultNotifications"
+    private(set) var unreadIDs: [String]
+    private var taskID: String?
+    private var badgeRefreshID = UUID()
+    var onUnreadChanged: (() -> Void)?
+    var onOpenResult: (() -> Void)?
+    var onDiagnostic: ((String) -> Void)?
+    var unreadCount: Int { unreadIDs.count }
+    var hasPendingTask: Bool { taskID != nil }
+    var badgeLabel: String? { unreadIDs.isEmpty ? nil : unreadIDs.count > 99 ? "99+" : String(unreadIDs.count) }
+
+    init(preferences: UserDefaults, runtimeEnabled: Bool) {
+        self.preferences = preferences
+        self.runtimeEnabled = runtimeEnabled
+        unreadIDs = Array(Set(preferences.stringArray(forKey: unreadKey) ?? [])).sorted()
+        center = runtimeEnabled ? UNUserNotificationCenter.current() : nil
+        super.init()
+        center?.delegate = self
+        refreshBadge()
+    }
+
+    func beginTask() {
+        taskID = UUID().uuidString
+        if runtimeEnabled { configurePermission(openSettings: false) }
+    }
+
+    @discardableResult
+    func complete(resultVisible: Bool, title: String, body: String) -> Bool {
+        guard let id = taskID else { return false }
+        taskID = nil
+        guard !resultVisible else { return false }
+        unreadIDs.append(id)
+        persistUnread()
+        guard let center else { return true }
+        center.getNotificationSettings { [weak self] settings in
+            let authorized = settings.authorizationStatus == .authorized
+            DispatchQueue.main.async {
+                guard let self, self.unreadIDs.contains(id), authorized else { return }
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                content.badge = NSNumber(value: self.unreadCount)
+                self.center?.add(UNNotificationRequest(identifier: "mfb.result." + id, content: content, trigger: nil)) { [weak self] error in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if let error { self.onDiagnostic?(error.localizedDescription) }
+                        if !self.unreadIDs.contains(id) {
+                            self.center?.removeDeliveredNotifications(withIdentifiers: ["mfb.result." + id])
+                            self.center?.removePendingNotificationRequests(withIdentifiers: ["mfb.result." + id])
+                        }
+                        self.refreshBadge()
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    func reviewAll() {
+        let identifiers = unreadIDs.map { "mfb.result." + $0 }
+        unreadIDs.removeAll()
+        center?.removeDeliveredNotifications(withIdentifiers: identifiers)
+        center?.removePendingNotificationRequests(withIdentifiers: identifiers)
+        persistUnread()
+    }
+
+    private func persistUnread() {
+        preferences.set(unreadIDs, forKey: unreadKey)
+        refreshBadge()
+        onUnreadChanged?()
+    }
+
+    private func refreshBadge() {
+        guard runtimeEnabled, let center else { return }
+        let generation = UUID()
+        badgeRefreshID = generation
+        center.getNotificationSettings { [weak self] settings in
+            let badgesAllowed = settings.authorizationStatus == .authorized && settings.badgeSetting == .enabled
+            DispatchQueue.main.async {
+                guard let self, self.badgeRefreshID == generation else { return }
+                NSApp.dockTile.badgeLabel = badgesAllowed ? self.badgeLabel : nil
+            }
+        }
+    }
+
+    func configurePermission(openSettings: Bool) {
+        guard let center else { return }
+        center.getNotificationSettings { [weak self] settings in
+            let needsAuthorization = settings.authorizationStatus == .notDetermined
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if needsAuthorization {
+                    self.center?.requestAuthorization(options: [.alert, .badge, .sound]) { [weak self] _, error in
+                        DispatchQueue.main.async {
+                            if let error { self?.onDiagnostic?(error.localizedDescription) }
+                            self?.refreshBadge()
+                        }
+                    }
+                } else if openSettings,
+                          let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"),
+                          !NSWorkspace.shared.open(url) {
+                    self.onDiagnostic?(localized("notification.settings_unavailable"))
+                }
+            }
+        }
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([])
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let opensResult = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+        DispatchQueue.main.async { [weak self] in
+            if opensResult { self?.onOpenResult?() }
+            completionHandler()
+        }
+    }
+
+    static func selfTest() throws {
+        let suite = "MFBResultNotifications.\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let originalBadge = NSApp.dockTile.badgeLabel
+        let notifier = ProcessingResultNotifier(preferences: preferences, runtimeEnabled: false)
+        var badges: [String?] = []
+        notifier.onUnreadChanged = { [weak notifier] in badges.append(notifier?.badgeLabel) }
+        notifier.configurePermission(openSettings: true)
+        guard notifier.center == nil, !notifier.hasPendingTask, notifier.badgeLabel == nil else {
+            throw HostError(message: "Notification validation accessed the production notification center")
+        }
+        notifier.beginTask()
+        guard !notifier.complete(resultVisible: true, title: "visible", body: "counts"), notifier.unreadCount == 0,
+              !notifier.hasPendingTask else { throw HostError(message: "A visible result became an unread notification") }
+        notifier.beginTask()
+        guard notifier.complete(resultVisible: false, title: "with file issues", body: "validated counts"),
+              !notifier.complete(resultVisible: false, title: "duplicate", body: "ignored"), notifier.unreadCount == 1 else {
+            throw HostError(message: "A task sent duplicate result notifications")
+        }
+        notifier.beginTask()
+        _ = notifier.complete(resultVisible: false, title: "cancelled", body: "retained work")
+        let restored = ProcessingResultNotifier(preferences: preferences, runtimeEnabled: false)
+        guard restored.unreadCount == 2, restored.badgeLabel == "2" else {
+            throw HostError(message: "Unread task results did not survive application restart")
+        }
+        notifier.reviewAll()
+        guard badges == ["1", "2", nil], notifier.badgeLabel == nil,
+              (preferences.stringArray(forKey: notifier.unreadKey) ?? []).isEmpty,
+              NSApp.dockTile.badgeLabel == originalBadge else {
+            throw HostError(message: "Review failed to clear unread results or validation changed the real Dock badge")
+        }
+    }
+}
+private let mainWindowContentSize = NSSize(width: 980, height: 720)
+private let compactWindowWidth: CGFloat = 760
+private let mainLogoSize: CGFloat = 80
+private let mainWindowStyleMask: NSWindow.StyleMask = [
+    .titled, .closable, .miniaturizable, .resizable, .fullSizeContentView,
+]
+
+private var appVersion: String {
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+}
+
+private var historyDirectory: URL {
+    FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".modern_format_boost/logs", isDirectory: true)
+}
+
+private func initialHistoryDirectory(
+    preferences: UserDefaults,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> URL {
+    if let path = environment["MFB_LOG_DIR"], path.hasPrefix("/") {
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+    if let path = environment["MFB_HOME_ROOT"], path.hasPrefix("/") {
+        return URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("logs", isDirectory: true)
+    }
+    // Debug may inspect existing history, but all generated state uses its private child environment.
+    let historyPreferences = isDebugWindow ? UserDefaults.standard : preferences
+    if let path = historyPreferences.string(forKey: historyPreferenceKey), path.hasPrefix("/") {
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+    return historyDirectory
+}
+
+private func bundledLicenseText() throws -> String {
+    guard let project = Bundle.main.url(forResource: "LICENSE", withExtension: nil),
+          let thirdParty = Bundle.main.url(forResource: "LICENSES", withExtension: "json"),
+          let nativeNotices = Bundle.main.url(forResource: "THIRD_PARTY_NOTICES", withExtension: "txt") else {
+        throw HostError(message: localized("error.licenses_missing"))
+    }
+    let data = try Data(contentsOf: thirdParty)
+    guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let licenses = document["licenses"] as? [[String: Any]], !licenses.isEmpty else {
+        throw HostError(message: localized("error.licenses_missing"))
+    }
+    var sections = ["Modern Format Boost · \(appVersion)",
+                    try String(contentsOf: project, encoding: .utf8),
+                    try String(contentsOf: nativeNotices, encoding: .utf8)]
+    for license in licenses {
+        guard let name = license["name"] as? String, !name.isEmpty,
+              let text = license["text"] as? String, !text.isEmpty,
+              let users = license["used_by"] as? [[String: Any]], !users.isEmpty else {
+            throw HostError(message: localized("error.licenses_missing"))
+        }
+        let crates = try users.map { user in
+            guard let package = user["crate"] as? [String: Any],
+                  let name = package["name"] as? String, !name.isEmpty,
+                  let version = package["version"] as? String, !version.isEmpty else {
+                throw HostError(message: localized("error.licenses_missing"))
+            }
+            return "\(name) \(version)"
+        }.sorted()
+        sections.append("\(name)\n\(crates.joined(separator: ", "))\n\n\(text)")
+    }
+    return sections.joined(separator: "\n\n────────────────────────\n\n")
+}
+
+private enum AppLanguage: String, CaseIterable {
+    case system
+    case english
+    case simplifiedChinese
+    case japanese
+
+    var resourceName: String? {
+        switch self {
+        case .system: nil
+        case .english: "en"
+        case .simplifiedChinese: "zh-Hans"
+        case .japanese: "ja"
+        }
+    }
+
+    var nativeTitle: String {
+        switch self {
+        case .system: localized("language.system")
+        case .english: "English"
+        case .simplifiedChinese: "简体中文"
+        case .japanese: "日本語"
+        }
+    }
+}
+
+private enum AppAppearance: String, CaseIterable {
+    case system
+    case light
+    case dark
+
+    var localizedTitle: String { localized("appearance.\(rawValue)") }
+
+    func apply() {
+        switch self {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+private struct ProcessingStart: Equatable {
+    var date = Date()
+    var uptime = ProcessInfo.processInfo.systemUptime
+}
+
+private final class LocalizationCatalog {
+    static let shared = LocalizationCatalog()
+
+    private(set) var language: AppLanguage
+    private var bundle: Bundle
+    private let lock = NSLock()
+
+    private init() {
+        language = guiPreferences.string(forKey: languagePreferenceKey)
+            .flatMap(AppLanguage.init(rawValue:)) ?? .system
+        bundle = Self.bundle(for: language)
+    }
+
+    func select(_ language: AppLanguage) {
+        lock.lock()
+        self.language = language
+        bundle = Self.bundle(for: language)
+        lock.unlock()
+        guiPreferences.set(language.rawValue, forKey: languagePreferenceKey)
+    }
+
+    func text(_ key: String) -> String {
+        lock.lock()
+        let selectedBundle = bundle
+        lock.unlock()
+        return selectedBundle.localizedString(forKey: key, value: key, table: nil)
+    }
+
+    private static func bundle(for language: AppLanguage) -> Bundle {
+        guard let resourceName = language.resourceName,
+              let path = Bundle.main.path(forResource: resourceName, ofType: "lproj"),
+              let localizedBundle = Bundle(path: path)
+        else { return .main }
+        return localizedBundle
+    }
+}
+
+func localized(_ key: String, _ arguments: CVarArg...) -> String {
+    let format = LocalizationCatalog.shared.text(key)
+    guard !arguments.isEmpty else { return format }
+    return String(format: format, locale: Locale.current, arguments: arguments)
+}
+
+struct HostError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+private enum ProcessingMode: String, CaseIterable {
+    case both
+    case imagesOnly
+    case videosOnly
+
+    var argument: String? {
+        switch self {
+        case .both: nil
+        case .imagesOnly: "--images-only"
+        case .videosOnly: "--videos-only"
+        }
+    }
+}
+
+private enum OperationMode: String, CaseIterable {
+    case adjacent
+    case fastImgJxl
+    case fastImgAvif
+    case fastVid
+    case restoreJpeg
+    case collect
+    case compare
+    case mergeXmp
+    case iCloudImport
+    case diagnostic
+    case cacheClean
+    case databaseManager
+
+    var developerOnly: Bool {
+        [.collect, .compare, .iCloudImport, .diagnostic, .cacheClean, .databaseManager].contains(self)
+    }
+
+    var backendMode: String? {
+        switch self {
+        case .adjacent: nil
+        case .fastImgJxl, .fastImgAvif: "fast-img"
+        case .fastVid: "fast-vid"
+        case .restoreJpeg: "restore-jpeg"
+        case .collect: "collect"
+        case .compare: "compare"
+        case .mergeXmp: "merge-xmp"
+        case .iCloudImport: "icloud-import"
+        case .diagnostic: "diagnostic"
+        case .cacheClean: "cache-clean"
+        case .databaseManager: "database-manager"
+        }
+    }
+
+    var strategy: String? {
+        switch self {
+        case .fastImgJxl: "jxl"
+        case .fastImgAvif: "avif"
+        default: nil
+        }
+    }
+
+    var capabilities: OperationCapabilities {
+        switch self {
+        case .adjacent:
+            OperationCapabilities(
+                usesProcessingSelection: true,
+                supportsUltimate: true,
+                supportsResume: true,
+                supportsArchive: true,
+                supportsStandardOptions: true
+            )
+        case .fastImgJxl, .fastImgAvif:
+            OperationCapabilities(
+                fixedProcessingMode: .imagesOnly,
+                supportsUltimate: true,
+                supportsShortestPath: true,
+                supportsResume: true,
+                supportsArchive: true,
+                supportsRetry: true
+            )
+        case .fastVid:
+            OperationCapabilities(fixedProcessingMode: .videosOnly, supportsShortestPath: true)
+        case .restoreJpeg:
+            OperationCapabilities(fixedProcessingMode: .imagesOnly)
+        case .collect, .compare, .mergeXmp, .iCloudImport, .diagnostic, .cacheClean, .databaseManager:
+            OperationCapabilities()
+        }
+    }
+}
+
+private struct OperationCapabilities {
+    var usesProcessingSelection = false
+    var fixedProcessingMode: ProcessingMode? = nil
+    var supportsUltimate = false
+    var supportsShortestPath = false
+    var supportsResume = false
+    var supportsArchive = false
+    var supportsRetry = false
+    var supportsStandardOptions = false
+
+    func resolvedProcessingMode(_ selected: ProcessingMode) -> ProcessingMode? {
+        fixedProcessingMode ?? (usesProcessingSelection ? selected : nil)
+    }
+}
+
+struct FastImgCleanupRecoveryResult: Decodable, Equatable {
+    static let prefix = "MFB_PHOTOS_CLEANUP_RECOVERY="
+    static let historyPrefix = "MFB_HISTORY_PHOTOS_CLEANUP_RECOVERY="
+
+    let schema_version: Int
+    let run_id: String
+    let source_path: String
+    let output_path: String
+    let strategy: String
+    let checkpoint_blake3: String
+    let outcome: String
+    let verified: Bool
+
+    static func decode(_ line: String, prefix: String = Self.prefix) throws -> Self? {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(prefix) else { return nil }
+        let data = Data(raw.dropFirst(prefix.count).utf8)
+        let fields = ["schema_version", "run_id", "source_path", "output_path", "strategy",
+                      "checkpoint_blake3", "outcome", "verified"]
+        guard data.count < 64 * 1024,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == Set(fields) else {
+            throw HostError(message: localized("cleanup.recovery.unconfirmed"))
+        }
+        let value = try JSONDecoder().decode(Self.self, from: data)
+        guard value.schema_version == 1, validHistoryIdentity(value.run_id),
+              [value.source_path, value.output_path].allSatisfy(validFastImgCleanupPath),
+              !FastImgDeliveryReceipt.samePath(value.source_path, value.output_path),
+              ["jxl", "avif"].contains(value.strategy),
+              FastImgFailedRetryAvailable.hash(value.checkpoint_blake3),
+              ["removed", "already_absent", "residual", "failed", "verification_blocked"].contains(value.outcome),
+              value.verified == (value.outcome != "verification_blocked") else {
+            throw HostError(message: localized("cleanup.recovery.unconfirmed"))
+        }
+        return value
+    }
+
+    var statusText: String { localized("cleanup.recovery.\(outcome)") }
+    var expectsCleanExit: Bool { ["removed", "already_absent", "residual"].contains(outcome) }
+
+    func matches(source: String, output: String?, strategy: String?) -> Bool {
+        strategy == self.strategy && FastImgDeliveryReceipt.samePath(source, source_path)
+            && FastImgDeliveryReceipt.samePath(output, output_path)
+    }
+
+    func matches(_ cleanup: OutputCleanupReceipt) -> Bool {
+        cleanup.run_id == run_id && cleanup.outcome == outcome
+            && FastImgDeliveryReceipt.samePath(cleanup.output_path, output_path)
+    }
+}
+
+private struct ProcessorRequest {
+    let targetPath: String
+    let processingMode: ProcessingMode
+    let operationMode: OperationMode
+    var backupPath: String? = nil
+    var ultimate = true
+    var verbose = false
+    var shortestPath = false
+    var resume = false
+    var fresh = false
+    var archive = false
+    var retry = false
+    var retryFailed = false
+    var retryFailedParent: String? = nil
+    var expectedFastImgOutput: String? = nil
+    var recoverPhotosCleanup = false
+    var force = false
+    var dryRun = false
+    var plain = false
+    var inPlace = false
+    var watch = false
+    var photosContainer: PhotosAuditContainer?
+    var mediaSettings = MediaSettings()
+}
+
+private struct FastImgConflictPreview: Decodable {
+    enum Decision: String, Decodable { case automatic, fresh, `continue`, failedOnly = "failed_only" }
+    enum FreshUnavailableReason: String, Decodable {
+        case privateWorkingCopyUnavailable = "private_working_copy_unavailable"
+    }
+    struct Previous: Decodable {
+        let output_path: String
+        let stage: String
+        let terminal: Bool
+        let recorded_failed_count: Int
+        let failed_retry_parent_output: String?
+        let delivery_conflict: Bool?
+    }
+    struct FailedOnly: Decodable {
+        enum State: String, Decodable { case available, existing, completed, conflict }
+        let output_path: String
+        let state: State
+    }
+    struct Occupied: Decodable {
+        enum Ownership: String, Decodable { case savedTask = "saved_task", filesystemOnly = "filesystem_only" }
+        let path: String
+        let ownership: Ownership
+    }
+    struct OutputStorage: Decodable {
+        let output_path: String
+        let observation: PreflightStorage
+    }
+    struct MigrationRequired: Decodable {
+        let schema_version: Int
+        let kind: String
+        let input_path: String
+        let source_root: String
+        let strategy: String
+        let photos: Bool
+        let decision: Decision
+
+        static func decodeIfPresent(_ data: Data, for request: ProcessorRequest) throws -> Self? {
+            guard let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  fields["kind"] as? String == "fast_img_retry_plan_migration_required" else { return nil }
+            let value = try JSONDecoder().decode(Self.self, from: data)
+            guard Set(fields.keys) == Set(["schema_version", "kind", "input_path", "source_root", "strategy", "photos", "decision"]),
+                  value.schema_version == 1, FastImgDeliveryReceipt.samePath(value.input_path, request.targetPath),
+                  FastImgFailedRetryAvailable.path(value.source_root), value.strategy == request.operationMode.strategy,
+                  value.photos == request.shortestPath, value.decision == FastImgConflictPreview.decision(for: request),
+                  value.decision != .failedOnly else { throw HostError(message: localized("preflight.fast.invalid")) }
+            return value
+        }
+    }
+    let schema_version: Int
+    let kind: String
+    let input_path: String
+    let source_root: String
+    let strategy: String
+    let photos: Bool
+    let decision: Decision
+    let proposed_output: String
+    let storage: OutputStorage?
+    let fresh_output: String?
+    let fresh_unavailable_reason: FreshUnavailableReason?
+    let previous: Previous?
+    let failed_only: FailedOnly?
+    let occupied_outputs: [Occupied]
+    let unknown: [String]
+
+    static func decision(for request: ProcessorRequest) -> Decision {
+        if request.retryFailed { return .failedOnly }
+        if request.fresh { return .fresh }
+        return request.resume || request.retry ? .continue : .automatic
+    }
+
+    static func arguments(for request: ProcessorRequest) throws -> [String] {
+        guard let strategy = request.operationMode.strategy, request.operationMode.backendMode == "fast-img" else {
+            throw HostError(message: localized("preflight.fast.invalid"))
+        }
+        var arguments = ["--plan-json", "--mode", "fast-img", "--strategy", strategy]
+        if request.shortestPath { arguments.append("--shortest-path") }
+        switch decision(for: request) {
+        case .automatic: break
+        case .continue: arguments.append("--retry")
+        case .fresh: arguments.append("--no-resume")
+        case .failedOnly:
+            arguments.append("--retry-failed")
+            if let parent = request.retryFailedParent { arguments += ["--retry-failed-parent", parent] }
+        }
+        arguments += try request.mediaSettings.arguments(operation: request.operationMode, processing: request.processingMode)
+        return arguments + ["--", request.targetPath]
+    }
+
+    static func decode(_ data: Data, for request: ProcessorRequest) throws -> Self {
+        let error = HostError(message: localized("preflight.fast.invalid"))
+        guard let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              ["currently_verified_completed", "currently_verified_reusable", "potential_duplicate_photos"]
+                  .allSatisfy({ fields[$0] is NSNull }) else { throw error }
+        let plan = try JSONDecoder().decode(Self.self, from: data)
+        var expectedFields: Set<String> = ["schema_version", "kind", "input_path", "source_root", "strategy", "photos",
+            "decision", "proposed_output", "fresh_output", "previous", "failed_only", "occupied_outputs",
+            "currently_verified_completed", "currently_verified_reusable", "potential_duplicate_photos", "unknown"]
+        switch plan.schema_version {
+        case 1: break
+        case 2:
+            expectedFields.insert("fresh_unavailable_reason")
+            if fields["storage"] != nil {
+                expectedFields.insert("storage")
+                guard let storage = fields["storage"] as? [String: Any],
+                      Set(storage.keys) == ["output_path", "observation"],
+                      let observation = storage["observation"] as? [String: Any],
+                      Set(observation.keys) == ["status", "directory", "available_bytes", "diagnostic"],
+                      let decoded = plan.storage, decoded.observation.valid,
+                      FastImgDeliveryReceipt.samePath(decoded.output_path, plan.proposed_output) else { throw error }
+            }
+        default: throw error
+        }
+        let path = FastImgFailedRetryAvailable.path
+        let samePath = FastImgDeliveryReceipt.samePath
+        guard Set(fields.keys) == expectedFields, plan.kind == "fast_img_retry_plan",
+              samePath(plan.input_path, request.targetPath), path(plan.source_root),
+              plan.strategy == request.operationMode.strategy, plan.photos == request.shortestPath,
+              plan.decision == decision(for: request), path(plan.proposed_output),
+              plan.unknown == (plan.photos ? ["current_media_verification", "photos_duplicate_count"] : ["current_media_verification"]),
+              plan.occupied_outputs.count <= 128,
+              Set(plan.occupied_outputs.map { Data($0.path.utf8) }).count == plan.occupied_outputs.count,
+              plan.occupied_outputs.allSatisfy({ path($0.path) && !samePath($0.path, plan.fresh_output) }),
+              plan.previous.map({ previous in
+                  path(previous.output_path) && previous.recorded_failed_count >= 0
+                    && ["scan_complete", "output_prepared", "encode_complete", "gate1_passed", "importing",
+                        "import_complete", "gate2_passed", "deep_scan_complete", "gate3_passed", "cleanup_complete",
+                        "gate1_failed", "gate2_failed", "gate3_failed", "aborted"].contains(previous.stage)
+                    && (!previous.terminal || previous.stage == "cleanup_complete")
+                    && (previous.failed_retry_parent_output.map(path) ?? true)
+                    && plan.occupied_outputs.contains { $0.ownership == .savedTask && samePath($0.path, previous.output_path) }
+              }) ?? true,
+              plan.failed_only.map({ path($0.output_path) && plan.previous?.terminal == true
+                  && plan.previous.map { $0.recorded_failed_count > 0 && !samePath($0.output_path, plan.failed_only?.output_path) } == true }) ?? true
+        else { throw error }
+        if let fresh = plan.fresh_output {
+            guard path(fresh), plan.fresh_unavailable_reason == nil else { throw error }
+        } else {
+            guard plan.schema_version == 2, plan.fresh_unavailable_reason == .privateWorkingCopyUnavailable,
+                  plan.photos, plan.previous != nil, plan.decision != .fresh,
+                  plan.failed_only?.state != .available else { throw error }
+            if plan.decision == .failedOnly {
+                guard let child = plan.failed_only, child.state == .existing || child.state == .completed else { throw error }
+            }
+        }
+        let deliveryConflict = plan.previous?.delivery_conflict == true
+        if deliveryConflict {
+            guard plan.schema_version == 2, plan.decision == .automatic,
+                  let previous = plan.previous, previous.failed_retry_parent_output != nil,
+                  plan.failed_only == nil, samePath(plan.proposed_output, plan.fresh_output) else { throw error }
+        }
+        switch plan.decision {
+        case .automatic, .continue:
+            let expected = deliveryConflict ? plan.fresh_output : (plan.previous?.output_path ?? plan.fresh_output)
+            guard samePath(plan.proposed_output, expected) else { throw error }
+        case .fresh:
+            guard samePath(plan.proposed_output, plan.fresh_output) else { throw error }
+        case .failedOnly:
+            guard samePath(plan.proposed_output, plan.failed_only?.output_path),
+                  request.retryFailedParent.map({ samePath($0, plan.previous?.output_path) }) ?? true else { throw error }
+        }
+        if let child = plan.failed_only {
+            let ownership = plan.occupied_outputs.first { samePath($0.path, child.output_path) }?.ownership
+            switch child.state {
+            case .available: guard ownership == nil else { throw error }
+            case .conflict: guard ownership != nil else { throw error }
+            case .existing, .completed: guard ownership == .savedTask else { throw error }
+            }
+        }
+        return plan
+    }
+
+    var needsChoice: Bool { decision != .automatic || previous != nil || !occupied_outputs.isEmpty }
+
+    func details(privacy: Bool) -> String {
+        func path(_ value: String) -> String { privacy ? localized("privacy.display.hidden") : value.debugDescription }
+        var lines = [localized("preflight.fast.output", path(proposed_output))]
+        if let observation = storage?.observation {
+            if let available = observation.available_bytes {
+                lines.append(localized("preflight.fast.storage_available", String(available)))
+            } else {
+                lines.append(localized("preflight.fast.storage_unknown"))
+            }
+        }
+        if let previous {
+            lines.append(localized("preflight.fast.previous", path(previous.output_path), String(previous.recorded_failed_count)))
+            if let parent = previous.failed_retry_parent_output { lines.append(localized("preflight.fast.parent", path(parent))) }
+        }
+        if decision != .fresh, let fresh = fresh_output, !FastImgDeliveryReceipt.samePath(proposed_output, fresh) {
+            lines.append(localized("preflight.fast.fresh_output", path(fresh)))
+        }
+        if let failed_only {
+            lines.append(localized("preflight.fast.failed_output", path(failed_only.output_path),
+                                   localized("preflight.fast.child.\(failed_only.state.rawValue)")))
+        }
+        let otherOutputs = occupied_outputs.filter { !FastImgDeliveryReceipt.samePath($0.path, previous?.output_path) }
+        if !otherOutputs.isEmpty {
+            lines.append("")
+            lines += otherOutputs.map { localized($0.ownership == .savedTask ? "preflight.fast.occupied_saved"
+                : "preflight.fast.occupied_unknown", path($0.path)) }
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+private enum MediaSetting: String, CaseIterable {
+    case imgConfig, imgFallback, imgJxlDistance, imgQualitySearch, imgJxlEffort, imgJxlSearch, imgJpegEffort, imgJpegSearch, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
+    case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
+    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastAvifQuality, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy, fastErrorMode
+    case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
+    case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
+    case photosRoot, photosAlbum, photosPreserveTree
+    case performance, externalToolSnapshot
+    case cacheMaxBytes, cacheTtlSeconds
+
+    var isImage: Bool { rawValue.hasPrefix("img") }
+    var isVideo: Bool { rawValue.hasPrefix("vid") }
+    var isFastImage: Bool { rawValue.hasPrefix("fast") }
+    var isPhotos: Bool { rawValue.hasPrefix("photos") }
+    var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode || self == .fastErrorMode }
+    var isPixelEffort: Bool { self == .imgJxlEffort || self == .fastJxlEffort }
+    var isJpegSearch: Bool { self == .imgJpegSearch || self == .fastJpegSearch }
+    var isEffort: Bool { isPixelEffort || self == .imgJpegEffort || self == .fastJpegEffort }
+    var isDistance: Bool { self == .imgJxlDistance }
+    var isSearch: Bool { [.imgJxlSearch, .fastJxlSearch, .imgJpegSearch, .fastJpegSearch, .imgQualitySearch, .fastQualitySearch].contains(self) }
+    var isSearchToggle: Bool { [.imgJxlSearch, .imgQualitySearch].contains(self) }
+    func searchEnabled(_ value: String) -> Bool? {
+        if value == "adaptive" { return true }
+        if value == "fixed" { return false }
+        if self == .imgQualitySearch && value == "mode-default" { return true }
+        return nil
+    }
+    func choiceTitle(_ value: String) -> String {
+        if isEffort || isDistance { return value }
+        if self == .fastAvifSpeed { return value }
+        if isJpegSearch { return localized("settings.jpeg_search.\(value)") }
+        if self == .imgJxlSearch || self == .fastJxlSearch { return localized("settings.effort.\(value)") }
+        if self == .imgQualitySearch { return localized("settings.distance.\(value)") }
+        if self == .fastQualitySearch { return localized("settings.avif.\(value)") }
+        return localized(isSearch && value == "adaptive" ? "settings.search.adaptive" : "settings.value.\(value)")
+    }
+    func appliesToFast(avif: Bool) -> Bool {
+        if self == .fastJxlEffort || self == .fastJxlSearch { return false }
+        if self == .fastJpegEffort || self == .fastJpegSearch { return !avif }
+        return ![.fastQualitySearch, .fastAvifQuality, .fastAvifSpeed].contains(self) || avif
+    }
+    var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
+    var isShared: Bool { self == .performance || isCache }
+    var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode].contains(self) }
+    var section: String {
+        if self == .performance || self == .externalToolSnapshot { return "performance" }
+        if isCache { return "cache" }
+        if isDeveloper { return "developer" }
+        if isPhotos { return "photos" }
+        if isFastImage { return "fast" }
+        return isImage ? "img" : "vid"
+    }
+    var flag: String {
+        switch self {
+        case .performance: "--performance"
+        case .externalToolSnapshot: "--external-tool-snapshot"
+        case .cacheMaxBytes: "--cache-max-bytes"
+        case .cacheTtlSeconds: "--cache-ttl-seconds"
+        case .imgConfig, .fastConfig: "--img-config"
+        case .imgFallback, .fastFallback: "--img-fallback-policy"
+        case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
+        case .imgJxlDistance: "--img-jxl-distance"
+        case .imgJxlEffort, .fastJxlEffort: "--img-jxl-effort"
+        case .imgJxlSearch, .fastJxlSearch: "--img-jxl-effort-search"
+        case .imgJpegSearch, .fastJpegSearch: "--img-jpeg-effort-search"
+        case .imgQualitySearch, .fastQualitySearch: "--img-quality-search"
+        case .fastAvifQuality: "--img-avif-quality"
+        case .fastAvifSpeed: "--img-avif-speed"
+        case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
+        case .imgDatabase, .fastDatabase: "--img-allow-database"
+        case .imgSizeTolerance: "--img-allow-size-tolerance"
+        case .imgSizeToleranceBytes: "--img-size-tolerance-bytes"
+        case .imgToolPolicy, .fastToolPolicy: "--img-tool-policy"
+        case .imgErrorMode, .fastErrorMode: "--img-error-mode"
+        case .vidCodec: "--vid-codec"
+        case .vidErrorMode: "--vid-error-mode"
+        case .vidConfig: "--vid-config"
+        case .vidForceMsSsimLong: "--vid-force-ms-ssim-long"
+        case .photosBackend: "--photos-backend"
+        case .photosNativeBatch: "--photos-native-batch-size"
+        case .photosAppleScriptBatch: "--photos-import-batch-size"
+        case .photosVerificationBatch: "--photos-verification-batch-size"
+        case .photosAdaptive: "--photos-adaptive-batching"
+        case .photosMinimumBatch: "--photos-native-min-batch-size"
+        case .photosMaximumBatch: "--photos-native-max-batch-size"
+        case .photosTargetSeconds: "--photos-target-batch-seconds"
+        case .photosRoot: "--photos-import-root"
+        case .photosAlbum: "--photos-album-name"
+        case .photosPreserveTree: "--preserve-folder-structure"
+        }
+    }
+    var choices: [String] {
+        switch self {
+        case .performance: ["adaptive", "relaxed", "balanced", "tight"]
+        case .imgFallback, .fastFallback: ["strict", "same-semantics", "repair"]
+        case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
+             .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong, .externalToolSnapshot: ["true", "false"]
+        case .imgErrorMode, .vidErrorMode, .fastErrorMode: ["log-and-continue", "fail-fast"]
+        case .imgJxlEffort, .fastJxlEffort, .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
+        case .imgJxlSearch, .fastJxlSearch: ["fixed", "adaptive"]
+        case .imgJpegSearch, .fastJpegSearch: ["full", "adaptive", "fixed"]
+        case .imgQualitySearch, .fastQualitySearch: ["adaptive", "mode-default", "fixed"]
+        case .fastAvifSpeed: (0...10).map(String.init)
+        case .vidCodec: ["hevc", "av1"]
+        case .imgToolPolicy, .fastToolPolicy: ["fallback", "single"]
+        case .photosBackend: ["auto", "native", "applescript"]
+        default: []
+        }
+    }
+    var range: ClosedRange<Int>? {
+        switch self {
+        case .photosNativeBatch, .photosVerificationBatch, .photosMinimumBatch, .photosMaximumBatch: 1...1000
+        case .photosAppleScriptBatch: 1...50
+        case .photosTargetSeconds: 1...600
+        case .cacheMaxBytes, .cacheTtlSeconds: 1...Int.max
+        case .imgSizeToleranceBytes: 0...Int.max
+        case .fastAvifQuality: 10...100
+        default: nil
+        }
+    }
+    var runtimeKey: String? {
+        switch self {
+        case .performance: "performance.mode"
+        case .externalToolSnapshot: "execution.external_tool_snapshot"
+        case .cacheMaxBytes: "cache.path_tree_max_bytes"
+        case .cacheTtlSeconds: "cache.path_tree_ttl_seconds"
+        case .imgFallback, .fastFallback: "img.fallback_policy"
+        case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
+        case .imgJxlDistance: "img.jxl_distance"
+        case .imgJxlEffort, .fastJxlEffort: "img.jxl_effort"
+        case .imgJxlSearch, .fastJxlSearch: "img.jxl_effort_search"
+        case .imgJpegSearch, .fastJpegSearch: "img.jpeg_effort_search"
+        case .imgQualitySearch, .fastQualitySearch: "img.quality_search"
+        case .fastAvifQuality: "img.avif_quality"
+        case .fastAvifSpeed: "img.avif_speed"
+        case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
+        case .imgDatabase, .fastDatabase: "img.allow_database"
+        case .imgSizeTolerance: "img.allow_size_tolerance"
+        case .imgSizeToleranceBytes: "img.size_tolerance_bytes"
+        case .imgToolPolicy, .fastToolPolicy: "tools.policy"
+        case .imgErrorMode, .vidErrorMode, .fastErrorMode: "execution.error_mode"
+        case .vidCodec: "vid.codec"
+        case .vidForceMsSsimLong: "vid.force_ms_ssim_long"
+        case .photosBackend: "photos.backend"
+        case .photosNativeBatch: "photos.native_batch_size"
+        case .photosAppleScriptBatch: "photos.import_batch_size"
+        case .photosVerificationBatch: "photos.verification_batch_size"
+        case .photosAdaptive: "photos.adaptive_batching"
+        case .photosMinimumBatch: "photos.native_min_batch_size"
+        case .photosMaximumBatch: "photos.native_max_batch_size"
+        case .photosTargetSeconds: "photos.target_batch_seconds"
+        case .photosRoot: "photos.import_root"
+        case .photosAlbum: "photos.album_name"
+        case .photosPreserveTree: "photos.preserve_folder_structure"
+        default: nil
+        }
+    }
+    var preferenceKey: String { "MFBGuiMediaSettings.\(rawValue)" }
+    var labelKey: String {
+        switch self {
+        case .fastConfig: "fastConfig"
+        case .fastFallback: "imgFallback"
+        case .fastJpegEffort: "fastJpegEffort"
+        case .fastJpegSearch: "imgJpegSearch"
+        case .fastJxlEffort: "imgJxlEffort"
+        case .fastJxlSearch: "imgJxlSearch"
+        case .fastQualitySearch: "fastQualitySearch"
+        case .fastAvifQuality: "fastAvifQuality"
+        case .fastAvifSpeed: "fastAvifSpeed"
+        case .fastHeuristic: "imgHeuristic"
+        case .fastDatabase: "imgDatabase"
+        case .fastToolPolicy: "imgToolPolicy"
+        default: rawValue
+        }
+    }
+    var title: String { localized("settings.\(labelKey)") }
+
+    func arguments(_ value: String) -> [String] {
+        choices == ["true", "false"] ? ["\(flag)=\(value)"] : [flag, value]
+    }
+}
+
+private enum ImageFallback: String { case strict, sameSemantics = "same-semantics", repair }
+private enum FileFailurePolicy: String { case recordAndContinue = "log-and-continue", failFast = "fail-fast" }
+private enum VideoCodec: String { case hevc, av1 }
+private enum ToolSelectionPolicy: String { case fallback, single }
+private enum PhotosImportBackend: String { case auto, native, applescript }
+private enum EffortSearchMode: String { case fixed, adaptive }
+private enum JpegEffortSearchMode: String { case fixed, adaptive, full }
+private enum QualitySearchMode: String { case modeDefault = "mode-default", fixed, adaptive }
+
+private enum ToolPipeline: String, CaseIterable {
+    case image, fastImage, video
+    var title: String { self == .image ? "IMG" : (self == .fastImage ? "Fast IMG" : "VID") }
+    var preferenceKey: String { "MFBGuiToolPaths_\(rawValue)" }
+}
+
+private struct ImageSettings {
+    var configurationFile: String?
+    var fallback: ImageFallback?
+    var jpegEffort: Int?
+    var jpegEffortSearch: JpegEffortSearchMode?
+    var jxlDistance: Float?
+    var jxlEffort: Int?
+    var jxlEffortSearch: EffortSearchMode?
+    var qualitySearch: QualitySearchMode?
+    var avifQuality: Int?
+    var avifSpeed: Int?
+    var qualityHeuristic: Bool?
+    var allowDatabase: Bool?
+    var toolPolicy: ToolSelectionPolicy?
+}
+
+private struct PhotosImportSettings {
+    var backend: PhotosImportBackend?
+    var nativeBatchSize: Int?
+    var appleScriptBatchSize: Int?
+    var verificationBatchSize: Int?
+    var adaptive: Bool?
+    var minimumBatchSize: Int?
+    var maximumBatchSize: Int?
+    var targetSeconds: Int?
+    var rootFolder: String?
+    var album: String?
+    var preserveTree: Bool?
+}
+
+private struct MediaSettings {
+    var image = ImageSettings()
+    var fastImage = ImageSettings()
+    var photos = PhotosImportSettings()
+    var imageFailure: FileFailurePolicy?
+    var fastImageFailure: FileFailurePolicy?
+    var imageSizeTolerance: Bool?
+    var imageSizeToleranceBytes: Int?
+    var videoFailure: FileFailurePolicy?
+    var videoCodec: VideoCodec?
+    var videoForceMsSsimLong: Bool?
+    var videoConfigurationFile: String?
+    var performance: String?
+    var externalToolSnapshot: Bool?
+    var cacheMaxBytes: Int?
+    var cacheTtlSeconds: Int?
+    var toolPaths: [ToolPipeline: [String: String]] = [:]
+    private var invalidToolPipelines: Set<ToolPipeline> = []
+    private var invalidValues: [MediaSetting: String] = [:]
+
+    func hasSameOverrides(as other: Self) -> Bool {
+        values == other.values && toolPaths == other.toolPaths
+            && invalidToolPipelines == other.invalidToolPipelines
+    }
+
+    // String values are the control/persistence boundary; processing uses typed groups.
+    var values: [MediaSetting: String] {
+        get {
+            let stored: [MediaSetting: String?] = [
+                .performance: performance, .externalToolSnapshot: externalToolSnapshot.map(String.init),
+                .cacheMaxBytes: cacheMaxBytes.map(String.init), .cacheTtlSeconds: cacheTtlSeconds.map(String.init),
+                .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
+                .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
+                .imgJxlEffort: image.jxlEffort.map(String.init),
+                .imgJxlDistance: image.jxlDistance.map { $0.rounded() == $0 ? String(Int($0)) : String($0) },
+                .imgJxlSearch: image.jxlEffortSearch?.rawValue,
+                .imgJpegSearch: image.jpegEffortSearch?.rawValue,
+                .imgQualitySearch: image.qualitySearch?.rawValue,
+                .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
+                .imgSizeTolerance: imageSizeTolerance.map(String.init),
+                .imgSizeToleranceBytes: imageSizeToleranceBytes.map(String.init),
+                .imgToolPolicy: image.toolPolicy?.rawValue,
+                .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
+                .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
+                .fastJxlEffort: fastImage.jxlEffort.map(String.init),
+                .fastJpegSearch: fastImage.jpegEffortSearch?.rawValue,
+                .fastJxlSearch: fastImage.jxlEffortSearch?.rawValue,
+                .fastQualitySearch: fastImage.qualitySearch?.rawValue,
+                .fastAvifQuality: fastImage.avifQuality.map(String.init), .fastAvifSpeed: fastImage.avifSpeed.map(String.init),
+                .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
+                .fastErrorMode: fastImageFailure?.rawValue,
+                .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
+                .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
+                .vidForceMsSsimLong: videoForceMsSsimLong.map(String.init),
+                .photosNativeBatch: photos.nativeBatchSize.map(String.init),
+                .photosAppleScriptBatch: photos.appleScriptBatchSize.map(String.init),
+                .photosVerificationBatch: photos.verificationBatchSize.map(String.init),
+                .photosAdaptive: photos.adaptive.map(String.init), .photosMinimumBatch: photos.minimumBatchSize.map(String.init),
+                .photosMaximumBatch: photos.maximumBatchSize.map(String.init), .photosTargetSeconds: photos.targetSeconds.map(String.init),
+                .photosRoot: photos.rootFolder, .photosAlbum: photos.album, .photosPreserveTree: photos.preserveTree.map(String.init),
+            ]
+            var result = stored.compactMapValues { $0 }
+            result.merge(invalidValues) { _, invalid in invalid }
+            return result
+        }
+        set {
+            let paths = toolPaths
+            let invalidPaths = invalidToolPipelines
+            self = MediaSettings()
+            toolPaths = paths
+            invalidToolPipelines = invalidPaths
+            for (field, value) in newValue {
+                if field.isDistance {
+                    guard let number = Float(value), number.isFinite, (0...25).contains(number) else { invalidValues[field] = value; continue }
+                } else if let range = field.range {
+                    guard let number = Int(value), range.contains(number) else { invalidValues[field] = value; continue }
+                } else if !field.choices.isEmpty, !field.choices.contains(value) {
+                    invalidValues[field] = value
+                    continue
+                }
+                switch field {
+                case .performance: performance = value
+                case .externalToolSnapshot: externalToolSnapshot = Bool(value)
+                case .cacheMaxBytes: cacheMaxBytes = Int(value)
+                case .cacheTtlSeconds: cacheTtlSeconds = Int(value)
+                case .imgConfig: image.configurationFile = value
+                case .imgFallback: image.fallback = ImageFallback(rawValue: value)
+                case .imgJpegEffort: image.jpegEffort = Int(value)
+                case .imgJxlDistance: image.jxlDistance = Float(value)
+                case .imgJxlEffort: image.jxlEffort = Int(value)
+                case .imgJxlSearch: image.jxlEffortSearch = EffortSearchMode(rawValue: value)
+                case .imgJpegSearch: image.jpegEffortSearch = JpegEffortSearchMode(rawValue: value)
+                case .imgQualitySearch: image.qualitySearch = QualitySearchMode(rawValue: value)
+                case .imgHeuristic: image.qualityHeuristic = Bool(value)
+                case .imgDatabase: image.allowDatabase = Bool(value)
+                case .imgSizeTolerance: imageSizeTolerance = Bool(value)
+                case .imgSizeToleranceBytes: imageSizeToleranceBytes = Int(value)
+                case .imgToolPolicy: image.toolPolicy = ToolSelectionPolicy(rawValue: value)
+                case .imgErrorMode: imageFailure = FileFailurePolicy(rawValue: value)
+                case .fastConfig: fastImage.configurationFile = value
+                case .fastFallback: fastImage.fallback = ImageFallback(rawValue: value)
+                case .fastJpegEffort: fastImage.jpegEffort = Int(value)
+                case .fastJpegSearch: fastImage.jpegEffortSearch = JpegEffortSearchMode(rawValue: value)
+                case .fastJxlEffort: fastImage.jxlEffort = Int(value)
+                case .fastJxlSearch: fastImage.jxlEffortSearch = EffortSearchMode(rawValue: value)
+                case .fastQualitySearch: fastImage.qualitySearch = QualitySearchMode(rawValue: value)
+                case .fastAvifQuality: fastImage.avifQuality = Int(value)
+                case .fastAvifSpeed: fastImage.avifSpeed = Int(value)
+                case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
+                case .fastDatabase: fastImage.allowDatabase = Bool(value)
+                case .fastToolPolicy: fastImage.toolPolicy = ToolSelectionPolicy(rawValue: value)
+                case .fastErrorMode: fastImageFailure = FileFailurePolicy(rawValue: value)
+                case .vidCodec: videoCodec = VideoCodec(rawValue: value)
+                case .vidConfig: videoConfigurationFile = value
+                case .vidErrorMode: videoFailure = FileFailurePolicy(rawValue: value)
+                case .vidForceMsSsimLong: videoForceMsSsimLong = Bool(value)
+                case .photosBackend: photos.backend = PhotosImportBackend(rawValue: value)
+                case .photosNativeBatch: photos.nativeBatchSize = Int(value)
+                case .photosAppleScriptBatch: photos.appleScriptBatchSize = Int(value)
+                case .photosVerificationBatch: photos.verificationBatchSize = Int(value)
+                case .photosAdaptive: photos.adaptive = Bool(value)
+                case .photosMinimumBatch: photos.minimumBatchSize = Int(value)
+                case .photosMaximumBatch: photos.maximumBatchSize = Int(value)
+                case .photosTargetSeconds: photos.targetSeconds = Int(value)
+                case .photosRoot: photos.rootFolder = value
+                case .photosAlbum: photos.album = value
+                case .photosPreserveTree: photos.preserveTree = Bool(value)
+                }
+            }
+        }
+    }
+
+    init(preferences: UserDefaults? = nil) {
+        if let preferences {
+            var saved: [MediaSetting: String] = [:]
+            for field in MediaSetting.allCases {
+                if let value = preferences.string(forKey: field.preferenceKey) {
+                    saved[field] = value
+                }
+            }
+            values = saved
+            for pipeline in ToolPipeline.allCases {
+                if let stored = preferences.object(forKey: pipeline.preferenceKey) {
+                    if let paths = stored as? [String: String] { toolPaths[pipeline] = paths }
+                    else { invalidToolPipelines.insert(pipeline) }
+                }
+            }
+        }
+    }
+
+    mutating func resetToolPaths(_ pipeline: ToolPipeline) {
+        toolPaths.removeValue(forKey: pipeline)
+        invalidToolPipelines.remove(pipeline)
+    }
+
+    func validateToolPaths() throws {
+        guard invalidToolPipelines.isEmpty else { throw HostError(message: localized("settings.tools.invalid_saved")) }
+        for paths in toolPaths.values {
+            for (name, path) in paths {
+                let validName = !name.isEmpty && name.utf8.allSatisfy {
+                    (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+                }
+                guard validName, path.hasPrefix("/"), !path.utf8.contains(0) else {
+                    throw HostError(message: localized("settings.invalid", name, path))
+                }
+            }
+        }
+    }
+
+    func toolArguments(_ pipeline: ToolPipeline, flag: String = "--tool") -> [String] {
+        (toolPaths[pipeline] ?? [:]).sorted { $0.key < $1.key }.flatMap { [flag, "\($0.key)=\($0.value)"] }
+    }
+
+    func validate(_ fields: [MediaSetting] = MediaSetting.allCases) throws {
+        try validateToolPaths()
+        for field in fields {
+            guard let value = values[field] else { continue }
+            let valid: Bool
+            switch field {
+            case .imgJxlDistance:
+                valid = Float(value).map { $0.isFinite && (0...25).contains($0) } ?? false
+            case .imgConfig, .fastConfig, .vidConfig:
+                var isDirectory: ObjCBool = false
+                valid = value.hasPrefix("/")
+                    && FileManager.default.fileExists(atPath: value, isDirectory: &isDirectory)
+                    && !isDirectory.boolValue && FileManager.default.isReadableFile(atPath: value)
+            case .photosRoot, .photosAlbum:
+                valid = !value.isEmpty && value != "." && value != ".."
+                    && !value.contains("/") && !value.contains("\\")
+                    && value.rangeOfCharacter(from: .controlCharacters) == nil
+            default:
+                valid = field.range.map { range in Int(value).map(range.contains) ?? false }
+                    ?? field.choices.contains(value)
+            }
+            guard valid else { throw HostError(message: localized("settings.invalid", field.title, value)) }
+        }
+        if fields.contains(.photosMinimumBatch), let minimum = photos.minimumBatchSize,
+           let maximum = photos.maximumBatchSize, minimum > maximum {
+            throw HostError(message: localized("settings.bounds_invalid"))
+        }
+    }
+
+    func save(to preferences: UserDefaults) throws {
+        try validate()
+        for field in MediaSetting.allCases {
+            if let value = values[field] { preferences.set(value, forKey: field.preferenceKey) }
+            else { preferences.removeObject(forKey: field.preferenceKey) }
+        }
+        for pipeline in ToolPipeline.allCases {
+            if let paths = toolPaths[pipeline], !paths.isEmpty { preferences.set(paths, forKey: pipeline.preferenceKey) }
+            else { preferences.removeObject(forKey: pipeline.preferenceKey) }
+        }
+    }
+
+    private func argumentValue(for field: MediaSetting) -> String? {
+        if field == .imgJpegEffort && image.jpegEffortSearch == .full { return nil }
+        if field == .fastJpegEffort && fastImage.jpegEffortSearch == .full { return nil }
+        if field == .imgJxlDistance && image.qualitySearch == .adaptive { return nil }
+        if field == .fastAvifQuality,
+           fastImage.qualitySearch == .adaptive || fastImage.qualitySearch == .modeDefault { return nil }
+        return values[field]
+    }
+
+    func arguments(operation: OperationMode, processing: ProcessingMode) throws -> [String] {
+        let fastImages = operation.backendMode == "fast-img"
+        let images = operation == .adjacent && processing != .videosOnly
+        let videos = operation == .adjacent && processing != .imagesOnly
+        let fields = MediaSetting.allCases.filter {
+            if $0.isFastImage && !$0.appliesToFast(avif: operation == .fastImgAvif) { return false }
+            if $0 == .externalToolSnapshot { return images || fastImages || operation == .restoreJpeg }
+            if $0.isShared { return images || videos || fastImages || ($0.isCache && operation == .fastVid) }
+            return $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
+        }
+        try validate(fields)
+        var arguments = fields.flatMap { field -> [String] in
+            guard let value = argumentValue(for: field) else { return [] }
+            return field.arguments(value)
+        }
+        if images || fastImages { arguments += toolArguments(fastImages ? .fastImage : .image, flag: "--img-tool") }
+        if videos { arguments += toolArguments(.video, flag: "--vid-tool") }
+        return arguments
+    }
+
+    func runtimeArguments(fast: Bool, inheritedOnly: Bool, avif: Bool = false) -> [String] {
+        var arguments = MediaSetting.allCases.filter {
+            ($0.isShared || $0 == .externalToolSnapshot || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
+                && (!fast || !$0.isFastImage || $0.appliesToFast(avif: avif))
+                && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
+        }.flatMap { field -> [String] in
+            guard let value = inheritedOnly ? values[field] : argumentValue(for: field) else { return [] }
+            return field.arguments(value).map { argument in
+                argument.hasPrefix("--img-") ? "--" + argument.dropFirst(6) : argument
+            }
+        }
+        if !inheritedOnly { arguments += toolArguments(fast ? .fastImage : .image) }
+        return arguments
+    }
+
+    func videoRuntimeArguments(inheritedOnly: Bool) -> [String] {
+        var arguments = videoConfigurationFile.map { ["--config", $0] } ?? []
+        if !inheritedOnly {
+            if let performance { arguments += ["--performance", performance] }
+            if let cacheMaxBytes { arguments += ["--cache-max-bytes", String(cacheMaxBytes)] }
+            if let cacheTtlSeconds { arguments += ["--cache-ttl-seconds", String(cacheTtlSeconds)] }
+            if let videoCodec { arguments += ["--codec", videoCodec.rawValue] }
+            if let videoFailure { arguments += ["--error-mode", videoFailure.rawValue] }
+            if let videoForceMsSsimLong { arguments += ["--force-ms-ssim-long=\(videoForceMsSsimLong)"] }
+            arguments += toolArguments(.video)
+        }
+        return arguments
+    }
+}
+
+private struct EffectiveRuntimeSettings {
+    let values: [String: String]
+    let sources: [String: String]
+    let sourceChain: [String: [String]]
+    subscript(key: String) -> String? { values[key] }
+
+    static func decode(_ data: Data) throws -> EffectiveRuntimeSettings {
+        guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let config = document["config"] as? [String: Any],
+              let sources = document["sources"] as? [String: String],
+              let chains = document["source_chain"] as? [String: [String]],
+              !sources.isEmpty, Set(sources.keys) == Set(chains.keys),
+              sources.allSatisfy({ key, source in
+                  !source.isEmpty && chains[key]?.last == source
+                      && chains[key]?.allSatisfy({ !$0.isEmpty }) == true
+              }) else {
+            throw HostError(message: localized("settings.config_invalid"))
+        }
+        var result: [String: String] = [:]
+        for (section, object) in config {
+            guard let fields = object as? [String: Any] else { continue }
+            for (key, value) in fields {
+                if section == "tools", key == "paths" {
+                    guard let paths = value as? [String: String] else {
+                        throw HostError(message: localized("settings.config_invalid"))
+                    }
+                    for (name, path) in paths { result["tools.paths.\(name)"] = path }
+                    continue
+                }
+                if value is NSNull { continue }
+                if let number = value as? NSNumber {
+                    if section == "img" && key == "jxl_distance" {
+                        let distance = number.floatValue
+                        guard CFGetTypeID(number) != CFBooleanGetTypeID(), distance.isFinite, (0...25).contains(distance) else {
+                            throw HostError(message: localized("settings.config_invalid"))
+                        }
+                        result["img.jxl_distance"] = distance.rounded() == distance ? String(Int(distance)) : String(distance)
+                    } else {
+                        result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
+                            ? (number.boolValue ? "true" : "false") : number.stringValue
+                    }
+                } else if let text = value as? String { result["\(section).\(key)"] = text }
+            }
+        }
+        guard result.keys.allSatisfy({ sources[$0] != nil }) else {
+            throw HostError(message: localized("settings.config_invalid"))
+        }
+        return EffectiveRuntimeSettings(values: result, sources: sources, sourceChain: chains)
+    }
+
+    func originDescription(key: String, guiOverride: Bool) throws -> String {
+        guard let chain = sourceChain[key], !chain.isEmpty, chain.last == sources[key],
+              !guiOverride || chain.last == "CLI" else {
+            throw HostError(message: localized("settings.config_invalid"))
+        }
+        let layers = chain.enumerated().map { index, source in
+            let label = guiOverride && index == chain.count - 1 ? "CLI (GUI)" : source
+            return "\(index + 1). \(label)"
+        }.joined(separator: "\n")
+        return "\(key) = \(values[key] ?? "null")\n\n\(localized("settings.sources.order"))\n\(layers)"
+    }
+}
+
+func settingsToolOutput(_ binary: URL, arguments: [String], timeout: TimeInterval? = 10, acceptedExitCodes: Set<Int32> = [0]) throws -> Data {
+    if isDebugWindow, arguments.contains(where: { ["--history-cleanup", "--history-backup", "--local-backup", "--prune", "--yes"].contains($0) }) {
+        throw HostError(message: localized("debug.preview_only"))
+    }
+    let process = Process()
+    process.executableURL = binary
+    process.arguments = arguments
+    process.environment = nativeChildEnvironment()
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = output
+    try process.run()
+    let watchdog = timeout.map { interval in
+        let item = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + interval, execute: item)
+        return item
+    }
+    defer { watchdog?.cancel() }
+    let capture = try readBoundedProcessOutput(output.fileHandleForReading, limit: 1024 * 1024)
+    process.waitUntilExit()
+    guard !capture.exceeded, process.terminationReason == .exit, acceptedExitCodes.contains(process.terminationStatus) else {
+        let detail = String(decoding: capture.data.prefix(8192), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        throw HostError(message: detail.isEmpty ? localized("settings.backend_failed", process.terminationStatus) : detail)
+    }
+    return capture.data
+}
+
+private final class PreflightQuery: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        cancelled = true
+        // The schema-2 launcher isolates its read-only probes in this process group.
+        if let process, process.isRunning {
+            kill(-process.processIdentifier, SIGKILL)
+            kill(process.processIdentifier, SIGKILL)
+        }
+    }
+
+    func run(_ binary: URL, arguments: [String], timeout: TimeInterval = 30) throws -> Data {
+        let child = Process()
+        child.executableURL = binary
+        child.arguments = arguments
+        child.environment = nativeChildEnvironment()
+        let pipe = Pipe()
+        child.standardOutput = pipe
+        child.standardError = pipe
+        defer { try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
+        lock.lock()
+        guard !cancelled else {
+            lock.unlock()
+            throw HostError(message: localized("preflight.cancelled"))
+        }
+        do { try child.run() } catch { lock.unlock(); throw error }
+        process = child
+        lock.unlock()
+        let watchdog = DispatchWorkItem { self.cancel() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
+        defer {
+            watchdog.cancel()
+            lock.lock()
+            process = nil
+            lock.unlock()
+        }
+        let capture: (data: Data, exceeded: Bool)
+        do {
+            capture = try readBoundedProcessOutput(pipe.fileHandleForReading, limit: 1024 * 1024)
+        } catch {
+            cancel()
+            child.waitUntilExit()
+            throw error
+        }
+        child.waitUntilExit()
+        lock.lock()
+        let wasCancelled = cancelled
+        lock.unlock()
+        guard !wasCancelled else { throw HostError(message: localized("preflight.cancelled")) }
+        guard !capture.exceeded else { throw HostError(message: localized("preflight.too_large")) }
+        guard child.terminationReason == .exit, child.terminationStatus == 0 else {
+            let detail = String(decoding: capture.data.prefix(8192), as: UTF8.self)
+            throw HostError(message: detail.isEmpty ? localized("settings.backend_failed", child.terminationStatus) : detail)
+        }
+        return capture.data
+    }
+}
+
+private func queryRuntimeSettings(arguments: [String], tool: String = "img") throws -> EffectiveRuntimeSettings {
+    guard let binary = ProcessorLocator.resolveTool(named: tool) else {
+        throw HostError(message: localized(tool == "vid" ? "error.vid_backend_missing" : "error.img_backend_missing"))
+    }
+    let data = try settingsToolOutput(binary, arguments: ["config", "show", "--effective"] + arguments)
+    return try EffectiveRuntimeSettings.decode(data)
+}
+
+private struct LocalCacheStatus: Decodable {
+    struct Database: Decodable {
+        let storeSchemaVersion: Int
+        let sqliteVersion: String
+        let journalMode: String
+        let pageSize: UInt64
+        let pageCount: UInt64
+        let freePages: UInt64
+
+        func validate() throws {
+            let bytes = pageSize.multipliedReportingOverflow(by: pageCount)
+            guard storeSchemaVersion > 0, !sqliteVersion.isEmpty,
+                  ["delete", "truncate", "persist", "memory", "wal", "off"].contains(journalMode),
+                  pageSize >= 512, pageSize <= 65536, pageSize.nonzeroBitCount == 1,
+                  pageCount > 0, freePages <= pageCount, !bytes.overflow, bytes.partialValue <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+    }
+    struct Pruning: Decodable {
+        struct Policy: Decodable {
+            let pathTreeMaxBytes: UInt64
+            let pathTreeTtlSeconds: UInt64
+        }
+        let policy: Policy
+        let expiredRows: UInt64
+        let evictedRows: UInt64
+    }
+    struct PruningPreview: Decodable {
+        let schemaVersion: Int
+        let snapshotUnixSecs: Int64
+        let cutoffUnixSecs: Int64
+        let policy: Pruning.Policy
+        let totalRows: UInt64
+        let totalPayloadBytes: UInt64
+        let expiredRows: UInt64
+        let expiredPayloadBytes: UInt64
+        let evictedRows: UInt64
+        let evictedPayloadBytes: UInt64
+        let retainedRows: UInt64
+        let retainedPayloadBytes: UInt64
+
+        func validate(rows: UInt64, bytes: UInt64) throws {
+            func sum(_ values: [UInt64]) throws -> UInt64 {
+                try values.reduce(0) { total, value in
+                    let addition = total.addingReportingOverflow(value)
+                    guard !addition.overflow, addition.partialValue <= UInt64(Int64.max) else {
+                        throw HostError(message: localized("settings.cache.invalid"))
+                    }
+                    return addition.partialValue
+                }
+            }
+            guard schemaVersion == 1, snapshotUnixSecs >= 0, cutoffUnixSecs <= snapshotUnixSecs,
+                  policy.pathTreeMaxBytes > 0, policy.pathTreeMaxBytes <= UInt64(Int64.max),
+                  policy.pathTreeTtlSeconds > 0, policy.pathTreeTtlSeconds <= UInt64(Int64.max),
+                  cutoffUnixSecs == snapshotUnixSecs - Int64(policy.pathTreeTtlSeconds),
+                  retainedPayloadBytes <= policy.pathTreeMaxBytes,
+                  totalRows == rows, totalPayloadBytes == bytes,
+                  try sum([expiredRows, evictedRows, retainedRows]) == totalRows,
+                  try sum([expiredPayloadBytes, evictedPayloadBytes, retainedPayloadBytes]) == totalPayloadBytes else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+    }
+    struct Integrity: Decodable {
+        struct Issue: Decodable { let code: String; let message: String }
+        enum Status: String, Decodable { case healthy, unhealthy, error, absent }
+        enum Check: String, Decodable { case ok, failed, notChecked = "not_checked" }
+        let schemaVersion: Int
+        let status: Status
+        let sqliteIntegrity: Check
+        let foreignKeys: Check
+        let blobScanComplete: Bool
+        let checkedCacheRows: UInt64
+        let checkedProtectedRows: UInt64
+        let corruptCacheRows: UInt64
+        let corruptProtectedRows: UInt64
+        let issueCount: UInt64
+        let issues: [Issue]
+
+        func validate() throws {
+            guard schemaVersion == 1, issues.count <= 20, UInt64(issues.count) <= issueCount,
+                  corruptCacheRows <= checkedCacheRows, corruptProtectedRows <= checkedProtectedRows,
+                  issues.allSatisfy({ !$0.code.isEmpty && !$0.message.isEmpty }) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+            let complete = sqliteIntegrity == .ok && foreignKeys == .ok && blobScanComplete
+            switch status {
+            case .healthy:
+                guard complete, issueCount == 0, corruptCacheRows == 0, corruptProtectedRows == 0 else {
+                    throw HostError(message: localized("settings.cache.invalid"))
+                }
+            case .absent:
+                guard sqliteIntegrity == .notChecked, foreignKeys == .notChecked, !blobScanComplete,
+                      checkedCacheRows == 0, checkedProtectedRows == 0, issueCount == 0 else {
+                    throw HostError(message: localized("settings.cache.invalid"))
+                }
+            case .unhealthy, .error:
+                guard issueCount > 0, !issues.isEmpty else {
+                    throw HostError(message: localized("settings.cache.invalid"))
+                }
+            }
+        }
+    }
+    struct Namespace: Decodable {
+        let name: String
+        let rows: UInt64
+        let payloadBytes: UInt64
+        let rebuildable: Bool
+    }
+    let schemaVersion: Int
+    let cacheDirectory: String
+    let coreStorePath: String?
+    let storeBytes: UInt64
+    let namespaces: [Namespace]
+    let legacyAnalysisBytes: UInt64
+    let legacyAnalysisFiles: UInt64
+    let removedRows: UInt64
+    let removedFiles: UInt64
+    let integrity: Integrity?
+    let pruning: Pruning?
+    let pruningPreview: PruningPreview?
+    let database: Database?
+    let rebuildableDatabase: Database?
+    let inactiveLegacyCache: LegacyCache?
+
+    struct LegacyCache: Decodable {
+        let rows: UInt64
+        let payloadBytes: UInt64
+    }
+
+    var coreStoreURL: URL? {
+        guard database != nil else { return nil }
+        return coreStorePath.map { URL(fileURLWithPath: $0) } ??
+            URL(fileURLWithPath: cacheDirectory, isDirectory: true).appendingPathComponent("mfb_store.sqlite")
+    }
+
+    var hasPruningStore: Bool {
+        rebuildableDatabase != nil || coreStoreURL?.deletingLastPathComponent().path == cacheDirectory
+    }
+
+    var pathTree: Namespace? { namespaces.first { $0.name == "path_tree" } }
+
+    func totals(rebuildable: Bool) throws -> (rows: UInt64, bytes: UInt64) {
+        var rows: UInt64 = 0, bytes: UInt64 = 0
+        for namespace in namespaces where namespace.rebuildable == rebuildable {
+            let count = rows.addingReportingOverflow(namespace.rows)
+            let size = bytes.addingReportingOverflow(namespace.payloadBytes)
+            guard !count.overflow, !size.overflow, size.partialValue <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+            rows = count.partialValue
+            bytes = size.partialValue
+        }
+        return (rows, bytes)
+    }
+
+    static func decode(_ data: Data) throws -> LocalCacheStatus {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let status = try decoder.decode(Self.self, from: data)
+        guard status.schemaVersion == 1, status.cacheDirectory.hasPrefix("/"),
+              status.storeBytes <= UInt64(Int64.max), status.legacyAnalysisBytes <= UInt64(Int64.max),
+              Set(status.namespaces.map(\.name)).count == status.namespaces.count,
+              status.namespaces.allSatisfy({ !$0.name.isEmpty
+                  && $0.rebuildable == ["path_tree", "gate1_verified_file"].contains($0.name) }) else {
+            throw HostError(message: localized("settings.cache.invalid"))
+        }
+        _ = try status.totals(rebuildable: true)
+        _ = try status.totals(rebuildable: false)
+        if let pruning = status.pruning {
+            let removed = pruning.expiredRows.addingReportingOverflow(pruning.evictedRows)
+            guard pruning.policy.pathTreeMaxBytes > 0, pruning.policy.pathTreeMaxBytes <= UInt64(Int64.max),
+                  pruning.policy.pathTreeTtlSeconds > 0, pruning.policy.pathTreeTtlSeconds <= UInt64(Int64.max),
+                  !removed.overflow, removed.partialValue == status.removedRows, status.removedFiles == 0 else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+        try status.integrity?.validate()
+        try status.database?.validate()
+        try status.rebuildableDatabase?.validate()
+        if let path = status.coreStorePath {
+            let cache = URL(fileURLWithPath: status.cacheDirectory, isDirectory: true)
+            let state = cache.deletingLastPathComponent().appendingPathComponent("state", isDirectory: true)
+            guard status.database != nil, path.hasPrefix("/"),
+                  [cache, state].contains(where: { $0.appendingPathComponent("mfb_store.sqlite").path == path }) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+        if let legacy = status.inactiveLegacyCache {
+            guard status.database != nil,
+                  status.rebuildableDatabase != nil || !status.hasPruningStore,
+                  legacy.rows > 0, legacy.payloadBytes <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+        if let preview = status.pruningPreview {
+            guard status.hasPruningStore, status.removedRows == 0, status.removedFiles == 0,
+                  status.pruning == nil else { throw HostError(message: localized("settings.cache.invalid")) }
+            try preview.validate(rows: status.pathTree?.rows ?? 0, bytes: status.pathTree?.payloadBytes ?? 0)
+        }
+        if let integrity = status.integrity, integrity.status == .healthy || integrity.status == .unhealthy {
+            guard integrity.blobScanComplete,
+                  integrity.checkedCacheRows == (try status.totals(rebuildable: true).rows),
+                  integrity.checkedProtectedRows == (try status.totals(rebuildable: false).rows) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+        return status
+    }
+}
+
+private struct CoreDatabaseBackup: Decodable {
+    let schemaVersion: Int
+    let source: String
+    let destination: String
+    let storeSchemaVersion: Int
+    let bytes: UInt64
+
+    static func decode(_ data: Data, source: URL, destination: URL, storeSchemaVersion: Int) throws -> Self {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let receipt = try decoder.decode(Self.self, from: data)
+        guard receipt.schemaVersion == 1, receipt.storeSchemaVersion == storeSchemaVersion,
+              receipt.source.hasPrefix("/"), receipt.destination.hasPrefix("/"), receipt.bytes > 0,
+              receipt.bytes <= UInt64(Int64.max),
+              URL(fileURLWithPath: receipt.source).standardizedFileURL == source.resolvingSymlinksInPath().standardizedFileURL,
+              URL(fileURLWithPath: receipt.destination).standardizedFileURL == destination.resolvingSymlinksInPath().standardizedFileURL else {
+            throw HostError(message: localized("settings.cache.backup_invalid"))
+        }
+        let values = try destination.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              values.fileSize.flatMap(UInt64.init(exactly:)) == receipt.bytes else {
+            throw HostError(message: localized("settings.cache.backup_invalid"))
+        }
+        return receipt
+    }
+}
+
+private func backupCoreDatabase(to destination: URL, source: URL, schema: Int) throws -> CoreDatabaseBackup {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    let data = try settingsToolOutput(binary, arguments: ["--local-backup", destination.path, "--json"], timeout: 120)
+    return try CoreDatabaseBackup.decode(data, source: source, destination: destination, storeSchemaVersion: schema)
+}
+
+private struct HistoryDatabaseBackup: Decodable {
+    let schemaVersion: Int
+    let kind: String
+    let source: String
+    let destination: String
+    let historySchemaVersion: Int
+    let bytes: UInt64
+    let sessions: UInt64
+    let events: UInt64
+    let outputRows: UInt64
+
+    static func decode(_ data: Data, source: URL, destination: URL) throws -> Self {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let receipt = try decoder.decode(Self.self, from: data)
+        guard receipt.schemaVersion == 1, receipt.kind == "history_sqlite", (1...3).contains(receipt.historySchemaVersion),
+              receipt.historySchemaVersion != 1 || receipt.outputRows == 0,
+              receipt.source.hasPrefix("/"), receipt.destination.hasPrefix("/"), receipt.bytes > 0,
+              [receipt.bytes, receipt.sessions, receipt.events, receipt.outputRows].allSatisfy({ $0 <= UInt64(Int64.max) }),
+              URL(fileURLWithPath: receipt.source).standardizedFileURL == source.resolvingSymlinksInPath().standardizedFileURL,
+              URL(fileURLWithPath: receipt.destination).standardizedFileURL == destination.resolvingSymlinksInPath().standardizedFileURL else {
+            throw HostError(message: localized("settings.history.backup_invalid"))
+        }
+        let values = try destination.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              values.fileSize.flatMap(UInt64.init(exactly:)) == receipt.bytes else {
+            throw HostError(message: localized("settings.history.backup_invalid"))
+        }
+        return receipt
+    }
+}
+
+private func historyBackupArguments(directory: URL, destination: URL) -> [String] {
+    ["--history-backup", destination.path, "--history-directory", directory.path, "--json"]
+}
+
+private func backupHistoryDatabase(to destination: URL, directory: URL) throws -> HistoryDatabaseBackup {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    let data = try settingsToolOutput(binary, arguments: historyBackupArguments(directory: directory, destination: destination), timeout: 120)
+    return try HistoryDatabaseBackup.decode(data, source: directory.appendingPathComponent("history.sqlite3"), destination: destination)
+}
+
+private struct HistoryDatabaseInspection: Decodable {
+    struct Overview: Decodable {
+        let historySchemaVersion: Int
+        let sqliteVersion: String
+        let journalMode: String
+        let pageSize: UInt64
+        let pageCount: UInt64
+        let freePages: UInt64
+        let sessions: UInt64
+        let events: UInt64
+        let eventBytes: UInt64
+        let outputRows: UInt64?
+        let outputBytes: UInt64?
+        let oldestSessionUpdate: String?
+        let newestSessionUpdate: String?
+
+        func validate(checked: Bool) throws {
+            let bytes = pageSize.multipliedReportingOverflow(by: pageCount)
+            guard (1...3).contains(historySchemaVersion), !sqliteVersion.isEmpty,
+                  ["delete", "truncate", "persist", "memory", "wal", "off"].contains(journalMode),
+                  pageSize >= 512, pageSize <= 65536, pageSize.nonzeroBitCount == 1,
+                  pageCount > 0, freePages <= pageCount, !bytes.overflow,
+                  [bytes.partialValue, sessions, events, eventBytes].allSatisfy({ $0 <= UInt64(Int64.max) }),
+                  outputRows.map({ $0 <= UInt64(Int64.max) }) ?? true,
+                  outputBytes.map({ $0 <= UInt64(Int64.max) }) ?? true,
+                  (historySchemaVersion == 1 ? outputRows == nil && outputBytes == nil
+                    : (outputRows != nil && outputBytes != nil) || (!checked && outputRows == nil && outputBytes == nil)),
+                  oldestSessionUpdate.map({ !$0.isEmpty && !$0.contains("\0") }) ?? true,
+                  newestSessionUpdate.map({ !$0.isEmpty && !$0.contains("\0") }) ?? true else {
+                throw HostError(message: localized("settings.history.inspection_invalid"))
+            }
+        }
+    }
+    struct Integrity: Decodable {
+        enum Status: String, Decodable { case healthy, unhealthy }
+        enum Check: String, Decodable { case ok, failed }
+        let status: Status
+        let checksComplete: Bool
+        let sqliteIntegrity: Check
+        let foreignKeys: Check
+        let recordTypes: Check
+        let issueCount: UInt64
+        let issues: [LocalCacheStatus.Integrity.Issue]
+
+        func validate() throws {
+            let healthy = sqliteIntegrity == .ok && foreignKeys == .ok && recordTypes == .ok
+            guard checksComplete, issues.count <= 20, UInt64(issues.count) <= issueCount,
+                  issueCount <= UInt64(Int64.max), issues.allSatisfy({ !$0.code.isEmpty && !$0.message.isEmpty }),
+                  (status == .healthy ? healthy && issueCount == 0 : !healthy && issueCount > 0 && !issues.isEmpty) else {
+                throw HostError(message: localized("settings.history.inspection_invalid"))
+            }
+        }
+    }
+    let schemaVersion: Int
+    let kind: String
+    let source: String
+    let exists: Bool
+    let overview: Overview?
+    let integrity: Integrity?
+
+    static func decode(_ data: Data, source: URL, checked: Bool) throws -> Self {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let result = try decoder.decode(Self.self, from: data)
+        guard result.schemaVersion == 1, result.kind == "history_sqlite_inspection",
+              result.source.hasPrefix("/"), !result.source.contains("\0"),
+              Data(result.source.utf8) == Data(source.path.utf8),
+              (result.exists ? result.overview != nil && (checked ? result.integrity != nil : result.integrity == nil)
+                  : result.overview == nil && result.integrity == nil) else {
+            throw HostError(message: localized("settings.history.inspection_invalid"))
+        }
+        try result.overview?.validate(checked: checked)
+        try result.integrity?.validate()
+        return result
+    }
+}
+
+private func historyInspectionArguments(directory: URL, checked: Bool) -> [String] {
+    ["--history-stats", "--history-directory", directory.path, "--json"] + (checked ? ["--check-integrity"] : [])
+}
+
+private func queryHistoryDatabase(directory: URL, checked: Bool) throws -> HistoryDatabaseInspection {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    let data = try settingsToolOutput(binary, arguments: historyInspectionArguments(directory: directory, checked: checked),
+        timeout: checked ? 120 : 30, acceptedExitCodes: checked ? [0, 2] : [0])
+    return try HistoryDatabaseInspection.decode(data, source: directory.appendingPathComponent("history.sqlite3"), checked: checked)
+}
+
+private enum LocalCacheAction: Equatable { case refresh, clear, check, preview, prune }
+
+private func cachePruningDraftMatches(_ left: MediaSettings, _ right: MediaSettings) -> Bool {
+    left.values.mapValues { Data($0.utf8) } == right.values.mapValues { Data($0.utf8) }
+}
+
+private func cachePruningArguments(_ policies: [EffectiveRuntimeSettings]) throws -> [String] {
+    let keys = ["cache.path_tree_max_bytes", "cache.path_tree_ttl_seconds"]
+    guard !policies.isEmpty else { throw HostError(message: localized("settings.config_invalid")) }
+    var arguments = ["--no-config"]
+    for (key, flag) in zip(keys, ["--cache-max-bytes", "--cache-ttl-seconds"]) {
+        let values = try policies.map { policy -> UInt64 in
+            guard let raw = policy[key], let value = UInt64(raw), value > 0, value <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.config_invalid"))
+            }
+            return value
+        }
+        guard Set(values).count == 1, let value = values.first else {
+            throw HostError(message: localized("settings.cache.prune_mixed"))
+        }
+        arguments += [flag, String(value)]
+    }
+    return arguments
+}
+
+private func queryLocalCache(action: LocalCacheAction, policyArguments: [String] = []) throws -> LocalCacheStatus {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    let arguments: [String]
+    switch action {
+    case .refresh: arguments = ["--stats", "--json"]
+    case .clear: arguments = ["--yes", "--json"]
+    case .check: arguments = ["--stats", "--check-integrity", "--json"]
+    case .prune, .preview:
+        guard policyArguments.count == 5 else { throw HostError(message: localized("settings.config_invalid")) }
+        arguments = (action == .prune ? ["--prune", "--yes", "--json"] : ["--preview-prune", "--json"]) + policyArguments
+    }
+    let status = try LocalCacheStatus.decode(settingsToolOutput(binary, arguments: arguments,
+        timeout: action == .check ? 120 : 30, acceptedExitCodes: action == .check ? [0, 1] : [0]))
+    guard action != .check || status.integrity != nil else {
+        throw HostError(message: localized("settings.cache.invalid"))
+    }
+    if action == .prune {
+        guard let pruning = status.pruning,
+              String(pruning.policy.pathTreeMaxBytes) == policyArguments[2],
+              String(pruning.policy.pathTreeTtlSeconds) == policyArguments[4] else {
+            throw HostError(message: localized("settings.cache.invalid"))
+        }
+    }
+    if action == .preview {
+        guard status.hasPruningStore == (status.pruningPreview != nil),
+              status.removedRows == 0, status.removedFiles == 0 else {
+            throw HostError(message: localized("settings.cache.invalid"))
+        }
+        if let preview = status.pruningPreview {
+            guard String(preview.policy.pathTreeMaxBytes) == policyArguments[2],
+                  String(preview.policy.pathTreeTtlSeconds) == policyArguments[4] else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+    }
+    return status
+}
+
+@MainActor
+private final class ToolInspectionPanel: NSObject, NSWindowDelegate {
+    private struct Observation: Decodable {
+        let schemaVersion: Int
+        let name: String
+        let path: String?
+        let status: String
+        let version: String?
+        let diagnostic: String?
+        let configurationSource: String?
+        let configuredPath: String?
+
+        static func decode(_ data: Data, name: String) throws -> Self {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let value = try decoder.decode(Self.self, from: data)
+            guard value.schemaVersion == 1, value.name == name,
+                  ["version_reported", "version_unconfirmed", "unresolved"].contains(value.status),
+                  value.path.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? (value.status == "unresolved"),
+                  value.configuredPath.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true,
+                  (value.status == "version_reported") == !(value.version ?? "").isEmpty,
+                  value.status != "unresolved" || value.path == nil,
+                  value.status == "version_reported" || !(value.diagnostic ?? "").isEmpty else {
+                throw HostError(message: localized("settings.tools.inspect_invalid"))
+            }
+            return value
+        }
+    }
+
+    private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    private let tools = NSPopUpButton()
+    private let details = NSTextView()
+    private let refresh = NSButton()
+    private let pipeline: ToolPipeline
+    private let avif: Bool
+    private let settings: MediaSettings
+    private let completed: () -> Void
+    private var generation = UUID()
+
+    init(settings: MediaSettings, pipeline: ToolPipeline, avif: Bool, completed: @escaping () -> Void) {
+        self.settings = settings
+        self.pipeline = pipeline
+        self.avif = avif
+        self.completed = completed
+        super.init()
+        panel.title = localized("settings.tools.inspect") + " · " + pipeline.title
+        panel.delegate = self
+        tools.addItems(withTitles: pipeline == .video ? ["ffmpeg", "ffprobe", "exiftool"]
+            : (avif ? ["avifenc", "avifdec", "exiftool", "ffprobe", "ffmpeg", "magick"]
+                : ["cjxl", "djxl", "exiftool", "ffprobe", "ffmpeg", "magick"]))
+        tools.target = self
+        tools.action = #selector(inspect)
+        tools.setAccessibilityLabel(localized("settings.tools.tool"))
+        refresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+        refresh.isBordered = false
+        refresh.target = self
+        refresh.action = #selector(inspect)
+        refresh.toolTip = localized("settings.tools.inspect_refresh")
+        refresh.setAccessibilityLabel(refresh.toolTip)
+        refresh.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        refresh.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        let selector = NSStackView(views: [NSTextField(labelWithString: localized("settings.tools.tool")), tools, refresh])
+        selector.spacing = 12
+        let note = NSTextField(wrappingLabelWithString: localized("settings.tools.inspect_note"))
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = .secondaryLabelColor
+        details.isEditable = false
+        details.isSelectable = true
+        details.drawsBackground = false
+        details.font = .systemFont(ofSize: 12)
+        details.textColor = .labelColor
+        details.isHorizontallyResizable = false
+        details.isVerticallyResizable = true
+        details.minSize = .zero
+        details.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        details.autoresizingMask = [.width]
+        details.textContainer?.widthTracksTextView = true
+        details.setAccessibilityLabel(localized("settings.tools.inspect"))
+        let scroll = NSScrollView()
+        scroll.documentView = details
+        scroll.hasVerticalScroller = true
+        let done = NSButton(title: localized("settings.tools.inspect_done"), target: self, action: #selector(close))
+        done.bezelStyle = .rounded
+        done.keyEquivalent = "\u{1b}"
+        let root = NSStackView(views: [selector, note, scroll, done])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 12
+        root.translatesAutoresizingMaskIntoConstraints = false
+        panel.contentView?.addSubview(root)
+        if let content = panel.contentView {
+            NSLayoutConstraint.activate([
+                root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+                root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+                root.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+                root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+                note.widthAnchor.constraint(equalTo: root.widthAnchor),
+                scroll.widthAnchor.constraint(equalTo: root.widthAnchor),
+            ])
+        }
+    }
+
+    func show(for parent: NSWindow) { parent.beginSheet(panel); inspect() }
+
+    @objc private func inspect() {
+        generation = UUID()
+        let token = generation
+        let name = tools.titleOfSelectedItem ?? ""
+        let worker = pipeline == .video ? "vid" : "img"
+        let arguments = pipeline == .video ? settings.videoRuntimeArguments(inheritedOnly: false)
+            : settings.runtimeArguments(fast: pipeline == .fastImage, inheritedOnly: false, avif: avif)
+        tools.isEnabled = false
+        refresh.isEnabled = false
+        details.string = localized("settings.tools.inspect_loading")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result {
+                guard let binary = ProcessorLocator.resolveTool(named: worker) else {
+                    throw HostError(message: localized(worker == "vid" ? "error.vid_backend_missing" : "error.img_backend_missing"))
+                }
+                return try Observation.decode(settingsToolOutput(binary, arguments: ["config", "tool", name] + arguments, timeout: 40), name: name)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == token else { return }
+                self.tools.isEnabled = true
+                self.refresh.isEnabled = true
+                switch result {
+                case let .success(value):
+                    self.details.string = [
+                        localized("settings.tools.inspect_status", localized("settings.tools.inspect_\(value.status)")),
+                        localized("settings.tools.inspect_role", localized("settings.tools.role.\(name)")),
+                        localized("settings.tools.inspect_path", value.path ?? localized("result.unknown")),
+                        localized("settings.tools.inspect_version", value.version ?? localized("result.unknown")),
+                        localized("settings.tools.inspect_source", value.configurationSource ?? localized("settings.tools.inspect_discovery")),
+                        value.configuredPath.map { localized("settings.tools.inspect_override", $0) } ?? "",
+                        value.diagnostic.map { localized("settings.tools.inspect_diagnostic", $0) } ?? "",
+                    ].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                case let .failure(error): self.details.string = error.localizedDescription
+                }
+                self.details.scrollRangeToVisible(NSRange(location: 0, length: 0))
+            }
+        }
+    }
+
+    @objc private func close() { generation = UUID(); panel.sheetParent?.endSheet(panel); completed() }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { close(); return false }
+
+    static func selfTest() throws {
+        let keys = ["inspect", "inspect_refresh", "inspect_done", "inspect_note", "inspect_loading", "inspect_invalid",
+            "inspect_status", "inspect_version_reported", "inspect_version_unconfirmed", "inspect_unresolved",
+            "inspect_role", "inspect_path", "inspect_version", "inspect_source", "inspect_discovery", "inspect_diagnostic", "inspect_override"]
+            + ["cjxl", "djxl", "exiftool", "ffprobe", "ffmpeg", "magick", "avifenc", "avifdec"].map { "role.\($0)" }
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path) else {
+                throw HostError(message: "Missing tool inspection language bundle")
+            }
+            for suffix in keys {
+                let key = "settings.tools.\(suffix)"
+                guard bundle.localizedString(forKey: key, value: key, table: nil) != key else {
+                    throw HostError(message: "Missing tool inspection translation: \(language)/\(key)")
+                }
+            }
+        }
+        let valid: [String: Any] = ["schema_version": 1, "name": "cjxl", "path": "/synthetic/cjxl",
+            "status": "version_reported", "version": "cjxl 1"]
+        _ = try Observation.decode(JSONSerialization.data(withJSONObject: valid), name: "cjxl")
+        for patch: [String: Any] in [["schema_version": 2], ["name": "ffmpeg"],
+            ["path": "relative/cjxl"], ["status": "ready"], ["version": ""], ["path": NSNull()]] {
+            let invalid = valid.merging(patch) { _, value in value }
+            do {
+                _ = try Observation.decode(JSONSerialization.data(withJSONObject: invalid), name: "cjxl")
+            } catch { continue }
+            throw HostError(message: "Invalid tool inspection was accepted")
+        }
+        for status in ["unresolved", "version_unconfirmed"] {
+            var observation: [String: Any] = ["schema_version": 1, "name": "cjxl", "status": status,
+                "diagnostic": "synthetic probe failure"]
+            if status != "unresolved" { observation["path"] = "/synthetic/cjxl" }
+            _ = try Observation.decode(JSONSerialization.data(withJSONObject: observation), name: "cjxl")
+        }
+    }
+}
+
+@MainActor
+private final class ToolPathsPanel: NSObject, NSTextFieldDelegate, NSWindowDelegate {
+    private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 240),
+                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    private let pipelines: [ToolPipeline]
+    private let pipelinePopup = NSPopUpButton()
+    private let toolPopup = NSPopUpButton()
+    private let path = NSTextField()
+    private let preview = NSTextField(wrappingLabelWithString: "")
+    private var settings: MediaSettings
+    private var generation = UUID()
+    private var effective: [ToolPipeline: EffectiveRuntimeSettings] = [:]
+    private let completed: (MediaSettings?) -> Void
+    private static let names = ["avifdec", "avifenc", "cjxl", "djxl", "exiftool", "ffmpeg", "ffprobe"]
+    static var searchNames: String { names.joined(separator: " ") }
+    private var pipeline: ToolPipeline { pipelines[pipelinePopup.indexOfSelectedItem] }
+    private var name: String { toolPopup.titleOfSelectedItem ?? "" }
+
+    init(settings: MediaSettings, pipelines: [ToolPipeline], completed: @escaping (MediaSettings?) -> Void) {
+        precondition(!pipelines.isEmpty)
+        self.settings = settings
+        self.pipelines = pipelines
+        self.completed = completed
+        super.init()
+        panel.title = localized("settings.tools.title")
+        panel.delegate = self
+        for pipeline in pipelines { pipelinePopup.addItem(withTitle: pipeline.title) }
+        pipelinePopup.target = self
+        pipelinePopup.action = #selector(selectPipeline)
+        pipelinePopup.setAccessibilityLabel(localized("settings.tools.pipeline"))
+        toolPopup.target = self
+        toolPopup.action = #selector(selectTool)
+        toolPopup.setAccessibilityLabel(localized("settings.tools.tool"))
+        path.delegate = self
+        path.placeholderString = localized("settings.automatic")
+        path.setAccessibilityLabel(localized("settings.tools.path"))
+        path.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let choose = button("settings.tools.choose", symbol: "folder", action: #selector(choosePath))
+        let reset = button("settings.tools.inherit", symbol: "arrow.uturn.backward", action: #selector(resetTool))
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: localized("settings.tools.pipeline")), pipelinePopup],
+            [NSTextField(labelWithString: localized("settings.tools.tool")), toolPopup],
+            [NSTextField(labelWithString: localized("settings.tools.path")), NSStackView(views: [path, choose, reset])],
+        ])
+        grid.rowSpacing = 10
+        grid.columnSpacing = 12
+        grid.column(at: 0).width = 100
+        grid.column(at: 1).xPlacement = .fill
+        for index in 0..<grid.numberOfRows { grid.row(at: index).yPlacement = .center }
+        preview.font = .systemFont(ofSize: 11)
+        preview.textColor = .secondaryLabelColor
+        preview.maximumNumberOfLines = 4
+        preview.isSelectable = true
+        preview.lineBreakMode = .byTruncatingMiddle
+        preview.setAccessibilityLabel(localized("settings.sources.preview"))
+        let actions = NSStackView(views: [
+            button("settings.tools.reset", symbol: "arrow.counterclockwise", action: #selector(resetPipeline)),
+            button("settings.tools.preview", symbol: "arrow.clockwise", action: #selector(loadPreview)),
+            button("alert.cancel", symbol: nil, action: #selector(cancel)),
+            button("settings.tools.use", symbol: nil, action: #selector(apply)),
+        ])
+        let root = NSStackView(views: [grid, preview, actions])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 16
+        root.translatesAutoresizingMaskIntoConstraints = false
+        panel.contentView?.addSubview(root)
+        if let content = panel.contentView {
+            NSLayoutConstraint.activate([
+                root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+                root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+                root.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+                grid.widthAnchor.constraint(equalTo: root.widthAnchor),
+                preview.widthAnchor.constraint(equalTo: root.widthAnchor),
+                preview.heightAnchor.constraint(equalToConstant: 58),
+            ])
+        }
+        selectPipeline()
+    }
+
+    private func button(_ key: String, symbol: String?, action: Selector) -> NSButton {
+        let button = NSButton(title: localized(key), target: self, action: action)
+        button.bezelStyle = .rounded
+        if let symbol {
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: localized(key))
+            button.title = ""
+            button.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        }
+        button.toolTip = localized(key)
+        button.setAccessibilityLabel(localized(key))
+        return button
+    }
+
+    func show(for parent: NSWindow) { parent.beginSheet(panel); loadPreview() }
+
+    @objc private func selectPipeline() {
+        let inherited = effective[pipeline]?.values.keys.compactMap {
+            $0.hasPrefix("tools.paths.") ? String($0.dropFirst(12)) : nil
+        } ?? []
+        let names = Set(Self.names + Array(settings.toolPaths[pipeline]?.keys ?? [:].keys) + inherited).sorted()
+        let selected = name
+        toolPopup.removeAllItems()
+        toolPopup.addItems(withTitles: names)
+        if names.contains(selected) { toolPopup.selectItem(withTitle: selected) }
+        selectTool()
+    }
+
+    @objc private func selectTool() {
+        generation = UUID()
+        path.stringValue = settings.toolPaths[pipeline]?[name] ?? ""
+        path.placeholderString = effective[pipeline]?["tools.paths.\(name)"] ?? localized("settings.automatic")
+        preview.stringValue = localized("settings.tools.not_previewed")
+        preview.toolTip = nil
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard notification.object as? NSTextField === path else { return }
+        generation = UUID()
+        settings.toolPaths[pipeline, default: [:]][name] = path.stringValue.isEmpty ? nil : path.stringValue
+        preview.stringValue = localized("settings.tools.not_previewed")
+        preview.toolTip = nil
+    }
+
+    @objc private func choosePath() {
+        let chooser = NSOpenPanel()
+        chooser.canChooseDirectories = false
+        chooser.allowsMultipleSelection = false
+        chooser.beginSheetModal(for: panel) { [weak self] response in
+            guard let self, response == .OK, let url = chooser.url else { return }
+            self.path.stringValue = url.path
+            self.controlTextDidChange(Notification(name: NSText.didChangeNotification, object: self.path))
+            self.loadPreview()
+        }
+    }
+
+    @objc private func resetTool() {
+        settings.toolPaths[pipeline]?.removeValue(forKey: name)
+        selectTool()
+        loadPreview()
+    }
+
+    @objc private func resetPipeline() {
+        settings.resetToolPaths(pipeline)
+        selectPipeline()
+        loadPreview()
+    }
+
+    @objc private func loadPreview() {
+        generation = UUID()
+        let token = generation
+        let selectedPipeline = pipeline
+        let selectedName = name
+        let key = "tools.paths.\(selectedName)"
+        let arguments = selectedPipeline == .video ? settings.videoRuntimeArguments(inheritedOnly: false)
+            : settings.runtimeArguments(fast: selectedPipeline == .fastImage, inheritedOnly: false)
+        let override = settings.toolPaths[selectedPipeline]?[selectedName] != nil
+        preview.stringValue = localized("settings.tools.loading")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { try queryRuntimeSettings(arguments: arguments, tool: selectedPipeline == .video ? "vid" : "img") }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == token else { return }
+                do {
+                    let resolved = try result.get()
+                    self.effective[selectedPipeline] = resolved
+                    self.selectPipeline()
+                    self.toolPopup.selectItem(withTitle: selectedName)
+                    self.path.stringValue = self.settings.toolPaths[selectedPipeline]?[selectedName] ?? ""
+                    self.path.placeholderString = resolved[key] ?? localized("settings.automatic")
+                    let text = try resolved[key].map { _ in try resolved.originDescription(key: key, guiOverride: override) }
+                        ?? localized("settings.tools.discovery")
+                    self.preview.stringValue = localized("settings.sources.preview") + "\n" + text
+                    self.preview.toolTip = self.preview.stringValue
+                } catch {
+                    self.preview.stringValue = error.localizedDescription
+                    self.preview.toolTip = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    @objc private func cancel() { generation = UUID(); panel.sheetParent?.endSheet(panel); completed(nil) }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { cancel(); return false }
+    @objc private func apply() {
+        do {
+            try settings.validateToolPaths()
+            generation = UUID()
+            panel.sheetParent?.endSheet(panel)
+            completed(settings)
+        } catch { NSAlert(error: error).beginSheetModal(for: panel) }
+    }
+}
+
+@MainActor
+private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFieldDelegate, NSComboBoxDelegate, NSTableViewDataSource, NSTableViewDelegate {
+    private enum SearchDestination: Equatable {
+        case setting(MediaSetting)
+        case general(String)
+        case about
+        case cache
+        case tools
+    }
+
+    private let panel: NSPanel
+    private let preferences: UserDefaults
+    private let applied: () -> Void
+    private let interfaceOnly: Bool
+    private let languagePopup = NSPopUpButton()
+    private let appearancePopup = NSPopUpButton()
+    private let zoomSlider = NSSlider()
+    private let zoomValue = NSTextField(labelWithString: "")
+    private let developerCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private var popups: [MediaSetting: NSPopUpButton] = [:]
+    private var textFields: [MediaSetting: NSTextField] = [:]
+    private var toggles: [MediaSetting: NSButton] = [:]
+    private var steppers: [MediaSetting: NSStepper] = [:]
+    private var sourceButtons: [MediaSetting: NSButton] = [:]
+    private var sourceGeneration = UUID()
+    private let sourcePopover = NSPopover()
+    private var restored = MediaSettings()
+    private var inherited: [MediaSetting: String] = [:]
+    private var inheritedSources: [MediaSetting: String] = [:]
+    private var inheritedMixed: Set<MediaSetting> = []
+    private var displayed: [MediaSetting: String] = [:]
+    private var rows: [MediaSetting: NSGridRow] = [:]
+    private var photosSourceNotice: NSStackView?
+    private let avifMetadataSummary = NSTextField(wrappingLabelWithString: "")
+    private var avifMetadataRow: NSGridRow?
+    private let developer: Bool
+    private let fast: Bool
+    private let avif: Bool
+    private let videos: Bool
+    private let privacyCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let privacyNote = NSTextField(wrappingLabelWithString: "")
+    private let advanced = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let status = NSTextField(wrappingLabelWithString: "")
+    private let tabs = NSTabView()
+    private let root = NSStackView()
+    private let search = NSSearchField()
+    private let searchResults = NSScrollView()
+    private let searchTable = NSTableView()
+    private let searchEmpty = NSTextField(labelWithString: "")
+    private var searchHeight: NSLayoutConstraint?
+    private var searchMatches: [SearchDestination] = []
+    private var fieldSections: [MediaSetting: String] = [:]
+    private var tabHeight: NSLayoutConstraint?
+    private var grids: [String: NSGridView] = [:]
+    private var applying = false
+    private var applyGeneration = UUID()
+    private var inheritedGeneration = UUID()
+    private var inheritedLoadStarted = false
+    private let resetButton = NSButton()
+    private let cancelButton = NSButton()
+    private let applyButton = NSButton()
+    private let cacheRefresh = NSButton()
+    private let cacheClear = NSButton()
+    private let cachePrune = NSButton()
+    private let cacheCheck = NSButton()
+    private let cacheBackup = NSButton()
+    private let historyBackup = NSButton()
+    private let historyRefresh = NSButton()
+    private let historyCheck = NSButton()
+    private let historyOverview = NSTextField(wrappingLabelWithString: "")
+    private let historyIntegrity = NSTextField(wrappingLabelWithString: "")
+    private var historyBackupDirectory: URL {
+        initialHistoryDirectory(preferences: preferences)
+    }
+    private var cacheStore: (url: URL, schema: Int)?
+    private var cacheLabels: [String: NSTextField] = [:]
+    private let cacheMessage = NSTextField(wrappingLabelWithString: "")
+    private var cacheMessageRow: NSGridRow?
+    private var cacheLoaded = false
+    private var cacheBusy = false
+    private var toolEditor: ToolPathsPanel?
+    private var toolInspector: ToolInspectionPanel?
+    private var processingGuide: ProcessingGuideController?
+    private var validatingLayout = false
+
+    init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, avif: Bool = false,
+         videos: Bool = false, interfaceOnly: Bool = false, applied: @escaping () -> Void) {
+        self.preferences = preferences
+        self.applied = applied
+        self.interfaceOnly = interfaceOnly
+        self.developer = developer
+        self.fast = fast
+        self.avif = avif
+        self.videos = videos
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 300),
+                        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        super.init()
+        panel.title = localized("settings.title")
+        let surface = NSView()
+        panel.contentView = surface
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 12
+        root.translatesAutoresizingMaskIntoConstraints = false
+        surface.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 20),
+            root.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -20),
+            root.topAnchor.constraint(equalTo: surface.topAnchor, constant: 16),
+            root.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -16),
+        ])
+        configureSearch()
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        tabs.delegate = self
+        installTab("general", grid: generalSettingsGrid())
+        let mediaSections = ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"]
+        for section in interfaceOnly ? ["performance"] : mediaSections {
+            let fields = MediaSetting.allCases.filter { field in
+                if interfaceOnly { return field == .externalToolSnapshot }
+                if field == .externalToolSnapshot { return section == "performance" && !videos }
+                if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
+                if field == .performance { return section == "performance" }
+                if field.isCache { return section == "cache" }
+                if field.isDeveloper {
+                    if field.isVideo { return developer && section == "developer" && !fast }
+                    return developer && section == "developer" && !videos && (fast ? field.isFastImage : field.isImage)
+                }
+                if field.isPhotos { return section == "photos" }
+                if field.isVideo { return section == "vid" && !fast }
+                return section == "img" && !videos && (fast ? field.isFastImage : field.isImage)
+            }
+            if fields.isEmpty { continue }
+            let grid = NSGridView()
+            grid.rowSpacing = 8
+            grid.columnSpacing = 12
+            for field in fields {
+                let control: NSView
+                if field.isSearchToggle || field == .photosAdaptive || field == .photosPreserveTree {
+                    let toggle = NSButton(checkboxWithTitle: field.title, target: self, action: #selector(updateVisibility))
+                    if field.isSearchToggle { toggle.action = #selector(changeSearch(_:)) }
+                    toggle.allowsMixedState = false
+                    toggles[field] = toggle
+                    control = toggle
+                } else if !field.choices.isEmpty {
+                    let popup = NSPopUpButton()
+                    popup.target = self
+                    popup.action = #selector(updateVisibility)
+                    for value in field.choices {
+                        popup.addItem(withTitle: field.choiceTitle(value))
+                        popup.lastItem?.representedObject = value
+                    }
+                    popups[field] = popup
+                    control = popup
+                } else {
+                    let text: NSTextField
+                    if field == .imgJxlDistance {
+                        let combo = NSComboBox()
+                        combo.addItems(withObjectValues: ["0", "0.1", "0.25", "0.5", "1", "2"])
+                        combo.isEditable = true
+                        combo.completes = false
+                        text = combo
+                    } else { text = NSTextField() }
+                    text.delegate = self
+                    text.placeholderString = field.range == nil ? localized("settings.automatic") : ""
+                    text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                    textFields[field] = text
+                    if field.isCache || field == .imgSizeToleranceBytes {
+                        // Keep full Int64 precision; NSStepper stores its value as Double.
+                        text.placeholderString = localized("settings.automatic")
+                        control = text
+                    } else if let range = field.range {
+                        text.widthAnchor.constraint(equalToConstant: 100).isActive = true
+                        text.setAccessibilityLabel(field.title)
+                        text.toolTip = localized("settings.\(field.labelKey).help")
+                        let stepper = NSStepper()
+                        stepper.setAccessibilityLabel(field.title)
+                        stepper.toolTip = text.toolTip
+                        stepper.minValue = Double(range.lowerBound)
+                        stepper.maxValue = Double(range.upperBound)
+                        stepper.increment = 1
+                        stepper.target = self
+                        stepper.action = #selector(stepNumber(_:))
+                        steppers[field] = stepper
+                        control = NSStackView(views: [text, stepper])
+                    } else { control = text }
+                }
+                control.setAccessibilityLabel(field.title)
+                control.toolTip = localized("settings.\(field.labelKey).help")
+                if field == .externalToolSnapshot { control.setAccessibilityHelp(control.toolTip) }
+                control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                let fieldView: NSView
+                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode, .externalToolSnapshot].contains(field) {
+                    let note = NSTextField(wrappingLabelWithString: localized("settings.\(field.labelKey).note"))
+                    note.font = .systemFont(ofSize: 11)
+                    note.textColor = .secondaryLabelColor
+                    let stack = NSStackView(views: [control, note])
+                    stack.orientation = .vertical
+                    stack.alignment = .leading
+                    stack.spacing = 3
+                    note.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+                    fieldView = stack
+                } else if field == .photosBackend {
+                    let symbol = NSImageView()
+                    symbol.image = NSImage(systemSymbolName: "info.circle.fill", accessibilityDescription: nil)
+                    symbol.contentTintColor = .systemOrange
+                    symbol.setContentHuggingPriority(.required, for: .horizontal)
+                    let title = NSTextField(labelWithString: localized("photos.source.title"))
+                    title.font = .systemFont(ofSize: 11, weight: .medium)
+                    let heading = NSStackView(views: [symbol, title])
+                    heading.spacing = 5
+                    let message = NSTextField(wrappingLabelWithString: localized("photos.source.notice") + "\n" + localized("photos.source.detail"))
+                    message.font = .systemFont(ofSize: 11)
+                    message.textColor = .secondaryLabelColor
+                    let notice = NSStackView(views: [heading, message])
+                    notice.orientation = .vertical
+                    notice.alignment = .leading
+                    notice.spacing = 3
+                    notice.setAccessibilityLabel(localized("photos.source.title"))
+                    notice.setAccessibilityHelp(message.stringValue)
+                    message.widthAnchor.constraint(equalTo: notice.widthAnchor).isActive = true
+                    photosSourceNotice = notice
+                    let stack = NSStackView(views: [control, notice])
+                    stack.orientation = .vertical
+                    stack.alignment = .leading
+                    stack.spacing = 7
+                    notice.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+                    fieldView = stack
+                } else { fieldView = control }
+                var cells: [NSView] = toggles[field] == nil
+                    ? [NSTextField(labelWithString: field.title), fieldView] : [control, NSView()]
+                if developer && field.runtimeKey != nil {
+                    let source = NSButton()
+                    source.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
+                    source.target = self
+                    source.action = #selector(showSources(_:))
+                    source.isBordered = false
+                    source.toolTip = localized("settings.sources.button", field.title)
+                    source.setAccessibilityLabel(source.toolTip)
+                    source.widthAnchor.constraint(equalToConstant: 22).isActive = true
+                    source.heightAnchor.constraint(equalToConstant: 22).isActive = true
+                    sourceButtons[field] = source
+                    cells.append(source)
+                } else if developer { cells.append(NSView()) }
+                let row = grid.addRow(with: cells)
+                if toggles[field] != nil { row.mergeCells(in: NSRange(location: 0, length: 2)) }
+                rows[field] = row
+                fieldSections[field] = section
+                row.yPlacement = .center
+            }
+            if section == "img" {
+                if fast && avif {
+                    avifMetadataSummary.font = .systemFont(ofSize: 11)
+                    avifMetadataSummary.textColor = .secondaryLabelColor
+                    avifMetadataSummary.isSelectable = true
+                    avifMetadataSummary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                    displayAvifMetadataMessage("settings.avif_metadata.loading")
+                    avifMetadataRow = grid.addRow(with: developer
+                        ? [NSTextField(labelWithString: localized("settings.avif_metadata.title")), avifMetadataSummary, NSView()]
+                        : [NSTextField(labelWithString: localized("settings.avif_metadata.title")), avifMetadataSummary])
+                    avifMetadataRow?.yPlacement = .top
+                }
+                let guide = NSButton(title: localized("settings.recovery.guide"), target: self, action: #selector(showRecoveryGuide))
+                guide.image = NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: nil)
+                guide.imagePosition = .imageLeading
+                guide.isBordered = false
+                guide.alignment = .left
+                guide.contentTintColor = .linkColor
+                guide.setAccessibilityLabel(guide.title)
+                grid.addRow(with: developer ? [NSView(), guide, NSView()] : [NSView(), guide]).yPlacement = .center
+            }
+            if section == "img" || section == "vid" {
+                let inspect = NSButton(title: localized("settings.tools.inspect"), target: self, action: #selector(inspectTools(_:)))
+                inspect.tag = section == "vid" ? 1 : 0
+                inspect.image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: nil)
+                inspect.imagePosition = .imageLeading
+                inspect.isBordered = false
+                inspect.alignment = .left
+                inspect.contentTintColor = .linkColor
+                grid.addRow(with: developer ? [NSView(), inspect, NSView()] : [NSView(), inspect]).yPlacement = .center
+            }
+            if section == "cache" { addCacheRows(to: grid) }
+            if section == "developer" {
+                let edit = NSButton(title: localized("settings.tools.title"), target: self, action: #selector(editToolPaths))
+                edit.image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: nil)
+                edit.imagePosition = .imageLeading
+                edit.bezelStyle = .rounded
+                edit.setAccessibilityLabel(localized("settings.tools.title"))
+                grid.addRow(with: [NSTextField(labelWithString: localized("settings.tools.path")), edit, NSView()]).yPlacement = .center
+            }
+            grid.column(at: 0).xPlacement = .leading
+            grid.column(at: 0).width = 220
+            grid.column(at: 1).xPlacement = .fill
+            if developer {
+                grid.column(at: 2).width = 22
+                grid.column(at: 2).xPlacement = .center
+            }
+            installTab(section, grid: grid)
+        }
+        installTab("about", grid: aboutSettingsGrid())
+        root.addArrangedSubview(tabs)
+        tabHeight = tabs.heightAnchor.constraint(equalToConstant: 210)
+        tabHeight?.isActive = true
+        tabs.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        advanced.title = localized("settings.advanced")
+        advanced.target = self
+        advanced.action = #selector(updateVisibility)
+        advanced.isHidden = true
+        root.addArrangedSubview(advanced)
+        privacyCheck.title = localized("privacy.display.title")
+        privacyCheck.toolTip = localized("privacy.display.scope")
+        privacyCheck.setAccessibilityLabel(privacyCheck.title)
+        privacyCheck.setAccessibilityHelp(privacyCheck.toolTip)
+        privacyCheck.state = DisplayPrivacy.enabled(in: preferences) ? .on : .off
+        privacyCheck.target = self
+        privacyCheck.action = #selector(changeDisplayPrivacy)
+        root.addArrangedSubview(privacyCheck)
+        privacyNote.stringValue = localized("privacy.display.scope")
+        privacyNote.font = .systemFont(ofSize: 11)
+        privacyNote.textColor = .secondaryLabelColor
+        root.addArrangedSubview(privacyNote)
+        privacyNote.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        status.font = .systemFont(ofSize: 11)
+        status.textColor = .secondaryLabelColor
+        status.maximumNumberOfLines = 3
+        status.isHidden = true
+        root.addArrangedSubview(status)
+        status.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        resetButton.title = localized("settings.reset")
+        resetButton.bezelStyle = .rounded
+        resetButton.target = self
+        resetButton.action = #selector(resetTab)
+        cancelButton.title = localized("alert.cancel")
+        cancelButton.bezelStyle = .rounded
+        cancelButton.target = self
+        cancelButton.action = #selector(cancel)
+        cancelButton.keyEquivalent = "\u{1b}"
+        applyButton.title = localized("settings.apply")
+        applyButton.bezelStyle = .rounded
+        applyButton.target = self
+        applyButton.action = #selector(apply)
+        applyButton.keyEquivalent = "\r"
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let actions = NSStackView(views: [resetButton, spacer, cancelButton, applyButton])
+        actions.distribution = .fill
+        root.addArrangedSubview(actions)
+        actions.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        restore(MediaSettings(preferences: preferences))
+    }
+
+    private func installTab(_ section: String, grid: NSGridView) {
+        let tab = NSTabViewItem(identifier: section)
+        tab.label = localized("settings.section.\(section)")
+        grids[section] = grid
+        let content = NSView()
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(grid)
+        NSLayoutConstraint.activate([
+            grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+        ])
+        tab.view = content
+        tabs.addTabViewItem(tab)
+    }
+
+    private func generalSettingsGrid() -> NSGridView {
+        languagePopup.addItems(withTitles: AppLanguage.allCases.map(\.nativeTitle))
+        appearancePopup.addItems(withTitles: AppAppearance.allCases.map(\.localizedTitle))
+        zoomSlider.minValue = Double(interfaceZoomSteps.first!)
+        zoomSlider.maxValue = Double(interfaceZoomSteps.last!)
+        zoomSlider.numberOfTickMarks = interfaceZoomSteps.count
+        zoomSlider.allowsTickMarkValuesOnly = true
+        zoomSlider.isContinuous = true
+        zoomSlider.target = self
+        zoomSlider.action = #selector(updateZoomValue)
+        zoomSlider.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        zoomSlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        zoomValue.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        zoomValue.alignment = .right
+        zoomValue.widthAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
+        zoomValue.setAccessibilityElement(false)
+        let zoomRow = NSStackView(views: [zoomSlider, zoomValue])
+        zoomRow.spacing = 10
+        zoomRow.alignment = .centerY
+        let zoomHelp = NSTextField(wrappingLabelWithString: localized("settings.zoom.help"))
+        zoomHelp.textColor = .secondaryLabelColor
+        let zoomControls = NSStackView(views: [zoomRow, zoomHelp])
+        zoomControls.orientation = .vertical
+        zoomControls.alignment = .leading
+        zoomControls.spacing = 6
+        zoomRow.widthAnchor.constraint(equalTo: zoomControls.widthAnchor).isActive = true
+        zoomHelp.widthAnchor.constraint(equalTo: zoomControls.widthAnchor).isActive = true
+        developerCheck.title = localized("option.developer")
+        developerCheck.toolTip = localized("settings.developer.help")
+        developerCheck.setAccessibilityHelp(developerCheck.toolTip)
+        let fields: [(String, NSControl, NSView)] = [
+            ("field.appearance", appearancePopup, appearancePopup),
+            ("field.language", languagePopup, languagePopup),
+            ("settings.zoom", zoomSlider, zoomControls),
+        ]
+        let grid = NSGridView(views: fields.map { key, control, view in
+            control.setAccessibilityLabel(localized(key))
+            return [NSTextField(labelWithString: localized(key)), view]
+        } + [[NSView(), developerCheck]])
+        grid.rowSpacing = 12
+        grid.columnSpacing = 14
+        grid.column(at: 0).width = 156
+        grid.column(at: 0).xPlacement = .leading
+        grid.column(at: 1).xPlacement = .fill
+        zoomSlider.setAccessibilityHelp(zoomHelp.stringValue)
+        restoreInterfacePreferences()
+        return grid
+    }
+
+    private func aboutSettingsGrid() -> NSGridView {
+        let logo = NSImageView(image: NSApp.applicationIconImage)
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        logo.setAccessibilityElement(false)
+        logo.setAccessibilityHidden(true)
+        logo.widthAnchor.constraint(equalToConstant: 112).isActive = true
+        logo.heightAnchor.constraint(equalToConstant: 112).isActive = true
+        let name = NSTextField(labelWithString: "Modern Format Boost")
+        name.font = .systemFont(ofSize: 19, weight: .semibold)
+        let version = NSTextField(labelWithString: localized("settings.about.version", appVersion))
+        version.textColor = .secondaryLabelColor
+        let licenses = NSButton(title: localized("settings.about.licenses"), target: self, action: #selector(showLicenses))
+        let details = NSStackView(views: [logo, name, version, licenses])
+        details.orientation = .vertical
+        details.alignment = .centerX
+        details.spacing = 8
+        let grid = NSGridView(views: [[NSView(), details]])
+        grid.column(at: 0).width = 0
+        grid.column(at: 1).xPlacement = .fill
+        return grid
+    }
+
+    @objc private func showLicenses() {
+        do {
+            let text = try bundledLicenseText()
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
+            scroll.hasVerticalScroller = true
+            scroll.borderType = .bezelBorder
+            let view = NSTextView(frame: scroll.bounds)
+            view.isEditable = false
+            view.isSelectable = true
+            view.font = .systemFont(ofSize: 13)
+            view.textContainerInset = NSSize(width: 12, height: 10)
+            view.autoresizingMask = [.width]
+            view.textContainer?.widthTracksTextView = true
+            view.string = text
+            view.setAccessibilityLabel(localized("settings.about.licenses"))
+            scroll.documentView = view
+            let alert = NSAlert()
+            alert.messageText = localized("settings.about.licenses")
+            alert.accessoryView = scroll
+            alert.addButton(withTitle: localized("menu.close"))
+            alert.beginSheetModal(for: panel)
+        } catch { NSAlert(error: error).beginSheetModal(for: panel) }
+    }
+
+    private func restoreInterfacePreferences(defaults: Bool = false) {
+        let language = defaults ? AppLanguage.system
+            : preferences.string(forKey: languagePreferenceKey).flatMap(AppLanguage.init(rawValue:)) ?? .system
+        let appearance = defaults ? AppAppearance.system
+            : preferences.string(forKey: appearancePreferenceKey).flatMap(AppAppearance.init(rawValue:)) ?? .system
+        languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: language) ?? 0)
+        appearancePopup.selectItem(at: AppAppearance.allCases.firstIndex(of: appearance) ?? 0)
+        developerCheck.state = !defaults && preferences.bool(forKey: developerPreferenceKey) ? .on : .off
+        zoomSlider.integerValue = defaults ? defaultInterfaceZoom : savedInterfaceZoom(preferences)
+        updateZoomValue()
+    }
+
+    @objc private func updateZoomValue() {
+        zoomValue.stringValue = localized("settings.zoom.percent", zoomSlider.integerValue)
+        zoomSlider.setAccessibilityValueDescription(zoomValue.stringValue)
+    }
+
+    private func applyInterfacePreferences() {
+        let language = AppLanguage.allCases[safe: languagePopup.indexOfSelectedItem] ?? .system
+        let appearance = AppAppearance.allCases[safe: appearancePopup.indexOfSelectedItem] ?? .system
+        preferences.set(language.rawValue, forKey: languagePreferenceKey)
+        preferences.set(appearance.rawValue, forKey: appearancePreferenceKey)
+        preferences.set(developerCheck.state == .on, forKey: developerPreferenceKey)
+        preferences.set(zoomSlider.integerValue, forKey: zoomPreferenceKey)
+        cancel()
+        applied()
+    }
+
+    private func configureSearch() {
+        search.placeholderString = localized("settings.search")
+        search.setAccessibilityLabel(localized("settings.search"))
+        search.delegate = self
+        search.sendsSearchStringImmediately = true
+        root.addArrangedSubview(search)
+        search.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        search.heightAnchor.constraint(equalToConstant: 24).isActive = true
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("setting"))
+        searchTable.addTableColumn(column)
+        searchTable.headerView = nil
+        searchTable.rowHeight = 26
+        searchTable.intercellSpacing = NSSize(width: 0, height: 0)
+        searchTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        searchTable.allowsMultipleSelection = false
+        searchTable.dataSource = self
+        searchTable.delegate = self
+        searchTable.target = self
+        searchTable.action = #selector(activateSearchResult)
+        searchTable.setAccessibilityLabel(localized("settings.search.results"))
+        searchResults.documentView = searchTable
+        searchResults.hasVerticalScroller = true
+        searchResults.autohidesScrollers = true
+        searchResults.borderType = .bezelBorder
+        searchResults.isHidden = true
+        root.addArrangedSubview(searchResults)
+        searchResults.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        searchHeight = searchResults.heightAnchor.constraint(equalToConstant: 28)
+        searchHeight?.isActive = true
+        searchEmpty.stringValue = localized("settings.search.empty")
+        searchEmpty.textColor = .secondaryLabelColor
+        searchEmpty.isHidden = true
+        root.addArrangedSubview(searchEmpty)
+    }
+
+    private func searchTitle(_ destination: SearchDestination) -> String {
+        switch destination {
+        case let .setting(field):
+            let section = fieldSections[field] ?? field.section
+            return field.title + " · " + localized("settings.section.\(section)")
+        case let .general(key): return localized(key) + " · " + localized("settings.section.general")
+        case .about: return localized("settings.section.about")
+        case .cache: return localized("settings.section.cache")
+        case .tools: return localized("settings.tools.title")
+        }
+    }
+
+    private func matchingSettings(_ query: String) -> [SearchDestination] {
+        let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !terms.isEmpty else { return [] }
+        func matches(_ text: String) -> Bool { terms.allSatisfy { text.localizedStandardContains($0) } }
+        var result = MediaSetting.allCases.compactMap { field -> SearchDestination? in
+            guard rows[field] != nil, isApplicable(field) else { return nil }
+            let destination = SearchDestination.setting(field)
+            var words = [searchTitle(destination), localized("settings.\(field.labelKey).help")]
+            words += field.choices.flatMap { [$0, field.choiceTitle($0)] }
+            if developer { words += [field.runtimeKey ?? "", field.flag] }
+            return matches(words.joined(separator: " ")) ? destination : nil
+        }
+        let cacheTerms = ["settings.section.cache", "settings.cache.path", "settings.cache.rebuildable",
+                          "settings.cache.retained", "settings.cache.store", "settings.cache.obsolete",
+                          "settings.cache.clear", "settings.cache.check", "settings.cache.prune",
+                          "settings.cache.database", "settings.cache.journal", "settings.cache.pages", "settings.cache.backup",
+                          "settings.history.path", "settings.history.backup", "settings.history.backup_help",
+                          "settings.history.overview", "settings.history.check", "settings.history.check_help"].map { localized($0) }.joined(separator: " ")
+        for key in ["field.appearance", "field.language", "settings.zoom", "option.developer"]
+            where matches(searchTitle(.general(key))) { result.append(.general(key)) }
+        if matches(localized("settings.section.about") + " " + localized("settings.about.licenses")) {
+            result.append(.about)
+        }
+        if grids["cache"] != nil, matches(cacheTerms) { result.append(.cache) }
+        if grids["developer"] != nil, matches(localized("settings.tools.title") + " tools.paths --tool " + ToolPathsPanel.searchNames) {
+            result.append(.tools)
+        }
+        return result
+    }
+
+    private func updateSearch() {
+        let selected = searchMatches.indices.contains(searchTable.selectedRow) ? searchMatches[searchTable.selectedRow] : nil
+        searchMatches = matchingSettings(search.stringValue)
+        searchTable.reloadData()
+        searchResults.isHidden = searchMatches.isEmpty
+        searchEmpty.isHidden = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !searchMatches.isEmpty
+        searchHeight?.constant = CGFloat(min(4, searchMatches.count)) * searchTable.rowHeight + 2
+        if !searchMatches.isEmpty {
+            let index = selected.flatMap { searchMatches.firstIndex(of: $0) } ?? 0
+            searchTable.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            searchTable.scrollRowToVisible(index)
+        }
+        // Return in the search field navigates; it must never apply the draft.
+        applyButton.keyEquivalent = search.stringValue.isEmpty ? "\r" : ""
+        updatePanelSize()
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { searchMatches.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard searchMatches.indices.contains(row) else { return nil }
+        let title = searchTitle(searchMatches[row])
+        let label = NSTextField(labelWithString: title)
+        label.lineBreakMode = .byTruncatingTail
+        label.toolTip = title
+        return label
+    }
+
+    @objc private func activateSearchResult() {
+        guard searchMatches.indices.contains(searchTable.selectedRow) else { return }
+        let destination = searchMatches[searchTable.selectedRow]
+        search.stringValue = ""
+        updateSearch()
+        switch destination {
+        case let .setting(field):
+            guard let section = fieldSections[field] else { return }
+            if field.isPhotos && field.range != nil { advanced.state = .on }
+            updateVisibility()
+            tabs.selectTabViewItem(withIdentifier: section)
+            let control: NSView? = (textFields[field] as NSView?) ?? popups[field] ?? toggles[field]
+            if let control { panel.makeFirstResponder(control) }
+        case let .general(key):
+            tabs.selectTabViewItem(withIdentifier: "general")
+            let controls: [String: NSControl] = ["field.appearance": appearancePopup, "field.language": languagePopup,
+                "settings.zoom": zoomSlider, "option.developer": developerCheck]
+            if let control = controls[key] { panel.makeFirstResponder(control) }
+        case .about:
+            tabs.selectTabViewItem(withIdentifier: "about")
+        case .cache:
+            tabs.selectTabViewItem(withIdentifier: "cache")
+            panel.makeFirstResponder(cacheRefresh)
+        case .tools:
+            tabs.selectTabViewItem(withIdentifier: "developer")
+            editToolPaths()
+        }
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === search else { return false }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)), !search.stringValue.isEmpty {
+            activateSearchResult()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)), !search.stringValue.isEmpty {
+            search.stringValue = ""
+            updateSearch()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) || commandSelector == #selector(NSResponder.moveUp(_:)) {
+            guard !searchMatches.isEmpty else { return true }
+            let delta = commandSelector == #selector(NSResponder.moveDown(_:)) ? 1 : -1
+            let index = min(searchMatches.count - 1, max(0, searchTable.selectedRow + delta))
+            searchTable.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            searchTable.scrollRowToVisible(index)
+            return true
+        }
+        return false
+    }
+
+    private func addCacheRows(to grid: NSGridView) {
+        for key in ["path", "database", "journal", "pages", "rebuildable", "retained", "store", "obsolete"] {
+            let value = NSTextField(labelWithString: localized("settings.cache.not_loaded"))
+            value.isSelectable = true
+            value.lineBreakMode = .byTruncatingMiddle
+            value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            cacheLabels[key] = value
+            grid.addRow(with: [NSTextField(labelWithString: localized("settings.cache.\(key)")), value]).yPlacement = .center
+        }
+        cacheRefresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: localized("settings.cache.refresh"))
+        cacheRefresh.bezelStyle = .rounded
+        cacheRefresh.toolTip = localized("settings.cache.refresh")
+        cacheRefresh.setAccessibilityLabel(localized("settings.cache.refresh"))
+        cacheRefresh.target = self
+        cacheRefresh.action = #selector(refreshCache)
+        cacheRefresh.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        cacheClear.title = localized("settings.cache.clear")
+        cacheClear.bezelStyle = .rounded
+        cacheClear.target = self
+        cacheClear.action = #selector(clearCache)
+        cacheClear.isEnabled = false
+        cachePrune.title = localized("settings.cache.prune")
+        cachePrune.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: nil)
+        cachePrune.imagePosition = .imageLeading
+        cachePrune.toolTip = localized("settings.cache.prune_detail")
+        cachePrune.setAccessibilityLabel(localized("settings.cache.prune"))
+        cachePrune.bezelStyle = .rounded
+        cachePrune.target = self
+        cachePrune.action = #selector(pruneCache)
+        cachePrune.isEnabled = false
+        cacheCheck.title = localized("settings.cache.check")
+        cacheCheck.image = NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil)
+        cacheCheck.imagePosition = .imageLeading
+        cacheCheck.toolTip = localized("settings.cache.check")
+        cacheCheck.setAccessibilityLabel(localized("settings.cache.check"))
+        cacheCheck.bezelStyle = .rounded
+        cacheCheck.target = self
+        cacheCheck.action = #selector(checkCacheIntegrity)
+        cacheBackup.title = localized("settings.cache.backup")
+        cacheBackup.image = NSImage(systemSymbolName: "externaldrive", accessibilityDescription: nil)
+        cacheBackup.imagePosition = .imageLeading
+        cacheBackup.bezelStyle = .rounded
+        cacheBackup.toolTip = localized("settings.cache.backup_help")
+        cacheBackup.setAccessibilityLabel(localized("settings.cache.backup"))
+        cacheBackup.target = self
+        cacheBackup.action = #selector(backupStore)
+        cacheBackup.isEnabled = false
+        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cacheCheck, cacheBackup])]).yPlacement = .center
+        grid.addRow(with: [NSView(), NSStackView(views: [cachePrune, cacheClear])]).yPlacement = .center
+        let historyPath = NSTextField(labelWithString: historyBackupDirectory.path)
+        historyPath.isSelectable = true
+        historyPath.lineBreakMode = .byTruncatingMiddle
+        historyPath.toolTip = historyBackupDirectory.path
+        historyPath.setAccessibilityLabel(localized("settings.history.path"))
+        historyPath.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        grid.addRow(with: [NSTextField(labelWithString: localized("settings.history.path")), historyPath]).yPlacement = .center
+        historyBackup.title = localized("settings.history.backup")
+        historyBackup.image = NSImage(systemSymbolName: "externaldrive", accessibilityDescription: nil)
+        historyBackup.imagePosition = .imageLeading
+        historyBackup.bezelStyle = .rounded
+        historyBackup.toolTip = localized("settings.history.backup_help")
+        historyBackup.setAccessibilityLabel(localized("settings.history.backup"))
+        historyBackup.target = self
+        historyBackup.action = #selector(backupHistory)
+        for (button, key, symbol, selector) in [
+            (historyRefresh, "settings.history.overview", "chart.bar.doc.horizontal", #selector(refreshHistory)),
+            (historyCheck, "settings.history.check", "checkmark.shield", #selector(checkHistory))
+        ] {
+            button.title = localized(key)
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            button.imagePosition = .imageLeading
+            button.bezelStyle = .rounded
+            button.toolTip = localized(key == "settings.history.check" ? "settings.history.check_help" : "settings.history.overview_help")
+            button.setAccessibilityLabel(localized(key))
+            button.target = self
+            button.action = selector
+        }
+        grid.addRow(with: [NSView(), NSStackView(views: [historyRefresh, historyCheck, historyBackup])]).yPlacement = .center
+        for (label, key) in [(historyOverview, "settings.history.overview"), (historyIntegrity, "settings.history.check")] {
+            label.stringValue = localized("settings.cache.not_loaded")
+            label.font = .systemFont(ofSize: 11)
+            label.maximumNumberOfLines = label === historyOverview ? 3 : 2
+            label.isSelectable = true
+            label.lineBreakMode = .byTruncatingTail
+            label.setAccessibilityLabel(localized(key))
+            grid.addRow(with: [NSTextField(labelWithString: localized(key)), label]).yPlacement = .center
+        }
+        cacheMessage.font = .systemFont(ofSize: 11)
+        cacheMessage.maximumNumberOfLines = 4
+        cacheMessage.isSelectable = true
+        cacheMessageRow = grid.addRow(with: [NSView(), cacheMessage])
+        cacheMessageRow?.isHidden = true
+    }
+
+    private func displayCache(_ snapshot: LocalCacheStatus) throws {
+        let cache = try snapshot.totals(rebuildable: true)
+        let retained = try snapshot.totals(rebuildable: false)
+        func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
+        cacheLabels["path"]?.stringValue = snapshot.cacheDirectory
+        cacheLabels["path"]?.toolTip = snapshot.cacheDirectory
+        cacheStore = snapshot.coreStoreURL.flatMap { url in snapshot.database.map { (url, $0.storeSchemaVersion) } }
+        if let database = snapshot.database {
+            cacheLabels["database"]?.stringValue = localized("settings.cache.database_value", database.storeSchemaVersion, database.sqliteVersion)
+            cacheLabels["database"]?.toolTip = cacheStore?.url.path
+            cacheLabels["journal"]?.stringValue = database.journalMode.uppercased()
+            cacheLabels["pages"]?.stringValue = localized("settings.cache.pages_value", String(database.pageCount), String(database.freePages), String(database.pageSize))
+            cacheLabels["pages"]?.toolTip = localized("settings.cache.pages_help")
+        } else {
+            let value = snapshot.rebuildableDatabase != nil || snapshot.storeBytes == 0
+                ? localized("settings.cache.absent") : localized("result.unknown")
+            for key in ["database", "journal", "pages"] { cacheLabels[key]?.stringValue = value; cacheLabels[key]?.toolTip = nil }
+        }
+        cacheLabels["rebuildable"]?.stringValue = localized("settings.cache.records", String(cache.rows), size(cache.bytes))
+        cacheLabels["retained"]?.stringValue = localized("settings.cache.records", String(retained.rows), size(retained.bytes))
+        cacheLabels["retained"]?.toolTip = snapshot.namespaces.filter { !$0.rebuildable }.map { "\($0.name): \($0.rows)" }.joined(separator: "\n")
+        cacheLabels["store"]?.stringValue = size(snapshot.storeBytes)
+        cacheLabels["store"]?.toolTip = localized("settings.cache.store_help")
+        if let legacy = snapshot.inactiveLegacyCache {
+            cacheLabels["store"]?.toolTip = [
+                localized("settings.cache.store_help"),
+                localized("settings.cache.inactive_cache", String(legacy.rows), size(legacy.payloadBytes)),
+            ].joined(separator: "\n")
+        }
+        cacheLabels["obsolete"]?.stringValue = localized("settings.cache.files", String(snapshot.legacyAnalysisFiles), size(snapshot.legacyAnalysisBytes))
+        cacheClear.isEnabled = !cacheBusy && (cache.rows > 0 || snapshot.legacyAnalysisFiles > 0)
+        cachePrune.isEnabled = !cacheBusy && (snapshot.pathTree?.rows ?? 0) > 0
+        cacheCheck.isEnabled = !cacheBusy
+        cacheBackup.isEnabled = !cacheBusy && cacheStore != nil
+        cacheLoaded = true
+    }
+
+    @objc private func refreshCache() { updateCache(action: .refresh) }
+    @objc private func checkCacheIntegrity() { updateCache(action: .check) }
+
+    @objc private func refreshHistory() { inspectHistory(checked: false) }
+    @objc private func checkHistory() { inspectHistory(checked: true) }
+
+    private func displayHistoryInspection(_ inspection: HistoryDatabaseInspection) {
+        guard let overview = inspection.overview else {
+            historyOverview.stringValue = localized("settings.history.absent")
+            historyIntegrity.stringValue = localized("settings.history.not_checked")
+            historyOverview.toolTip = inspection.source
+            historyIntegrity.toolTip = nil
+            historyIntegrity.textColor = .secondaryLabelColor
+            return
+        }
+        func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
+        let outputs = overview.outputRows.map { String($0) } ?? localized("settings.history.unsupported")
+        if overview.historySchemaVersion >= 2 && overview.outputRows == nil {
+            historyOverview.stringValue = localized("settings.history.overview_quick_value", String(overview.sessions),
+                String(overview.events), size(overview.eventBytes)) + "\n" + localized("settings.history.overview_not_scanned")
+        } else {
+            historyOverview.stringValue = localized("settings.history.overview_value", String(overview.sessions),
+                String(overview.events), size(overview.eventBytes), outputs,
+                overview.outputBytes.map(size) ?? localized("settings.history.unsupported"))
+        }
+        historyOverview.toolTip = inspection.source + "\n"
+            + localized("settings.cache.database_value", overview.historySchemaVersion, overview.sqliteVersion)
+            + " · \(overview.journalMode.uppercased())\n"
+            + localized("settings.cache.pages_value", String(overview.pageCount), String(overview.freePages), String(overview.pageSize))
+            + "\n" + localized("settings.history.update_range", overview.oldestSessionUpdate ?? localized("result.unknown"),
+                overview.newestSessionUpdate ?? localized("result.unknown"))
+        if let integrity = inspection.integrity {
+            historyIntegrity.stringValue = localized("settings.history.structure.\(integrity.status.rawValue)", String(integrity.issueCount))
+            historyIntegrity.textColor = integrity.status == .healthy ? .labelColor : .systemRed
+            historyIntegrity.toolTip = localized("settings.history.check_help") + "\n"
+                + integrity.issues.map { "\($0.code): \($0.message)" }.joined(separator: "\n")
+        } else {
+            historyIntegrity.stringValue = localized("settings.history.not_checked")
+            historyIntegrity.textColor = .secondaryLabelColor
+            historyIntegrity.toolTip = localized("settings.history.check_help")
+        }
+    }
+
+    private func inspectHistory(checked: Bool) {
+        guard !cacheBusy else { return }
+        let directory = historyBackupDirectory
+        let previous = [cacheRefresh, cacheCheck, cacheBackup, cachePrune, cacheClear].map { ($0, $0.isEnabled) }
+        cacheBusy = true
+        for (button, _) in previous { button.isEnabled = false }
+        cacheMessage.stringValue = localized(checked ? "settings.history.checking" : "settings.history.loading")
+        cacheMessage.textColor = .secondaryLabelColor
+        cacheMessage.toolTip = nil
+        cacheMessageRow?.isHidden = false
+        updatePanelSize()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result { try queryHistoryDatabase(directory: directory, checked: checked) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.cacheBusy = false
+                for (button, enabled) in previous { button.isEnabled = enabled }
+                guard self.panel.sheetParent != nil else { return }
+                do {
+                    guard Data(self.historyBackupDirectory.path.utf8) == Data(directory.path.utf8) else {
+                        throw HostError(message: localized("settings.cache.preview_changed"))
+                    }
+                    self.displayHistoryInspection(try result.get())
+                    self.cacheMessageRow?.isHidden = true
+                } catch {
+                    self.historyOverview.stringValue = localized("settings.cache.unavailable")
+                    self.historyIntegrity.stringValue = localized("settings.history.not_checked")
+                    self.historyOverview.toolTip = nil
+                    self.historyIntegrity.toolTip = nil
+                    self.cacheMessage.stringValue = error.localizedDescription
+                    self.cacheMessage.textColor = .systemRed
+                }
+                self.updatePanelSize()
+            }
+        }
+    }
+
+    @objc private func backupHistory() {
+        guard !isDebugWindow, !cacheBusy, historyBackup.isEnabled else { return }
+        let directory = historyBackupDirectory
+        let save = NSSavePanel()
+        save.title = localized("settings.history.backup")
+        save.message = localized("settings.history.backup_help")
+        save.nameFieldStringValue = "mfb-history-backup-\(UUID().uuidString.prefix(8)).sqlite"
+        save.canCreateDirectories = true
+        save.beginSheetModal(for: panel) { [weak self] response in
+            guard let self, response == .OK, let destination = save.url, !self.cacheBusy,
+                  self.panel.sheetParent != nil else { return }
+            let previous = [self.cacheRefresh, self.cacheCheck, self.cacheBackup, self.cachePrune, self.cacheClear].map { ($0, $0.isEnabled) }
+            self.cacheBusy = true
+            for (button, _) in previous { button.isEnabled = false }
+            self.cacheMessage.stringValue = localized("settings.history.backing_up")
+            self.cacheMessage.textColor = .secondaryLabelColor
+            self.cacheMessage.toolTip = nil
+            self.cacheMessageRow?.isHidden = false
+            self.updatePanelSize()
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Result { try backupHistoryDatabase(to: destination, directory: directory) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.cacheBusy = false
+                    for (button, enabled) in previous { button.isEnabled = enabled }
+                    guard self.panel.sheetParent != nil else { return }
+                    do {
+                        let receipt = try result.get()
+                        self.cacheMessage.stringValue = localized("settings.history.backed_up", destination.lastPathComponent,
+                            String(receipt.sessions), String(receipt.events), String(receipt.outputRows))
+                        self.cacheMessage.textColor = .labelColor
+                        self.cacheMessage.toolTip = receipt.destination
+                    } catch {
+                        self.cacheMessage.stringValue = error.localizedDescription
+                        self.cacheMessage.textColor = .systemRed
+                    }
+                    self.updatePanelSize()
+                }
+            }
+        }
+    }
+
+    @objc private func backupStore() {
+        guard !isDebugWindow, !cacheBusy, cacheLoaded, cacheBackup.isEnabled, let store = cacheStore else { return }
+        let save = NSSavePanel()
+        save.title = localized("settings.cache.backup")
+        save.message = localized("settings.cache.backup_help")
+        save.nameFieldStringValue = "mfb-core-backup-\(UUID().uuidString.prefix(8)).sqlite"
+        save.canCreateDirectories = true
+        save.beginSheetModal(for: panel) { [weak self] response in
+            guard let self, response == .OK, let destination = save.url, !self.cacheBusy,
+                  self.panel.sheetParent != nil else { return }
+            let previousCleanup = (self.cachePrune.isEnabled, self.cacheClear.isEnabled)
+            self.cacheBusy = true
+            for button in [self.cacheRefresh, self.cacheCheck, self.cacheBackup, self.cachePrune, self.cacheClear, self.historyBackup, self.historyRefresh, self.historyCheck] { button.isEnabled = false }
+            self.cacheMessage.stringValue = localized("settings.cache.backing_up")
+            self.cacheMessage.textColor = .secondaryLabelColor
+            self.cacheMessage.toolTip = nil
+            self.cacheMessageRow?.isHidden = false
+            self.updatePanelSize()
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Result { try backupCoreDatabase(to: destination, source: store.url, schema: store.schema) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.cacheBusy = false
+                    self.cacheRefresh.isEnabled = true
+                    self.cacheCheck.isEnabled = true
+                    self.cacheBackup.isEnabled = self.cacheStore != nil && self.cacheLoaded
+                    self.cachePrune.isEnabled = previousCleanup.0
+                    self.cacheClear.isEnabled = previousCleanup.1
+                    guard self.panel.sheetParent != nil else { return }
+                    do {
+                        let receipt = try result.get()
+                        self.cacheMessage.stringValue = localized("settings.cache.backed_up", destination.lastPathComponent,
+                            ByteCountFormatter.string(fromByteCount: Int64(receipt.bytes), countStyle: .binary))
+                        self.cacheMessage.textColor = .labelColor
+                        self.cacheMessage.toolTip = receipt.destination
+                    } catch {
+                        self.cacheMessage.stringValue = error.localizedDescription
+                        self.cacheMessage.textColor = .systemRed
+                    }
+                    self.updatePanelSize()
+                }
+            }
+        }
+    }
+
+    @objc private func pruneCache() {
+        guard !isDebugWindow, !cacheBusy, cacheLoaded, cachePrune.isEnabled else { return }
+        updateCache(action: .preview)
+    }
+
+    private func confirmCachePruning(_ preview: LocalCacheStatus.PruningPreview, settings: MediaSettings, arguments: [String]) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localized("settings.cache.prune_confirm")
+        func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
+        alert.informativeText = localized("settings.cache.preview_value", String(preview.expiredRows), size(preview.expiredPayloadBytes),
+            String(preview.evictedRows), size(preview.evictedPayloadBytes), String(preview.retainedRows), size(preview.retainedPayloadBytes))
+            + "\n\n" + localized("settings.cache.preview_note")
+        alert.addButton(withTitle: localized("settings.cache.prune"))
+        alert.addButton(withTitle: localized("alert.cancel"))
+        alert.beginSheetModal(for: panel) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, self.panel.sheetParent != nil, !self.cacheBusy else { return }
+            guard cachePruningDraftMatches(self.draft(), settings) else {
+                self.cacheMessage.stringValue = localized("settings.cache.preview_changed")
+                self.cacheMessage.textColor = .systemRed
+                self.cacheMessageRow?.isHidden = false
+                self.updatePanelSize()
+                return
+            }
+            self.updateCache(action: .prune, policyArguments: arguments)
+        }
+    }
+
+    @objc private func clearCache() {
+        guard !isDebugWindow, !cacheBusy, cacheLoaded, cacheClear.isEnabled else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localized("settings.cache.confirm")
+        alert.informativeText = localized("settings.cache.confirm_detail")
+        alert.addButton(withTitle: localized("settings.cache.clear"))
+        alert.addButton(withTitle: localized("alert.cancel"))
+        alert.beginSheetModal(for: panel) { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.updateCache(action: .clear) }
+        }
+    }
+
+    private func updateCache(action: LocalCacheAction, policyArguments: [String]? = nil) {
+        guard !cacheBusy else { return }
+        let settings = draft()
+        let fast = self.fast, videos = self.videos
+        cacheBusy = true
+        cacheRefresh.isEnabled = false
+        cacheClear.isEnabled = false
+        cachePrune.isEnabled = false
+        cacheCheck.isEnabled = false
+        cacheBackup.isEnabled = false
+        cacheMessage.toolTip = nil
+        cacheMessage.maximumNumberOfLines = 4
+        let message: String
+        switch action {
+        case .refresh: message = "settings.cache.loading"
+        case .check: message = "settings.cache.checking"
+        case .clear: message = "settings.cache.clearing"
+        case .prune: message = "settings.cache.pruning"
+        case .preview: message = "settings.cache.preview_loading"
+        }
+        cacheMessage.stringValue = localized(message)
+        cacheMessage.textColor = .secondaryLabelColor
+        cacheMessageRow?.isHidden = false
+        updatePanelSize()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result {
+                var arguments = policyArguments ?? []
+                if action == .preview || (action == .prune && policyArguments == nil) {
+                    let fields: [MediaSetting] = [.cacheMaxBytes, .cacheTtlSeconds]
+                        + (fast ? [.fastConfig] : (videos ? [.vidConfig] : [.imgConfig, .vidConfig]))
+                    try settings.validate(fields)
+                    var policies: [EffectiveRuntimeSettings] = []
+                    if !videos {
+                        policies.append(try queryRuntimeSettings(arguments: settings.runtimeArguments(fast: fast, inheritedOnly: true)
+                            + fields.filter(\.isCache).flatMap { field in settings.values[field].map(field.arguments) ?? [] }))
+                    }
+                    if !fast {
+                        let configuration = settings.videoConfigurationFile.map { ["--config", $0] } ?? []
+                        policies.append(try queryRuntimeSettings(arguments: configuration
+                            + fields.filter(\.isCache).flatMap { field in settings.values[field].map(field.arguments) ?? [] }, tool: "vid"))
+                    }
+                    arguments = try cachePruningArguments(policies)
+                }
+                return (try queryLocalCache(action: action, policyArguments: arguments), arguments)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.cacheBusy = false
+                self.cacheRefresh.isEnabled = true
+                self.cacheCheck.isEnabled = true
+                guard self.panel.sheetParent != nil else { return }
+                do {
+                    let (snapshot, arguments) = try result.get()
+                    if action == .preview && !cachePruningDraftMatches(self.draft(), settings) {
+                        throw HostError(message: localized("settings.cache.preview_changed"))
+                    }
+                    try self.displayCache(snapshot)
+                    self.cacheMessage.stringValue = action == .clear
+                        ? localized("settings.cache.cleared", String(snapshot.removedRows), String(snapshot.removedFiles)) : ""
+                    if let pruning = snapshot.pruning {
+                        self.cacheMessage.stringValue = localized("settings.cache.pruned", String(pruning.expiredRows),
+                            String(pruning.evictedRows), String(pruning.policy.pathTreeMaxBytes), String(pruning.policy.pathTreeTtlSeconds))
+                    }
+                    self.cacheMessageRow?.isHidden = self.cacheMessage.stringValue.isEmpty
+                    if let report = snapshot.integrity { self.displayCacheIntegrity(report) }
+                    if action == .preview {
+                        if let preview = snapshot.pruningPreview {
+                            self.confirmCachePruning(preview, settings: settings, arguments: arguments)
+                        } else {
+                            self.cacheMessage.stringValue = localized("settings.cache.absent")
+                            self.cacheMessageRow?.isHidden = false
+                        }
+                    }
+                } catch {
+                    self.cacheLoaded = false
+                    self.cacheStore = nil
+                    self.cacheBackup.isEnabled = false
+                    for label in self.cacheLabels.values { label.stringValue = localized("settings.cache.unavailable"); label.toolTip = nil }
+                    self.cacheMessage.stringValue = error.localizedDescription
+                    self.cacheMessage.textColor = .systemRed
+                    self.cacheMessageRow?.isHidden = false
+                }
+                self.updatePanelSize()
+            }
+        }
+    }
+
+    private func displayCacheIntegrity(_ report: LocalCacheStatus.Integrity) {
+        cacheMessage.maximumNumberOfLines = 0
+        if report.status == .error {
+            cacheLoaded = false
+            cacheStore = nil
+            cacheBackup.isEnabled = false
+            cacheClear.isEnabled = false
+            cachePrune.isEnabled = false
+            for (key, label) in cacheLabels where key != "path" {
+                label.stringValue = localized("settings.cache.unavailable")
+                label.toolTip = nil
+            }
+        }
+        cacheMessage.stringValue = localized("settings.cache.integrity.\(report.status.rawValue)")
+        if report.status != .absent {
+            cacheMessage.stringValue += "\n" + localized("settings.cache.checked",
+                String(report.checkedCacheRows), String(report.checkedProtectedRows),
+                String(report.corruptCacheRows), String(report.corruptProtectedRows), String(report.issueCount))
+        }
+        cacheMessage.textColor = report.status == .unhealthy || report.status == .error ? .systemRed : .labelColor
+        cacheMessage.toolTip = report.issues.map { "\($0.code): \($0.message)" }.joined(separator: "\n")
+        cacheMessageRow?.isHidden = false
+    }
+
+    @objc private func changeDisplayPrivacy() {
+        preferences.set(privacyCheck.state == .on, forKey: DisplayPrivacy.preferenceKey)
+        NotificationCenter.default.post(name: DisplayPrivacy.changed, object: preferences)
+    }
+
+    func show(for window: NSWindow, section: String = "general") {
+        privacyCheck.state = DisplayPrivacy.enabled(in: preferences) ? .on : .off
+        restoreInterfacePreferences()
+        tabs.selectTabViewItem(withIdentifier: section)
+        updatePanelSize()
+        window.beginSheet(panel)
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        updatePanelSize()
+        guard panel.sheetParent != nil, !validatingLayout, let section = tabViewItem?.identifier as? String else { return }
+        if !["general", "about"].contains(section), !inheritedLoadStarted { loadInheritedValues() }
+        if section == "cache", !cacheLoaded { refreshCache() }
+    }
+
+    @objc private func showRecoveryGuide() {
+        if processingGuide == nil { processingGuide = ProcessingGuideController() }
+        processingGuide?.show(relativeTo: panel, topic: "tools")
+    }
+
+    private func updatePanelSize() {
+        guard let section = tabs.selectedTabViewItem?.identifier as? String,
+              let grid = grids[section], let tabHeight else { return }
+        let about = section == "about"
+        advanced.isHidden = developer || section != "photos"
+        privacyCheck.isHidden = about
+        privacyNote.isHidden = about
+        resetButton.isHidden = about
+        cancelButton.title = localized("alert.cancel")
+        cancelButton.isEnabled = !cacheBusy
+        resetButton.isEnabled = !cacheBusy
+        applyButton.isEnabled = !cacheBusy && !applying
+        historyBackup.isEnabled = !cacheBusy
+        historyRefresh.isEnabled = !cacheBusy
+        historyCheck.isEnabled = !cacheBusy
+        if isDebugWindow {
+            for button in [cacheClear, cachePrune, cacheBackup, historyBackup] {
+                button.isEnabled = false
+                button.toolTip = localized("debug.preview_only")
+            }
+        }
+        status.isHidden = status.stringValue.isEmpty
+        let visibleRows = (0..<grid.numberOfRows).map { grid.row(at: $0) }.filter { !$0.isHidden }
+        let rowsHeight: CGFloat
+        if ["general", "about", "cache"].contains(section) {
+            panel.contentView?.layoutSubtreeIfNeeded()
+            rowsHeight = grid.frame.height
+        } else {
+            rowsHeight = visibleRows.reduce(CGFloat(0)) { height, row in
+                height + max(24, row.cell(at: 1).contentView?.fittingSize.height ?? 24)
+            } + CGFloat(max(0, visibleRows.count - 1)) * grid.rowSpacing
+        }
+        tabHeight.constant = rowsHeight + 64
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let searchExtras: CGFloat = 36 + (searchResults.isHidden ? 0 : (searchHeight?.constant ?? 0) + 12)
+            + (searchEmpty.isHidden ? 0 : 30)
+        let privacyHeight = about ? 0 : privacyCheck.fittingSize.height + privacyNote.fittingSize.height + root.spacing * 2
+        let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52) + searchExtras + privacyHeight
+        panel.setContentSize(NSSize(width: 660, height: tabHeight.constant + 76 + extras))
+        panel.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func loadInheritedValues() {
+        inheritedLoadStarted = true
+        inheritedGeneration = UUID()
+        let generation = inheritedGeneration
+        let settings = draft()
+        let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: true)
+        let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: true)
+        let videoArgs = settings.videoRuntimeArguments(inheritedOnly: true)
+        let needsStandard = interfaceOnly || (!fast && !videos)
+        let needsFast = !interfaceOnly
+        let needsVideo = !fast && !interfaceOnly
+        displayAvifMetadataMessage("settings.avif_metadata.loading")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result {
+                (try needsStandard ? queryRuntimeSettings(arguments: standardArgs) : nil,
+                 try needsFast ? queryRuntimeSettings(arguments: fastArgs) : nil,
+                 try needsVideo ? queryRuntimeSettings(arguments: videoArgs, tool: "vid") : nil)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.inheritedGeneration == generation else { return }
+                switch result {
+                case let .success((standard, fast, video)):
+                    let draft = self.draft()
+                    self.setInheritedValues(standard: standard, fast: fast, video: video)
+                    self.restore(draft)
+                    self.status.stringValue = ""
+                case let .failure(error):
+                    let draft = self.draft()
+                    self.inherited.removeAll()
+                    self.inheritedSources.removeAll()
+                    self.inheritedMixed.removeAll()
+                    self.displayAvifMetadataMessage("settings.avif_metadata.unavailable")
+                    self.restore(draft)
+                    self.status.stringValue = error.localizedDescription
+                }
+                self.updatePanelSize()
+            }
+        }
+    }
+
+    private func setInheritedValues(standard: EffectiveRuntimeSettings?, fast: EffectiveRuntimeSettings?,
+                                    video: EffectiveRuntimeSettings?) {
+        inherited.removeAll()
+        inheritedSources.removeAll()
+        inheritedMixed.removeAll()
+        for field in MediaSetting.allCases {
+            guard let key = field.runtimeKey else { continue }
+            let effective = field == .externalToolSnapshot ? (self.fast ? fast : standard)
+                : field.isShared ? (self.fast ? fast : (videos ? video : standard))
+                : (field.isFastImage || field.isPhotos ? fast : (field.isVideo ? video : standard))
+            inherited[field] = effective?[key]
+            inheritedSources[field] = effective?.sourceChain[key]?.joined(separator: " → ")
+        }
+        for field in MediaSetting.allCases where field.isShared && !self.fast && !videos {
+            guard let key = field.runtimeKey, let imageValue = standard?[key],
+                  let videoValue = video?[key], imageValue != videoValue else { continue }
+            inheritedMixed.insert(field)
+            inherited[field] = nil
+            inheritedSources[field] = "IMG: \(imageValue) (\(standard?.sources[key] ?? localized("result.unknown")))\nVID: \(videoValue) (\(video?.sources[key] ?? localized("result.unknown")))"
+        }
+        if let fast { displayAvifMetadataPolicy(fast) }
+    }
+
+    private func displayAvifMetadataMessage(_ key: String, policy: String? = nil) {
+        guard fast && avif && !videos else { return }
+        let message = localized(key)
+        avifMetadataSummary.stringValue = message
+        avifMetadataSummary.setAccessibilityLabel(message)
+        avifMetadataSummary.toolTip = policy.map { message + "\nimg.avif_metadata_policy: " + $0 } ?? message
+    }
+
+    private func displayAvifMetadataPolicy(_ effective: EffectiveRuntimeSettings) {
+        switch effective["img.avif_metadata_policy"] {
+        case "clear": displayAvifMetadataMessage("settings.avif_metadata.clear", policy: "clear")
+        case nil: displayAvifMetadataMessage("settings.avif_metadata.unavailable")
+        default: displayAvifMetadataMessage("settings.avif_metadata.unsupported")
+        }
+    }
+
+    private func restore(_ settings: MediaSettings) {
+        restored = settings
+        displayed = inherited.merging(settings.values) { _, explicit in explicit }
+        if popups[.externalToolSnapshot] != nil, displayed[.externalToolSnapshot] == nil {
+            displayed[.externalToolSnapshot] = "false"
+        }
+        for (field, text) in textFields {
+            text.stringValue = displayed[field] ?? ""
+            if field.isCache {
+                text.placeholderString = localized(inheritedMixed.contains(field) ? "settings.performance.per_pipeline" : "settings.automatic")
+            } else if field.isDistance {
+                text.placeholderString = localized(inheritedSources[field] == nil ? "result.unknown" : "settings.private_policy")
+            }
+            updateStepper(for: field)
+        }
+        for (field, toggle) in toggles {
+            let value = displayed[field]
+            let enabled = field.isSearchToggle ? value.flatMap(field.searchEnabled) : value.flatMap(Bool.init)
+            toggle.state = enabled == true ? .on : .off
+            toggle.isEnabled = enabled != nil
+            toggle.title = field.title
+            if let value, enabled == nil { toggle.title = localized("settings.invalid", field.title, value) }
+            toggle.setAccessibilityLabel(toggle.title)
+        }
+        for (field, popup) in popups {
+            for index in popup.itemArray.indices.reversed()
+                where !field.choices.contains(popup.item(at: index)?.representedObject as? String ?? "") {
+                popup.removeItem(at: index)
+            }
+            popup.selectItem(at: -1)
+            if field.isFailurePolicy || field.isEffort || field.isSearch || field.isDistance {
+                let inheritedValue = inherited[field].map {
+                    field.choices.contains($0) ? field.choiceTitle($0) : localized("settings.invalid", field.title, $0)
+                } ?? localized(field.isEffort && inheritedSources[field] != nil ? "settings.private_policy" : "result.unknown")
+                let title = field.isEffort || field.isSearch ? inheritedValue : localized("settings.failure.inherited", inheritedValue)
+                // NSPopUpButton merges equal titles; inheritance and an explicit equal value are distinct.
+                popup.menu?.insertItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""), at: 0)
+                if settings.values[field] == nil { popup.selectItem(at: 0); continue }
+            }
+            if field == .performance && inheritedMixed.contains(field) {
+                popup.insertItem(withTitle: localized("settings.performance.per_pipeline"), at: 0)
+                if settings.values[field] == nil { popup.selectItem(at: 0) }
+            }
+            if let value = displayed[field] {
+                if let item = popup.itemArray.first(where: { ($0.representedObject as? String) == value }) {
+                    popup.select(item)
+                } else {
+                    popup.addItem(withTitle: localized("settings.invalid", field.title, value))
+                    popup.lastItem?.representedObject = value
+                    popup.select(popup.lastItem)
+                }
+            }
+        }
+        if developer {
+            for (field, row) in rows {
+                row.cell(at: 1).contentView?.toolTip = localized("settings.\(field.labelKey).help")
+                    + "\n" + (field.runtimeKey ?? field.flag) + ": " + (displayed[field] ?? localized("settings.automatic"))
+                    + "\n" + (settings.values[field] == nil ? (inheritedSources[field] ?? localized("result.unknown")) : "GUI")
+            }
+        }
+        updateVisibility()
+    }
+
+    private func draft() -> MediaSettings {
+        var settings = restored
+        for (field, text) in textFields {
+            if text.stringValue != (displayed[field] ?? "") {
+                settings.values[field] = text.stringValue.isEmpty ? nil : text.stringValue
+            }
+        }
+        for (field, toggle) in toggles {
+            let enabled = field.isSearchToggle ? displayed[field].flatMap(field.searchEnabled) : displayed[field].flatMap(Bool.init)
+            if toggle.isEnabled && (toggle.state == .on) != enabled {
+                settings.values[field] = field.isSearchToggle
+                    ? (toggle.state == .on ? "adaptive" : "fixed") : (toggle.state == .on ? "true" : "false")
+            }
+        }
+        for (field, popup) in popups {
+            if field.isFailurePolicy || field.isEffort || field.isSearch || field.isDistance {
+                settings.values[field] = popup.selectedItem?.representedObject as? String
+                continue
+            }
+            if field == .performance, inheritedMixed.contains(field), popup.indexOfSelectedItem == 0 {
+                settings.values[field] = nil
+                continue
+            }
+            if let value = popup.selectedItem?.representedObject as? String, value != displayed[field] {
+                settings.values[field] = value
+            }
+        }
+        return settings
+    }
+
+    private func isApplicable(_ field: MediaSetting) -> Bool {
+        if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
+        if field == .imgJpegEffort || field == .fastJpegEffort {
+            let searchField: MediaSetting = field == .imgJpegEffort ? .imgJpegSearch : .fastJpegSearch
+            let mode = popups[searchField]?.selectedItem?.representedObject as? String ?? displayed[searchField]
+            if mode == "full" { return false }
+        }
+        let backend = (popups[.photosBackend]?.selectedItem?.representedObject as? String) ?? displayed[.photosBackend]
+        let adaptive = toggles[.photosAdaptive]?.state == .on
+        if field == .photosAppleScriptBatch && backend == "native" { return false }
+        if [.photosNativeBatch, .photosAdaptive, .photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field),
+           backend == "applescript" { return false }
+        if [.photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field), !adaptive { return false }
+        return true
+    }
+
+    @objc private func changeSearch(_ sender: NSButton) {
+        guard let field = toggles.first(where: { $0.value === sender })?.key else { return }
+        var settings = draft()
+        settings.values[field] = sender.state == .on ? "adaptive" : "fixed"
+        restore(settings)
+    }
+
+    @objc private func updateVisibility() {
+        sourceGeneration = UUID()
+        let distanceSearch = draft().image.qualitySearch?.rawValue ?? inherited[.imgQualitySearch]
+        textFields[.imgJxlDistance]?.isEnabled = distanceSearch != "adaptive"
+        let avifQualityMode = draft().values[.fastQualitySearch] ?? inherited[.fastQualitySearch]
+        let avifQualityEnabled = avifQualityMode == "fixed"
+        textFields[.fastAvifQuality]?.isEnabled = avifQualityEnabled
+        updateStepper(for: .fastAvifQuality)
+        steppers[.fastAvifQuality]?.isEnabled = avifQualityEnabled && (steppers[.fastAvifQuality]?.isEnabled ?? false)
+        if let toggle = toggles[.imgQualitySearch], let distanceSearch,
+           MediaSetting.imgQualitySearch.searchEnabled(distanceSearch) != nil {
+            toggle.title = distanceSearch == "mode-default"
+                ? localized("settings.distance.mode-default") : MediaSetting.imgQualitySearch.title
+            toggle.setAccessibilityLabel(toggle.title)
+        }
+        for (field, searchField) in [(MediaSetting.imgJxlEffort, MediaSetting.imgJxlSearch),
+                                     (.imgJpegEffort, .imgJpegSearch), (.fastJpegEffort, .fastJpegSearch)] {
+            guard let popup = popups[field], let label = rows[field]?.cell(at: 0).contentView as? NSTextField else { continue }
+            let comparing = field.isPixelEffort ? toggles[searchField]?.state == .on
+                : (popups[searchField]?.selectedItem?.representedObject as? String ?? displayed[searchField]) == "adaptive"
+            let title = comparing
+                ? localized(field.isPixelEffort ? "settings.effort.comparison" : "settings.jpeg_effort.comparison") : field.title
+            label.stringValue = title
+            popup.setAccessibilityLabel(title)
+        }
+        for (field, row) in rows {
+            row.isHidden = !isApplicable(field) || (field.range != nil && field.isPhotos && !developer && advanced.state != .on)
+        }
+        let photosBackend = draft().values[.photosBackend] ?? inherited[.photosBackend] ?? "auto"
+        photosSourceNotice?.isHidden = !["auto", "native"].contains(photosBackend)
+        updateSearch()
+    }
+
+    @objc private func stepNumber(_ sender: NSStepper) {
+        sourceGeneration = UUID()
+        if let field = steppers.first(where: { $0.value === sender })?.key {
+            textFields[field]?.integerValue = sender.integerValue
+        }
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSSearchField === search { updateSearch(); return }
+        sourceGeneration = UUID()
+        guard let text = notification.object as? NSTextField,
+              let field = textFields.first(where: { $0.value === text })?.key else { return }
+        updateStepper(for: field)
+        if [.imgConfig, .fastConfig, .vidConfig].contains(field) {
+            inheritedGeneration = UUID()
+        }
+    }
+
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        guard let combo = notification.object as? NSComboBox,
+              let value = combo.objectValueOfSelectedItem as? String else { return }
+        combo.stringValue = value
+        sourceGeneration = UUID()
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let text = notification.object as? NSTextField,
+              let field = textFields.first(where: { $0.value === text })?.key,
+              [.imgConfig, .fastConfig, .vidConfig].contains(field) else { return }
+        loadInheritedValues()
+    }
+
+    private func updateStepper(for field: MediaSetting) {
+        guard let stepper = steppers[field], let text = textFields[field], let range = field.range else { return }
+        if text.stringValue.isEmpty {
+            stepper.integerValue = range.lowerBound
+            stepper.isEnabled = true
+        } else if let value = Int(text.stringValue), range.contains(value) {
+            stepper.integerValue = value
+            stepper.isEnabled = true
+        } else {
+            stepper.isEnabled = false
+        }
+    }
+
+    @objc private func showSources(_ sender: NSButton) {
+        guard let field = sourceButtons.first(where: { $0.value === sender })?.key,
+              let key = field.runtimeKey else { return }
+        sourcePopover.close()
+        do {
+            let settings = draft()
+            try settings.validate()
+            sourceGeneration = UUID()
+            let generation = sourceGeneration
+            let requests: [(String, String, [String])]
+            if field.isShared && !fast && !videos {
+                requests = [("IMG", "img", settings.runtimeArguments(fast: false, inheritedOnly: false)),
+                            ("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
+            } else if field.isVideo || (field.isShared && videos) {
+                requests = [("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
+            } else {
+                let useFast = field.isFastImage || field.isPhotos || ((field.isShared || field == .externalToolSnapshot) && fast)
+                requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false, avif: avif))]
+            }
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let result = Result {
+                    try requests.map { label, tool, arguments in
+                        let effective = try queryRuntimeSettings(arguments: arguments, tool: tool)
+                        return "\(label)\n" + (try effective.originDescription(key: key, guiOverride: settings.values[field] != nil))
+                    }.joined(separator: "\n\n")
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.panel.sheetParent != nil, self.sourceGeneration == generation,
+                          self.draft().values == settings.values else { return }
+                    do {
+                        let text = try result.get()
+                        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 260))
+                        scroll.hasVerticalScroller = true
+                        scroll.drawsBackground = false
+                        let view = NSTextView(frame: scroll.bounds)
+                        view.isEditable = false
+                        view.isSelectable = true
+                        view.drawsBackground = false
+                        view.textColor = .labelColor
+                        view.textContainerInset = NSSize(width: 12, height: 12)
+                        view.autoresizingMask = [.width]
+                        view.textContainer?.widthTracksTextView = true
+                        view.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+                        view.string = "\(field.title)\n\(localized("settings.sources.preview"))\n\n\(text)"
+                        view.setAccessibilityLabel(localized("settings.sources.preview"))
+                        scroll.documentView = view
+                        let controller = NSViewController()
+                        controller.view = scroll
+                        self.sourcePopover.contentViewController = controller
+                        self.sourcePopover.contentSize = scroll.frame.size
+                        self.sourcePopover.behavior = .transient
+                        self.sourcePopover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minX)
+                    } catch { NSAlert(error: error).beginSheetModal(for: self.panel) }
+                }
+            }
+        } catch { NSAlert(error: error).beginSheetModal(for: panel) }
+    }
+
+    @objc private func resetTab() {
+        var settings = draft()
+        let section = tabs.selectedTabViewItem?.identifier as? String
+        if section == "general" { restoreInterfacePreferences(defaults: true); return }
+        for field in rows.keys where field.section == section || (section == "img" && field.isFastImage && !field.isDeveloper) {
+            settings.values.removeValue(forKey: field)
+        }
+        if section == "developer" {
+            for pipeline in toolPipelines { settings.resetToolPaths(pipeline) }
+        }
+        restore(settings)
+        if section == "developer" && !validatingLayout { loadInheritedValues() }
+    }
+
+    private var toolPipelines: [ToolPipeline] { fast ? [.fastImage] : (videos ? [.video] : [.image, .video]) }
+
+    @objc private func inspectTools(_ sender: NSButton) {
+        guard !applying, !cacheBusy, toolInspector == nil else { return }
+        let pipeline: ToolPipeline = sender.tag == 1 ? .video : (fast ? .fastImage : .image)
+        toolInspector = ToolInspectionPanel(settings: draft(), pipeline: pipeline, avif: avif) { [weak self] in
+            self?.toolInspector = nil
+        }
+        toolInspector?.show(for: panel)
+    }
+
+    @objc private func editToolPaths() {
+        guard !applying, !cacheBusy, toolEditor == nil else { return }
+        sourceGeneration = UUID()
+        toolEditor = ToolPathsPanel(settings: draft(), pipelines: toolPipelines) { [weak self] settings in
+            guard let self else { return }
+            self.toolEditor = nil
+            if let settings { self.restore(settings) }
+        }
+        toolEditor?.show(for: panel)
+    }
+
+    @objc private func cancel() {
+        guard !cacheBusy else { return }
+        sourcePopover.close()
+        sourceGeneration = UUID()
+        applyGeneration = UUID()
+        inheritedGeneration = UUID()
+        applying = false
+        panel.sheetParent?.endSheet(panel)
+    }
+
+    @objc private func apply() {
+        guard !applying, !cacheBusy else { return }
+        sourcePopover.close()
+        sourceGeneration = UUID()
+        do {
+            let settings = draft()
+            if settings.hasSameOverrides(as: MediaSettings(preferences: preferences)) {
+                applyInterfacePreferences()
+                return
+            }
+            try settings.validate()
+            applying = true
+            applyGeneration = UUID()
+            let generation = applyGeneration
+            let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: false)
+            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif)
+            let videoArgs = settings.videoRuntimeArguments(inheritedOnly: false)
+            let needsStandard = interfaceOnly || (!fast && !videos)
+            let needsFast = !interfaceOnly
+            let needsVideo = !fast && !interfaceOnly
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let result = Result {
+                    if needsStandard { _ = try queryRuntimeSettings(arguments: standardArgs) }
+                    if needsFast { _ = try queryRuntimeSettings(arguments: fastArgs) }
+                    if needsVideo { _ = try queryRuntimeSettings(arguments: videoArgs, tool: "vid") }
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.applyGeneration == generation else { return }
+                    self.applying = false
+                    do {
+                        try result.get()
+                        try settings.save(to: self.preferences)
+                        self.applyInterfacePreferences()
+                    } catch { NSAlert(error: error).beginSheetModal(for: self.panel) }
+                }
+            }
+        } catch { NSAlert(error: error).beginSheetModal(for: panel) }
+    }
+
+    private func validateToolPathsForSelfTest() throws {
+        let suite = "MFBToolPathsSelfTest_\(UUID().uuidString)"
+        guard let preferences = UserDefaults(suiteName: suite) else { throw HostError(message: "Tool path preferences unavailable") }
+        defer { preferences.removePersistentDomain(forName: suite) }
+        var settings = MediaSettings()
+        let imagePath = "/synthetic/tool dir/cjxl=a"
+        settings.toolPaths = [.image: ["cjxl": imagePath], .fastImage: ["cjxl": "/synthetic/fast/cjxl"],
+                              .video: ["ffmpeg": "/synthetic/video/ffmpeg"]]
+        settings.values[.imgJpegEffort] = "8"
+        try settings.save(to: preferences)
+        let restored = MediaSettings(preferences: preferences)
+        guard restored.toolPaths == settings.toolPaths,
+              restored.runtimeArguments(fast: false, inheritedOnly: false).suffix(2) == ["--tool", "cjxl=\(imagePath)"],
+              !restored.runtimeArguments(fast: false, inheritedOnly: true).contains("--tool"),
+              restored.runtimeArguments(fast: true, inheritedOnly: false).suffix(2) == ["--tool", "cjxl=/synthetic/fast/cjxl"],
+              restored.videoRuntimeArguments(inheritedOnly: false).suffix(2) == ["--tool", "ffmpeg=/synthetic/video/ffmpeg"],
+              !restored.videoRuntimeArguments(inheritedOnly: true).contains("--tool") else {
+            throw HostError(message: "Tool paths lost inheritance, exact spelling, or pipeline isolation")
+        }
+        let mixed = try restored.arguments(operation: .adjacent, processing: .both)
+        guard mixed.contains("--img-tool"), mixed.contains("--vid-tool"),
+              !(try restored.arguments(operation: .adjacent, processing: .imagesOnly)).contains("--vid-tool"),
+              !(try restored.arguments(operation: .adjacent, processing: .videosOnly)).contains("--img-tool") else {
+            throw HostError(message: "Tool path launcher scopes differ from processing scope")
+        }
+        for (name, path) in [("Bad", "/absolute"), ("cjxl", "relative"), ("cjxl", "/bad\0path")] {
+            var invalid = MediaSettings()
+            invalid.toolPaths[.image] = [name: path]
+            do { try invalid.validateToolPaths(); throw HostError(message: "Invalid tool override accepted") }
+            catch { guard error.localizedDescription != "Invalid tool override accepted" else { throw error } }
+        }
+        preferences.set(["cjxl": 4], forKey: ToolPipeline.image.preferenceKey)
+        var invalid = MediaSettings(preferences: preferences)
+        do { try invalid.validateToolPaths(); throw HostError(message: "Invalid saved tool paths ignored") }
+        catch { guard error.localizedDescription != "Invalid saved tool paths ignored" else { throw error } }
+        invalid.resetToolPaths(.image)
+        try invalid.validateToolPaths()
+        try invalid.save(to: preferences)
+        guard preferences.object(forKey: ToolPipeline.image.preferenceKey) == nil else {
+            throw HostError(message: "Reset tool paths did not restore inheritance")
+        }
+        let key = "tools.paths.cjxl"
+        let document: [String: Any] = ["config": ["tools": ["paths": ["cjxl": imagePath]]],
+                                      "sources": [key: "CLI"], "source_chain": [key: ["default", "overlay", "CLI"]]]
+        let resolved = try EffectiveRuntimeSettings.decode(JSONSerialization.data(withJSONObject: document))
+        guard resolved[key] == imagePath, try resolved.originDescription(key: key, guiOverride: true).contains("CLI (GUI)") else {
+            throw HostError(message: "Nested tool paths or their effective source chain were lost")
+        }
+        var missingSource = document
+        missingSource["sources"] = ["tools.policy": "default"]
+        missingSource["source_chain"] = ["tools.policy": ["default"]]
+        do {
+            _ = try EffectiveRuntimeSettings.decode(JSONSerialization.data(withJSONObject: missingSource))
+            throw HostError(message: "Tool path with no source accepted")
+        } catch { guard error.localizedDescription != "Tool path with no source accepted" else { throw error } }
+    }
+
+    private func validateExternalToolSnapshotForSelfTest() throws {
+        let field = MediaSetting.externalToolSnapshot
+        guard let popup = popups[field], fieldSections[field] == "performance",
+              popup.accessibilityLabel() == field.title,
+              matchingSettings(field.title).contains(.setting(field)) else {
+            throw HostError(message: "External tool pinning is missing from searchable Settings")
+        }
+
+        let original = restored
+        let originalInherited = inherited[field]
+        defer {
+            inherited[field] = originalInherited
+            restore(original)
+        }
+        inherited[field] = nil
+        restore(MediaSettings())
+        guard popup.selectedItem?.representedObject as? String == "false", draft().values[field] == nil else {
+            throw HostError(message: "External tool pinning did not default to disabled without an override")
+        }
+
+        let suite = "MFBToolSnapshotSelfTest_\(UUID().uuidString)"
+        guard let temporary = UserDefaults(suiteName: suite) else {
+            throw HostError(message: "External tool pinning preferences unavailable")
+        }
+        defer { temporary.removePersistentDomain(forName: suite) }
+        for value in ["true", "false"] {
+            inherited[field] = value == "true" ? nil : "true"
+            restore(MediaSettings())
+            popup.select(popup.itemArray.first { ($0.representedObject as? String) == value })
+            try draft().save(to: temporary)
+            let saved = MediaSettings(preferences: temporary)
+            let flag = "--external-tool-snapshot=\(value)"
+            guard saved.values[field] == value,
+                  try saved.arguments(operation: .adjacent, processing: .both) == [flag],
+                  try saved.arguments(operation: .fastImgJxl, processing: .imagesOnly) == [flag],
+                  try saved.arguments(operation: .fastImgAvif, processing: .imagesOnly) == [flag],
+                  try saved.arguments(operation: .restoreJpeg, processing: .imagesOnly) == [flag],
+                  try saved.arguments(operation: .adjacent, processing: .videosOnly).isEmpty,
+                  try saved.arguments(operation: .fastVid, processing: .videosOnly).isEmpty,
+                  saved.runtimeArguments(fast: fast, inheritedOnly: false) == [flag],
+                  saved.runtimeArguments(fast: fast, inheritedOnly: true).isEmpty,
+                  saved.videoRuntimeArguments(inheritedOnly: false).isEmpty else {
+                throw HostError(message: "External tool pinning preference did not reach the correct image modes")
+            }
+        }
+    }
+
+    func validateForSelfTest() throws {
+        validatingLayout = true
+        defer { validatingLayout = false }
+        try validateEncodingScopesForSelfTest()
+        try validateExternalToolSnapshotForSelfTest()
+        for field in [MediaSetting.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode] {
+            guard let row = rows[field] else { continue }
+            guard let stack = row.cell(at: 1).contentView as? NSStackView,
+                  let note = stack.arrangedSubviews.last as? NSTextField,
+                  note.stringValue == localized("settings.\(field.labelKey).note"),
+                  popups[field]?.accessibilityLabel() == field.title else {
+                throw HostError(message: "Encoding recovery and tool permissions lost their visible explanation")
+            }
+        }
+        var pixelEffort = MediaSettings()
+        pixelEffort.values = [.imgJxlEffort: "8", .fastJxlEffort: "10", .imgJpegEffort: "11"]
+        try pixelEffort.validate()
+        let imageArguments = try pixelEffort.arguments(operation: .adjacent, processing: .imagesOnly)
+        let fastArguments = try pixelEffort.arguments(operation: .fastImgJxl, processing: .imagesOnly)
+        guard imageArguments.contains("8"), imageArguments.contains("--img-jxl-effort"),
+              !fastArguments.contains("--img-jxl-effort"), !fastArguments.contains("8"),
+              !pixelEffort.runtimeArguments(fast: false, inheritedOnly: true).contains("--jxl-effort"),
+              pixelEffort.runtimeArguments(fast: false, inheritedOnly: false).contains("--jxl-effort"),
+              !(try pixelEffort.arguments(operation: .adjacent, processing: .videosOnly)).contains("--img-jxl-effort") else {
+            throw HostError(message: "JXL pixel effort does not preserve independent scopes and inheritance")
+        }
+        for effort in ["1", "9", "11"] {
+            pixelEffort.values[.imgJxlEffort] = effort
+            try pixelEffort.validate()
+        }
+        for invalid in ["0", "12", "1.5"] {
+            pixelEffort.values[.imgJxlEffort] = invalid
+            do { try pixelEffort.validate(); throw HostError(message: "Invalid JXL pixel effort accepted") }
+            catch { guard error.localizedDescription != "Invalid JXL pixel effort accepted" else { throw error } }
+        }
+        if !fast && !videos {
+            let previousInherited = inherited
+            let previousSources = inheritedSources
+            let previousMixed = inheritedMixed
+            defer {
+                inherited = previousInherited
+                inheritedSources = previousSources
+                inheritedMixed = previousMixed
+                restore(MediaSettings())
+            }
+            let key = "img.jxl_effort"
+            let standard = EffectiveRuntimeSettings(values: [key: "8"], sources: [key: "/synthetic/img.json"],
+                sourceChain: [key: ["default", "/synthetic/img.json"]])
+            let fastImage = EffectiveRuntimeSettings(values: [key: "10"], sources: [key: "/synthetic/fast.json"],
+                sourceChain: [key: ["default", "/synthetic/fast.json"]])
+            setInheritedValues(standard: standard, fast: fastImage, video: standard)
+            restore(MediaSettings())
+            restore(MediaSettings())
+            let field: MediaSetting = fast ? .fastJxlEffort : .imgJxlEffort
+            guard let popup = popups[field], popup.numberOfItems == 12, popup.indexOfSelectedItem == 0,
+                  (sourceButtons[field] != nil) == developer, fieldSections[field] == "img",
+                  inherited[field] == (fast ? "10" : "8"), draft().values[field] == nil else {
+                throw HostError(message: "JXL pixel effort inheritance used the wrong pipeline or fabricated an override")
+            }
+            popup.selectItem(at: fast ? 10 : 8)
+            guard draft().values[field] == inherited[field] else {
+                throw HostError(message: "Explicit JXL pixel effort equal to inheritance lost its override")
+            }
+            popup.selectItem(at: 0)
+            guard draft().values[field] == nil else {
+                throw HostError(message: "Returning to JXL pixel effort inheritance retained an override")
+            }
+            inherited.removeAll()
+            inheritedSources.removeAll()
+            restore(MediaSettings())
+            guard popup.titleOfSelectedItem == localized("result.unknown"),
+                  toggles[.imgQualitySearch]?.accessibilityLabel() == toggles[.imgQualitySearch]?.title else {
+                throw HostError(message: "Unavailable JXL pixel configuration was presented as automatic")
+            }
+            inheritedSources[field] = "default"
+            inheritedSources[.imgJxlDistance] = "default"
+            restore(MediaSettings())
+            guard popup.titleOfSelectedItem == localized("settings.private_policy"),
+                  draft().values[field] == nil,
+                  textFields[.imgJxlDistance]?.placeholderString == localized("settings.private_policy"),
+                  draft().image.jxlDistance == nil else {
+                throw HostError(message: "Null JXL pixel effort invented a resolved target")
+            }
+        }
+        restore(MediaSettings())
+        try validateCacheForSelfTest()
+        try validateCachePolicyForSelfTest()
+        try validatePhotosForSelfTest()
+        try validateSearchForSelfTest()
+        try validateFailurePolicyForSelfTest()
+        try validateToolPathsForSelfTest()
+        if !fast && !videos {
+            var budget = MediaSettings()
+            budget.values = [.imgSizeToleranceBytes: String(Int.max)]
+            restore(budget)
+            guard draft().imageSizeToleranceBytes == Int.max, steppers[.imgSizeToleranceBytes] == nil,
+                  draft().imageSizeTolerance == nil else {
+                throw HostError(message: "Image growth limit lost precision or enabled tolerance")
+            }
+            budget.values[.imgSizeToleranceBytes] = "0"
+            restore(budget)
+            guard draft().imageSizeToleranceBytes == 0 else {
+                throw HostError(message: "Zero image growth budget was not preserved")
+            }
+            for invalid in ["-1", "1.5", "9223372036854775808"] {
+                budget.values[.imgSizeToleranceBytes] = invalid
+                do { try budget.validate() }
+                catch { continue }
+                throw HostError(message: "Invalid image growth budget was accepted")
+            }
+        }
+        var settings = MediaSettings()
+        let effort: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
+        let database: MediaSetting = fast ? .fastDatabase : .imgDatabase
+        let fallback: MediaSetting = fast ? .fastFallback : .imgFallback
+        settings.values = [fallback: "strict", effort: "9", database: "false",
+                           .vidCodec: "av1", .vidErrorMode: "fail-fast"]
+        restore(settings)
+        guard draft().values == settings.values, popups[effort]?.selectedItem?.representedObject as? String == "9" else {
+            throw HostError(message: "Settings controls did not restore explicit overrides")
+        }
+        guard let jpegPopup = popups[effort], jpegPopup.numberOfItems == 12,
+              fieldSections[effort] == "img", steppers[effort] == nil else {
+            throw HostError(message: "JPEG effort choices are missing or outside image settings")
+        }
+        jpegPopup.selectItem(at: 11)
+        guard draft().values[effort] == "11" else {
+            throw HostError(message: "JPEG effort 11 did not reach the settings draft")
+        }
+        var invalidEffort = settings
+        invalidEffort.values[effort] = "12"
+        restore(invalidEffort)
+        guard draft().values[effort] == "12" else {
+            throw HostError(message: "Invalid saved JPEG effort was silently replaced")
+        }
+        do { try draft().validate(); throw HostError(message: "Invalid JPEG effort accepted") }
+        catch { guard error.localizedDescription != "Invalid JPEG effort accepted" else { throw error } }
+        restore(settings)
+        try draft().save(to: preferences)
+        guard MediaSettings(preferences: preferences).values == settings.values else {
+            throw HostError(message: "Media settings did not persist independently")
+        }
+        tabs.selectTabViewItem(withIdentifier: "img")
+        resetTab()
+        guard draft().values == [.vidCodec: "av1", .vidErrorMode: "fail-fast"], popups[effort]?.indexOfSelectedItem == 0 else {
+            throw HostError(message: "Resetting image settings changed video settings")
+        }
+        for index in 0..<tabs.numberOfTabViewItems {
+            tabs.selectTabViewItem(at: index)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            guard let content = tabs.selectedTabViewItem?.view, let grid = content.subviews.first as? NSGridView,
+                  content.bounds.contains(grid.frame), grid.frame.width >= content.bounds.width - 40 else {
+                throw HostError(message: "Settings grid extends outside its tab")
+            }
+            if tabs.selectedTabViewItem?.identifier as? String == "performance",
+               let surface = panel.contentView {
+                let privacyHeight = privacyCheck.frame.height + privacyNote.frame.height + root.spacing * 2
+                let snapshotRowHeight = rows[.externalToolSnapshot]?.cell(at: 1).contentView?.fittingSize.height ?? 0
+                guard surface.bounds.height - privacyHeight <= 230 + snapshotRowHeight + grid.rowSpacing else {
+                    throw HostError(message: "Performance settings retained oversized empty space")
+                }
+                let checkbox = privacyCheck.convert(privacyCheck.bounds, to: surface)
+                let note = privacyNote.convert(privacyNote.bounds, to: surface)
+                guard surface.bounds.contains(checkbox), surface.bounds.contains(note), !checkbox.intersects(note) else {
+                    throw HostError(message: "Settings privacy controls clipped or overlapped")
+                }
+            }
+            for rowIndex in 0..<grid.numberOfRows {
+                let row = grid.row(at: rowIndex)
+                if row.isHidden { continue }
+                if let toggle = row.cell(at: 0).contentView as? NSButton, toggles.values.contains(where: { $0 === toggle }) {
+                    guard toggle.frame.width + 1 >= toggle.intrinsicContentSize.width else {
+                        throw HostError(message: "Settings checkbox label clipped")
+                    }
+                    continue
+                }
+                guard let label = row.cell(at: 0).contentView, let control = row.cell(at: 1).contentView,
+                      label.frame.width + 1 >= label.intrinsicContentSize.width,
+                      !label.frame.intersects(control.frame) else {
+                    throw HostError(message: "Settings labels overlap or clip")
+                }
+            }
+            for (field, popup) in popups where rows[field]?.isHidden == false && popup.window != nil {
+                guard popup.bounds.width + 1 >= popup.intrinsicContentSize.width else {
+                    throw HostError(message: "Settings choice clipped: \(field.rawValue)")
+                }
+            }
+        }
+        var invalid = MediaSettings()
+        invalid.values = [database: "invalid"]
+        restore(invalid)
+        restore(invalid)
+        guard draft().values[database] == "invalid" else {
+            throw HostError(message: "Invalid saved checkbox was silently converted to a valid value")
+        }
+        guard popups[database]?.numberOfItems == database.choices.count + 1 else {
+            throw HostError(message: "Reloading invalid settings duplicated menu entries")
+        }
+        var independent = MediaSettings()
+        independent.values = [.imgJpegEffort: "11", .fastJpegEffort: "8", .photosNativeBatch: "250", .photosAlbum: "Selected"]
+        restore(independent)
+        guard popups[database]?.numberOfItems == database.choices.count else {
+            throw HostError(message: "Recovered settings kept stale invalid menu entries")
+        }
+        tabs.selectTabViewItem(withIdentifier: "img")
+        resetTab()
+        independent.values.removeValue(forKey: effort)
+        guard draft().values == independent.values else { throw HostError(message: "Fast IMG reset affected other groups") }
+        inherited[effort] = "11"
+        inherited[database] = "true"
+        restore(MediaSettings())
+        guard popups[effort]?.indexOfSelectedItem == 0,
+              popups[database]?.selectedItem?.representedObject as? String == "true",
+              draft().values.isEmpty, toggles.values.allSatisfy({ !$0.allowsMixedState }) else {
+            throw HostError(message: "Effective values must not create overrides or mixed states")
+        }
+        try MediaSettings().save(to: preferences)
+        guard MediaSettings(preferences: preferences).values.isEmpty else {
+            throw HostError(message: "Reset settings still override inherited configuration")
+        }
+        let standard = EffectiveRuntimeSettings(values: ["performance.mode": "tight", "tools.policy": "single"],
+                                                sources: ["performance.mode": "/synthetic/img.json", "tools.policy": "CLI"],
+                                                sourceChain: ["performance.mode": ["default", "/synthetic/img.json"], "tools.policy": ["default", "CLI"]])
+        let fastValues = EffectiveRuntimeSettings(values: ["performance.mode": "adaptive", "tools.policy": "fallback"],
+                                                  sources: ["performance.mode": "default", "tools.policy": "default"],
+                                                  sourceChain: ["performance.mode": ["default"], "tools.policy": ["default"]])
+        let video = EffectiveRuntimeSettings(values: ["performance.mode": "relaxed", "vid.codec": "av1"],
+                                             sources: ["performance.mode": "/synthetic/vid.json", "vid.codec": "/synthetic/vid.json"],
+                                             sourceChain: ["performance.mode": ["default", "/synthetic/vid.json"], "vid.codec": ["default", "/synthetic/vid.json"]])
+        setInheritedValues(standard: standard, fast: fastValues, video: video)
+        restore(MediaSettings())
+        guard rows.keys.filter({ $0.runtimeKey != nil }).allSatisfy({ (sourceButtons[$0] != nil) == developer }),
+              sourceButtons.values.allSatisfy({ $0.frame.width == 22 }) else {
+            throw HostError(message: "Configuration source controls escaped Developer mode or lost their fixed size")
+        }
+        if !fast && !videos {
+            guard inheritedMixed.contains(.performance), popups[.performance]?.indexOfSelectedItem == 0,
+                  draft().values[.performance] == nil, inherited[.vidCodec] == "av1" else {
+                throw HostError(message: "Mixed pipeline defaults became a fabricated shared performance override")
+            }
+            var explicit = MediaSettings()
+            explicit.values[.performance] = "balanced"
+            restore(explicit)
+            guard draft().values[.performance] == "balanced" else {
+                throw HostError(message: "Explicit shared performance choice was lost")
+            }
+            popups[.performance]?.selectItem(at: 0)
+            guard draft().values[.performance] == nil else {
+                throw HostError(message: "Returning to per-pipeline defaults kept a shared override")
+            }
+            restore(MediaSettings())
+            restore(MediaSettings())
+            guard popups[.performance]?.numberOfItems == MediaSetting.performance.choices.count + 1 else {
+                throw HostError(message: "Repeated reload duplicated the per-pipeline choice")
+            }
+        } else {
+            guard !inheritedMixed.contains(.performance), inherited[.performance] == (fast ? "adaptive" : "relaxed") else {
+                throw HostError(message: "Performance inheritance used the wrong pipeline")
+            }
+        }
+        if !videos {
+            let tool: MediaSetting = fast ? .fastToolPolicy : .imgToolPolicy
+            guard popups[tool] != nil, fieldSections[tool] == "img",
+                  inherited[tool] == (fast ? "fallback" : "single") else {
+                throw HostError(message: "Image tool policy is missing or inherited from another pipeline")
+            }
+        }
+        inherited.removeAll()
+        inheritedSources.removeAll()
+        inheritedMixed.removeAll()
+        restore(MediaSettings())
+    }
+
+    func validateInterfaceSettingsForSelfTest() throws {
+        try validateExternalToolSnapshotForSelfTest()
+        let keys = [zoomPreferenceKey, languagePreferenceKey, appearancePreferenceKey, developerPreferenceKey]
+        let original = keys.map { preferences.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, original) { preferences.set(value, forKey: key) }
+        }
+        tabs.selectTabViewItem(withIdentifier: "general")
+        updatePanelSize()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard zoomSlider.frame.width >= 280,
+              zoomSlider.accessibilityLabel() == localized("settings.zoom"),
+              matchingSettings(localized("settings.zoom")).contains(.general("settings.zoom")) else {
+            throw HostError(message: "Window zoom is clipped, unnamed, or missing from Settings search")
+        }
+        zoomSlider.integerValue = 130
+        updateZoomValue()
+        languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: .japanese)!)
+        appearancePopup.selectItem(at: AppAppearance.allCases.firstIndex(of: .dark)!)
+        developerCheck.state = .on
+        apply()
+        guard zoomValue.stringValue == localized("settings.zoom.percent", 130),
+              savedInterfaceZoom(preferences) == 130,
+              preferences.string(forKey: languagePreferenceKey) == AppLanguage.japanese.rawValue,
+              preferences.string(forKey: appearancePreferenceKey) == AppAppearance.dark.rawValue,
+              preferences.bool(forKey: developerPreferenceKey) else {
+            throw HostError(message: "General Settings did not persist independently of media processing")
+        }
+    }
+
+    private func validateAvifMetadataForSelfTest() throws {
+        let expected = fast && avif && !videos
+        guard (avifMetadataRow != nil) == expected else {
+            throw HostError(message: "Fast AVIF metadata policy escaped its image settings scope")
+        }
+        guard expected, let row = avifMetadataRow else { return }
+        let key = "img.avif_metadata_policy"
+        let previousDraft = draft()
+        let previousInherited = inherited
+        let previousSources = inheritedSources
+        let previousMixed = inheritedMixed
+        let previousMessage = avifMetadataSummary.stringValue
+        let previousTooltip = avifMetadataSummary.toolTip
+        let beforePreferences = preferences.dictionaryRepresentation()
+        defer {
+            inherited = previousInherited
+            inheritedSources = previousSources
+            inheritedMixed = previousMixed
+            restore(previousDraft)
+            avifMetadataSummary.stringValue = previousMessage
+            avifMetadataSummary.setAccessibilityLabel(previousMessage)
+            avifMetadataSummary.toolTip = previousTooltip
+        }
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path) else {
+                throw HostError(message: "Missing Fast AVIF policy language bundle")
+            }
+            for suffix in ["title", "loading", "clear", "unavailable", "unsupported"] {
+                let translationKey = "settings.avif_metadata.\(suffix)"
+                guard bundle.localizedString(forKey: translationKey, value: translationKey, table: nil) != translationKey else {
+                    throw HostError(message: "Missing Fast AVIF policy translation: \(language)/\(translationKey)")
+                }
+            }
+        }
+        let confirmed = EffectiveRuntimeSettings(values: [key: "clear"], sources: [key: "default"], sourceChain: [key: ["default"]])
+        setInheritedValues(standard: nil, fast: confirmed, video: nil)
+        restore(previousDraft)
+        guard !avifMetadataSummary.isEditable, row.cell(at: 1).contentView === avifMetadataSummary,
+              avifMetadataSummary.stringValue == localized("settings.avif_metadata.clear"),
+              avifMetadataSummary.accessibilityLabel() == avifMetadataSummary.stringValue,
+              avifMetadataSummary.toolTip?.contains(key + ": clear") == true,
+              MediaSetting.allCases.allSatisfy({ $0.runtimeKey != key }), draft().values == previousDraft.values,
+              !draft().runtimeArguments(fast: true, inheritedOnly: false, avif: true).contains("--avif-metadata-policy") else {
+            throw HostError(message: "Fast AVIF policy summary fabricated an editable preference or lost the resolved policy")
+        }
+        for (value, message) in [(nil, "unavailable"), ("preserve", "unsupported")] as [(String?, String)] {
+            let effective = EffectiveRuntimeSettings(values: value.map { [key: $0] } ?? [:],
+                sources: value.map { _ in [key: "default"] } ?? [:], sourceChain: value.map { _ in [key: ["default"]] } ?? [:])
+            setInheritedValues(standard: nil, fast: effective, video: nil)
+            guard avifMetadataSummary.stringValue == localized("settings.avif_metadata.\(message)") else {
+                throw HostError(message: "Unavailable Fast AVIF policy was presented as confirmed Clear")
+            }
+        }
+        for message in ["loading", "unavailable"] {
+            displayAvifMetadataPolicy(confirmed)
+            displayAvifMetadataMessage("settings.avif_metadata.\(message)")
+            guard avifMetadataSummary.stringValue == localized("settings.avif_metadata.\(message)"),
+                  avifMetadataSummary.toolTip?.contains(key + ": clear") != true else {
+                throw HostError(message: "Fast AVIF configuration refresh retained a stale policy confirmation")
+            }
+        }
+        displayAvifMetadataPolicy(confirmed)
+        tabs.selectTabViewItem(withIdentifier: "img")
+        updatePanelSize()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let cell = avifMetadataSummary.cell,
+              avifMetadataSummary.bounds.width > 0,
+              avifMetadataSummary.bounds.height + 1 >= cell.cellSize(forBounds:
+                NSRect(x: 0, y: 0, width: avifMetadataSummary.bounds.width, height: .greatestFiniteMagnitude)).height else {
+            throw HostError(message: "Fast AVIF metadata policy explanation was clipped")
+        }
+        cancel()
+        guard (preferences.dictionaryRepresentation() as NSDictionary).isEqual(to: beforePreferences),
+              draft().values == previousDraft.values else {
+            throw HostError(message: "Reading or cancelling the policy summary changed settings")
+        }
+    }
+
+    func validateEncodingScopesForSelfTest() throws {
+        try validateAvifMetadataForSelfTest()
+        if !videos && (!fast || !avif) {
+            let searchField: MediaSetting = fast ? .fastJpegSearch : .imgJpegSearch
+            let effortField: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
+            let otherSearch: MediaSetting = fast ? .imgJpegSearch : .fastJpegSearch
+            guard fieldSections[searchField] == "img", toggles[searchField] == nil,
+                  popups[searchField]?.itemArray.compactMap({ $0.representedObject as? String }) == ["full", "adaptive", "fixed"],
+                  !MediaSetting.imgJxlSearch.choices.contains("full"), !MediaSetting.fastJxlSearch.choices.contains("full") else {
+                throw HostError(message: "JPEG effort comparison is not a complete image settings choice")
+            }
+            var settings = MediaSettings()
+            settings.values = [searchField: "full", effortField: "7", otherSearch: "fixed"]
+            restore(settings)
+            let operation: OperationMode = fast ? .fastImgJxl : .adjacent
+            let arguments = try draft().arguments(operation: operation, processing: .imagesOnly)
+            guard rows[effortField]?.isHidden == true, draft().values[effortField] == "7",
+                  draft().values[searchField] == "full", draft().values[otherSearch] == "fixed",
+                  arguments == ["--img-jpeg-effort-search", "full"],
+                  draft().runtimeArguments(fast: fast, inheritedOnly: false) == ["--jpeg-effort-search", "full"] else {
+                throw HostError(message: "Full JPEG comparison retained a false limit or mixed image profiles")
+            }
+            popups[searchField]?.select(popups[searchField]?.itemArray.first(where: { $0.representedObject as? String == "fixed" }))
+            updateVisibility()
+            guard rows[effortField]?.isHidden == false, draft().values[effortField] == "7",
+                  draft().values[searchField] == "fixed" else {
+                throw HostError(message: "Returning from full JPEG comparison lost the fixed effort")
+            }
+            let suite = "MFBGuiJpegSearchSelfTest.\(UUID().uuidString)"
+            let storage = UserDefaults(suiteName: suite)!
+            defer { storage.removePersistentDomain(forName: suite) }
+            try settings.save(to: storage)
+            guard MediaSettings(preferences: storage).values == settings.values else {
+                throw HostError(message: "Full JPEG comparison did not survive independent profile persistence")
+            }
+            restore(MediaSettings())
+        }
+        if !videos && !fast {
+            guard [.imgJxlEffort, .imgJpegEffort, .imgJpegSearch, .imgToolPolicy]
+                .allSatisfy({ fieldSections[$0] == "img" && popups[$0] != nil }),
+                  [.imgJxlSearch, .imgQualitySearch]
+                    .allSatisfy({ fieldSections[$0] == "img" && toggles[$0] != nil }),
+                  let distance = textFields[.imgJxlDistance] as? NSComboBox,
+                  distance.isEditable, distance.numberOfItems == 6,
+                  fieldSections[.imgJxlDistance] == "img" else {
+                throw HostError(message: "Image decisions escaped the ordinary image settings tab")
+            }
+            var settings = MediaSettings()
+            settings.values = [.imgJxlDistance: "0.25", .imgJxlSearch: "adaptive", .imgJxlEffort: "8", .imgJpegEffort: "11", .imgJpegSearch: "fixed", .imgQualitySearch: "fixed"]
+            restore(settings)
+            guard (rows[.imgJxlEffort]?.cell(at: 0).contentView as? NSTextField)?.stringValue == localized("settings.effort.comparison"),
+                  rows[.imgJxlSearch]?.isHidden == false, rows[.imgJxlDistance]?.isHidden == false,
+                  toggles[.imgJxlSearch]?.state == .on, toggles[.imgQualitySearch]?.state == .off,
+                  distance.stringValue == "0.25", draft().values == settings.values else {
+                throw HostError(message: "Effort-only exploration hid or changed a fixed distance")
+            }
+            distance.stringValue = "0.125"
+            guard draft().image.jxlDistance == 0.125 else { throw HostError(message: "Manual JXL distance did not reach the draft") }
+            distance.stringValue = "0.25"
+            let arguments = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
+            let runtimeArguments = draft().runtimeArguments(fast: false, inheritedOnly: false)
+            guard arguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 }) == runtimeArguments,
+                  arguments.contains("0.25"), arguments.contains("8") else {
+                throw HostError(message: "Distance or effort differed between preview and processing")
+            }
+            settings.values[.imgQualitySearch] = "adaptive"
+            restore(settings)
+            let exploration = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
+            guard rows[.imgJxlSearch]?.isHidden == false, rows[.imgJxlDistance]?.isHidden == false,
+                  toggles[.imgJxlSearch]?.state == .on, toggles[.imgQualitySearch]?.state == .on,
+                  draft().image.jxlDistance == 0.25, draft().image.jxlEffort == 8,
+                  !exploration.contains("--img-jxl-distance"), !exploration.contains("0.25"),
+                  exploration.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == draft().runtimeArguments(fast: false, inheritedOnly: false) else {
+                throw HostError(message: "Distance exploration did not preserve the draft and use its policy baseline")
+            }
+            for distanceSearch in ["fixed", "adaptive"] {
+                for effortSearch in ["fixed", "adaptive"] {
+                    settings.values[.imgQualitySearch] = distanceSearch
+                    settings.values[.imgJxlSearch] = effortSearch
+                    restore(settings)
+                    guard toggles[.imgQualitySearch]?.state == (distanceSearch == "adaptive" ? .on : .off),
+                          toggles[.imgJxlSearch]?.state == (effortSearch == "adaptive" ? .on : .off),
+                          draft().values == settings.values,
+                          popups[.imgJxlEffort]?.accessibilityLabel() == (effortSearch == "adaptive"
+                            ? localized("settings.effort.comparison") : MediaSetting.imgJxlEffort.title),
+                          rows[.imgJxlDistance]?.isHidden == false, rows[.imgJxlEffort]?.isHidden == false else {
+                        throw HostError(message: "Independent distance and effort exploration combinations were lost")
+                    }
+                }
+            }
+            settings.values[.imgQualitySearch] = "mode-default"
+            restore(settings)
+            guard toggles[.imgQualitySearch]?.state == .on, draft().image.qualitySearch == .modeDefault else {
+                throw HostError(message: "The private policy default was replaced by a GUI search override")
+            }
+            let policyArguments = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
+            guard draft().image.jxlDistance == 0.25, distance.isEnabled,
+                  toggles[.imgQualitySearch]?.title == localized("settings.distance.mode-default"),
+                  policyArguments.contains("--img-jxl-distance"), policyArguments.contains("0.25"),
+                  policyArguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == draft().runtimeArguments(fast: false, inheritedOnly: false) else {
+                throw HostError(message: "The private policy default lost its editable fixed distance or canonical arguments")
+            }
+            toggles[.imgQualitySearch]?.performClick(nil)
+            toggles[.imgQualitySearch]?.performClick(nil)
+            guard draft().image.qualitySearch == .adaptive, !distance.isEnabled,
+                  draft().image.jxlDistance == 0.25,
+                  !(try draft().arguments(operation: .adjacent, processing: .imagesOnly)).contains("--img-jxl-distance") else {
+                throw HostError(message: "Explicitly enabling distance exploration fell back to inherited mode semantics")
+            }
+            toggles[.imgQualitySearch]?.state = .off
+            guard draft().image.qualitySearch == .fixed, draft().image.jxlDistance == 0.25 else {
+                throw HostError(message: "Disabling distance exploration lost the saved fixed value")
+            }
+            for invalid in ["-0.1", "25.1", "nan", "inf", "distance"] {
+                settings.values[.imgJxlDistance] = invalid
+                restore(settings)
+                guard draft().values[.imgJxlDistance] == invalid else {
+                    throw HostError(message: "Invalid saved JXL distance was silently replaced")
+                }
+                do { try settings.validate() }
+                catch { continue }
+                throw HostError(message: "Invalid JXL distance was accepted")
+            }
+            restore(MediaSettings())
+            var avifOnly = MediaSettings()
+            avifOnly.values = [.fastQualitySearch: "fixed", .fastAvifQuality: "80", .fastAvifSpeed: "4"]
+            let ordinaryArguments = try avifOnly.arguments(operation: .adjacent, processing: .imagesOnly)
+            guard !ordinaryArguments.contains("--img-avif-quality"),
+                  !ordinaryArguments.contains("--img-avif-speed"),
+                  !avifOnly.runtimeArguments(fast: false, inheritedOnly: false).contains("--avif-quality"),
+                  !avifOnly.runtimeArguments(fast: false, inheritedOnly: false).contains("--avif-speed") else {
+                throw HostError(message: "Fast AVIF quality or speed leaked into standard IMG")
+            }
+        }
+        if fast {
+            guard popups[.fastJxlEffort] == nil, popups[.fastJxlSearch] == nil,
+                  (popups[.fastJpegEffort] != nil) == !avif, (popups[.fastJpegSearch] != nil) == !avif,
+                  (popups[.fastQualitySearch] != nil) == avif,
+                  (textFields[.fastAvifQuality] != nil) == avif,
+                  (popups[.fastAvifSpeed] != nil) == avif,
+                  textFields[.fastAvifSpeed] == nil else {
+                throw HostError(message: "Fast IMG displayed an ineffective encoder decision")
+            }
+            var settings = MediaSettings()
+            settings.values = [.fastJpegEffort: "11", .fastJpegSearch: "adaptive", .fastQualitySearch: "fixed",
+                               .fastAvifQuality: "10", .fastAvifSpeed: "0"]
+            restore(settings)
+            let operation: OperationMode = avif ? .fastImgAvif : .fastImgJxl
+            let arguments = try settings.arguments(operation: operation, processing: .imagesOnly)
+            guard (avif || popups[.fastJpegEffort]?.accessibilityLabel() == localized("settings.jpeg_effort.comparison")),
+                  arguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif),
+                  !arguments.contains("--img-jxl-distance"),
+                  arguments.contains("--img-jpeg-effort") == !avif,
+                  arguments.contains("--img-jpeg-effort-search") == !avif,
+                  arguments.contains("--img-quality-search") == avif,
+                  arguments.contains("--img-avif-quality") == avif,
+                  arguments.contains("--img-avif-speed") == avif,
+                   (!avif || (arguments.contains("10") && arguments.contains("0")
+                       && textFields[.fastAvifQuality]?.isEnabled == true
+                       && steppers[.fastAvifQuality]?.isEnabled == true
+                       && textFields[.fastAvifQuality]?.accessibilityLabel() == MediaSetting.fastAvifQuality.title
+                       && steppers[.fastAvifQuality]?.accessibilityLabel() == MediaSetting.fastAvifQuality.title)),
+                  textFields[.fastAvifQuality]?.isEnabled != true || settings.fastImage.qualitySearch == .fixed else {
+                throw HostError(message: "Fast encoder decisions differed between preview and processing")
+            }
+            if avif {
+                let previousInherited = inherited
+                let previousInheritedSources = inheritedSources
+                let previousInheritedMixed = inheritedMixed
+                let preferenceSuite = "MFBGuiAVIFSettingsSelfTest.\(UUID().uuidString)"
+                let avifPreferences = UserDefaults(suiteName: preferenceSuite)!
+                defer { avifPreferences.removePersistentDomain(forName: preferenceSuite) }
+                var preferenceSettings = MediaSettings()
+                preferenceSettings.values = [.fastQualitySearch: "fixed", .fastAvifQuality: "10", .fastAvifSpeed: "0"]
+                try preferenceSettings.save(to: avifPreferences)
+                let reloaded = MediaSettings(preferences: avifPreferences)
+                guard reloaded.fastImage.avifQuality == 10, reloaded.fastImage.avifSpeed == 0,
+                      reloaded.image.avifQuality == nil, reloaded.image.avifSpeed == nil else {
+                    throw HostError(message: "Fast AVIF preferences did not round-trip independently")
+                }
+                for mode in ["adaptive", "mode-default"] {
+                    settings.values[.fastQualitySearch] = mode
+                    settings.values[.fastAvifQuality] = "85"
+                    restore(settings)
+                    let inactive = try settings.arguments(operation: .fastImgAvif, processing: .imagesOnly)
+                    guard textFields[.fastAvifQuality]?.isEnabled == false,
+                          steppers[.fastAvifQuality]?.isEnabled == false,
+                          settings.values[.fastAvifQuality] == "85",
+                          popups[.fastAvifSpeed]?.selectedItem?.representedObject as? String == "0",
+                          !inactive.contains("--img-avif-quality"), inactive.contains("--img-avif-speed"),
+                          inactive.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                            == settings.runtimeArguments(fast: true, inheritedOnly: false, avif: true) else {
+                        throw HostError(message: "AVIF Q was lost, enabled, or emitted under an inactive quality mode")
+                    }
+                }
+                for (field, invalid) in [(MediaSetting.fastAvifQuality, "0"), (.fastAvifQuality, "9"),
+                                         (.fastAvifQuality, "101"), (.fastAvifQuality, "q"),
+                                         (.fastAvifSpeed, "-1"),
+                                         (.fastAvifSpeed, "11"), (.fastAvifSpeed, "1.5")] {
+                    var invalidSettings = MediaSettings()
+                    invalidSettings.values[.fastQualitySearch] = "fixed"
+                    invalidSettings.values[field] = invalid
+                    restore(invalidSettings)
+                    guard draft().values[field] == invalid else {
+                        throw HostError(message: "Invalid AVIF value was silently replaced")
+                    }
+                    do { try invalidSettings.validate() }
+                    catch { continue }
+                    throw HostError(message: "Invalid AVIF value was accepted")
+                }
+                var inheritedSettings = MediaSettings()
+                inheritedSettings.values = [.fastAvifQuality: "80", .fastAvifSpeed: "4"]
+                inherited = [.fastQualitySearch: "mode-default"]
+                restore(inheritedSettings)
+                guard textFields[.fastAvifQuality]?.isEnabled == false,
+                      steppers[.fastAvifQuality]?.isEnabled == false,
+                      draft().values[.fastQualitySearch] == nil,
+                      draft().values[.fastAvifQuality] == "80",
+                      popups[.fastAvifSpeed]?.selectedItem?.representedObject as? String == "4",
+                      !(try inheritedSettings.arguments(operation: .fastImgAvif, processing: .imagesOnly))
+                        .contains("--img-quality-search") else {
+                    throw HostError(message: "Unknown or inherited AVIF policy fabricated a GUI override or discarded Q")
+                }
+                inherited.removeAll()
+                inheritedSources.removeAll()
+                inheritedMixed.removeAll()
+                let defaults = MediaSettings()
+                restore(defaults)
+                guard textFields[.fastAvifQuality]?.stringValue.isEmpty == true,
+                      popups[.fastAvifSpeed]?.indexOfSelectedItem == -1,
+                      popups[.fastQualitySearch]?.indexOfSelectedItem == 0,
+                      textFields[.fastAvifQuality]?.isEnabled == false,
+                      steppers[.fastAvifQuality]?.isEnabled == false,
+                      draft().values[.fastAvifQuality] == nil, draft().values[.fastAvifSpeed] == nil else {
+                    throw HostError(message: "Unknown AVIF defaults fabricated GUI overrides or enabled Q")
+                }
+                inherited = previousInherited
+                inheritedSources = previousInheritedSources
+                inheritedMixed = previousInheritedMixed
+            }
+            restore(MediaSettings())
+        }
+        if !fast {
+            guard fieldSections[.vidForceMsSsimLong] == "vid" else { throw HostError(message: "Video quality decision escaped video settings") }
+        }
+    }
+
+    private func validateFailurePolicyForSelfTest() throws {
+        let key = "execution.error_mode"
+        guard [MediaSetting.imgErrorMode, .vidErrorMode, .fastErrorMode].allSatisfy({ $0.runtimeKey == key }) else {
+            throw HostError(message: "Failure policies are missing their effective configuration key")
+        }
+        var independent = MediaSettings()
+        independent.values = [.imgErrorMode: "fail-fast", .vidErrorMode: "fail-fast", .fastErrorMode: "log-and-continue"]
+        for operation in [OperationMode.fastImgJxl, .fastImgAvif] {
+            guard try independent.arguments(operation: operation, processing: .imagesOnly)
+                    == ["--img-error-mode", "log-and-continue"],
+                  independent.runtimeArguments(fast: true, inheritedOnly: false, avif: operation == .fastImgAvif)
+                    == ["--error-mode", "log-and-continue"] else {
+                throw HostError(message: "Fast IMG failure handling leaked another mode's setting")
+            }
+        }
+        guard (popups[.fastErrorMode] != nil) == fast,
+              (!fast && developer) || (popups[.imgErrorMode] == nil && popups[.vidErrorMode] == nil) else {
+            throw HostError(message: "Failure controls leaked between standard and Fast settings")
+        }
+        let fields: [MediaSetting] = fast ? [.fastErrorMode]
+            : (developer ? (videos ? [.vidErrorMode] : [.imgErrorMode, .vidErrorMode]) : [])
+        if fields.isEmpty {
+            return
+        }
+        let previous = restored
+        let previousInherited = inherited
+        let previousSources = inheritedSources
+        let previousMixed = inheritedMixed
+        defer {
+            inherited = previousInherited
+            inheritedSources = previousSources
+            inheritedMixed = previousMixed
+            restore(previous)
+        }
+        let image = EffectiveRuntimeSettings(values: [key: "fail-fast"], sources: [key: "MFB_ERROR_MODE"],
+                                             sourceChain: [key: ["default", "MFB_ERROR_MODE"]])
+        let video = EffectiveRuntimeSettings(values: [key: "log-and-continue"], sources: [key: "/synthetic/vid.json"],
+                                             sourceChain: [key: ["default", "/synthetic/vid.json"]])
+        let fastImage = EffectiveRuntimeSettings(values: [key: "log-and-continue"], sources: [key: "default"],
+                                                  sourceChain: [key: ["default"]])
+        setInheritedValues(standard: image, fast: fastImage, video: video)
+        restore(MediaSettings())
+        restore(MediaSettings())
+        for field in fields {
+            let expectedValue = field == .imgErrorMode ? "fail-fast" : "log-and-continue"
+            let expectedSource = field == .fastErrorMode ? "default"
+                : (field == .imgErrorMode ? "default → MFB_ERROR_MODE" : "default → /synthetic/vid.json")
+            guard let popup = popups[field], popup.indexOfSelectedItem == 0,
+                  popup.numberOfItems == field.choices.count + 1,
+                  (sourceButtons[field] != nil) == developer,
+                  fieldSections[field] == (fast ? "img" : "developer"),
+                  inherited[field] == expectedValue, inheritedSources[field] == expectedSource,
+                  draft().values[field] == nil else {
+                throw HostError(message: "Failure inheritance fabricated an override or used the wrong pipeline")
+            }
+            popup.selectItem(at: expectedValue == "fail-fast" ? 2 : 1)
+            guard draft().values[field] == inherited[field] else {
+                throw HostError(message: "Choosing the inherited failure value explicitly lost its override")
+            }
+            try draft().save(to: preferences)
+            guard MediaSettings(preferences: preferences).values[field] == inherited[field] else {
+                throw HostError(message: "Explicit failure override did not persist")
+            }
+            popup.selectItem(at: 0)
+            try draft().save(to: preferences)
+            guard draft().values[field] == nil, MediaSettings(preferences: preferences).values[field] == nil else {
+                throw HostError(message: "Returning to failure inheritance retained an override")
+            }
+        }
+        var explicit = MediaSettings()
+        explicit.values = [.imgErrorMode: "log-and-continue", .vidErrorMode: "fail-fast", .fastErrorMode: "fail-fast"]
+        restore(explicit)
+        tabs.selectTabViewItem(withIdentifier: fast ? "img" : "developer")
+        resetTab()
+        guard fields.allSatisfy({ draft().values[$0] == nil && popups[$0]?.indexOfSelectedItem == 0 }) else {
+            throw HostError(message: "Settings reset forced a failure default instead of inheritance")
+        }
+        inherited.removeAll()
+        inheritedSources.removeAll()
+        restore(MediaSettings())
+        guard fields.allSatisfy({ displayed[$0] == nil && popups[$0]?.indexOfSelectedItem == 0
+            && popups[$0]?.titleOfSelectedItem == localized("settings.failure.inherited", localized("result.unknown")) }) else {
+            throw HostError(message: "Unknown failure policy was presented as record-and-continue")
+        }
+    }
+
+    func validatePhotosForSelfTest() throws {
+        let original = draft()
+        defer { restore(original) }
+        for backend in ["auto", "native", "applescript"] {
+            var settings = original
+            settings.values[.photosBackend] = backend
+            restore(settings)
+            guard photosSourceNotice?.isHidden == (backend == "applescript"),
+                  photosSourceNotice?.accessibilityLabel() == localized("photos.source.title") else {
+                throw HostError(message: "Native and automatic Photos import lost the persistent-source notice")
+            }
+        }
+        guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "photos" }),
+              MediaSetting.allCases.filter(\.isPhotos).allSatisfy({ rows[$0] != nil }) else {
+            throw HostError(message: "Photos import settings disappeared outside Fast IMG")
+        }
+        for field in [MediaSetting.photosAdaptive, .photosPreserveTree] {
+            guard toggles[field]?.title == field.title,
+                  rows[field]?.cell(at: 0).contentView === toggles[field] else {
+                throw HostError(message: "Photos checkbox lost its visible inline title")
+            }
+        }
+        if !fast {
+            guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "vid" }),
+                  popups[.vidCodec] != nil,
+                   popups[.vidForceMsSsimLong] != nil, fieldSections[.vidForceMsSsimLong] == "vid",
+                  !developer || (textFields[.vidConfig] != nil && popups[.vidErrorMode] != nil) else {
+                throw HostError(message: "Video configuration controls are missing")
+            }
+        }
+    }
+
+    private func validateSearchForSelfTest() throws {
+        let original = draft()
+        let wasAdvanced = advanced.state
+        defer {
+            search.stringValue = ""
+            advanced.state = wasAdvanced
+            restore(original)
+        }
+        var settings = MediaSettings()
+        settings.values = [.photosBackend: "native", .photosAdaptive: "true", .photosAlbum: "Unsaved album"]
+        restore(settings)
+        advanced.state = .off
+        updateVisibility()
+        let before = draft().values
+        search.stringValue = MediaSetting.photosVerificationBatch.title
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        guard searchMatches.contains(.setting(.photosVerificationBatch)), !searchResults.isHidden,
+              applyButton.keyEquivalent.isEmpty, draft().values == before else {
+            throw HostError(message: "Settings search lost an advanced field or modified the draft")
+        }
+        guard let index = searchMatches.firstIndex(of: .setting(.photosVerificationBatch)) else {
+            throw HostError(message: "Settings search did not find the verification batch size")
+        }
+        searchTable.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        let editor = NSTextView()
+        guard control(search, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))),
+              tabs.selectedTabViewItem?.identifier as? String == "photos",
+              rows[.photosVerificationBatch]?.isHidden == false,
+              search.stringValue.isEmpty, draft().values == before else {
+            throw HostError(message: "Search navigation changed settings or failed to reveal the destination")
+        }
+        search.stringValue = "no-such-setting-948217"
+        updateSearch()
+        guard searchMatches.isEmpty, !searchEmpty.isHidden,
+              control(search, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))),
+              !applying, draft().values == before else {
+            throw HostError(message: "Return in empty search results attempted to apply settings")
+        }
+        guard control(search, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))),
+              search.stringValue.isEmpty, searchEmpty.isHidden, draft().values == before else {
+            throw HostError(message: "Search cancellation changed the settings draft")
+        }
+        guard !matchingSettings(MediaSetting.photosAppleScriptBatch.title).contains(.setting(.photosAppleScriptBatch)),
+              matchingSettings("fail-fast").contains(.setting(.vidErrorMode)) == (developer && !fast),
+              matchingSettings("vid.codec").contains(.setting(.vidCodec)) == (developer && !fast),
+              matchingSettings(localized("settings.cache.clear")).contains(.cache) else {
+            throw HostError(message: "Search exposed unavailable settings or missed cache management")
+        }
+        search.stringValue = localized("settings.section.photos")
+        updateSearch()
+        guard searchMatches.count > 1 else { throw HostError(message: "Section search missed its controls") }
+        _ = control(search, textView: editor, doCommandBy: #selector(NSResponder.moveDown(_:)))
+        guard searchTable.selectedRow == 1 else { throw HostError(message: "Settings search keyboard navigation failed") }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        if let surface = panel.contentView {
+            guard surface.bounds.contains(surface.convert(searchResults.bounds, from: searchResults)),
+                  searchResults.frame.maxY <= search.frame.minY || searchResults.frame.minY >= search.frame.maxY else {
+                throw HostError(message: "Settings search results overlap or escape the panel")
+            }
+        }
+        settings.values[.photosBackend] = "applescript"
+        restore(settings)
+        guard !matchingSettings(MediaSetting.photosNativeBatch.title).contains(.setting(.photosNativeBatch)),
+              matchingSettings(MediaSetting.photosAppleScriptBatch.title).contains(.setting(.photosAppleScriptBatch)) else {
+            throw HostError(message: "Settings search kept stale backend-specific results")
+        }
+    }
+
+    func validateCachePolicyForSelfTest() throws {
+        let previous = restored
+        let previousInherited = inherited
+        let previousSources = inheritedSources
+        let previousMixed = inheritedMixed
+        defer {
+            inherited = previousInherited
+            inheritedSources = previousSources
+            inheritedMixed = previousMixed
+            restore(previous)
+        }
+        let key = "cache.path_tree_max_bytes"
+        let ttl = "cache.path_tree_ttl_seconds"
+        let standard = EffectiveRuntimeSettings(values: [key: "1024", ttl: "60"], sources: [:], sourceChain: [:])
+        let fastValues = EffectiveRuntimeSettings(values: [key: "2048", ttl: "60"], sources: [:], sourceChain: [:])
+        let video = EffectiveRuntimeSettings(values: [key: "4096", ttl: "60"], sources: [:], sourceChain: [:])
+        setInheritedValues(standard: standard, fast: fastValues, video: video)
+        restore(MediaSettings())
+        tabs.selectTabViewItem(withIdentifier: "cache")
+        guard textFields[.cacheMaxBytes] != nil, textFields[.cacheTtlSeconds]?.stringValue == "60",
+              steppers[.cacheMaxBytes] == nil, steppers[.cacheTtlSeconds] == nil,
+              draft().values.isEmpty, !applyButton.isHidden, !resetButton.isHidden else {
+            throw HostError(message: "Cache controls lost inherited values or created overrides")
+        }
+        if !fast && !videos {
+            guard inheritedMixed.contains(.cacheMaxBytes), textFields[.cacheMaxBytes]?.stringValue.isEmpty == true else {
+                throw HostError(message: "Different pipeline cache limits became a shared default")
+            }
+        } else if textFields[.cacheMaxBytes]?.stringValue != (fast ? "2048" : "4096") {
+            throw HostError(message: "Cache inheritance used another pipeline")
+        }
+        textFields[.cacheMaxBytes]?.stringValue = String(Int.max)
+        textFields[.cacheTtlSeconds]?.stringValue = "1"
+        let explicit = draft()
+        try explicit.save(to: preferences)
+        guard MediaSettings(preferences: preferences).cacheMaxBytes == Int.max,
+              explicit.cacheTtlSeconds == 1 else {
+            throw HostError(message: "Cache settings lost integer precision or persistence")
+        }
+        restore(explicit)
+        textFields[.cacheMaxBytes]?.stringValue = ""
+        guard draft().cacheMaxBytes == nil else { throw HostError(message: "Clearing cache limit kept an override") }
+        for value in ["0", "-1", "1.5", "9223372036854775808", "bad"] {
+            textFields[.cacheMaxBytes]?.stringValue = value
+            do { try draft().validate() }
+            catch { continue }
+            throw HostError(message: "Invalid cache limit accepted: \(value)")
+        }
+        var independent = explicit
+        independent.values[.vidCodec] = "av1"
+        restore(independent)
+        resetTab()
+        guard draft().values == [.vidCodec: "av1"] else {
+            throw HostError(message: "Cache reset retained overrides or changed another section")
+        }
+        try previous.save(to: preferences)
+    }
+
+    private func validateHistoryInspectionForSelfTest() throws {
+        let source = URL(fileURLWithPath: "/synthetic/history/history.sqlite3")
+        let overview: [String: Any] = ["history_schema_version": 2, "sqlite_version": "3.53.0", "journal_mode": "wal",
+            "page_size": 4096, "page_count": 12, "free_pages": 3, "sessions": 2, "events": 3,
+            "event_bytes": 512, "output_rows": 5, "output_bytes": 1024,
+            "oldest_session_update": "2026-01-01", "newest_session_update": "2026-01-02"]
+        let integrity: [String: Any] = ["status": "healthy", "checks_complete": true, "sqlite_integrity": "ok",
+            "foreign_keys": "ok", "record_types": "ok", "issue_count": 0, "issues": []]
+        let document: [String: Any] = ["schema_version": 1, "kind": "history_sqlite_inspection", "source": source.path,
+            "exists": true, "overview": overview, "integrity": integrity]
+        func decode(_ object: [String: Any], checked: Bool = true) throws -> HistoryDatabaseInspection {
+            try HistoryDatabaseInspection.decode(JSONSerialization.data(withJSONObject: object), source: source, checked: checked)
+        }
+        func refuse(_ object: [String: Any], checked: Bool = true) throws {
+            do { _ = try decode(object, checked: checked) }
+            catch { return }
+            throw HostError(message: "Invalid History inspection was accepted")
+        }
+        displayHistoryInspection(try decode(document))
+        guard historyOverview.stringValue.contains("2"), historyOverview.stringValue.contains("5"),
+              historyIntegrity.stringValue == localized("settings.history.structure.healthy", "0"),
+              historyInspectionArguments(directory: source.deletingLastPathComponent(), checked: false)
+                == ["--history-stats", "--history-directory", source.deletingLastPathComponent().path, "--json"],
+              historyInspectionArguments(directory: source.deletingLastPathComponent(), checked: true).last == "--check-integrity",
+              matchingSettings(localized("settings.history.overview")).contains(.cache),
+              matchingSettings(localized("settings.history.check")).contains(.cache),
+              historyCheck.toolTip == localized("settings.history.check_help") else {
+            throw HostError(message: "History inspection counts, arguments or Settings controls were lost")
+        }
+        var changed = document
+        var quickOverview = overview
+        quickOverview["output_rows"] = NSNull()
+        quickOverview["output_bytes"] = NSNull()
+        changed["overview"] = quickOverview
+        changed["integrity"] = NSNull()
+        displayHistoryInspection(try decode(changed, checked: false))
+        guard historyOverview.stringValue.contains(localized("settings.history.overview_not_scanned")),
+              !historyOverview.stringValue.contains(localized("settings.history.unsupported")),
+              historyIntegrity.stringValue == localized("settings.history.not_checked") else {
+            throw HostError(message: "Quick History overview presented unscanned output as a failure or unsupported schema")
+        }
+        try refuse(changed, checked: true)
+        quickOverview["output_rows"] = 5
+        changed["overview"] = quickOverview
+        try refuse(changed, checked: false)
+        changed = document
+        changed["exists"] = false
+        try refuse(changed)
+        changed["overview"] = NSNull()
+        changed["integrity"] = NSNull()
+        displayHistoryInspection(try decode(changed))
+        guard historyOverview.stringValue == localized("settings.history.absent") else {
+            throw HostError(message: "Missing History was shown as an empty database")
+        }
+        var oldOverview = overview
+        oldOverview["history_schema_version"] = 1
+        oldOverview["output_rows"] = NSNull()
+        oldOverview["output_bytes"] = NSNull()
+        changed = document
+        changed["overview"] = oldOverview
+        displayHistoryInspection(try decode(changed))
+        guard historyOverview.stringValue.contains(localized("settings.history.unsupported")) else {
+            throw HostError(message: "Unsupported History output counters were guessed as zero")
+        }
+        oldOverview["output_rows"] = 0
+        changed["overview"] = oldOverview
+        try refuse(changed)
+        for (key, value) in [("schema_version", 2 as Any), ("source", "/synthetic/other/history.sqlite3"),
+            ("kind", "other_database")] {
+            changed = document
+            changed[key] = value
+            try refuse(changed)
+        }
+        for (key, value) in [("history_schema_version", 4 as Any), ("page_size", 513), ("free_pages", 13),
+            ("events", UInt64.max), ("output_bytes", NSNull())] {
+            var invalid = overview
+            invalid[key] = value
+            changed = document
+            changed["overview"] = invalid
+            try refuse(changed)
+        }
+        for (key, value) in [("checks_complete", false as Any), ("record_types", "failed"),
+            ("issue_count", 1), ("status", "unknown")] {
+            var invalid = integrity
+            invalid[key] = value
+            changed = document
+            changed["integrity"] = invalid
+            try refuse(changed)
+        }
+        var unhealthy = integrity
+        unhealthy["status"] = "unhealthy"
+        unhealthy["record_types"] = "failed"
+        unhealthy["issue_count"] = 1
+        unhealthy["issues"] = [["code": "invalid_type", "message": "Synthetic invalid stored type"]]
+        changed = document
+        changed["integrity"] = unhealthy
+        displayHistoryInspection(try decode(changed))
+        guard historyIntegrity.textColor == .systemRed else {
+            throw HostError(message: "Unhealthy History was displayed as a successful check")
+        }
+        changed["integrity"] = NSNull()
+        _ = try decode(changed, checked: false)
+        try refuse(changed)
+        try refuse(document, checked: false)
+        historyOverview.stringValue = localized("settings.cache.not_loaded")
+        historyOverview.toolTip = nil
+        historyIntegrity.stringValue = localized("settings.history.not_checked")
+        historyIntegrity.textColor = .secondaryLabelColor
+        historyIntegrity.toolTip = nil
+    }
+
+    private func validateCacheForSelfTest() throws {
+        try validateHistoryInspectionForSelfTest()
+        let document: [String: Any] = ["schema_version": 1, "cache_directory": "/synthetic/cache",
+            "store_bytes": 1024, "legacy_analysis_bytes": 64, "legacy_analysis_files": 1,
+            "removed_rows": 0, "removed_files": 0, "namespaces": [
+                ["name": "path_tree", "rows": 3, "payload_bytes": 512, "rebuildable": true],
+                ["name": "gate1_verified_file", "rows": 5, "payload_bytes": 1024, "rebuildable": true],
+                ["name": "checkpoint", "rows": 2, "payload_bytes": 128, "rebuildable": false],
+                ["name": "future_state", "rows": 4, "payload_bytes": 256, "rebuildable": false]]]
+        let snapshot = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: document))
+        let database: [String: Any] = ["store_schema_version": 2, "sqlite_version": "3.53.0",
+            "journal_mode": "wal", "page_size": 4096, "page_count": 12, "free_pages": 3]
+        var withDatabase = document
+        withDatabase["database"] = database
+        let databaseSnapshot = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: withDatabase))
+        guard matchingSettings(localized("settings.cache.backup")).contains(.cache) else {
+            throw HostError(message: "Database backup was omitted from Settings search")
+        }
+        guard matchingSettings(localized("settings.history.backup")).contains(.cache),
+              historyBackup.toolTip == localized("settings.history.backup_help") else {
+            throw HostError(message: "History backup is missing from Settings search or accessibility context")
+        }
+        try displayCache(databaseSnapshot)
+        guard cacheBackup.isEnabled, cacheStore?.schema == 2,
+              cacheLabels["journal"]?.stringValue == "WAL",
+              cacheLabels["pages"]?.stringValue == localized("settings.cache.pages_value", "12", "3", "4096") else {
+            throw HostError(message: "Database overview or backup availability lost its recorded values")
+        }
+        for (key, value) in [("store_schema_version", 0 as Any), ("journal_mode", "unknown"),
+                             ("page_size", 513), ("page_count", 0), ("free_pages", 13),
+                             ("page_count", UInt64.max)] {
+            var invalidDatabase = database
+            invalidDatabase[key] = value
+            withDatabase["database"] = invalidDatabase
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: withDatabase)) }
+            catch { continue }
+            throw HostError(message: "Invalid database overview was accepted: \(key)")
+        }
+        var relocated = withDatabase
+        relocated["database"] = database
+        relocated["legacy_analysis_bytes"] = 0
+        relocated["legacy_analysis_files"] = 0
+        relocated["namespaces"] = snapshot.namespaces.filter { !$0.rebuildable }.map {
+            ["name": $0.name, "rows": $0.rows, "payload_bytes": $0.payloadBytes, "rebuildable": $0.rebuildable] as [String: Any]
+        }
+        relocated["core_store_path"] = "/synthetic/state/mfb_store.sqlite"
+        relocated["inactive_legacy_cache"] = ["rows": 1, "payload_bytes": 9]
+        let relocatedSnapshot = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: relocated))
+        try displayCache(relocatedSnapshot)
+        guard cacheBackup.isEnabled, !relocatedSnapshot.hasPruningStore,
+              !cacheClear.isEnabled, !cachePrune.isEnabled,
+              cacheStore?.url.path == "/synthetic/state/mfb_store.sqlite" else {
+            throw HostError(message: "Relocated Core database lost its backup path or was exposed as a cache")
+        }
+        relocated["core_store_path"] = "/unrelated/state/mfb_store.sqlite"
+        do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: relocated)) }
+        catch { relocated["core_store_path"] = nil }
+        guard relocated["core_store_path"] == nil else {
+            throw HostError(message: "Cache report accepted an unrelated Core database path")
+        }
+        let backupDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("mfb-backup-receipt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: backupDirectory) }
+        let destination = backupDirectory.appendingPathComponent("snapshot.sqlite")
+        try Data([0, 1, 2, 3]).write(to: destination)
+        let source = URL(fileURLWithPath: "/synthetic/cache/mfb_store.sqlite")
+        let backup: [String: Any] = ["schema_version": 1, "source": source.path,
+            "destination": destination.resolvingSymlinksInPath().path, "store_schema_version": 2, "bytes": 4]
+        guard try CoreDatabaseBackup.decode(JSONSerialization.data(withJSONObject: backup), source: source,
+            destination: destination, storeSchemaVersion: 2).bytes == 4 else {
+            throw HostError(message: "Valid backup receipt was lost")
+        }
+        for (key, value) in [("schema_version", 2 as Any), ("source", "/synthetic/other.sqlite"),
+                             ("destination", "/synthetic/other.sqlite"), ("store_schema_version", 3), ("bytes", 0), ("bytes", 5)] {
+            var invalid = backup
+            invalid[key] = value
+            do { _ = try CoreDatabaseBackup.decode(JSONSerialization.data(withJSONObject: invalid), source: source,
+                destination: destination, storeSchemaVersion: 2) }
+            catch { continue }
+            throw HostError(message: "Contradictory backup receipt was accepted: \(key)")
+        }
+        let link = backupDirectory.appendingPathComponent("link.sqlite")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: destination)
+        do { _ = try CoreDatabaseBackup.decode(JSONSerialization.data(withJSONObject: backup), source: source,
+            destination: link, storeSchemaVersion: 2)
+            throw HostError(message: "Symlinked backup was accepted")
+        } catch let error as HostError where error.message == "Symlinked backup was accepted" { throw error }
+          catch { }
+        let historySource = URL(fileURLWithPath: "/synthetic/history/history.sqlite3")
+        var historyReceipt: [String: Any] = ["schema_version": 1, "kind": "history_sqlite", "source": historySource.path,
+            "destination": destination.resolvingSymlinksInPath().path, "history_schema_version": 2, "bytes": 4,
+            "sessions": 2, "events": 3, "output_rows": 5]
+        let historyData = try JSONSerialization.data(withJSONObject: historyReceipt)
+        let history = try HistoryDatabaseBackup.decode(historyData, source: historySource, destination: destination)
+        guard history.sessions == 2, history.events == 3, history.outputRows == 5,
+              historyBackupArguments(directory: historySource.deletingLastPathComponent(), destination: destination)
+                == ["--history-backup", destination.path, "--history-directory", "/synthetic/history", "--json"] else {
+            throw HostError(message: "History backup receipt or explicit source arguments lost their scope")
+        }
+        for (key, value) in [("kind", "core_sqlite" as Any), ("schema_version", 2),
+                             ("history_schema_version", 0), ("history_schema_version", 1),
+                             ("source", "/synthetic/other.sqlite"), ("destination", "/synthetic/other.sqlite"),
+                             ("bytes", 5), ("sessions", UInt64.max), ("events", -1), ("output_rows", NSNull())] {
+            var invalid = historyReceipt
+            invalid[key] = value
+            do { _ = try HistoryDatabaseBackup.decode(JSONSerialization.data(withJSONObject: invalid), source: historySource, destination: destination) }
+            catch { continue }
+            throw HostError(message: "Invalid History backup evidence was accepted: \(key)")
+        }
+        do {
+            _ = try HistoryDatabaseBackup.decode(historyData, source: historySource, destination: link)
+            throw HostError(message: "History backup destination symlink was accepted")
+        } catch let error as HostError where error.message == "History backup destination symlink was accepted" { throw error }
+          catch { }
+        historyReceipt["history_schema_version"] = 1
+        historyReceipt["output_rows"] = 0
+        guard try HistoryDatabaseBackup.decode(JSONSerialization.data(withJSONObject: historyReceipt), source: historySource, destination: destination).historySchemaVersion == 1 else {
+            throw HostError(message: "Version-one History backup was incorrectly migrated or rejected")
+        }
+        guard try snapshot.totals(rebuildable: true).rows == 8,
+              try snapshot.totals(rebuildable: false).rows == 6 else {
+            throw HostError(message: "Cache and retained state counts were mixed")
+        }
+        try displayCache(snapshot)
+        guard !cacheBackup.isEnabled, cacheLabels["database"]?.stringValue == localized("result.unknown") else {
+            throw HostError(message: "Missing database evidence was guessed or allowed a backup")
+        }
+        tabs.selectTabViewItem(withIdentifier: "cache")
+        guard cacheClear.isEnabled, cachePrune.isEnabled, !resetButton.isHidden, !applyButton.isHidden,
+              cacheCheck.isEnabled, cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
+            throw HostError(message: "Cache controls were not placed in Settings")
+        }
+        var gateOnly = document
+        gateOnly["namespaces"] = [["name": "gate1_verified_file", "rows": 5, "payload_bytes": 1024, "rebuildable": true]]
+        gateOnly["legacy_analysis_files"] = 0
+        try displayCache(LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: gateOnly)))
+        guard cacheClear.isEnabled, !cachePrune.isEnabled else {
+            throw HostError(message: "Gate 1 cache enabled path-tree pruning")
+        }
+        cacheBusy = true
+        try displayCache(databaseSnapshot)
+        updatePanelSize()
+        guard !cacheClear.isEnabled, !cachePrune.isEnabled, !cacheCheck.isEnabled, !cacheBackup.isEnabled,
+              !historyBackup.isEnabled, !historyRefresh.isEnabled, !historyCheck.isEnabled, !cancelButton.isEnabled else {
+            throw HostError(message: "Cache commands stayed enabled while busy")
+        }
+        cacheBusy = false
+        try displayCache(snapshot)
+        let policy = EffectiveRuntimeSettings(values: ["cache.path_tree_max_bytes": "4096", "cache.path_tree_ttl_seconds": "60"],
+            sources: [:], sourceChain: [:])
+        var before = draft(), after = draft()
+        before.values[.imgConfig] = "/synthetic/\u{00e9}.json"
+        after.values[.imgConfig] = "/synthetic/e\u{0301}.json"
+        guard !cachePruningDraftMatches(before, after), cachePruningDraftMatches(before, before) else {
+            throw HostError(message: "Pruning confirmation merged byte-distinct configuration paths")
+        }
+        guard try cachePruningArguments([policy, policy]) == ["--no-config", "--cache-max-bytes", "4096", "--cache-ttl-seconds", "60"] else {
+            throw HostError(message: "Cache pruning did not pin the resolved policy")
+        }
+        for values in [[String: String](), ["cache.path_tree_max_bytes": "0", "cache.path_tree_ttl_seconds": "60"],
+                       ["cache.path_tree_max_bytes": "4096", "cache.path_tree_ttl_seconds": "61"],
+                       ["cache.path_tree_max_bytes": "18446744073709551615", "cache.path_tree_ttl_seconds": "60"]] {
+            let other = EffectiveRuntimeSettings(values: values, sources: [:], sourceChain: [:])
+            do { _ = try cachePruningArguments([policy, other]) }
+            catch { continue }
+            throw HostError(message: "Missing, mixed or invalid pruning policy was accepted")
+        }
+        var pruned = document
+        pruned["removed_rows"] = 3
+        let pruning: [String: Any] = ["policy": ["path_tree_max_bytes": 4096, "path_tree_ttl_seconds": 60],
+            "expired_rows": 1, "evicted_rows": 2]
+        pruned["pruning"] = pruning
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: pruned)).pruning?.expiredRows == 1 else {
+            throw HostError(message: "Pruning receipt lost category counts")
+        }
+        for key in ["removed_rows", "removed_files"] {
+            var invalid = pruned
+            invalid[key] = 1
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid)) }
+            catch { continue }
+            throw HostError(message: "Contradictory pruning receipt was accepted")
+        }
+        var previewed = document
+        previewed["database"] = database
+        let preview: [String: Any] = ["schema_version": 1, "snapshot_unix_secs": 100, "cutoff_unix_secs": 40,
+            "policy": ["path_tree_max_bytes": 4096, "path_tree_ttl_seconds": 60],
+            "total_rows": 3, "total_payload_bytes": 512, "expired_rows": 1, "expired_payload_bytes": 128,
+            "evicted_rows": 1, "evicted_payload_bytes": 128, "retained_rows": 1, "retained_payload_bytes": 256]
+        previewed["pruning_preview"] = preview
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: previewed)).pruningPreview?.retainedRows == 1 else {
+            throw HostError(message: "Read-only cache preview lost retained counts")
+        }
+        var cacheOnly = previewed
+        cacheOnly["database"] = nil
+        var cacheDatabase = database
+        cacheDatabase["store_schema_version"] = 1
+        cacheOnly["rebuildable_database"] = cacheDatabase
+        let cacheOnlyStatus = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: cacheOnly))
+        guard cacheOnlyStatus.hasPruningStore, cacheOnlyStatus.database == nil,
+              cacheOnlyStatus.pruningPreview?.retainedRows == 1 else {
+            throw HostError(message: "Dedicated cache preview was confused with a Core backup source")
+        }
+        for (key, value) in [("schema_version", 2 as Any), ("cutoff_unix_secs", 101), ("cutoff_unix_secs", 39),
+            ("expired_rows", 4), ("retained_payload_bytes", 255), ("total_rows", UInt64.max)] {
+            var invalidPreview = preview
+            invalidPreview[key] = value
+            var invalid = previewed
+            invalid["pruning_preview"] = invalidPreview
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid)) }
+            catch { continue }
+            throw HostError(message: "Invalid pruning preview was accepted: \(key)")
+        }
+        for key in ["removed_rows", "removed_files"] {
+            var invalid = previewed
+            invalid[key] = 1
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid)) }
+            catch { continue }
+            throw HostError(message: "Read-only preview claimed a mutation")
+        }
+        cacheLabels["path"]?.stringValue = "/synthetic/" + String(repeating: "long-directory/", count: 30)
+        cacheMessage.stringValue = String(repeating: "Synthetic cache error. ", count: 30)
+        cacheMessageRow?.isHidden = false
+        updatePanelSize()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let content = tabs.selectedTabViewItem?.view, let grid = grids["cache"],
+              content.bounds.contains(grid.frame),
+              cacheLabels.values.allSatisfy({ grid.bounds.contains($0.alignmentRect(forFrame: $0.frame)) }) else {
+            let labels = cacheLabels.map { "\($0.key)=\($0.value.frame)" }.joined(separator: ", ")
+            throw HostError(message: "Long cache paths or errors escaped the Settings tab: content=\(String(describing: tabs.selectedTabViewItem?.view?.bounds)), grid=\(String(describing: grids["cache"]?.frame)), labels=\(labels)")
+        }
+        cacheMessageRow?.isHidden = true
+        try displayCache(snapshot)
+        let healthy: [String: Any] = ["schema_version": 1, "status": "healthy",
+            "sqlite_integrity": "ok", "foreign_keys": "ok", "blob_scan_complete": true,
+            "checked_cache_rows": 8, "checked_protected_rows": 6,
+            "corrupt_cache_rows": 0, "corrupt_protected_rows": 0, "issue_count": 0, "issues": []]
+        var checked = document
+        checked["integrity"] = healthy
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: checked)).integrity?.status == .healthy else {
+            throw HostError(message: "Database integrity result was not decoded")
+        }
+        for (key, value) in [("schema_version", 2 as Any), ("status", "unknown"),
+                             ("checked_cache_rows", 3), ("blob_scan_complete", false),
+                             ("corrupt_protected_rows", 1), ("issue_count", 1)] {
+            var report = healthy
+            report[key] = value
+            checked["integrity"] = report
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: checked)) }
+            catch { continue }
+            throw HostError(message: "Invalid database integrity receipt was accepted: \(key)")
+        }
+        for state in ["unhealthy", "error"] {
+            var report = healthy
+            report["status"] = state
+            report["corrupt_protected_rows"] = 1
+            report["issue_count"] = 1
+            report["issues"] = [["code": "protected_payload", "message": "Invalid digest."]]
+            checked["integrity"] = report
+            let decoded = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: checked))
+            guard let integrity = decoded.integrity, integrity.status.rawValue == state else { throw HostError(message: "Integrity failure was lost") }
+            displayCacheIntegrity(integrity)
+            guard cacheMessage.textColor == .systemRed, cacheMessageRow?.isHidden == false,
+                  state != "error" || (!cacheClear.isEnabled && !cachePrune.isEnabled && !cacheLoaded) else {
+                throw HostError(message: "Incomplete integrity check was shown as available or successful")
+            }
+        }
+        var absent = healthy
+        absent["status"] = "absent"
+        absent["sqlite_integrity"] = "not_checked"
+        absent["foreign_keys"] = "not_checked"
+        absent["blob_scan_complete"] = false
+        absent["checked_cache_rows"] = 0
+        absent["checked_protected_rows"] = 0
+        checked["integrity"] = absent
+        checked["namespaces"] = []
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: checked)).integrity?.status == .absent else {
+            throw HostError(message: "Missing database was not distinguished from healthy")
+        }
+        cacheMessageRow?.isHidden = true
+        try displayCache(snapshot)
+        for version in [0, 2] {
+            var invalid = document
+            invalid["schema_version"] = version
+            do {
+                _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid))
+            } catch { continue }
+            throw HostError(message: "Unsupported cache status schema was accepted")
+        }
+        var invalid = document
+        invalid["namespaces"] = [["name": "checkpoint", "rows": 2, "payload_bytes": 128, "rebuildable": true]]
+        do {
+            _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid))
+        } catch { return }
+        throw HostError(message: "Recovery state was mislabeled as rebuildable cache")
+    }
+}
+
+private enum PhotosAuditContainerKind: String, Decodable {
+    case folder
+    case album
+
+    var argument: String {
+        switch self {
+        case .folder: "--photos-folder-id"
+        case .album: "--photos-album-id"
+        }
+    }
+}
+
+private struct PhotosAuditContainer: Decodable, Equatable {
+    let kind: PhotosAuditContainerKind
+    let id: String
+    let name: String
+    let parentID: String?
+    let path: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case kind, id, name, path
+        case parentID = "parent_id"
+    }
+}
+
+private enum ProcessorCommand {
+    static func arguments(from request: ProcessorRequest) throws -> [String] {
+        if request.recoverPhotosCleanup {
+            guard request.operationMode.backendMode == "fast-img",
+                  let strategy = request.operationMode.strategy, let output = request.expectedFastImgOutput,
+                  [request.targetPath, output].allSatisfy(validFastImgCleanupPath),
+                  !FastImgDeliveryReceipt.samePath(request.targetPath, output) else {
+                throw HostError(message: localized("cleanup.recovery.unconfirmed"))
+            }
+            return ["--mode", "fast-img", "--strategy", strategy, "--shortest-path",
+                    "--retry", "--recover-photos-cleanup", "--output", output, "--", request.targetPath]
+        }
+        guard !request.targetPath.isEmpty else {
+            throw HostError(message: localized("error.select_target"))
+        }
+
+        let capabilities = request.operationMode.capabilities
+        guard !request.shortestPath || capabilities.supportsShortestPath else {
+            throw HostError(message: localized("error.option_unavailable"))
+        }
+        guard !request.ultimate || capabilities.supportsUltimate else {
+            throw HostError(message: localized("error.option_unavailable"))
+        }
+        guard (!request.resume && !request.fresh) || capabilities.supportsResume else {
+            throw HostError(message: localized("error.option_unavailable"))
+        }
+        guard !((request.resume || request.retry) && request.fresh) else {
+            throw HostError(message: localized("error.resume_conflict"))
+        }
+        guard !request.retryFailed || (request.operationMode.backendMode == "fast-img"
+            && !request.resume && !request.retry && !request.fresh && !request.watch),
+              request.retryFailedParent == nil || request.retryFailed else {
+            throw HostError(message: localized("error.resume_conflict"))
+        }
+        guard !request.archive || capabilities.supportsArchive,
+              !request.retry || capabilities.supportsRetry,
+              !(request.force || request.plain || request.inPlace) || capabilities.supportsStandardOptions
+        else { throw HostError(message: localized("error.option_unavailable")) }
+        if request.watch {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: request.targetPath, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { throw HostError(message: localized("error.watch_directory")) }
+        }
+        if request.photosContainer != nil {
+            guard request.operationMode == .restoreJpeg,
+                  isPhotosLibraryPackagePath(request.targetPath)
+            else {
+                throw HostError(message: localized("error.photos_scope_unavailable"))
+            }
+        }
+        if request.operationMode == .collect || request.operationMode == .compare {
+            guard let backup = request.backupPath, !backup.isEmpty else {
+                throw HostError(message: localized("error.select_backup"))
+            }
+            guard isPhotosLibraryPackagePath(backup)
+                == isPhotosLibraryPackagePath(request.targetPath)
+            else {
+                throw HostError(message: localized("error.backup_kind_mismatch"))
+            }
+            if request.operationMode == .compare {
+                guard isPhotosLibraryPackagePath(request.targetPath),
+                      isPhotosLibraryPackagePath(backup)
+                else {
+                    throw HostError(message: localized("error.photos_compare_required"))
+                }
+            }
+        } else if request.backupPath != nil {
+            throw HostError(message: localized("error.option_unavailable"))
+        }
+
+        var arguments: [String] = []
+        if let processing = capabilities.resolvedProcessingMode(request.processingMode),
+           let mode = processing.argument
+        {
+            arguments.append(mode)
+        }
+        if let mode = request.operationMode.backendMode { arguments += ["--mode", mode] }
+        if let strategy = request.operationMode.strategy {
+            arguments += ["--strategy", strategy]
+        }
+        if request.ultimate { arguments.append("--ultimate") }
+        if request.verbose { arguments.append("--verbose") }
+        if request.archive { arguments.append("--archive") }
+        if request.retry { arguments.append("--retry") }
+        if request.retryFailed { arguments.append("--retry-failed") }
+        if let parent = request.retryFailedParent {
+            guard FastImgFailedRetryAvailable.path(parent) else { throw HostError(message: localized("retry.invalid")) }
+            arguments += ["--retry-failed-parent", parent]
+        }
+        if let output = request.expectedFastImgOutput {
+            guard request.operationMode.backendMode == "fast-img", FastImgFailedRetryAvailable.path(output) else {
+                throw HostError(message: localized("preflight.fast.invalid"))
+            }
+            arguments += ["--output", output]
+        }
+        if request.force { arguments.append("--force") }
+        if request.dryRun { arguments.append("--dry-run") }
+        if request.plain { arguments.append("--plain") }
+        if request.inPlace { arguments.append("--in-place") }
+        if request.watch { arguments.append("--watch") }
+        if request.shortestPath {
+            arguments.append("--shortest-path")
+        }
+        if request.resume {
+            arguments.append("--resume")
+        } else if request.fresh {
+            arguments.append("--no-resume")
+        }
+        if let container = request.photosContainer {
+            arguments += [container.kind.argument, container.id]
+        }
+        if let backup = request.backupPath { arguments += ["--backup", backup] }
+        arguments += try request.mediaSettings.arguments(operation: request.operationMode, processing: request.processingMode)
+        arguments.append(request.targetPath)
+        return arguments
+    }
+
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    static func terminalShellCommand(binary: URL, arguments: [String]) throws -> String {
+        guard binary.isFileURL else { throw HostError(message: localized("error.backend_local")) }
+        let target = arguments.last.map(URL.init(fileURLWithPath:))
+        let workingDirectory: URL
+        if let target,
+           (try? target.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        {
+            workingDirectory = target.deletingLastPathComponent()
+        } else {
+            workingDirectory = target?.deletingLastPathComponent()
+                ?? binary.deletingLastPathComponent()
+        }
+        return "cd \(shellQuote(workingDirectory.path)) && "
+            + ([binary.path] + arguments).map(shellQuote).joined(separator: " ")
+    }
+}
+
+private func conciseProcessLog(_ text: String) -> String? {
+    let signals = [
+        "error", "fail", "warn", "complete", "finished", "summary", "processed", "converted",
+        "skipped", "progress", "MFB_RESUME_DECISION_REQUIRED", "[ERROR]", "[WARN]", "[SUMMARY]",
+        "[PROGRESS]", "[SUCCESS]", "✓", "✗", "▶︎",
+        "失败", "错误", "警告", "完成", "进度", "失敗", "エラー", "警告", "完了", "進捗",
+    ]
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+    let kept = lines.filter { line in
+        let lowered = line.lowercased()
+        if lowered.range(of: #"^(?:err:\s*)?\[?(?:debug|trace)(?:\s|\]|:)"#, options: .regularExpression) != nil {
+            return false
+        }
+        return signals.contains { lowered.contains($0.lowercased()) }
+            || lowered.range(of: #"\b\d{1,3}%(?!\w)"#, options: .regularExpression) != nil
+            || lowered.range(of: #"^(?:err:\s*)?\[(?:scan|copy|encode|meme mode|verify|import|skip|retain|done|restore|resume|final)\s*\]"#, options: .regularExpression) != nil
+            // Keep unclassified stderr diagnostics, but not routine INFO chatter.
+            || (lowered.hasPrefix("err:")
+                && lowered.range(of: #"^err:\s*\[?info(?:\s|\]|:)"#, options: .regularExpression) == nil)
+    }
+    return kept.isEmpty ? nil : kept.joined(separator: "\n")
+}
+
+private func countStatusValue(in line: String) -> String? {
+    guard line.range(of: "Count status:", options: .caseInsensitive) != nil else { return nil }
+    guard let range = line.range(of: #"^\s*(?:ERR:\s*)?Count status:\s*\S+"#, options: [.regularExpression, .caseInsensitive]) else {
+        return nil
+    }
+    return line[range].split(separator: ":").last?
+        .trimmingCharacters(in: .whitespaces)
+}
+
+private struct ImgStartupAdmission {
+    static let prefix = "MFB_IMG_ADMISSION_BLOCKED="
+    struct Event: Decodable, Equatable {
+        enum Cause: String, Decodable {
+            case resumeConfigUnknown = "resume_config_unknown"
+            case resumeConfigChanged = "resume_config_changed"
+            case resumeToolModeChanged = "resume_tool_mode_changed"
+            case admissionFailed = "admission_failed"
+        }
+        let schema_version: Int
+        let pipeline: String
+        let cause_code: Cause
+        let input_path: String?
+        let requested_output: String?
+        let message: String
+    }
+    private(set) var event: Event?
+    private(set) var invalid = false
+
+    mutating func ingest(_ line: String, request: ProcessorRequest?, hasMediaEvidence: Bool) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(Self.prefix) else { return false }
+        do {
+            let data = Data(raw.dropFirst(Self.prefix.count).utf8)
+            guard !invalid, !hasMediaEvidence, data.count <= 32_768,
+                  let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  Set(fields.keys) == Set(["schema_version", "pipeline", "cause_code", "input_path", "requested_output", "message"])
+            else { throw HostError(message: localized("admission.invalid")) }
+            let next = try JSONDecoder().decode(Event.self, from: data)
+            guard next.schema_version == 1, next.pipeline == "img",
+                  !next.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  next.message.utf8.count <= 8_192, !next.message.utf8.contains(0),
+                  next.requested_output.map(FastImgDeliveryReceipt.absolute) ?? true,
+                  let input = next.input_path, FastImgDeliveryReceipt.absolute(input),
+                  let request, request.operationMode.backendMode == "fast-img", !request.dryRun,
+                  FastImgDeliveryReceipt.samePath(input, request.targetPath),
+                  event == nil || event == next
+            else { throw HostError(message: localized("admission.invalid")) }
+            // The output is a launcher diagnostic, never authority for a fresh
+            // output location, a recovered artifact, or a cleanup operation.
+            event = next
+        } catch {
+            event = nil
+            invalid = true
+        }
+        return true
+    }
+
+    var isBlocked: Bool { invalid || event != nil }
+    var allowsIndependentTask: Bool {
+        guard !invalid else { return false }
+        switch event?.cause_code {
+        case .resumeConfigUnknown, .resumeConfigChanged, .resumeToolModeChanged: return true
+        default: return false
+        }
+    }
+    var status: String {
+        if invalid { return localized("admission.invalid") }
+        switch event?.cause_code {
+        case .resumeConfigUnknown: return localized("admission.resume_unknown")
+        case .resumeConfigChanged: return localized("admission.resume_changed")
+        case .resumeToolModeChanged: return localized("admission.resume_tool_mode_changed")
+        default: return localized("admission.stopped")
+        }
+    }
+}
+
+private struct ToolSnapshotPresentation {
+    static let prefix = "MFB_TOOL_SNAPSHOT="
+    struct Event: Decodable {
+        enum State: String, Decodable { case preparing, ready, blocked }
+        enum Boundary: String, Decodable { case persisted = "persisted-external", observed = "live-observed" }
+        let schema_version: Int
+        let state: State
+        let boundary: Boundary
+        let identity: String?
+        let manifest_path: String?
+        let cause_code: String?
+        let tool: String?
+        let tool_names: [String]?
+        let pipeline: String?
+        let message: String?
+
+        func validate() throws {
+            guard schema_version == 1, (message?.utf8.count ?? 0) <= 8 * 1024,
+                  (tool_names?.count ?? 0) <= 64,
+                  tool_names?.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) != false else {
+                throw HostError(message: "Invalid tool snapshot event")
+            }
+            if state == .ready && boundary == .persisted {
+                guard let identity, identity.utf8.count == 64,
+                      identity.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+                      let manifest_path, manifest_path.hasPrefix("/"), !manifest_path.utf8.contains(0),
+                      tool_names?.isEmpty == false else {
+                    throw HostError(message: "Fixed tools have no complete snapshot identity")
+                }
+            }
+            if state == .blocked, cause_code?.isEmpty != false {
+                throw HostError(message: "Blocked tools have no recorded cause")
+            }
+        }
+    }
+    private(set) var event: Event?
+    private(set) var invalid = false
+
+    mutating func ingest(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(Self.prefix) else { return false }
+        do {
+            let decoded = try JSONDecoder().decode(Event.self, from: Data(raw.dropFirst(Self.prefix.count).utf8))
+            try decoded.validate()
+            if event?.state != .blocked { event = decoded }
+        } catch { invalid = true }
+        return true
+    }
+
+    mutating func finish() {
+        if event?.state == .preparing { event = nil }
+    }
+
+    var label: String {
+        if invalid { return localized("tool_snapshot.invalid") }
+        guard let event else { return "" }
+        let content: String
+        switch event.state {
+        case .preparing: content = localized("tool_snapshot.preparing")
+        case .ready:
+            let label = localized(event.boundary == .persisted ? "tool_snapshot.ready" : "tool_snapshot.observed")
+            content = event.boundary == .persisted ? label + " · " + (event.tool_names ?? []).joined(separator: ", ") : label
+        case .blocked:
+            let cause = event.cause_code ?? ""
+            let key = ["tool_unavailable", "tool_changed", "snapshot_invalid", "snapshot_unsupported", "configuration_mismatch", "prepare_failed", "tool_probe_unconfirmed"]
+                .contains(cause) ? "tool_snapshot.\(cause)" : "tool_snapshot.blocked"
+            content = localized(key)
+        }
+        let scope = ["img", "vid"].contains(event.pipeline ?? "")
+            ? localized("tool_snapshot.scope.\(event.pipeline ?? "")") + " · " : ""
+        return scope + content
+    }
+
+    static func selfTest() throws {
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"),
+                  let bundle = Bundle(path: path) else {
+                throw HostError(message: "Missing tool snapshot locale: \(language)")
+            }
+            for suffix in ["preparing", "ready", "observed", "invalid", "blocked", "tool_unavailable", "tool_changed", "snapshot_invalid", "snapshot_unsupported", "configuration_mismatch", "prepare_failed", "tool_probe_unconfirmed", "scope.img", "scope.vid"] {
+                let key = "tool_snapshot." + suffix
+                let value = bundle.localizedString(forKey: key, value: nil, table: nil)
+                guard !value.isEmpty, value != key else { throw HostError(message: "Missing tool snapshot translation: \(key)") }
+            }
+        }
+        var state = Self()
+        _ = state.ingest(prefix + #"{"schema_version":1,"state":"preparing","boundary":"persisted-external"}"#)
+        state.finish()
+        guard state.event == nil else { throw HostError(message: "Ended tool preparation was still presented as running") }
+        let ready = prefix + "{\"schema_version\":1,\"state\":\"ready\",\"boundary\":\"persisted-external\",\"identity\":\"" + String(repeating: "a", count: 64) + "\",\"manifest_path\":\"/synthetic/manifest.json\",\"tool_names\":[\"cjxl\"]}"
+        guard state.ingest(ready), !state.invalid, state.label == localized("tool_snapshot.ready") + " · cjxl" else {
+            throw HostError(message: "Tool snapshot receipt did not show its verified boundary")
+        }
+        let blocked = prefix + #"{"schema_version":1,"state":"blocked","boundary":"persisted-external","cause_code":"tool_changed","tool":"cjxl","message":"Failed: 999 is technical text"}"#
+        guard state.ingest("ERR: " + blocked), state.label == localized("tool_snapshot.tool_changed") else {
+            throw HostError(message: "Tool change was not explained independently from media failure counts")
+        }
+        guard state.ingest(ready), state.label == localized("tool_snapshot.tool_changed") else {
+            throw HostError(message: "A later worker concealed an earlier tool failure")
+        }
+        var unconfirmed = Self()
+        guard unconfirmed.ingest(prefix + #"{"schema_version":1,"state":"blocked","boundary":"persisted-external","cause_code":"tool_probe_unconfirmed"}"#),
+              unconfirmed.label == localized("tool_snapshot.tool_probe_unconfirmed") else {
+            throw HostError(message: "Unconfirmed tool readiness was presented as a damaged tool")
+        }
+        var observed = Self()
+        guard observed.ingest(prefix + #"{"schema_version":1,"state":"ready","boundary":"live-observed"}"#),
+              observed.label == localized("tool_snapshot.observed") else {
+            throw HostError(message: "Live tools were presented as a persistent snapshot")
+        }
+        var invalid = Self()
+        guard invalid.ingest(ready.replacingOccurrences(of: "\"schema_version\":1", with: "\"schema_version\":2")),
+              invalid.invalid, invalid.label == localized("tool_snapshot.invalid") else {
+            throw HostError(message: "Unsupported tool evidence was presented as verified")
+        }
+    }
+}
+
+private struct FileStageProgress {
+    struct Event: Decodable {
+        let schema_version: Int
+        let stage_id: String
+        let stage: String
+        let processed: UInt64
+        let total: UInt64
+        let state: String
+
+        var isSourcePreparation: Bool {
+            ["modern_source_inspection", "fast_img_source_preparation", "fast_img_source_hashing"].contains(stage)
+        }
+
+        var stageLabel: String { localized("progress.stage.\(stage)") }
+
+        var valid: Bool {
+            schema_version == 1 && !stage_id.isEmpty && stage_id.utf8.count <= 64
+                && (isSourcePreparation || ["image_processing", "video_processing", "fast_img_encode"].contains(stage))
+                && ["running", "finished"].contains(state)
+                && processed <= total && total <= UInt64(Int64.max)
+        }
+
+        var percentage: Double? {
+            guard total > 0 else { return nil }
+            // Do not round an unfinished stage up to 100.00%.
+            return processed == total ? 100 : min(99.99, Double(processed) / Double(total) * 100)
+        }
+    }
+
+    private(set) var event: Event?
+    private(set) var invalid = false
+
+    static func payload(_ line: String) -> Substring? {
+        let raw = line.hasPrefix("ERR: ") ? line.dropFirst(5) : line[...]
+        let prefix = "MFB_PROGRESS="
+        return raw.hasPrefix(prefix) ? raw.dropFirst(prefix.count) : nil
+    }
+
+    mutating func ingest(_ line: String) -> Bool {
+        guard let payload = Self.payload(line) else { return false }
+        guard payload.utf8.count <= 1_024,
+              let next = try? JSONDecoder().decode(Event.self, from: Data(payload.utf8)), next.valid else {
+            event = nil
+            invalid = true
+            return true
+        }
+        if let previous = event, previous.stage_id == next.stage_id {
+            guard previous.stage == next.stage, previous.total == next.total,
+                  next.processed >= previous.processed,
+                  previous.state != "finished" || next.state == "finished" else {
+                event = nil
+                invalid = true
+                return true
+            }
+        }
+        event = next
+        invalid = false
+        return true
+    }
+
+    var label: String {
+        guard let event else { return localized("progress.unavailable") }
+        let processed = String(event.processed)
+        let total = String(event.total)
+        if event.stage == "modern_source_inspection", event.total > 0 {
+            if event.state == "finished" {
+                let key = event.processed == event.total ? "progress.candidates_finished" : "progress.candidates_ended"
+                return localized(key, processed, total)
+            }
+            return localized("progress.candidates", processed, total)
+        }
+        let stage = event.stageLabel
+        if event.state == "finished" {
+            return localized("progress.stage_finished", stage, processed, total)
+        }
+        guard let percentage = event.percentage else { return localized("progress.empty", stage) }
+        if event.isSourcePreparation {
+            return localized("progress.inspection", stage, processed, total)
+        }
+        return localized("progress.files", stage, processed, total, percentage)
+    }
+}
+
+private struct LiveWorkerExecution {
+    static let prefix = "MFB_HISTORY_WORKER_EXECUTION="
+    private var active: [String: HistoryWorkerExecution] = [:]
+    // This is a live presenter, not another history store: normal sequential work has no lifetime limit.
+    private var recentlyClosed: [String] = []
+    private var runID: String?
+    private var hasRunIdentity = false
+    private var sawOtherFailure = false
+    private(set) var latest: HistoryWorkerExecution?
+    private(set) var invalid = false
+    var confirmedRunID: String? { invalid ? nil : runID }
+
+    mutating func ingest(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(Self.prefix) else { return false }
+        latest = nil
+        guard !invalid, raw.utf8.count <= 4_096,
+              let next = try? JSONDecoder().decode(HistoryWorkerExecution.self,
+                  from: Data(raw.dropFirst(Self.prefix.count).utf8)), next.valid,
+              !hasRunIdentity || runID == next.run_id else {
+            invalid = true
+            return true
+        }
+        hasRunIdentity = true
+        runID = next.run_id
+        if next.state == "spawned" {
+            guard active.count < 64, active[next.invocation_id] == nil,
+                  !recentlyClosed.contains(next.invocation_id) else {
+                invalid = true
+                return true
+            }
+            active[next.invocation_id] = next
+        } else {
+            guard let spawn = active[next.invocation_id], spawn.pid == next.pid,
+                  spawn.run_id == next.run_id, spawn.pipeline == next.pipeline else {
+                invalid = true
+                return true
+            }
+            active.removeValue(forKey: next.invocation_id)
+            recentlyClosed.append(next.invocation_id)
+            if recentlyClosed.count > 64 { recentlyClosed.removeFirst() }
+            if let code = next.exit_code, code != 0 { sawOtherFailure = true }
+            if let signal = next.signal, ![2, 15].contains(signal) { sawOtherFailure = true }
+        }
+        latest = next
+        return true
+    }
+
+    var interruptionSignal: Int32? {
+        guard !invalid, !sawOtherFailure, active.isEmpty,
+              let latest, latest.state == "exited", let signal = latest.signal,
+              [2, 15].contains(signal) else { return nil }
+        return signal
+    }
+
+    var singleSuccessfulImageRunID: String? {
+        guard !invalid, !sawOtherFailure, active.isEmpty, recentlyClosed.count == 1,
+              let latest, latest.state == "exited", latest.pipeline == "img",
+              latest.signal == nil, latest.exit_code == 0,
+              recentlyClosed.first == latest.invocation_id else { return nil }
+        return latest.run_id
+    }
+
+    static func signalDescription(_ signal: Int32) -> String {
+        let name: String?
+        switch signal {
+        case SIGINT: name = "SIGINT"
+        case SIGTERM: name = "SIGTERM"
+        case SIGKILL: name = "SIGKILL"
+        case SIGABRT: name = "SIGABRT"
+        case SIGSEGV: name = "SIGSEGV"
+        default: name = nil
+        }
+        return name.map { "\($0) (\(signal))" } ?? String(signal)
+    }
+}
+
+private struct PhotosImportProgress {
+    static let prefix = "MFB_PHOTOS_PROGRESS="
+    struct Event: Decodable {
+        let schema_version: Int
+        let scope: String
+        let operation_id: String
+        let sequence: UInt64
+        let phase: String
+        let pending_total: UInt64
+        let verified: UInt64
+
+        var closed: Bool { phase == "completed" || phase == "stopped" }
+        var identity: (pid: UInt32, counter: UInt64)? {
+            let parts = operation_id.split(separator: "-", omittingEmptySubsequences: false)
+            guard operation_id.utf8.count <= 64, parts.count == 2,
+                  let pid = UInt32(parts[0]), pid > 0, let counter = UInt64(parts[1]),
+                  String(pid) == parts[0], String(counter) == parts[1] else { return nil }
+            return (pid, counter)
+        }
+        var valid: Bool {
+            schema_version == 1 && scope == "current_pending_import" && sequence > 0
+                && identity != nil
+                && ["target_preparation", "reconciling", "importing", "verifying", "completed", "stopped"].contains(phase)
+                && pending_total <= UInt64(Int64.max) && verified <= pending_total
+                && (phase != "completed" || verified == pending_total)
+        }
+        var percentage: Double? {
+            guard pending_total > 0, phase == "verifying" || phase == "completed" else { return nil }
+            let measured = Double(verified) / Double(pending_total) * 100
+            return phase == "completed" ? measured : min(99.99, measured)
+        }
+    }
+    private(set) var event: Event?
+    private(set) var invalid = false
+    private var stoppedDuringPreparation = false
+    private var highestCounter: [UInt32: UInt64] = [:]
+
+    var preparationStopPendingCount: Int? {
+        guard !invalid, stoppedDuringPreparation, let event else { return nil }
+        return Int(exactly: event.pending_total)
+    }
+
+    mutating func ingest(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(Self.prefix) else { return false }
+        let data = Data(raw.dropFirst(Self.prefix.count).utf8)
+        guard !invalid, data.count <= 1_024,
+              let fields = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(fields.keys) == Set(["schema_version", "scope", "operation_id", "sequence", "phase", "pending_total", "verified"]),
+              let next = try? JSONDecoder().decode(Event.self, from: data), next.valid else {
+            invalid = true
+            return true
+        }
+        if let previous = event, previous.operation_id == next.operation_id {
+            guard !previous.closed, next.sequence > previous.sequence,
+                  next.pending_total == previous.pending_total, next.verified >= previous.verified else {
+                invalid = true
+                return true
+            }
+        } else {
+            // shortcut: local display IDs reject same-batch PID reuse with a reset counter; revisit if these become persistent task identities.
+            guard event?.closed ?? true, let identity = next.identity,
+                  highestCounter[identity.pid].map({ identity.counter > $0 }) ?? true,
+                  next.sequence == 1, next.phase == "target_preparation", next.verified == 0 else {
+                invalid = true
+                return true
+            }
+            highestCounter[identity.pid] = identity.counter
+        }
+        // A gap can hide a later phase, so name the stop phase only from adjacent events.
+        stoppedDuringPreparation = next.phase == "stopped" && next.verified == 0
+            && event.map { $0.operation_id == next.operation_id && $0.phase == "target_preparation"
+                && $0.sequence > 1 && $0.sequence == next.sequence - 1 } == true
+        event = next
+        return true
+    }
+    var label: String {
+        guard !invalid, let event else { return localized("photos.progress.invalid") }
+        let phase = localized("photos.progress.phase.\(event.phase)")
+        guard event.pending_total > 0 else { return phase }
+        return localized("photos.progress.counts", phase, String(event.verified), String(event.pending_total))
+    }
+
+    static func selfTest() throws {
+        func line(_ sequence: UInt64 = 1, _ phase: String = "target_preparation", _ verified: UInt64 = 0,
+                  total: UInt64 = 3, operation: String = "100-1") throws -> String {
+            prefix + String(decoding: try JSONSerialization.data(withJSONObject: ["schema_version": 1,
+                "scope": "current_pending_import", "operation_id": operation, "sequence": sequence,
+                "phase": phase, "pending_total": total, "verified": verified]), as: UTF8.self)
+        }
+        func require(_ value: Bool, _ message: String) throws {
+            if !value { throw HostError(message: message) }
+        }
+        var progress = Self()
+        for (sequence, phase, verified) in [(1, "target_preparation", 0), (2, "reconciling", 1),
+            (3, "importing", 1), (4, "verifying", 2), (5, "importing", 2), (6, "verifying", 3)] {
+            _ = progress.ingest(try line(UInt64(sequence), phase, UInt64(verified)))
+            try require(!progress.invalid, "Valid pending Photos progress was rejected")
+        }
+        try require(progress.event?.percentage == 99.99, "Unclosed Photos progress reached 100 percent")
+        _ = progress.ingest(try line(7, "completed", 3))
+        try require(progress.event?.percentage == 100 && progress.event?.closed == true,
+                    "Completed pending Photos import lost local verification progress")
+        _ = progress.ingest(try line(operation: "100-2"))
+        try require(!progress.invalid && progress.event?.verified == 0, "A new Photos operation inherited previous counts")
+        _ = progress.ingest(try line(2, "verifying", 2, operation: "100-2"))
+        try require(!progress.invalid && progress.event?.verified == 2 && progress.event?.pending_total == 3,
+                    "A handed-off import inherited the completed operation's counts")
+        _ = progress.ingest(try line(operation: "100-1"))
+        try require(progress.invalid, "A delayed old Photos operation replaced the current operation")
+        for bad in [try line(1, "completed", 3), try line(1, "importing"), try line(0),
+                    try line(total: UInt64.max), try line(operation: "not-an-id"), try line(operation: "100-1\n"),
+                    try line(operation: "0100-1"), try line(operation: "100-01"), try line(operation: "0-1"),
+                    try line(operation: "4294967296-1"), try line(operation: "100-18446744073709551616"),
+                    try line().replacingOccurrences(of: "current_pending_import", with: "all_assets"),
+                    try line().replacingOccurrences(of: "target_preparation", with: "unknown"),
+                    prefix + "{\"schema_version\":1}"] {
+            var invalid = Self()
+            _ = invalid.ingest(bad)
+            try require(invalid.invalid, "Invalid first Photos progress event was accepted")
+        }
+        for bad in [try line(1), try line(2, "verifying", 4), try line(2, "completed", 2),
+                    try line(2, "verifying", 1, total: 4), try line(operation: "100-2")] {
+            var invalid = Self()
+            _ = invalid.ingest(try line())
+            _ = invalid.ingest(bad)
+            _ = invalid.ingest(try line(3, "verifying", 2))
+            try require(invalid.invalid, "A later Photos event erased invalid operation evidence")
+        }
+        var decreasing = Self()
+        _ = decreasing.ingest(try line())
+        _ = decreasing.ingest(try line(2, "verifying", 2))
+        _ = decreasing.ingest(try line(3, "verifying", 1))
+        try require(decreasing.invalid, "Photos verified counts moved backwards")
+        var zero = Self()
+        _ = zero.ingest(try line(total: 0))
+        _ = zero.ingest(try line(2, "completed", total: 0))
+        try require(!zero.invalid && zero.event?.percentage == nil
+            && zero.label == localized("photos.progress.phase.completed"), "An empty Photos operation invented a percentage")
+        var closed = Self()
+        _ = closed.ingest(try line())
+        _ = closed.ingest(try line(2, "stopped", 1))
+        _ = closed.ingest(try line(3, "verifying", 2))
+        try require(closed.invalid, "A stopped Photos operation reopened")
+        var many = Self()
+        for counter in 0..<130 {
+            let operation = "100-\(counter)"
+            _ = many.ingest(try line(operation: operation))
+            _ = many.ingest(try line(2, counter.isMultiple(of: 2) ? "completed" : "stopped",
+                counter.isMultiple(of: 2) ? 3 : 0, operation: operation))
+            try require(!many.invalid, "A valid Photos operation exceeded the old 64-operation display limit")
+        }
+        _ = many.ingest(try line(operation: "100-64"))
+        try require(many.invalid, "A delayed closed operation bypassed the per-process counter")
+        var malformed = Self()
+        _ = malformed.ingest(prefix + "{}")
+        try require(malformed.invalid, "Missing Photos progress fields were accepted")
+    }
+}
+
+struct GateCheckActivity {
+    private static let relationshipChecks = ["import_receipts", "count_x3", "sync", "quarantine", "chain"]
+
+    struct Event: Decodable, Equatable {
+        struct Files: Decodable, Equatable {
+            let processed: UInt64
+            let total: UInt64
+        }
+        let schema_version: Int
+        let stage_id: String
+        let gate: String
+        let check: String
+        let completed: UInt64
+        let total: UInt64
+        let state: String
+        let file_progress: Files?
+
+        var isPhotosRelationshipCheck: Bool { gate == "photos_relationships" }
+
+        var valid: Bool {
+            guard schema_version == 1, !stage_id.isEmpty, stage_id.utf8.count <= 64 else { return false }
+            if isPhotosRelationshipCheck {
+                let checks = GateCheckActivity.relationshipChecks
+                guard total == UInt64(checks.count),
+                      let index = checks.firstIndex(of: check) else { return false }
+                if let files = file_progress {
+                    guard check == "chain", files.total > 0, files.total <= UInt64(Int64.max),
+                          files.processed <= files.total,
+                          state != "passed" || files.processed == files.total else { return false }
+                }
+                switch state {
+                case "running": return completed == UInt64(index)
+                case "failed": return completed <= total && completed > UInt64(index)
+                    && (completed == total || completed == 2)
+                case "passed": return check == "chain" && completed == total
+                default: return false
+                }
+            }
+            if ["photos_custody", "photos_sidecars"].contains(gate), total == 1 {
+                if gate == "photos_custody", check == "inventory" {
+                    return completed == 0 && file_progress == nil && ["running", "failed"].contains(state)
+                }
+                guard check == (gate == "photos_custody" ? "original_bytes" : "working_copy_aae") else { return false }
+                if let files = file_progress {
+                    guard files.total > 0, files.total <= UInt64(Int64.max), files.processed <= files.total,
+                          state != "passed" || files.processed == files.total else { return false }
+                }
+                return state == "running" ? completed == 0
+                    : ["passed", "failed"].contains(state) && completed == 1
+            }
+            let checks: [String]
+            if ["local", "photos_custody"].contains(gate), total == 6 {
+                checks = ["count", "size", "blake3", "metadata", "orient", "decode"]
+            } else if gate == "photos_custody", total == 3 {
+                checks = ["count", "size", "decode"]
+            } else {
+                return false
+            }
+            if let files = file_progress {
+                guard ["blake3", "metadata", "orient", "decode"].contains(check),
+                      files.total > 0, files.total <= UInt64(Int64.max),
+                      files.processed <= files.total,
+                      ["running", "failed"].contains(state) || files.processed == files.total else { return false }
+            }
+            if check == "inventory" { return completed == 0 && ["running", "failed"].contains(state) }
+            guard let index = checks.firstIndex(of: check) else { return false }
+            switch state {
+            case "running": return completed == UInt64(index)
+            case "failed": return completed == UInt64(index + 1)
+            case "file_failures": return ["metadata", "orient", "decode"].contains(check) && completed == UInt64(index + 1)
+            case "passed": return check == "decode" && completed == total
+            default: return false
+            }
+        }
+    }
+
+    private(set) var event: Event?
+    private(set) var invalid = false
+    private var updatedAt: TimeInterval?
+
+    mutating func ingest(_ line: String, now: TimeInterval) -> Bool {
+        let raw = line.hasPrefix("ERR: ") ? line.dropFirst(5) : line[...]
+        let prefix = "MFB_GATE_ACTIVITY="
+        guard raw.hasPrefix(prefix) else { return false }
+        let payload = raw.dropFirst(prefix.count)
+        guard now.isFinite, payload.utf8.count <= 1_024,
+              let next = try? JSONDecoder().decode(Event.self, from: Data(payload.utf8)), next.valid else {
+            invalidate()
+            return true
+        }
+        if next.isPhotosRelationshipCheck {
+            if let previous = event, previous.stage_id == next.stage_id {
+                let chainProgress = previous.check == "chain" && next.check == "chain"
+                    && next.state == "running" && next.file_progress != nil && next.completed == previous.completed
+                guard next == previous || (previous.state == "running"
+                    && (next.completed == previous.completed + 1 || chainProgress)) else {
+                    invalidate()
+                    return true
+                }
+            } else if next.check != "import_receipts" || next.state != "running" {
+                invalidate()
+                return true
+            }
+        }
+        if next.gate == "photos_sidecars", event?.stage_id != next.stage_id,
+           next.state != "running" || next.file_progress != nil {
+            invalidate()
+            return true
+        }
+        if let previous = event, previous.stage_id == next.stage_id {
+            guard previous.gate == next.gate, previous.total == next.total else { invalidate(); return true }
+            if next.gate == "photos_sidecars", previous.file_progress == nil,
+               let files = next.file_progress, next.state != "running" || files.processed != 0 {
+                invalidate()
+                return true
+            }
+            if previous.check == next.check, let files = previous.file_progress {
+                guard let nextFiles = next.file_progress, nextFiles.total == files.total,
+                      nextFiles.processed >= files.processed else { invalidate(); return true }
+            }
+            guard next.completed >= previous.completed,
+                  previous.state == "running" || previous == next
+                    || (previous.state == "file_failures" && previous.completed < previous.total && next.state == "running"),
+                  next.completed != previous.completed || previous == next
+                    || (previous.check == "inventory" && next.check == "count" && next.state == "running")
+                    || (previous.check == "inventory" && next.check == "inventory" && next.state == "failed")
+                    || (previous.state == "file_failures" && next.state == "running")
+                    || (next.gate == "photos_custody" && next.state == "running"
+                        && (previous.check == "inventory" || previous.check == "original_bytes")
+                        && next.check == "original_bytes")
+                    || ((next.total != 1 || next.gate == "photos_sidecars") && previous.check == next.check
+                        && next.state == "running" && next.file_progress != nil) else {
+                invalidate()
+                return true
+            }
+        }
+        event = next
+        updatedAt = now
+        invalid = false
+        return true
+    }
+
+    private mutating func invalidate() {
+        event = nil
+        updatedAt = nil
+        invalid = true
+    }
+
+    func label(now: TimeInterval) -> String {
+        guard let event else { return invalid ? localized("gate.activity.invalid") : "" }
+        var text: String
+        if event.isPhotosRelationshipCheck {
+            if event.state == "passed" {
+                text = localized("gate.relationships.passed")
+            } else {
+                text = localized("gate.relationships.\(event.state)", localized("gate.check.\(event.check)"))
+            }
+            if let files = event.file_progress {
+                text += " · " + localized("gate.relationships.files", String(files.processed), String(files.total))
+            }
+        } else if event.gate == "photos_sidecars" {
+            text = localized("gate.sidecars.\(event.state)")
+            if let files = event.file_progress {
+                text += " · " + localized("gate.sidecars.files", String(files.processed), String(files.total))
+            }
+        } else if event.gate == "photos_custody", event.total == 1 {
+            let state = event.state == "running" && event.check == "inventory" ? "preparing" : event.state
+            text = localized("gate.custody.\(state)")
+            if let files = event.file_progress {
+                text += " · " + localized("gate.custody.files", String(files.processed), String(files.total))
+            }
+        } else {
+            let prefix = event.gate == "photos_custody" ? "gate.activity.final" : "gate.activity"
+            switch event.state {
+            case "passed": text = localized("\(prefix).passed", String(event.completed), String(event.total))
+            case "file_failures": text = localized("\(prefix).file_failures", String(event.completed), String(event.total))
+            case "failed": text = localized("\(prefix).failed", localized("gate.check.\(event.check)"),
+                                            String(event.completed), String(event.total), String(event.total - event.completed))
+            default: text = localized("\(prefix).running", localized("gate.check.\(event.check)"),
+                                      String(event.completed), String(event.total))
+            }
+            if let files = event.file_progress {
+                let key = event.check == "decode" ? "gate.activity.files" : "gate.activity.files.\(event.check)"
+                text += " · " + localized(key, String(files.processed), String(files.total))
+            }
+        }
+        guard event.state == "running", let updatedAt, now.isFinite else { return text }
+        let age = UInt64(min(Double(Int64.max), max(0, now - updatedAt)))
+        return text + " · " + localized("gate.activity.updated", String(age))
+    }
+}
+
+struct PhaseLogPresentation {
+    enum Phase: String, Decodable { case processing, verification }
+    enum Update: Equatable {
+        case unchanged, invalid
+        case changed(Phase, replace: Bool)
+    }
+    private struct Event: Decodable {
+        let schema_version: Int
+        let phase: Phase
+    }
+    private(set) var phase: Phase?
+    private var lastReplacement: TimeInterval
+
+    init(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        lastReplacement = now
+    }
+
+    mutating func ingest(_ line: String, now: TimeInterval) -> Update? {
+        let raw = line.hasPrefix("ERR: ") ? line.dropFirst(5) : line[...]
+        let prefix = "MFB_LOG_PHASE="
+        guard raw.hasPrefix(prefix) else { return nil }
+        let payload = raw.dropFirst(prefix.count)
+        guard payload.utf8.count <= 512,
+              let next = try? JSONDecoder().decode(Event.self, from: Data(payload.utf8)),
+              next.schema_version == 1 else { return .invalid }
+        guard next.phase != phase else { return .unchanged }
+        phase = next.phase
+        // Merge short phases instead of flashing away output the user has just seen.
+        let replace = now - lastReplacement >= 2
+        if replace { lastReplacement = now }
+        return .changed(next.phase, replace: replace)
+    }
+}
+
+func processingCountTotal(_ values: [Int?]) -> Int? {
+    guard !values.isEmpty else { return nil }
+    var total = 0
+    for value in values {
+        guard let value, value >= 0 else { return nil }
+        let sum = total.addingReportingOverflow(value)
+        guard !sum.overflow else { return nil }
+        total = sum.partialValue
+    }
+    return total
+}
+
+func hasPartialProcessingSuccess(succeeded: [Int?], failed: [Int?], countsComplete: Bool) -> Bool {
+    guard countsComplete, succeeded.count == failed.count,
+          let successes = processingCountTotal(succeeded), let failures = processingCountTotal(failed),
+          !successes.addingReportingOverflow(failures).overflow else { return false }
+    return successes > 0 && failures > 0
+}
+
+private func hasMandatoryVerificationFailure(_ line: String) -> Bool {
+    let raw = LogTone.message(line)
+    if let count = countStatusValue(in: raw), !["MATCH", "EXPLAINED"].contains(count.uppercased()) { return true }
+    return raw.range(of: #"(?i)^(?:Integrity Issues:\s*[1-9]\d*|Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|\[GATE\s*\d+\s*\].*\bFAIL\b)"#,
+                     options: .regularExpression) != nil
+}
+
+private func hasSeriousProcessingDiagnostic(_ line: String) -> Bool {
+    let raw = LogTone.message(line).replacingOccurrences(of: #"(?i)^(?:\[ERROR\]\s*|Error:\s*)"#,
+        with: "", options: .regularExpression)
+    return hasMandatoryVerificationFailure(raw)
+        || raw.range(of: #"(?i)^(?:\[FATAL\]|fatal(?: error)?:|thread .*panicked|panic:|No space left on device|Permission denied|database is (?:locked|corrupt)|SQLite.*(?:corrupt|malformed))"#,
+                     options: .regularExpression) != nil
+        || raw.hasPrefix("[LOG] final processing summary write failed:")
+        || raw.hasPrefix("write final processing summary")
+}
+
+private func processDiagnosticColor(_ line: String, confirmedFileFailure: Bool = false) -> NSColor {
+    confirmedFileFailure && !hasSeriousProcessingDiagnostic(line) ? .systemOrange : .systemRed
+}
+
+private struct BatchResults {
+    typealias FastDelivery = FastImgDeliveryReceipt
+
+    struct Event: Decodable {
+        let schemaVersion: Int
+        let media: String
+        let succeeded: Int?
+        let skipped: Int?
+        let failed: Int?
+        let ignored: Int?
+        let unprocessed: Int?
+        let exitCode: Int?
+
+        var counts: [Int?] { [succeeded, skipped, failed, ignored] }
+        var countsAreValid: Bool {
+            var total = 0
+            for value in counts + [unprocessed] {
+                guard let value else { continue }
+                let sum = total.addingReportingOverflow(value)
+                guard value >= 0, !sum.overflow else { return false }
+                total = sum.partialValue
+            }
+            return true
+        }
+    }
+
+    private(set) var totals: [String: [Int?]] = [:]
+    private(set) var pendingTotals: [String: Int?] = [:]
+    private(set) var hasFailure = false
+    private(set) var hasFileFailures = false
+    private(set) var hasUnprocessed = false
+    private(set) var pendingTotalOverflowed = false
+    private(set) var invalid = false
+    private(set) var controlRecordsMissing = false
+    private(set) var transportGapNotice: String?
+    private(set) var fastDeliveries: [FastDelivery] = []
+    private(set) var fastDeliveryInvalid = false
+    private(set) var outputCleanups: [OutputCleanupReceipt] = []
+    private(set) var outputCleanupInvalid = false
+    private var workerExitCodes: [Int] = []
+    private var completedFileErrors: Int?
+    private var photosQuarantineBlocked: Int?
+    private var unavailableVerification: (runID: String, reason: IndependentVerificationUnavailable)?
+    private(set) var mandatoryEvidenceConflict = false
+    private(set) var integrityIssueCount: Int?
+    private(set) var failedRetryRequest: FastImgRetryReference?
+    private(set) var failedRetryReused: FastImgRetryReference?
+    private(set) var failedRetryFinalized: FastImgRetryReference?
+    private(set) var failedRetryInvalid = false
+    var hasFastDelivery: Bool { fastDeliveryInvalid || !fastDeliveries.isEmpty }
+
+    mutating func ingestRetryReference(_ line: String, requested: Bool, source: String?, parent: String?, strategy: String?, photos: Bool?, runID: String?) -> Bool {
+        let raw = LogTone.message(line)
+        let isRequest = raw.hasPrefix(FastImgRetryReference.requestPrefix)
+        let isConfirmed = raw.hasPrefix(FastImgRetryReference.confirmedPrefix)
+        let isFinalized = raw.hasPrefix(FastImgRetryReference.finalizedPrefix)
+        // Only the launcher's Core-bound confirmation can describe a result.
+        if raw.hasPrefix("MFB_FAST_IMG_RETRY_REUSED=") || raw.hasPrefix("MFB_FAST_IMG_RETRY_FINALIZED=") { return true }
+        guard isRequest || isConfirmed || isFinalized else { return false }
+        do {
+            let prefix = isRequest ? FastImgRetryReference.requestPrefix
+                : (isFinalized ? FastImgRetryReference.finalizedPrefix : FastImgRetryReference.confirmedPrefix)
+            guard requested, !failedRetryInvalid,
+                  let reference = try FastImgRetryReference.decode(raw, prefix: prefix, reused: isConfirmed, finalized: isFinalized),
+                  reference.matchesInput(source), reference.strategy == strategy,
+                  (reference.deliveryIntent.kind == "photos") == photos,
+                  parent.map({ FastImgDeliveryReceipt.samePath($0, reference.parentWorkingCopy) }) ?? true,
+                  runID.map({ $0 == reference.runId }) ?? isRequest else { throw HostError(message: localized("retry.invalid")) }
+            if isRequest {
+                guard failedRetryRequest == nil else { throw HostError(message: localized("retry.invalid")) }
+                failedRetryRequest = reference
+            } else {
+                guard let request = failedRetryRequest, request.sameRequest(as: reference), failedRetryReused == nil,
+                      failedRetryFinalized == nil,
+                      fastDeliveries.isEmpty, outputCleanups.isEmpty else { throw HostError(message: localized("retry.invalid")) }
+                if isFinalized { failedRetryFinalized = reference } else { failedRetryReused = reference }
+            }
+        } catch {
+            failedRetryInvalid = true; mandatoryEvidenceConflict = true
+            failedRetryReused = nil; failedRetryFinalized = nil
+        }
+        return true
+    }
+
+    func retryReuseIsConfirmed(processExit: Int32?, exitedNormally: Bool, runID: String?) -> Bool {
+        failedRetryReused != nil && retryOutcomeIsConfirmed(processExit: processExit, exitedNormally: exitedNormally, runID: runID)
+    }
+
+    func retryFinalizationIsConfirmed(processExit: Int32?, exitedNormally: Bool, runID: String?) -> Bool {
+        failedRetryFinalized != nil && retryOutcomeIsConfirmed(processExit: processExit, exitedNormally: exitedNormally, runID: runID)
+    }
+
+    private func retryOutcomeIsConfirmed(processExit: Int32?, exitedNormally: Bool, runID: String?) -> Bool {
+        guard !failedRetryInvalid, !mandatoryEvidenceConflict, !isIncomplete, !hasFailure, exitedNormally,
+              unavailableVerification == nil,
+              failedRetryReused == nil || failedRetryFinalized == nil,
+              processExit == 0, let request = failedRetryRequest, let reused = failedRetryFinalized ?? failedRetryReused,
+              request.sameRequest(as: reused), reused.runId == runID, fastDeliveries.isEmpty,
+              outputCleanups.isEmpty, !outputCleanupInvalid, !fastDeliveryInvalid,
+              workerExitCodes == [0], totals.count == 1, totals["img"] == [0, 0, 0, 0],
+              pendingTotals.count == 1, (pendingTotals["img"] ?? nil) == 0 else { return false }
+        return true
+    }
+
+    mutating func ingestTransportGap(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        let prefix = "MFB_GUI_TRANSPORT_GAP="
+        guard raw.hasPrefix(prefix) else { return false }
+        struct Gap: Decodable {
+            let schema_version: Int
+            let control_records: UInt64
+            let diagnostic_records: UInt64
+        }
+        guard let gap = try? JSONDecoder().decode(Gap.self, from: Data(raw.dropFirst(prefix.count).utf8)),
+              gap.schema_version == 1, gap.control_records > 0 || gap.diagnostic_records > 0 else {
+            controlRecordsMissing = true
+            mandatoryEvidenceConflict = true
+            transportGapNotice = localized("result.control_records_missing")
+            return true
+        }
+        if gap.control_records > 0 {
+            controlRecordsMissing = true
+            mandatoryEvidenceConflict = true
+            transportGapNotice = localized("log.critical_overflow", gap.control_records)
+        } else {
+            transportGapNotice = localized("log.diagnostics_omitted", gap.diagnostic_records)
+        }
+        return true
+    }
+
+    mutating func ingestOutputCleanup(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(OutputCleanupReceipt.prefix) else { return false }
+        do {
+            guard let receipt = try OutputCleanupReceipt.decode(raw), receipt.run_id != nil,
+                  !outputCleanupInvalid, outputCleanups.count < 64,
+                  outputCleanups.allSatisfy({ $0.run_id == receipt.run_id }) else {
+                outputCleanupInvalid = true
+                return true
+            }
+            if let previous = outputCleanups.first(where: { Data($0.output_path.utf8) == Data(receipt.output_path.utf8) }) {
+                if previous != receipt { outputCleanupInvalid = true }
+            } else { outputCleanups.append(receipt) }
+        } catch { outputCleanupInvalid = true }
+        return true
+    }
+
+    func outputCleanupText(detailed: Bool, privacy: Bool) -> String {
+        if outputCleanupInvalid { return localized("cleanup.invalid") }
+        if outputCleanups.isEmpty { return localized("cleanup.not_recorded") }
+        return outputCleanups.map { detailed ? $0.detailText(privacy: privacy) : $0.statusText }.joined(separator: "\n")
+    }
+
+    func fastDeliveryCount(_ key: KeyPath<FastDelivery, Int>) -> Int? {
+        processingCountTotal(fastDeliveries.map { $0[keyPath: key] })
+    }
+
+    mutating func ingestTerminalEvidence(_ raw: String, runID: String? = nil) -> Bool {
+        let unavailablePrefix = "MFB_BATCH_VERIFICATION_UNAVAILABLE="
+        if raw.hasPrefix(unavailablePrefix) {
+            struct Receipt: Decodable {
+                let schema_version: Int
+                let run_id: String
+                let reason: IndependentVerificationUnavailable
+            }
+            let payload = raw.dropFirst(unavailablePrefix.count)
+            guard payload.utf8.count <= 256, unavailableVerification == nil,
+                  photosQuarantineBlocked == nil, completedFileErrors == nil, let runID,
+                  let receipt = try? JSONDecoder().decode(Receipt.self, from: Data(payload.utf8)),
+                  receipt.schema_version == 1, receipt.run_id == runID else {
+                mandatoryEvidenceConflict = true
+                return true
+            }
+            unavailableVerification = (receipt.run_id, receipt.reason)
+            return true
+        }
+        let quarantinePrefix = "MFB_BATCH_PHOTOS_QUARANTINE_BLOCKED="
+        let isQuarantine = raw.hasPrefix(quarantinePrefix)
+        let prefix = isQuarantine ? quarantinePrefix : "MFB_BATCH_FILE_ERRORS_COMPLETE="
+        guard isQuarantine || raw.hasPrefix(prefix) else { return false }
+        struct Receipt: Decodable {
+            let schema_version: Int
+            let failed: Int?
+            let quarantined: Int?
+        }
+        let payload = raw.dropFirst(prefix.count)
+        guard payload.utf8.count <= 128, photosQuarantineBlocked == nil, completedFileErrors == nil, unavailableVerification == nil,
+              let receipt = try? JSONDecoder().decode(Receipt.self, from: Data(payload.utf8)),
+              receipt.schema_version == 1,
+              let count = isQuarantine ? receipt.quarantined : receipt.failed,
+              count > 0, (isQuarantine ? receipt.failed : receipt.quarantined) == nil else {
+            mandatoryEvidenceConflict = true
+            return true
+        }
+        if isQuarantine { photosQuarantineBlocked = count } else { completedFileErrors = count }
+        return true
+    }
+
+    func confirmedUnavailableVerification(photos: Bool, processExit: Int32?, exitedNormally: Bool) -> IndependentVerificationUnavailable? {
+        guard processExit == 1, exitedNormally, !mandatoryEvidenceConflict, !isIncomplete,
+              hasCompleteCountReport, !fastDeliveryInvalid, !outputCleanupInvalid,
+              let unavailableVerification, outputCleanups.count == 1, let cleanup = outputCleanups.first,
+              cleanup.run_id == unavailableVerification.runID,
+              cleanup.outcome == (photos ? "verification_blocked" : "not_requested") else { return nil }
+        return unavailableVerification.reason
+    }
+
+    func confirmedPhotosQuarantine(source: String?, processExit: Int32?, exitedNormally: Bool) -> Int? {
+        guard processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
+              hasCompleteCountReport, !fastDeliveryInvalid, !outputCleanupInvalid,
+              let count = photosQuarantineBlocked, completedFileErrors == nil,
+              workerExitCodes == [2], totals.count == 1, let img = totals["img"],
+              fastDeliveries.count == 1, let receipt = fastDeliveries.first,
+              receipt.photosQuarantineBlocked == count,
+              FastDelivery.samePath(receipt.sourceDirectory, source),
+              img == receipt.counts, (pendingTotals["img"] ?? nil) == receipt.unprocessed,
+              receipt.hasBlockedOutputCleanup(outputCleanups) else { return nil }
+        return count
+    }
+
+    func photosPreparationStopped(source: String?, pendingCount: Int?, processExit: Int32?, exitedNormally: Bool) -> Bool {
+        guard processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
+              hasCompleteCountReport, !fastDeliveryInvalid, !outputCleanupInvalid,
+              completedFileErrors == nil, photosQuarantineBlocked == nil,
+              workerExitCodes == [2], totals.count == 1, let img = totals["img"],
+              fastDeliveries.count == 1, let receipt = fastDeliveries.first,
+              receipt.primaryVerificationComplete == true, !receipt.primaryCleanupComplete,
+              !receipt.isDeferred, receipt.finalPhotosQuarantineCount == nil,
+              receipt.finalizationError?.isEmpty == false, receipt.photosVerified == 0,
+              receipt.unprocessed > 0, receipt.unprocessed == pendingCount,
+              FastDelivery.samePath(receipt.sourceDirectory, source),
+              img == receipt.counts, (pendingTotals["img"] ?? nil) == receipt.unprocessed,
+              receipt.hasBlockedOutputCleanup(outputCleanups) else { return false }
+        return true
+    }
+
+    func fastDeliveryIsConfirmed(photos: Bool, processExit: Int32?, exitedNormally: Bool = true) -> Bool {
+        guard let processExit, exitedNormally, !mandatoryEvidenceConflict,
+              photosQuarantineBlocked == nil, unavailableVerification == nil,
+              !isIncomplete, !fastDeliveryInvalid, !fastDeliveries.isEmpty,
+              totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
+              let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
+              pending == fastDeliveryCount(\.unprocessed),
+              fastDeliveries.allSatisfy({ $0.finalizationError == nil && $0.failedSourcesRetained == $0.failed
+                  && $0.failedSourcesVerified == $0.failed && $0.failedSourceVerificationError == nil
+                  && ($0.failed == 0 || $0.primaryCleanupComplete || $0.isRetainedOnly) }),
+              workerExitCodes.count == fastDeliveries.count,
+              zip(workerExitCodes, fastDeliveries).allSatisfy({ code, report in code == (report.failed > 0 ? 1 : 0) }),
+              let successes = fastDeliveryCount(\.succeeded),
+              let failures = fastDeliveryCount(\.failed),
+              processingCountTotal(fastDeliveries.map(\.sourceRetained)) != nil else { return false }
+        if let completedFileErrors, completedFileErrors != failures { return false }
+        let retainedOnly = fastDeliveries.filter(\.isRetainedOnly)
+        if !retainedOnly.isEmpty {
+            guard completedFileErrors == failures, !outputCleanupInvalid,
+                  retainedOnly.allSatisfy({ report in
+                      outputCleanups.contains { $0.outcome == "not_requested"
+                          && FastDelivery.samePath($0.output_path, report.outputDirectory) }
+                  }) else { return false }
+        }
+        for index in 0..<4 {
+            guard img[index] == processingCountTotal(fastDeliveries.map { $0.counts[index] }) else { return false }
+        }
+        if photos, fastDeliveryCount(\.photosVerified) != successes { return false }
+        // A file-failure exit is expected; a crash or another exit must not inherit its safe verdict.
+        if processExit != (failures > 0 ? 1 : 0) { return false }
+        return true
+    }
+
+    func deliveryIsDeferred(photos: Bool, source: String?, processExit: Int32?, exitedNormally: Bool) -> Bool {
+        guard photos, processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
+              completedFileErrors == nil, photosQuarantineBlocked == nil, unavailableVerification == nil,
+              !isIncomplete, !fastDeliveryInvalid, fastDeliveries.count == 1,
+              fastDeliveries.contains(where: \.isDeferred), totals.keys.allSatisfy({ $0 == "img" }),
+              pendingTotals.count == 1, let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
+              pending == fastDeliveryCount(\.unprocessed), workerExitCodes.count == fastDeliveries.count,
+              fastDeliveries.allSatisfy({ FastImgDeliveryReceipt.samePath($0.sourceDirectory, source) && $0.failedSourceVerificationError == nil
+                  && $0.failedSourcesRetained == $0.failed && $0.failedSourcesVerified == $0.failed
+                  && $0.sourceRetained != nil && $0.retentionUnknownReason == nil
+                  && ($0.isDeferred || $0.finalizationError == nil) }),
+              zip(workerExitCodes, fastDeliveries).allSatisfy({ code, report in
+                  code == (report.isDeferred ? 2 : report.failed > 0 ? 1 : 0)
+              }) else { return false }
+        return (0..<4).allSatisfy { index in img[index] == processingCountTotal(fastDeliveries.map { $0.counts[index] }) }
+    }
+
+    mutating func observeMandatoryEvidence(_ line: String) {
+        let raw = LogTone.message(line)
+        if raw.range(of: #"^Integrity Issues:\s*[1-9]\d*\s*$"#, options: [.caseInsensitive, .regularExpression]) != nil,
+           let value = raw.split(separator: ":").last,
+           let count = Int(value.trimmingCharacters(in: .whitespaces)) {
+            integrityIssueCount = count
+        }
+        if hasSeriousProcessingDiagnostic(line) { mandatoryEvidenceConflict = true }
+    }
+
+    mutating func markMandatoryEvidenceConflict() { mandatoryEvidenceConflict = true }
+
+    mutating func ingestFastDelivery(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        let prefix = FastImgDeliveryReceipt.prefix
+        guard raw.hasPrefix(prefix) else { return false }
+        guard fastDeliveries.count < 4_096,
+              let event = try? FastImgDeliveryReceipt.decode(raw) else {
+            fastDeliveryInvalid = true
+            return true
+        }
+        fastDeliveries.append(event)
+        return true
+    }
+    var isIncomplete: Bool {
+        if invalid || controlRecordsMissing || pendingTotalOverflowed || totals.values.contains(where: { $0.contains(where: { $0 == nil }) }) {
+            return true
+        }
+        var total = 0
+        for value in totals.values.flatMap({ $0 }) + Array(pendingTotals.values) {
+            guard let value else { continue }
+            let sum = total.addingReportingOverflow(value)
+            if sum.overflow { return true }
+            total = sum.partialValue
+        }
+        return false
+    }
+
+    var hasPartialSuccess: Bool {
+        hasPartialProcessingSuccess(succeeded: totals.values.map { $0[0] },
+                                    failed: totals.values.map { $0[2] },
+                                    countsComplete: !isIncomplete && !hasUnprocessed
+                                        && pendingTotals.count == totals.count
+                                        && pendingTotals.values.allSatisfy { $0 == 0 })
+    }
+
+    var hasCompleteCountReport: Bool {
+        !isIncomplete && !totals.isEmpty && pendingTotals.count == totals.count
+            && pendingTotals.values.allSatisfy { $0 != nil }
+    }
+
+    var integritySummary: String? {
+        guard mandatoryEvidenceConflict, hasCompleteCountReport, let integrityIssueCount else { return nil }
+        return localized("result.integrity_issues", String(integrityIssueCount))
+    }
+
+    var summary: String? {
+        if controlRecordsMissing { return localized("result.control_records_missing") }
+        if invalid { return localized("result.invalid") }
+        guard !totals.isEmpty else { return nil }
+        if isIncomplete { return localized("result.incomplete") }
+        let count = { (value: Int?) in value.map(String.init) ?? localized("result.unknown") }
+        let counts = (0..<4).map { field in
+            count(invalid ? nil : processingCountTotal(totals.values.map { $0[field] }))
+        }
+        return localized("result.counts", counts[0], counts[1], counts[2], counts[3])
+            + " · " + localized("result.unprocessed", count(invalid ? nil
+                : processingCountTotal(Array(pendingTotals.values))))
+    }
+
+    var compactSummary: String {
+        if controlRecordsMissing || invalid || isIncomplete { return summary ?? localized("result.incomplete") }
+        guard !isIncomplete,
+              let succeeded = processingCountTotal(totals.values.map { $0[0] }),
+              let skipped = processingCountTotal(totals.values.map { $0[1] }),
+              let failed = processingCountTotal(totals.values.map { $0[2] }),
+              let ignored = processingCountTotal(totals.values.map { $0[3] }),
+              let pending = processingCountTotal(Array(pendingTotals.values)) else {
+            return localized("result.incomplete")
+        }
+        var parts = [localized("result.completed_count", String(succeeded))]
+        for (count, key) in [(failed, "result.failed_count"), (pending, "result.pending_count"),
+                             (skipped, "result.skipped_count"), (ignored, "result.excluded_count")] where count > 0 {
+            parts.append(localized(key, String(count)))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    mutating func ingest(_ raw: String) -> String? {
+        let prefix = "MFB_BATCH_RESULT="
+        guard raw.hasPrefix(prefix) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let event = try? decoder.decode(Event.self, from: Data(raw.dropFirst(prefix.count).utf8)),
+              event.schemaVersion == 1, ["img", "vid"].contains(event.media),
+              event.countsAreValid else {
+            invalid = true
+            for media in Array(pendingTotals.keys) {
+                pendingTotals.updateValue(nil, forKey: media)
+            }
+            return "[WARN] \(localized("result.invalid"))"
+        }
+        hasFailure = hasFailure || (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0
+        hasFileFailures = hasFileFailures || (event.failed ?? 0) > 0
+        if let code = event.exitCode { workerExitCodes.append(code) }
+        if event.exitCode == nil { invalid = true }
+        let previous = totals[event.media] ?? [0, 0, 0, 0]
+        totals[event.media] = zip(previous, event.counts).map { left, right in
+            guard let left, let right else { return nil }
+            let sum = left.addingReportingOverflow(right)
+            return sum.overflow ? nil : sum.partialValue
+        }
+        if let unprocessed = event.unprocessed, unprocessed > 0 { hasUnprocessed = true }
+        if invalid {
+            pendingTotals.updateValue(nil, forKey: event.media)
+        } else if pendingTotals.keys.contains(event.media) {
+            let previous = pendingTotals[event.media] ?? nil
+            if let previousValue = previous, let unprocessed = event.unprocessed {
+                let sum = previousValue.addingReportingOverflow(unprocessed)
+                if sum.overflow { pendingTotalOverflowed = true }
+                pendingTotals.updateValue(sum.overflow ? nil : sum.partialValue, forKey: event.media)
+            } else {
+                pendingTotals.updateValue(nil, forKey: event.media)
+            }
+        } else {
+            pendingTotals.updateValue(event.unprocessed, forKey: event.media)
+        }
+        let count = { (value: Int?) in value.map(String.init) ?? localized("result.unknown") }
+        let summary = localized("result.counts", count(event.succeeded), count(event.skipped),
+                                count(event.failed), count(event.ignored))
+            + " · " + localized("result.unprocessed", count(event.unprocessed))
+        // Counts do not prove delivery or source retention; confirmed receipts control softer styling.
+        let tag = (event.failed ?? 0) > 0 ? "FAIL"
+            : (event.exitCode != 0 || event.counts.contains { $0 == nil } || (event.unprocessed ?? 0) > 0 ? "WARN" : "SUMMARY")
+        return "[\(tag)] \(event.media.uppercased()): \(summary) (exit=\(count(event.exitCode)))"
+    }
+}
+
+private struct PhotosDiagnostics {
+    struct Phase: Decodable {
+        let calls: Int
+        let seconds: Double
+    }
+
+    struct Profile: Decodable {
+        let schemaVersion: Int
+        let backend: String
+        let succeeded: Bool
+        let committedAssets: Int?
+        let verifiedAssets: Int?
+        let peakVerificationBacklog: Int?
+        let totalSeconds: Double?
+        let verifiedAssetsPerSecond: Double?
+        let transactionSamples: Int?
+        let transactionMeanSeconds: Double?
+        let transactionP50Seconds: Double?
+        let transactionP90Seconds: Double?
+        let transactionP95Seconds: Double?
+        let transactionP99Seconds: Double?
+        let importBatchSize: Int?
+        let verificationBatchSize: Int?
+        let helperPeakRssBytes: Int?
+        let phases: [String: Phase]?
+        let deliveryDeferred: Bool?
+        let scope: String?
+
+        var isDeferredPreparation: Bool {
+            deliveryDeferred == true && scope == "target_preparation" && backend == "native" && !succeeded
+                && committedAssets == 0 && verifiedAssets == 0 && transactionSamples == 0
+        }
+    }
+
+    private(set) var profile: Profile?
+    private(set) var backend: String?
+    private(set) var committedAssets: Int?
+    private(set) var verifiedAssets: Int?
+    private(set) var peakBacklog: Int?
+    private(set) var failed = false
+
+    var hasMeasurements: Bool { profile != nil || backend != nil }
+
+    mutating func reset() { self = PhotosDiagnostics() }
+
+    mutating func markFailed() {
+        if hasMeasurements { failed = true }
+    }
+
+    @discardableResult
+    mutating func ingest(_ line: String) -> Bool {
+        let raw = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
+        let profilePrefix = "[PHOTOS PROFILE] "
+        if raw.hasPrefix(profilePrefix) {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            guard let decoded = try? decoder.decode(Profile.self, from: Data(raw.dropFirst(profilePrefix.count).utf8)),
+                  decoded.schemaVersion == 1 else { return false }
+            let previouslyFailed = failed
+            if backend != decoded.backend { reset() }
+            profile = decoded
+            backend = decoded.backend
+            committedAssets = decoded.committedAssets ?? committedAssets
+            verifiedAssets = decoded.verifiedAssets ?? verifiedAssets
+            peakBacklog = decoded.peakVerificationBacklog ?? peakBacklog
+            failed = previouslyFailed || (decoded.deliveryDeferred == true ? !decoded.isDeferredPreparation : !decoded.succeeded)
+            return true
+        }
+        let progressPrefix = "[PHOTOS PROGRESS] "
+        guard raw.hasPrefix(progressPrefix) else { return false }
+        let fields = raw.dropFirst(progressPrefix.count).split(separator: " ").reduce(into: [String: String]()) { result, item in
+            let pair = item.split(separator: "=", maxSplits: 1)
+            if pair.count == 2 { result[String(pair[0])] = String(pair[1]) }
+        }
+        guard let newBackend = fields["backend"] else { return false }
+        let previouslyFailed = failed
+        if backend != newBackend || profile != nil { reset() }
+        failed = previouslyFailed
+        backend = newBackend
+        if newBackend == "native", let value = fields["committed"].flatMap(Int.init), value >= 0 {
+            committedAssets = value
+        }
+        if let value = fields["verified"].flatMap(Int.init), value >= 0 { verifiedAssets = value }
+        if newBackend == "native", let value = fields["peak_backlog"].flatMap(Int.init), value >= 0 {
+            peakBacklog = value
+        }
+        return true
+    }
+
+    func rendered() -> String {
+        let unknown = localized("diagnostics.unknown")
+        func count(_ value: Int?) -> String {
+            guard let value, value >= 0 else { return unknown }
+            return String(value)
+        }
+        func seconds(_ value: Double?) -> String {
+            guard let value, value.isFinite, value >= 0 else { return unknown }
+            return String(format: "%.2f s", value)
+        }
+        func rate(_ value: Double?) -> String {
+            guard let value, value.isFinite, value >= 0 else { return unknown }
+            return String(format: "%.2f %@", value, localized("diagnostics.assets_per_second"))
+        }
+        func row(_ key: String, _ value: String) -> String { "\(localized("diagnostics.\(key)")): \(value)" }
+        let status = failed ? localized("diagnostics.failed")
+            : profile?.succeeded == true ? localized("diagnostics.completed")
+            : hasMeasurements ? localized("diagnostics.in_progress") : unknown
+        let backendName = backend.map {
+            ["native": localized("diagnostics.backend.native"),
+             "applescript": localized("diagnostics.backend.applescript")][$0] ?? $0
+        } ?? unknown
+        let backlog: Int? = {
+            guard backend == "native", let committedAssets, let verifiedAssets, verifiedAssets >= 0,
+                  committedAssets >= verifiedAssets else { return nil }
+            return committedAssets - verifiedAssets
+        }()
+        var rows = [
+            row("status", status), row("backend", backendName),
+            row("import_batch", count(profile?.importBatchSize)),
+            row("verification_batch", count(profile?.verificationBatchSize)),
+            row("transactions", count(profile?.transactionSamples)),
+            row("committed", count(committedAssets)), row("verified", count(verifiedAssets)),
+            row("throughput", rate(profile?.verifiedAssetsPerSecond)),
+            row("total_time", seconds(profile?.totalSeconds)),
+            row("average_transaction", seconds(profile?.transactionMeanSeconds)),
+            row("backlog", count(backlog)), row("peak_backlog", count(peakBacklog)),
+            row("p50", seconds(profile?.transactionP50Seconds)),
+            row("p90", seconds(profile?.transactionP90Seconds)),
+            row("p95", seconds(profile?.transactionP95Seconds)),
+            row("p99", seconds(profile?.transactionP99Seconds)),
+            row("rss", profile?.helperPeakRssBytes.flatMap {
+                $0 >= 0 ? ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .memory) : nil
+            } ?? unknown),
+            "", localized("diagnostics.phases"),
+        ]
+        if let phases = profile?.phases, !phases.isEmpty {
+            rows += phases.keys.sorted().compactMap { name in
+                guard let phase = phases[name] else { return nil }
+                return "\(name): \(count(phase.calls)) · \(seconds(phase.seconds))"
+            }
+        } else {
+            rows.append(unknown)
+        }
+        return rows.joined(separator: "\n")
+    }
+}
+
+enum DisplayPrivacy {
+    static let preferenceKey = "MFBGuiDisplayPrivacy"
+    static let changed = Notification.Name("MFBGuiDisplayPrivacyChanged")
+
+    static func enabled(in preferences: UserDefaults) -> Bool {
+        preferences.object(forKey: preferenceKey) as? Bool ?? false
+    }
+
+    static func path(_ value: String?, hidden: Bool, problem: Bool = false) -> String {
+        guard let value else { return localized("result.unknown") }
+        return hidden && !problem ? localized("privacy.display.hidden") : value
+    }
+
+    // Only explicit diagnostic prefixes or validated records can reveal a path.
+    static func problemTone(_ line: String) -> LogTone? {
+        let raw = LogTone.message(line)
+        if raw.hasPrefix(HistoryIgnoredSource.prefix)
+            || ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: raw.hasPrefix)
+            || raw == "Failed: 0" || LogTone.isExpectedExistingJxlSkip(raw) { return nil }
+        if raw.hasPrefix(HistoryFileFailure.prefix) {
+            return (try? HistoryFileFailure.decode(raw)) != nil ? .failure : .warning
+        }
+        if raw.hasPrefix(OutputCleanupReceipt.prefix) {
+            do { return try OutputCleanupReceipt.decode(raw)?.needsAttention == true ? .warning : nil }
+            catch { return .warning }
+        }
+        if let count = countStatusValue(in: raw) {
+            return count.uppercased() == "MATCH" ? nil : count.uppercased() == "EXPLAINED" ? .warning : .failure
+        }
+        if raw.range(of: #"(?i)^\s*(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|(?:Permission denied|No space left on device|exiting with failures)\b|\[Summary\]\s*.*\bfailed=[1-9]\d*(?:\s|$)|Integrity Issues:\s*[1-9]\d*|Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil
+            || hasSeriousProcessingDiagnostic(raw) { return .failure }
+        if raw.range(of: #"(?i)^\s*(?:\[WARN(?:ING)?\s*\]|(?:warning|警告):|Integrity:\s*WARNINGS\b)"#, options: .regularExpression) != nil { return .warning }
+        if LogTone.isQuarantineGateResult(raw) { return .warning }
+        if raw.range(of: #"^\s*(?:\[[^\]\r\n]{1,40}\]\s*)?(?:✗|❌)(?:\s|$)"#, options: .regularExpression) != nil { return .failure }
+        // String regex uses graphemes: both literal forms must require a warning symbol.
+        if raw.range(of: #"^\s*(?:\[[^\]\r\n]{1,40}\]\s*)?(?:⚠️|⚠)(?:\s|$)"#, options: .regularExpression) != nil { return .warning }
+        return nil
+    }
+}
+
+enum LogTone: Equatable {
+    case muted, normal, stage, result, warning, failure
+
+    static func message(_ line: String) -> String {
+        let uncolored = line.contains("\u{1B}")
+            ? line.replacingOccurrences(of: #"\x1B\[[0-?]*[ -/]*[@-~]"#, with: "", options: .regularExpression)
+            : line
+        var text = uncolored.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("ERR:") { text = String(text.dropFirst(4)).trimmingCharacters(in: .whitespaces) }
+        return text
+    }
+
+    static func isQuarantineGateResult(_ raw: String) -> Bool {
+        guard raw.hasPrefix("[GATE 2"), raw.hasSuffix(" → QUARANTINE_BLOCKED") else { return false }
+        return raw.range(of: #"^\[GATE 2\s*\] (?:\w+:✅ )*quarantine:❌ (?:\w+:✅ )*→ QUARANTINE_BLOCKED$"#,
+                         options: .regularExpression) != nil
+    }
+
+    static func isQuarantineWrapperSummary(_ raw: String) -> Bool {
+        guard raw.hasPrefix("[WARN] Final Photos verification blocked by quarantine on ")
+            || raw.hasPrefix("Error: Final Photos verification blocked by quarantine on ") else { return false }
+        return raw.range(of: #"^(?:\[WARN\]|Error:) Final Photos verification blocked by quarantine on [1-9][0-9]* item\(s\); sources and working copy retained$"#,
+                         options: .regularExpression) != nil
+    }
+
+    static func isExpectedExistingJxlSkip(_ raw: String) -> Bool {
+        guard raw.hasPrefix("⚠️ WRN fast-img source skipped — original file retained file=")
+            || raw.hasPrefix("WRN fast-img source skipped — original file retained file=") else { return false }
+        return raw.range(of: #" reason=existing JXL verified; full E1–E11 winner is not smaller \([0-9]+ B\)$"#,
+                         options: .regularExpression) != nil
+    }
+
+    static func classify(_ line: String) -> Self {
+        let line = message(line)
+        if line.hasPrefix(OutputCleanupReceipt.prefix) {
+            do {
+                guard let receipt = try OutputCleanupReceipt.decode(line) else { return .warning }
+                return receipt.needsAttention ? .warning : .muted
+            } catch { return .warning }
+        }
+        if line.hasPrefix(HistoryIgnoredSource.prefix) {
+            do { return try HistoryIgnoredSource.decode(line) == nil ? .warning : .muted }
+            catch { return .warning }
+        }
+        if line == "Failed: 0" || ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: line.hasPrefix) { return .normal }
+        if line.hasPrefix(HistoryFileFailure.prefix) { return .muted }
+        if line == "WARNING: Always keep a backup of your original media before optimization." { return .muted }
+        if line.hasPrefix("Error:"), isQuarantineWrapperSummary(line) { return .muted }
+        if line.range(of: #"(?i)^Error: fast-img exited with (?:code|status) \d+$"#, options: .regularExpression) != nil {
+            return .muted
+        }
+        // The stderr transport prefix is not evidence of an error.
+        if let count = countStatusValue(in: line) {
+            return count.uppercased() == "MATCH" ? .result : count.uppercased() == "EXPLAINED" ? .warning : .failure
+        }
+        if let diagnostic = DisplayPrivacy.problemTone(line) { return diagnostic }
+        if line.range(of: #"(?i)(?:\[(?:DONE|SUMMARY|SUCCESS|OK)\]|^\s*(?:Success rate:|Integrity:|Integrity Issues:|Total time:)|^\s*✓)"#, options: .regularExpression) != nil { return .result }
+        if line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:#|\[(?:SCAN|COPY|ENCODE|VERIFY|CHECK|IMPORT|SKIP|RETAIN|RESTORE|RESUME|FINAL|STATS|ARCHIVE|PROGRESS|PHASE)\s*\])"#, options: .regularExpression) != nil { return .stage }
+        if line.range(of: #"(?i)^\s*(?:INF|INFO|DBG|DEBUG|TRACE)\b"#, options: .regularExpression) != nil { return .muted }
+        return .normal
+    }
+
+    var color: NSColor {
+        switch self {
+        case .muted: .tertiaryLabelColor
+        case .normal: .labelColor
+        case .stage: .controlAccentColor
+        case .result: .systemTeal
+        case .warning: .systemOrange
+        case .failure: .systemRed
+        }
+    }
+
+    var font: NSFont {
+        .monospacedSystemFont(ofSize: 12, weight: self == .normal || self == .muted ? .regular : .semibold)
+    }
+}
+
+private struct PhotosQuarantineLogBlock {
+    static let pathPrefix = "[GATE 2 quarantine] "
+    private var awaitingCount = false
+    private var pathsRemaining = 0
+
+    mutating func scopedPath(in raw: String) -> String? {
+        if LogTone.isQuarantineGateResult(raw) {
+            awaitingCount = true
+            pathsRemaining = 0
+            return nil
+        }
+        if awaitingCount {
+            awaitingCount = false
+            let prefix = "quarantine: expected 0 quarantined, got "
+            let value = raw.dropFirst(prefix.count)
+            if raw.hasPrefix(prefix), value.utf8.allSatisfy({ (48...57).contains($0) }),
+               let count = Int(value), count > 0 {
+                pathsRemaining = count
+                return nil
+            }
+        }
+        guard pathsRemaining > 0 else { return nil }
+        let prefix = raw.hasPrefix("[QUARANTINE] ") ? "[QUARANTINE] " : "❌ "
+        let path = String(raw.dropFirst(prefix.count))
+        if raw.hasPrefix(prefix), FastImgDeliveryReceipt.absolute(path) {
+            pathsRemaining -= 1
+            return path
+        }
+        pathsRemaining = 0
+        return nil
+    }
+}
+
+struct ConsecutiveDiagnosticLogFolder: Equatable {
+    enum Update: Equatable {
+        case append(String)
+        case repeated(String, occurrences: Int)
+    }
+
+    private static let maximumFoldableUTF16Length = 8_192
+    private(set) var previousLine: String? = nil
+    private(set) var occurrences = 0
+
+    mutating func ingest(_ line: String) -> Update {
+        let tone = LogTone.classify(line)
+        guard tone == .warning || tone == .failure,
+              line.utf16.count <= Self.maximumFoldableUTF16Length else {
+            reset()
+            return .append(line)
+        }
+
+        guard previousLine == line else {
+            previousLine = line
+            occurrences = 1
+            return .append(line)
+        }
+
+        let next = occurrences.addingReportingOverflow(1)
+        guard !next.overflow else {
+            previousLine = line
+            occurrences = 1
+            return .append(line)
+        }
+        occurrences = next.partialValue
+        return .repeated(line, occurrences: occurrences)
+    }
+
+    mutating func reset() {
+        previousLine = nil
+        occurrences = 0
+    }
+}
+
+func trailingLogLineRange(_ expected: String, in value: NSString) -> NSRange? {
+    guard !expected.isEmpty, value.length > 0, value.character(at: value.length - 1) != 0x0A else {
+        return nil
+    }
+    let fullRange = NSRange(location: 0, length: value.length)
+    let separator = value.range(of: "\n", options: .backwards, range: fullRange)
+    let start = separator.location == NSNotFound ? 0 : NSMaxRange(separator)
+    let lineRange = NSRange(location: start, length: value.length - start)
+    let line = value.substring(with: lineRange)
+    return line == expected || line.hasPrefix(expected + " · ") ? lineRange : nil
+}
+
+private struct LatestDiagnostics {
+    private(set) var failure: String?
+    private(set) var warning: String?
+    private var failureIsSummary = false
+    private var failureIsSafety = false
+
+    mutating func ingest(_ line: String) -> Bool {
+        let tone = LogTone.classify(line)
+        guard tone == .failure || tone == .warning else { return false }
+        let message = LogTone.message(line)
+        if tone == .warning, LogTone.isQuarantineGateResult(message) || LogTone.isQuarantineWrapperSummary(message) {
+            return false
+        }
+        // Keep presentation bounded; the launcher retains the full output in history.
+        let scalars = message.unicodeScalars
+        let bounded = String(String.UnicodeScalarView(scalars.prefix(4_096)))
+            + (scalars.count > 4_096 ? "…" : "")
+        switch tone {
+        case .failure:
+            let isSafety = hasSeriousProcessingDiagnostic(message)
+            guard !failureIsSafety || isSafety else { return false }
+            let isSummary = countStatusValue(in: message) != nil
+                || message.range(of: #"(?i)^Failed:\s*\d+\s*$"#, options: .regularExpression) != nil
+                || message.range(of: #"(?i)^(?:\[Summary\]|\[GATE\s*\d+\s*\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\s*\])\s*)?(?:exiting with failures\b|fast-img exited with (?:code|status)\b|fast-img (?:batch|original-media delivery) recorded \d+ failed source))"#,
+                                 options: .regularExpression) != nil
+            // A final aggregate must not hide the most recent actionable error.
+            guard isSafety || !isSummary || failure == nil || failureIsSummary else { return false }
+            guard failure != bounded else { return false }
+            failure = bounded
+            failureIsSummary = isSummary
+            failureIsSafety = isSafety
+        case .warning:
+            guard warning != bounded else { return false }
+            warning = bounded
+        default: return false
+        }
+        return true
+    }
+}
+
+private func isPhotosLibraryPath(_ path: String) -> Bool {
+    URL(fileURLWithPath: path)
+        .resolvingSymlinksInPath()
+        .standardized.pathComponents.contains { component in
+        let component = component.lowercased()
+        return component.hasSuffix(".photoslibrary") || component.hasSuffix(".photolibrary")
+    }
+}
+
+private func isPhotosLibraryPackagePath(_ path: String) -> Bool {
+    let component = URL(fileURLWithPath: path)
+        .resolvingSymlinksInPath()
+        .standardized.lastPathComponent.lowercased()
+    return component.hasSuffix(".photoslibrary") || component.hasSuffix(".photolibrary")
+}
+
+private func isPhotosUUID(_ value: String) -> Bool {
+    let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+    guard parts.map(\.count) == [8, 4, 4, 4, 12] else { return false }
+    return parts.joined().allSatisfy { $0.isHexDigit }
+}
+
+private func processingRequiresPhotosAutomation(_ request: ProcessorRequest) -> Bool {
+    !request.dryRun && (request.operationMode == .iCloudImport
+        || (request.shortestPath && request.operationMode.capabilities.supportsShortestPath)
+        || (request.operationMode == .restoreJpeg && isPhotosLibraryPath(request.targetPath)))
+}
+
+private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String] {
+    var chunks: [String] = []
+    var start = buffer.startIndex
+    while start < buffer.endIndex {
+        if let newline = buffer[start...].firstIndex(of: 0x0A),
+           buffer.distance(from: start, to: newline) <= maxProcessLogChunkBytes
+        {
+            chunks.append(String(decoding: buffer[start..<newline], as: UTF8.self))
+            start = buffer.index(after: newline)
+            continue
+        }
+        guard buffer.distance(from: start, to: buffer.endIndex) >= maxProcessLogChunkBytes else { break }
+        let end = buffer.index(start, offsetBy: maxProcessLogChunkBytes)
+        chunks.append(String(decoding: buffer[start..<end], as: UTF8.self))
+        start = end
+    }
+    buffer.removeSubrange(buffer.startIndex..<start)
+    if flush, !buffer.isEmpty {
+        chunks.append(String(decoding: buffer, as: UTF8.self))
+        buffer.removeAll(keepingCapacity: false)
+    }
+    return chunks
+}
+
+private func readBoundedProcessOutput(
+    _ handle: FileHandle,
+    limit: Int
+) throws -> (data: Data, exceeded: Bool) {
+    precondition(limit >= 0 && limit < Int.max)
+    let sentinelLimit = limit + 1
+    var data = Data()
+    while true {
+        let hasData = try autoreleasepool {
+            guard let chunk = try handle.read(upToCount: maxProcessLogChunkBytes), !chunk.isEmpty else { return false }
+            if data.count < sentinelLimit {
+                data.append(chunk.prefix(sentinelLimit - data.count))
+            }
+            return true
+        }
+        if !hasData { break }
+    }
+    let exceeded = data.count > limit
+    if exceeded {
+        data.removeSubrange(limit...)
+    }
+    return (data, exceeded)
+}
+
+private final class ProcessLogBackpressure: @unchecked Sendable {
+    static let gapPrefix = "MFB_GUI_TRANSPORT_GAP="
+
+    private enum RecordKind { case ordinary, diagnostic, control }
+
+    private let lock = NSLock()
+    private let maxBytes: Int
+    private let maxEntries: Int
+    private let maxDiagnosticBytes: Int
+    private let maxDiagnosticEntries: Int
+    private let maxCriticalBytes: Int
+    private let maxCriticalEntries: Int
+    private var pending = ""
+    private var pendingBytes = 0
+    private var pendingEntries = 0
+    private var criticalBytes = 0
+    private var criticalEntries = 0
+    private var diagnosticBytes = 0
+    private var diagnosticEntries = 0
+    private var omittedCriticalEntries: UInt64 = 0
+    private var omittedDiagnosticEntries: UInt64 = 0
+    private var pendingProgress: String?
+    private var omittedEntries: UInt64 = 0
+    private var deliveryInFlight = false
+
+    init(maxBytes: Int = maxProcessLogBatchBytes, maxEntries: Int = maxProcessLogBatchEntries,
+         maxCriticalBytes: Int = maxProcessLogBatchBytes, maxCriticalEntries: Int = maxProcessLogBatchEntries,
+         maxDiagnosticBytes: Int = maxProcessLogBatchBytes, maxDiagnosticEntries: Int = maxProcessLogBatchEntries) {
+        precondition(maxBytes >= 0 && maxEntries >= 0 && maxCriticalBytes >= 0 && maxCriticalEntries >= 0
+            && maxDiagnosticBytes >= 0 && maxDiagnosticEntries >= 0)
+        self.maxBytes = maxBytes
+        self.maxEntries = maxEntries
+        self.maxCriticalBytes = maxCriticalBytes
+        self.maxCriticalEntries = maxCriticalEntries
+        self.maxDiagnosticBytes = maxDiagnosticBytes
+        self.maxDiagnosticEntries = maxDiagnosticEntries
+    }
+
+    private static func recordKind(_ text: String) -> RecordKind {
+        let raw = LogTone.message(text)
+        if raw.hasPrefix(HistoryIgnoredSource.prefix) {
+            return (try? HistoryIgnoredSource.decode(raw)) == nil ? .control : .diagnostic
+        }
+        if raw.hasPrefix(HistoryFileFailure.prefix) {
+            guard let failure = try? HistoryFileFailure.decode(raw) else { return .control }
+            return hasSeriousProcessingDiagnostic(failure.message) ? .control : .diagnostic
+        }
+        if raw.hasPrefix("MFB_") || raw.hasPrefix("[PHOTOS PROFILE]")
+            || raw.hasPrefix("[PHOTOS PROGRESS]") || countStatusValue(in: raw) != nil
+            || raw.hasPrefix("Integrity:") || raw.hasPrefix("Integrity Issues:")
+            || raw.hasPrefix("[GATE") {
+            return .control
+        }
+        let tone = LogTone.classify(text)
+        if tone == .failure && hasSeriousProcessingDiagnostic(raw) { return .control }
+        return tone == .warning || tone == .failure || tone == .result ? .diagnostic : .ordinary
+    }
+
+    func enqueue(_ entry: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        // Diagnostic bursts must not consume the reserve for result and safety evidence.
+        for line in entry.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            // Progress is a replaceable snapshot, not a result or diagnostic.
+            if let payload = FileStageProgress.payload(text) {
+                pendingProgress = payload.utf8.count <= 1_024 ? text : "MFB_PROGRESS={}"
+                continue
+            }
+            let kind = Self.recordKind(text)
+            let limit: Int
+            let used: Int
+            let entries: Int
+            let entryLimit: Int
+            switch kind {
+            case .ordinary:
+                (limit, used, entries, entryLimit) = (maxBytes, pendingBytes, pendingEntries, maxEntries)
+            case .diagnostic:
+                (limit, used, entries, entryLimit) = (maxDiagnosticBytes, diagnosticBytes, diagnosticEntries, maxDiagnosticEntries)
+            case .control:
+                (limit, used, entries, entryLimit) = (maxCriticalBytes, criticalBytes, criticalEntries, maxCriticalEntries)
+            }
+            let separatorBytes = pending.isEmpty ? 0 : 1
+            let entryBytes = text.utf8.count
+            if entries >= entryLimit || separatorBytes > limit - used
+                || entryBytes > limit - used - separatorBytes {
+                switch kind {
+                case .control:
+                    if omittedCriticalEntries < UInt64.max { omittedCriticalEntries += 1 }
+                case .diagnostic:
+                    if omittedDiagnosticEntries < UInt64.max { omittedDiagnosticEntries += 1 }
+                case .ordinary:
+                    if omittedEntries < UInt64.max { omittedEntries += 1 }
+                }
+                continue
+            }
+            if separatorBytes > 0 { pending.append("\n") }
+            pending.append(text)
+            switch kind {
+            case .control:
+                criticalBytes += separatorBytes + entryBytes
+                criticalEntries += 1
+            case .diagnostic:
+                diagnosticBytes += separatorBytes + entryBytes
+                diagnosticEntries += 1
+            case .ordinary:
+                pendingBytes += separatorBytes + entryBytes
+                pendingEntries += 1
+            }
+        }
+        guard !deliveryInFlight else { return false }
+        deliveryInFlight = true
+        return true
+    }
+
+    func takeDelivery() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard deliveryInFlight else { return nil }
+        var payload = pending
+        if let progress = pendingProgress {
+            payload = progress + (payload.isEmpty ? "" : "\n" + payload)
+        }
+        pendingProgress = nil
+        if omittedEntries > 0 {
+            if !payload.isEmpty { payload.append("\n") }
+            payload.append(localized("log.omitted", omittedEntries))
+        }
+        if omittedCriticalEntries > 0 || omittedDiagnosticEntries > 0 {
+            if !payload.isEmpty { payload.append("\n") }
+            payload.append(Self.gapPrefix
+                + "{\"schema_version\":1,\"control_records\":\(omittedCriticalEntries),\"diagnostic_records\":\(omittedDiagnosticEntries)}")
+        }
+        pending.removeAll(keepingCapacity: true)
+        pendingBytes = 0
+        pendingEntries = 0
+        criticalBytes = 0
+        criticalEntries = 0
+        diagnosticBytes = 0
+        diagnosticEntries = 0
+        omittedCriticalEntries = 0
+        omittedDiagnosticEntries = 0
+        omittedEntries = 0
+        return payload
+    }
+
+    func finishDelivery() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let hasPending = pendingEntries > 0 || criticalEntries > 0 || diagnosticEntries > 0 || omittedEntries > 0
+            || omittedCriticalEntries > 0 || omittedDiagnosticEntries > 0 || pendingProgress != nil
+        if !hasPending { deliveryInFlight = false }
+        return hasPending
+    }
+
+    var isIdle: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0
+            && diagnosticEntries == 0 && omittedEntries == 0 && omittedCriticalEntries == 0
+            && omittedDiagnosticEntries == 0 && pendingProgress == nil
+    }
+}
+
+enum ProcessorLocator {
+    static func candidates(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executable: URL? = Bundle.main.executableURL,
+        currentDirectory: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+    ) -> [URL] {
+        var candidates: [URL] = []
+        if let configured = environment["MFB_PROCESSOR_BINARY"], !configured.isEmpty {
+            candidates.append(URL(fileURLWithPath: configured))
+        }
+        if guiPreferences.bool(forKey: developerPreferenceKey),
+           let configured = guiPreferences.string(forKey: "MFBGuiCoreBinary") {
+            candidates.append(URL(fileURLWithPath: configured))
+        }
+        if let executable {
+            let executableDirectory = executable.deletingLastPathComponent()
+            if executableDirectory.lastPathComponent == "MacOS" {
+                let contents = executableDirectory.deletingLastPathComponent()
+                let resources = contents.appendingPathComponent("Resources", isDirectory: true)
+                candidates.append(resources.appendingPathComponent(processorName))
+                candidates.append(resources.appendingPathComponent("bin/\(processorName)"))
+                candidates.append(executableDirectory.appendingPathComponent(processorName))
+                return candidates
+            }
+            candidates.append(executableDirectory.appendingPathComponent(processorName))
+            if ["debug", "release"].contains(executableDirectory.lastPathComponent) {
+                let target = executableDirectory.deletingLastPathComponent()
+                candidates.append(target.appendingPathComponent("release/\(processorName)"))
+                candidates.append(target.appendingPathComponent("debug/\(processorName)"))
+            }
+            var ancestor = executableDirectory
+            while ancestor.path != "/" {
+                candidates.append(ancestor.appendingPathComponent("target/release/\(processorName)"))
+                candidates.append(ancestor.appendingPathComponent("target/debug/\(processorName)"))
+                ancestor.deleteLastPathComponent()
+            }
+        }
+        candidates.append(currentDirectory.appendingPathComponent(processorName))
+        if let path = environment["PATH"] {
+            candidates.append(contentsOf: path.split(separator: ":").map {
+                URL(fileURLWithPath: String($0)).appendingPathComponent(processorName)
+            })
+        }
+        return candidates
+    }
+
+    static func resolve() -> URL? {
+        candidates().first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    static func resolveTool(named name: String) -> URL? {
+        var seen = Set<String>()
+        for processor in candidates() {
+            let directory = processor.deletingLastPathComponent()
+            for candidate in [
+                directory.appendingPathComponent(name),
+                directory.deletingLastPathComponent().appendingPathComponent(name),
+            ] where seen.insert(candidate.path).inserted
+                && FileManager.default.isExecutableFile(atPath: candidate.path)
+            {
+                return candidate
+            }
+        }
+        let bundleURL = Bundle.main.bundleURL.standardized
+        let isAppBundle = bundleURL.pathExtension == "app"
+        let isBuildBundle = bundleURL.path.contains("/target/release/bundle/macos/")
+        if var ancestor = Bundle.main.executableURL?.deletingLastPathComponent() {
+            while ancestor.path != "/" {
+                let isReleaseRoot = ancestor.lastPathComponent == "release"
+                    && ancestor.deletingLastPathComponent().lastPathComponent == "target"
+                if !isAppBundle || (isBuildBundle && isReleaseRoot) {
+                    let candidate = ancestor.appendingPathComponent(name)
+                    if seen.insert(candidate.path).inserted,
+                       FileManager.default.isExecutableFile(atPath: candidate.path)
+                    {
+                        return candidate
+                    }
+                }
+                ancestor.deleteLastPathComponent()
+            }
+        }
+        return nil
+    }
+
+    static func missingError() -> String {
+        let checked = candidates().map(\.path).joined(separator: "; ")
+        return localized("error.backend_missing", checked)
+    }
+}
+
+private enum PhotosAutomationPreflightError: LocalizedError {
+    case photosUnavailable
+    case permissionDenied(OSStatus)
+    case checkFailed(OSStatus)
+
+    var shouldOpenSettings: Bool {
+        if case .permissionDenied = self { true } else { false }
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .photosUnavailable:
+            localized("error.photos_unavailable")
+        case let .permissionDenied(status):
+            localized("error.photos_denied", status)
+        case let .checkFailed(status):
+            localized("error.photos_check", status)
+        }
+    }
+}
+
+private func queryPhotosAuditContainers(binary: URL, library: String) throws -> [PhotosAuditContainer] {
+    let process = Process()
+    process.executableURL = binary
+    process.arguments = ["photos-albums", library, "--json"]
+    let combined = Pipe()
+    process.standardOutput = combined
+    process.standardError = combined
+    try process.run()
+    let capture = try readBoundedProcessOutput(
+        combined.fileHandleForReading,
+        limit: 16 * 1024 * 1024
+    )
+    process.waitUntilExit()
+    guard !capture.exceeded else {
+        throw HostError(message: localized("error.photos_scope_too_large"))
+    }
+    guard process.terminationStatus == 0 else {
+        let detail = String(decoding: capture.data.prefix(8_192), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        throw HostError(message: localized("error.photos_scope_load", detail))
+    }
+    let containers = try JSONDecoder().decode([PhotosAuditContainer].self, from: capture.data)
+    let ids = Set(containers.map(\.id))
+    guard ids.count == containers.count,
+          containers.allSatisfy({
+              isPhotosUUID($0.id)
+                  && !$0.name.isEmpty
+                  && !$0.path.isEmpty
+                  && $0.path.last == $0.name
+                  && $0.parentID.map { isPhotosUUID($0) && ids.contains($0) } ?? true
+          })
+    else {
+        throw HostError(message: localized("error.photos_scope_invalid"))
+    }
+    return containers
+}
+
+private enum ProcessorReadiness: Equatable, Sendable {
+    case checking, ready, unavailable
+    case failed(diagnostic: String, truncated: Bool)
+
+    var message: String {
+        switch self {
+        case .checking: return localized("status.checking_processor")
+        case .ready: return localized("status.processor_ready")
+        case .unavailable: return localized("status.processor_unavailable")
+        case let .failed(diagnostic, truncated):
+            let detail = [diagnostic, truncated ? localized("status.processor_diagnostic_truncated") : ""]
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+            return localized("status.processor_failed") + (detail.isEmpty ? "" : ": " + detail)
+        }
+    }
+}
+
+@MainActor
+private final class NativeHost {
+    private let readOnly: Bool
+    init(readOnly: Bool = isDebugWindow) { self.readOnly = readOnly }
+    var onLog: ((String) -> Void)?
+    var onCompletion: ((Result<String, Error>) -> Void)?
+    private var activeProcess: Process?
+    private var pendingLaunch = false
+    private var launchGeneration = UUID()
+    private var controlFile: URL?
+    private var controlToken = UUID().uuidString
+    private(set) var controlState = "running"
+    private(set) var lastExitStatus: Int32?
+    private(set) var lastExitWasNormal = false
+    private let processLogs = ProcessLogBackpressure()
+    private var pendingProcessCompletion: (() -> Void)?
+
+    var isRunning: Bool { activeProcess != nil || pendingLaunch }
+    var canPause: Bool { activeProcess != nil && controlState != "cancelled" }
+
+    var isPaused: Bool {
+        guard controlState == "paused", let controlFile else { return false }
+        return (try? String(contentsOf: controlFile.appendingPathExtension("ack"), encoding: .utf8))
+            == "paused\n\(controlToken)"
+    }
+
+    func setControlState(_ state: String) throws {
+        guard ["running", "paused", "cancelled"].contains(state) else {
+            throw HostError(message: "Invalid batch control state")
+        }
+        let token = UUID().uuidString
+        if let controlFile {
+            try Data("\(state)\n\(token)".utf8).write(to: controlFile, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: controlFile.path)
+        }
+        controlState = state
+        controlToken = token
+        if state == "cancelled", pendingLaunch {
+            pendingLaunch = false
+            launchGeneration = UUID()
+            completeProcessingAfterLogs(status: 130)
+        }
+    }
+
+    func loadPhotosAuditContainers(
+        library: String,
+        completion: @escaping (Result<[PhotosAuditContainer], Error>) -> Void
+    ) {
+        guard !readOnly else {
+            completion(.failure(HostError(message: localized("debug.preview_only"))))
+            return
+        }
+        guard activeProcess == nil else {
+            completion(.failure(HostError(message: localized("error.task_running"))))
+            return
+        }
+        guard let binary = ProcessorLocator.resolveTool(named: "img") else {
+            completion(.failure(HostError(message: localized("error.img_backend_missing"))))
+            return
+        }
+        requestPhotosAutomationPermission { result in
+            switch result {
+            case let .failure(error):
+                completion(.failure(error))
+            case .success:
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let result = Result {
+                        try queryPhotosAuditContainers(binary: binary, library: library)
+                    }
+                    DispatchQueue.main.async { completion(result) }
+                }
+            }
+        }
+    }
+
+    nonisolated func checkVersionAlignment() -> ProcessorReadiness {
+        guard let binary = ProcessorLocator.resolve(), ProcessorLocator.resolveTool(named: "img") != nil,
+              ProcessorLocator.resolveTool(named: "vid") != nil else {
+            return .unavailable
+        }
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = ["--help"]
+        process.environment = nativeChildEnvironment()
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+            let watchdog = DispatchWorkItem {
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: watchdog)
+            defer { watchdog.cancel() }
+            let capture = try readBoundedProcessOutput(
+                output.fileHandleForReading,
+                limit: maxProcessLogChunkBytes
+            )
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                return .ready
+            }
+            let diagnostic = String(decoding: capture.data, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return .failed(diagnostic: diagnostic, truncated: capture.exceeded)
+        } catch {
+            return .failed(diagnostic: error.localizedDescription, truncated: false)
+        }
+    }
+
+    func startProcessing(_ request: ProcessorRequest, photosAutomationAuthorized: Bool = false) {
+        guard !readOnly else {
+            onCompletion?(.failure(HostError(message: localized("debug.preview_only"))))
+            return
+        }
+        guard !isRunning else {
+            onCompletion?(.failure(HostError(message: localized("error.task_running"))))
+            return
+        }
+        guard let binary = ProcessorLocator.resolve() else {
+            onCompletion?(.failure(HostError(message: ProcessorLocator.missingError())))
+            return
+        }
+        controlState = "running"
+        lastExitStatus = nil
+        lastExitWasNormal = false
+        if processingRequiresPhotosAutomation(request), !photosAutomationAuthorized {
+            pendingLaunch = true
+            launchGeneration = UUID()
+            let generation = launchGeneration
+            requestPhotosAutomationPermission { [weak self] result in
+                guard let self, self.pendingLaunch, self.launchGeneration == generation else { return }
+                self.pendingLaunch = false
+                switch result {
+                case .success:
+                    self.startProcessing(request, photosAutomationAuthorized: true)
+                case let .failure(error):
+                    if error.shouldOpenSettings,
+                       let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+                    {
+                        NSWorkspace.shared.open(settings)
+                    }
+                    self.onLog?(localized("log.photos_preflight", error.localizedDescription))
+                    self.onCompletion?(.failure(error))
+                }
+            }
+            return
+        }
+
+        let arguments: [String]
+        do { arguments = try ProcessorCommand.arguments(from: request) }
+        catch { onCompletion?(.failure(error)); return }
+
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = arguments
+        var environment = nativeChildEnvironment()
+        environment["MFB_USE_LEGACY_PY"] = "0"
+        environment["FROM_APP"] = "1"
+        environment["LC_ALL"] = "en_US.UTF-8"
+        environment["LANG"] = "en_US.UTF-8"
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        onLog?(localized("log.backend_start", binary.path))
+        do {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mfb-gui-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            controlFile = directory.appendingPathComponent("control")
+            try setControlState("running")
+            environment["MFB_BATCH_CONTROL_FILE"] = controlFile!.path
+            process.environment = environment
+            try process.run()
+        }
+        catch {
+            removeControlFile()
+            onCompletion?(.failure(HostError(message: localized("error.backend_start", error.localizedDescription))))
+            return
+        }
+        activeProcess = process
+        let readers = DispatchGroup()
+        stream(stdout.fileHandleForReading, prefix: "", group: readers)
+        stream(stderr.fileHandleForReading, prefix: "ERR: ", group: readers)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            process.waitUntilExit()
+            readers.wait()
+            let status = process.terminationStatus
+            let exitedNormally = process.terminationReason == .exit
+            DispatchQueue.main.async { self?.completeProcessingAfterLogs(status: status, exitedNormally: exitedNormally) }
+        }
+    }
+
+    func terminalCommand(for request: ProcessorRequest) throws -> String {
+        guard !readOnly else { throw HostError(message: localized("debug.preview_only")) }
+        guard let binary = ProcessorLocator.resolve() else {
+            throw HostError(message: ProcessorLocator.missingError())
+        }
+        return try ProcessorCommand.terminalShellCommand(
+            binary: binary,
+            arguments: ProcessorCommand.arguments(from: request),
+        )
+    }
+
+    func openInTerminal(_ request: ProcessorRequest) throws -> String {
+        let command = try terminalCommand(for: request)
+        let shellCommand = "\(command); exec /bin/sh"
+        for (name, executable, arguments) in [
+            ("Ghostty", "/Applications/Ghostty.app/Contents/MacOS/ghostty", ["-e", "/bin/sh", "-c", shellCommand]),
+            ("kitty", "/Applications/kitty.app/Contents/MacOS/kitty", ["/bin/sh", "-c", shellCommand]),
+        ] where FileManager.default.isExecutableFile(atPath: executable) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            if (try? process.run()) != nil { return localized("status.opened_terminal", name) }
+        }
+
+        let scripts: [(String, String)] = [
+            ("iTerm", """
+            on run argv
+                tell application "iTerm"
+                    activate
+                    if (count of windows) = 0 then create window with default profile
+                    tell current window
+                        create tab with default profile
+                        tell current session to write text (item 1 of argv)
+                    end tell
+                end tell
+            end run
+            """),
+            ("Terminal", """
+            on run argv
+                tell application "Terminal"
+                    activate
+                    do script (item 1 of argv)
+                end tell
+            end run
+            """),
+        ]
+        for (name, script) in scripts
+        where name != "iTerm" || FileManager.default.fileExists(atPath: "/Applications/iTerm.app") {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script, shellCommand]
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 { return localized("status.opened_terminal", name) }
+            } catch { continue }
+        }
+        throw HostError(message: localized("error.no_terminal"))
+    }
+
+    private func removeControlFile() {
+        guard let controlFile else { return }
+        do { try FileManager.default.removeItem(at: controlFile.deletingLastPathComponent()) }
+        catch { onLog?(localized("error.control_cleanup", error.localizedDescription)) }
+        self.controlFile = nil
+    }
+
+    func validateControlForSelfTest() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mfb-control-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        controlFile = directory.appendingPathComponent("control")
+        defer { removeControlFile() }
+        try setControlState("paused")
+        let desired = try String(contentsOf: controlFile!, encoding: .utf8)
+        guard desired == "paused\n\(controlToken)", !isPaused else {
+            throw HostError(message: "Pause was acknowledged before reaching a safe boundary")
+        }
+        try Data(desired.utf8).write(to: controlFile!.appendingPathExtension("ack"), options: .atomic)
+        guard isPaused else { throw HostError(message: "Valid pause acknowledgment was ignored") }
+        try setControlState("running")
+        try setControlState("paused")
+        guard !isPaused else { throw HostError(message: "Stale acknowledgment paused a new transaction") }
+        try setControlState("cancelled")
+        guard controlState == "cancelled", !isPaused else { throw HostError(message: "Cancel state failed") }
+        removeControlFile()
+        pendingLaunch = true
+        var completions = 0
+        onCompletion = { _ in completions += 1 }
+        try setControlState("cancelled")
+        guard !isRunning, completions == 1 else {
+            throw HostError(message: "Preflight cancellation could launch a late child")
+        }
+    }
+
+    private func requestPhotosAutomationPermission(
+        completion: @escaping (Result<Void, PhotosAutomationPreflightError>) -> Void,
+    ) {
+        let photosBundleIdentifier = "com.apple.Photos"
+        let checkPermission = {
+            let target = NSAppleEventDescriptor(bundleIdentifier: photosBundleIdentifier)
+            guard let descriptor = target.aeDesc else {
+                DispatchQueue.main.async { completion(.failure(.photosUnavailable)) }
+                return
+            }
+            let status = AEDeterminePermissionToAutomateTarget(descriptor, typeWildCard, typeWildCard, true)
+            DispatchQueue.main.async {
+                if status == noErr {
+                    completion(.success(()))
+                } else if status == OSStatus(errAEEventNotPermitted)
+                    || status == OSStatus(errAEEventWouldRequireUserConsent)
+                {
+                    completion(.failure(.permissionDenied(status)))
+                } else {
+                    completion(.failure(.checkFailed(status)))
+                }
+            }
+        }
+
+        if NSRunningApplication.runningApplications(withBundleIdentifier: photosBundleIdentifier).isEmpty {
+            guard let photosURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: photosBundleIdentifier) else {
+                completion(.failure(.photosUnavailable))
+                return
+            }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            let completed = NSLock()
+            var didComplete = false
+            let failWithTimeout = {
+                completed.lock()
+                let alreadyDone = didComplete
+                if !alreadyDone { didComplete = true }
+                completed.unlock()
+                guard !alreadyDone else { return }
+                DispatchQueue.main.async { completion(.failure(.photosUnavailable)) }
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10) {
+                failWithTimeout()
+            }
+            NSWorkspace.shared.openApplication(at: photosURL, configuration: configuration) { _, error in
+                completed.lock()
+                let alreadyDone = didComplete
+                if !alreadyDone { didComplete = true }
+                completed.unlock()
+                guard !alreadyDone else { return }
+                if error != nil {
+                    DispatchQueue.main.async { completion(.failure(.photosUnavailable)) }
+                } else {
+                    DispatchQueue.global(qos: .userInitiated).async { checkPermission() }
+                }
+            }
+        } else {
+            DispatchQueue.global(qos: .userInitiated).async { checkPermission() }
+        }
+    }
+
+    private func completeProcessingAfterLogs(status: Int32, exitedNormally: Bool = false) {
+        let finish = { [weak self] in
+            guard let self else { return }
+            self.activeProcess = nil
+            self.pendingLaunch = false
+            self.lastExitStatus = status
+            self.lastExitWasNormal = exitedNormally
+            self.removeControlFile()
+            if status == 0 {
+                self.onCompletion?(.success(localized("status.completed")))
+            } else {
+                self.onCompletion?(.failure(HostError(message: localized("status.process_exit", status))))
+            }
+        }
+        if processLogs.isIdle { finish() } else { pendingProcessCompletion = finish }
+    }
+
+    private func flushProcessLogs() {
+        guard let payload = processLogs.takeDelivery() else { return }
+        autoreleasepool { onLog?(payload) }
+        if processLogs.finishDelivery() {
+            DispatchQueue.main.async { [weak self] in self?.flushProcessLogs() }
+        } else if let completion = pendingProcessCompletion {
+            pendingProcessCompletion = nil
+            completion()
+        }
+    }
+
+    func validateLogDrainForSelfTest() throws {
+        let started = ProcessInfo.processInfo.systemUptime
+        let pipe = Pipe()
+        let group = DispatchGroup()
+        stream(pipe.fileHandleForReading, prefix: "", group: group)
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            defer {
+                pipe.fileHandleForWriting.closeFile()
+                group.leave()
+            }
+            let chunk = Data((String(repeating: "synthetic 🧪 detail\n", count: 2_048)).utf8)
+            for _ in 0..<4 {
+                autoreleasepool { pipe.fileHandleForWriting.write(chunk) }
+            }
+        }
+        // Deliberately keep the main queue busy while the real pipe reader drains a flood.
+        guard group.wait(timeout: .now() + 15) == .success else {
+            throw HostError(message: "Log pipe reader failed to drain a flood while the main queue was busy")
+        }
+        pipe.fileHandleForReading.closeFile()
+        print("runtime log drain: 8192 lines with main queue busy, \(ProcessInfo.processInfo.systemUptime - started)s")
+    }
+
+    private func stream(_ handle: FileHandle, prefix: String, group: DispatchGroup) {
+        let processLogs = processLogs
+        group.enter()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            defer { group.leave() }
+            var buffer = Data()
+            while true {
+                // The reader lives for the entire batch; drain Cocoa temporaries per read.
+                let hasData = autoreleasepool {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { return false }
+                    buffer.append(chunk)
+                    for line in drainProcessLogChunks(&buffer, flush: false) {
+                        if processLogs.enqueue(prefix + line) {
+                            DispatchQueue.main.async { self?.flushProcessLogs() }
+                        }
+                    }
+                    return true
+                }
+                if !hasData { break }
+            }
+            for line in drainProcessLogChunks(&buffer, flush: true) {
+                if processLogs.enqueue(prefix + line) {
+                    DispatchQueue.main.async { self?.flushProcessLogs() }
+                }
+            }
+        }
+    }
+}
+
+@MainActor
+private final class NativeDropView: NSVisualEffectView {
+    var onDrop: ((String) -> Void)?
+    var acceptsDrops = true
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        acceptsDrops && sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self]) ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard acceptsDrops, let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true],
+        ) as? [URL], let first = urls.first else { return false }
+        onDrop?(first.path)
+        return true
+    }
+}
+
+@MainActor
+private final class AppController: NSObject, NSWindowDelegate {
+    private let host = NativeHost()
+    private let preferences: UserDefaults
+    private let window: NSWindow
+    private let titleLabel = NSTextField(labelWithString: "Modern Format Boost")
+    private let logo = NSImageView()
+    private var logoSize: [NSLayoutConstraint] = []
+    private var mainFonts: [(NSControl, NSFont)] = []
+    private var interfaceScale: CGFloat = 1
+    private let actionRow = NSStackView()
+    private let compactActions = NSStackView()
+    private let primaryActions = NSStackView()
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    private let mediaLabel = NSTextField(labelWithString: "")
+    private let operationLabel = NSTextField(labelWithString: "")
+    private let photosScopeLabel = NSTextField(labelWithString: "")
+    private let metadataSafetyLabel = NSTextField(wrappingLabelWithString: "")
+    private let targetField = NSTextField()
+    private let backupLabel = NSTextField(labelWithString: "")
+    private let backupField = NSTextField()
+    private let processingPopup = NSPopUpButton()
+    private let operationPopup = NSPopUpButton()
+    private var processingRow: NSGridRow?
+    private let ultimateCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let verboseCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let shortestPathCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let resumeCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let freshCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let archiveCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let retryCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let forceCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let dryRunCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let plainCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let inPlaceCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let watchCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let commandField = NSTextField()
+    private let logView = NSTextView(usingTextLayoutManager: false)
+    private let fullLogPresentation = NSMutableAttributedString(string: "")
+    private let privateLogPresentation = NSMutableAttributedString(string: "")
+    private let privacyButton = NSButton()
+    private let copyVisibleLogButton = NSButton()
+    private let targetPrivacyLabel = NSTextField(labelWithString: "")
+    private let backupPrivacyLabel = NSTextField(labelWithString: "")
+    private let logScroll = NSScrollView()
+    private let logDetailsButton = NSButton(title: "", target: nil, action: nil)
+    private let mainLayout = NSStackView()
+    private var logDetailsExpanded = false
+    private var processEndedWithError = false
+    private var cleanupRecoveryResult: FastImgCleanupRecoveryResult?
+    private var cleanupRecoveryResultInvalid = false
+    private var deliveryFixture = false
+    private var restoreFixture = false
+    private var hasConfirmedFileFailures = false
+    private var hasConfirmedPhotosQuarantine = false
+    private var explicitPhotosFreshTarget: String?
+    private var quarantineLogBlock = PhotosQuarantineLogBlock()
+    private let countStatusLabel = NSTextField(labelWithString: "")
+    private var countStatus: String?
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let progressIndicator = NSProgressIndicator()
+    private let fileProgressIndicator = NSProgressIndicator()
+    private let fileProgressLabel = NSTextField(labelWithString: "")
+    private let fileProgressRow = NSStackView()
+    private var fileProgress = FileStageProgress()
+    private var toolSnapshot = ToolSnapshotPresentation()
+    private var startupAdmission = ImgStartupAdmission()
+    private var startupAdmissionHasConflict = false
+    private let toolSnapshotLabel = NSTextField(wrappingLabelWithString: "")
+    private var workerExecution = LiveWorkerExecution()
+    private var photosImportProgress = PhotosImportProgress()
+    private var photosProgressFixture = false
+    private var gateActivity = GateCheckActivity()
+    private var logPhase = PhaseLogPresentation()
+    private var diagnosticLogFolder = ConsecutiveDiagnosticLogFolder()
+    private var latestDiagnostics = LatestDiagnostics()
+    private let latestFailureLabel = NSTextField(labelWithString: "")
+    private let latestWarningLabel = NSTextField(labelWithString: "")
+    private let latestDiagnosticsRow = NSStackView()
+    private let batchOverview = NSStackView()
+    private let batchOverviewTitle = NSTextField(labelWithString: "")
+    private let batchOverviewCounts = NSTextField(labelWithString: "")
+    private let batchOverviewDelivery = NSTextField(labelWithString: "")
+    private let batchOverviewCleanup = NSTextField(labelWithString: "")
+    private let chooseButton = NSButton(title: "", target: nil, action: nil)
+    private let backupButton = NSButton(title: "", target: nil, action: nil)
+    private let backupRow = NSStackView()
+    private let photosScopeButton = NSButton(title: "", target: nil, action: nil)
+    private let photosScopeRow = NSStackView()
+    private let options = NSStackView()
+    private var optionColumns: [NSStackView] = []
+    private let optionsSpacer = NSView()
+    private let openButton = NSButton(title: "", target: nil, action: nil)
+    private let copyButton = NSButton(title: "", target: nil, action: nil)
+    private let runButton = NSButton(title: "", target: nil, action: nil)
+    private let historyButton = NSButton(title: "", target: nil, action: nil)
+    private lazy var resultNotifier = ProcessingResultNotifier(preferences: preferences,
+        runtimeEnabled: !isBackgroundSelfTest && !isDebugWindow)
+    private var announcedGate: String?
+    private var resultNotificationError: String?
+    private let settingsButton = NSButton(title: "", target: nil, action: nil)
+    private let helpButton = NSButton(title: "", target: nil, action: nil)
+    private var settingsPanel: MediaSettingsPanel?
+    private var historyPanel: ProcessingHistoryPanel?
+    private var historyRemovalInProgress = false
+    private let historyRemovalNotice = NSTextField(wrappingLabelWithString: "")
+    private let preflightButton = NSButton(title: "", target: nil, action: nil)
+    private var preflightPanel: PreflightInspectorPanel?
+    private var preflightQuery: PreflightQuery?
+    private var preflightGeneration = UUID()
+    private let diagnosticsButton = NSButton(title: "", target: nil, action: nil)
+    private let diagnosticsTextView = NSTextView()
+    private var diagnosticsPanel: NSPanel?
+    private var photosDiagnostics = PhotosDiagnostics()
+    private var batchResults = BatchResults()
+    private var resolvedHistoryDirectory = historyDirectory
+    private let pauseButton = NSButton(title: "", target: nil, action: nil)
+    private let stopButton = NSButton(title: "", target: nil, action: nil)
+    private var processingGuide: ProcessingGuideController?
+    private var closeWhenFinished = false
+    private var lastRequest: ProcessorRequest?
+    private var sawResumeDecision = false
+    private var failedRetryAvailable: FastImgFailedRetryAvailable?
+    private var failedRetryAvailabilityInvalid = false
+    private var sawFailedRetryDecision = false
+    private var sawProductionBusy = false
+    private var configurationControlsEnabled = true
+    private var processorStatus: ProcessorReadiness = .checking
+    private enum StatusDisplay {
+        case processor
+        case localized(String, [CVarArg])
+        case message(String)
+    }
+    private var statusDisplay: StatusDisplay = .processor
+    private var selectedPhotosContainer: PhotosAuditContainer?
+    private var processingStartedAt: ProcessingStart?
+    private let elapsedFormatter = DateComponentsFormatter()
+    private let statusRecoveryButton = NSButton()
+    private var refreshTimer: Timer?
+    private var processingActivity: NSObjectProtocol?
+
+    private var developerMode: Bool
+    private var privacyEnabled: Bool { DisplayPrivacy.enabled(in: preferences) }
+
+    private var optionControls: [(NSButton, String)] { [
+        (verboseCheck, "verbose"), (shortestPathCheck, "shortestPath"),
+        (resumeCheck, "resume"), (freshCheck, "fresh"),
+        (archiveCheck, "archive"), (retryCheck, "retry"),
+        (forceCheck, "force"), (dryRunCheck, "dryRun"),
+        (plainCheck, "plain"), (inPlaceCheck, "inPlace"), (watchCheck, "watch"),
+    ] }
+
+    private func optionKey(_ name: String, for operation: OperationMode) -> String {
+        "MFBGuiOption.\(operation.rawValue).\(name)"
+    }
+
+    private func restoreOptions(for operation: OperationMode) {
+        explicitPhotosFreshTarget = nil
+        for (control, name) in optionControls {
+            let saved = preferences.object(forKey: optionKey(name, for: operation)) as? Bool
+            let enabledByDefault = name == "verbose"
+                || (name == "fresh" && operation.capabilities.supportsResume)
+                || (name == "shortestPath" && operation.backendMode == "fast-img")
+            control.state = (saved ?? enabledByDefault) ? .on : .off
+        }
+        verboseCheck.state = .on
+        if operation.capabilities.supportsResume {
+            let photos = operation.backendMode == "fast-img" && shortestPathCheck.state == .on
+            let resuming = freshCheck.state != .on
+                && (resumeCheck.state == .on || retryCheck.state == .on)
+            resumeCheck.state = resuming ? .on : .off
+            freshCheck.state = resuming || photos ? .off : .on
+            if !resuming { retryCheck.state = .off }
+        }
+    }
+
+    private func saveOption(_ control: NSButton) {
+        guard let name = optionControls.first(where: { $0.0 === control })?.1 else { return }
+        preferences.set(control.state == .on, forKey: optionKey(name, for: selectedOperation))
+    }
+
+    init(preferences: UserDefaults = guiPreferences) {
+        self.preferences = preferences
+        developerMode = preferences.bool(forKey: developerPreferenceKey)
+        resolvedHistoryDirectory = initialHistoryDirectory(preferences: preferences)
+        window = NSWindow(
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: mainWindowContentSize.width,
+                height: mainWindowContentSize.height,
+            ),
+            styleMask: mainWindowStyleMask,
+            backing: .buffered,
+            defer: false,
+        )
+        super.init()
+        configureWindow()
+        configureHost()
+        NotificationCenter.default.addObserver(self, selector: #selector(displayPrivacyChanged),
+            name: DisplayPrivacy.changed, object: preferences)
+        refreshPrivacyPresentation()
+    }
+
+    func show() {
+        window.center()
+        activate()
+        processorStatus = .checking
+        statusDisplay = .processor
+        refreshStatus()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let status = self.host.checkVersionAlignment()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.processorStatus = status
+                if self.configurationControlsEnabled, case .processor = self.statusDisplay { self.refreshStatus() }
+            }
+        }
+    }
+
+    func activate() {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        requestClose()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if deliveryFixture || photosProgressFixture, notification.object as? NSWindow === window { NSApp.terminate(nil) }
+    }
+
+    func requestClose() -> Bool {
+        guard !historyRemovalInProgress else {
+            historyPanel?.show()
+            return false
+        }
+        invalidatePreflight()
+        guard !host.isRunning else {
+            closeWhenFinished = true
+            stopProcessing()
+            return false
+        }
+        return true
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        refreshProcessingStatus()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let width = window.contentView?.bounds.width else { return }
+        if arrangeActions(for: width) { updateWindowSize() }
+    }
+
+    private func refreshStatus() {
+        let message: String
+        var needsRecovery = false
+        switch statusDisplay {
+        case .processor:
+            message = processorStatus.message
+            switch processorStatus {
+            case .unavailable, .failed: needsRecovery = configurationControlsEnabled && !isDebugWindow
+            case .ready, .checking: break
+            }
+        case let .localized(key, arguments):
+            let format = LocalizationCatalog.shared.text(key)
+            message = arguments.isEmpty ? format : String(format: format, locale: Locale.current, arguments: arguments)
+        case let .message(text): message = text
+        }
+        if statusLabel.stringValue != message {
+            statusLabel.stringValue = message
+            statusLabel.toolTip = message
+        }
+        statusRecoveryButton.isHidden = !needsRecovery
+        if needsRecovery {
+            statusRecoveryButton.title = localized(developerMode ? "status.choose_processor" : "status.download_full")
+            statusRecoveryButton.setAccessibilityLabel(statusRecoveryButton.title)
+        }
+    }
+
+    private func setLocalizedStatus(_ key: String, _ arguments: CVarArg...) {
+        statusDisplay = .localized(key, arguments)
+        refreshStatus()
+    }
+
+    private func setStatus(_ message: String) {
+        statusDisplay = .message(message)
+        refreshStatus()
+    }
+
+    @objc private func refreshProcessingStatus() {
+        guard let startedAt = processingStartedAt else { return }
+        refreshFileProgress()
+        pauseButton.isEnabled = host.canPause
+        if host.controlState == "cancelled" {
+            setLocalizedStatus("status.stopping")
+            return
+        }
+        if host.controlState == "paused" {
+            setLocalizedStatus(host.isPaused ? "status.paused" : "status.pausing")
+            return
+        }
+        let elapsed = floor(max(0, ProcessInfo.processInfo.systemUptime - startedAt.uptime))
+        let end = startedAt.date.addingTimeInterval(elapsed)
+        if let duration = elapsedFormatter.string(from: startedAt.date, to: end) {
+            setLocalizedStatus("status.running_elapsed", duration)
+        } else {
+            setLocalizedStatus("status.running")
+        }
+    }
+
+    private func configureWindow() {
+        window.title = isDebugWindow ? localized("window.debug_title", appVersion) : "Modern Format Boost · \(appVersion)"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .visible
+        window.setContentSize(mainWindowContentSize)
+        window.contentMinSize = NSSize(width: compactWindowWidth, height: 360)
+        window.tabbingMode = .disallowed
+        window.delegate = self
+
+        let root = NativeDropView()
+        root.material = .windowBackground
+        root.blendingMode = .behindWindow
+        root.state = .active
+        root.onDrop = { [weak self] path in self?.acceptTarget(path) }
+        window.contentView = root
+
+        logo.image = NSApp.applicationIconImage
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        logo.setAccessibilityElement(false)
+        logo.setAccessibilityHidden(true)
+        logoSize = [logo.widthAnchor.constraint(equalToConstant: mainLogoSize),
+                    logo.heightAnchor.constraint(equalToConstant: mainLogoSize)]
+        NSLayoutConstraint.activate(logoSize)
+        logo.setContentHuggingPriority(.required, for: .horizontal)
+        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let titleStack = NSStackView(views: [titleLabel, subtitleLabel])
+        titleStack.orientation = .vertical
+        titleStack.alignment = .leading
+        titleStack.spacing = 2
+        let headerSpacer = NSView()
+        headerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let header = NSStackView(views: [logo, titleStack, headerSpacer])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 16
+
+        targetField.isEditable = false
+        targetField.isSelectable = true
+        targetField.lineBreakMode = .byTruncatingMiddle
+        targetField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        chooseButton.target = self
+        chooseButton.action = #selector(chooseTarget)
+        let targetRow = NSStackView(views: [targetField, targetPrivacyLabel, chooseButton])
+        targetPrivacyLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        targetPrivacyLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        targetRow.orientation = .horizontal
+        targetRow.alignment = .centerY
+        targetRow.distribution = .fill
+        targetRow.spacing = 8
+        targetField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        chooseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 92).isActive = true
+        chooseButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        chooseButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        backupField.isEditable = false
+        backupField.isSelectable = true
+        backupField.lineBreakMode = .byTruncatingMiddle
+        backupField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        backupButton.target = self
+        backupButton.action = #selector(chooseBackup)
+        backupLabel.alignment = .left
+        backupLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        backupRow.addArrangedSubview(backupLabel)
+        backupRow.addArrangedSubview(backupField)
+        backupRow.addArrangedSubview(backupPrivacyLabel)
+        backupPrivacyLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        backupPrivacyLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        backupButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 92).isActive = true
+        backupButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        backupButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        backupRow.addArrangedSubview(backupButton)
+        backupRow.orientation = .horizontal
+        backupRow.alignment = .centerY
+        backupRow.distribution = .fill
+        backupRow.spacing = 12
+        backupField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        backupRow.isHidden = true
+
+        processingPopup.target = self
+        processingPopup.action = #selector(configurationChanged)
+        operationPopup.target = self
+        operationPopup.action = #selector(operationChanged)
+        let grid = NSGridView(views: [
+            [mediaLabel, processingPopup],
+            [operationLabel, operationPopup],
+        ])
+        processingRow = grid.row(at: 0)
+        grid.rowSpacing = 8
+        grid.columnSpacing = 12
+        grid.column(at: 0).xPlacement = .leading
+        grid.column(at: 0).width = 120
+        grid.column(at: 1).xPlacement = .fill
+        for popup in [processingPopup, operationPopup] {
+            popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            popup.widthAnchor.constraint(equalTo: grid.widthAnchor, constant: -132).isActive = true
+        }
+        mediaLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        operationLabel.widthAnchor.constraint(equalTo: mediaLabel.widthAnchor).isActive = true
+
+        photosScopeButton.target = self
+        photosScopeButton.action = #selector(choosePhotosScope)
+        photosScopeButton.lineBreakMode = .byTruncatingMiddle
+        photosScopeButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        photosScopeButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        photosScopeLabel.alignment = .left
+        photosScopeLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        photosScopeRow.addArrangedSubview(photosScopeLabel)
+        photosScopeRow.addArrangedSubview(photosScopeButton)
+        photosScopeRow.orientation = .horizontal
+        photosScopeRow.alignment = .centerY
+        photosScopeRow.spacing = 12
+        photosScopeRow.isHidden = true
+
+        metadataSafetyLabel.font = .systemFont(ofSize: 11)
+        metadataSafetyLabel.textColor = .secondaryLabelColor
+        metadataSafetyLabel.maximumNumberOfLines = 3
+
+        for control in [
+            ultimateCheck, verboseCheck, shortestPathCheck, archiveCheck,
+            forceCheck, dryRunCheck, plainCheck, inPlaceCheck, watchCheck,
+        ] {
+            control.target = self
+            control.action = #selector(optionChanged(_:))
+        }
+        for control in [resumeCheck, freshCheck, retryCheck] {
+            control.target = self
+            control.action = #selector(resumeChoiceChanged(_:))
+        }
+        resumeCheck.setButtonType(.radio)
+        freshCheck.setButtonType(.radio)
+        optionColumns = [
+            [ultimateCheck, freshCheck, resumeCheck, dryRunCheck],
+            [shortestPathCheck, forceCheck, plainCheck, inPlaceCheck],
+            [verboseCheck, archiveCheck, retryCheck, watchCheck],
+        ].map { controls -> NSStackView in
+            let column = NSStackView(views: controls)
+            column.orientation = .vertical
+            column.alignment = .leading
+            column.spacing = 5
+            column.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            return column
+        }
+        for column in optionColumns { options.addArrangedSubview(column) }
+        optionsSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        options.addArrangedSubview(optionsSpacer)
+        options.orientation = .horizontal
+        options.distribution = .fill
+        options.alignment = .top
+        options.spacing = 12
+
+        commandField.isEditable = false
+        commandField.isSelectable = true
+        commandField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        commandField.textColor = .secondaryLabelColor
+        commandField.lineBreakMode = .byTruncatingMiddle
+        commandField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        openButton.target = self
+        openButton.action = #selector(openInTerminal)
+        copyButton.target = self
+        copyButton.action = #selector(copyCommand)
+        runButton.target = self
+        runButton.action = #selector(runHere)
+        runButton.keyEquivalent = "\r"
+        historyButton.target = self
+        historyButton.action = #selector(openHistory)
+        historyButton.keyEquivalent = "r"
+        historyButton.keyEquivalentModifierMask = [.command, .shift]
+        historyButton.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
+        historyButton.imagePosition = .imageLeading
+        settingsButton.target = self
+        settingsButton.action = #selector(showSettings)
+        settingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        settingsButton.imagePosition = .imageLeading
+        preflightButton.target = self
+        preflightButton.action = #selector(inspectInput)
+        preflightButton.image = NSImage(systemSymbolName: "doc.text.magnifyingglass", accessibilityDescription: nil)
+        preflightButton.imagePosition = .imageOnly
+        preflightButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        helpButton.target = self
+        helpButton.action = #selector(openHelp)
+        helpButton.bezelStyle = .helpButton
+        helpButton.toolTip = localized("button.help")
+        helpButton.setAccessibilityLabel(localized("button.help"))
+        diagnosticsButton.target = self
+        diagnosticsButton.action = #selector(showDiagnostics)
+        diagnosticsButton.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: nil)
+        diagnosticsButton.imagePosition = .imageOnly
+        diagnosticsButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        pauseButton.target = self
+        pauseButton.action = #selector(togglePause)
+        stopButton.target = self
+        stopButton.action = #selector(stopProcessing)
+        pauseButton.isEnabled = false
+        stopButton.isEnabled = false
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        for view in [pauseButton, stopButton, runButton] { primaryActions.addArrangedSubview(view) }
+        for view in [settingsButton, helpButton, historyButton, preflightButton, diagnosticsButton,
+                     openButton, copyButton, spacer, primaryActions] { actionRow.addArrangedSubview(view) }
+        let compactSpacer = NSView()
+        compactSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        compactActions.addArrangedSubview(compactSpacer)
+        for row in [actionRow, primaryActions, compactActions] {
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 8
+        }
+        compactActions.isHidden = true
+        historyRemovalNotice.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        historyRemovalNotice.maximumNumberOfLines = 2
+        historyRemovalNotice.isHidden = true
+
+        logView.isEditable = false
+        logView.isSelectable = true
+        logView.isContinuousSpellCheckingEnabled = false
+        logView.isGrammarCheckingEnabled = false
+        logView.isAutomaticTextCompletionEnabled = false
+        logView.isAutomaticLinkDetectionEnabled = false
+        logView.isAutomaticDataDetectionEnabled = false
+        logView.allowsUndo = false
+        logView.layoutManager?.allowsNonContiguousLayout = true
+        logView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        logView.textContainerInset = NSSize(width: 8, height: 8)
+        logView.backgroundColor = .textBackgroundColor
+        logScroll.documentView = logView
+        logScroll.hasVerticalScroller = true
+        logScroll.borderType = .lineBorder
+        logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        logDetailsButton.target = self
+        logDetailsButton.action = #selector(toggleLogDetails)
+        logDetailsButton.bezelStyle = .inline
+        logDetailsButton.imagePosition = .imageLeading
+        logDetailsButton.alignment = .left
+        privacyButton.target = self
+        privacyButton.action = #selector(toggleDisplayPrivacy)
+        privacyButton.bezelStyle = .inline
+        privacyButton.setButtonType(.toggle)
+        copyVisibleLogButton.target = self
+        copyVisibleLogButton.action = #selector(copyVisibleLog)
+        copyVisibleLogButton.bezelStyle = .inline
+        copyVisibleLogButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
+        let logToolbar = NSStackView(views: [logDetailsButton, privacyButton, copyVisibleLogButton])
+        logToolbar.orientation = .horizontal
+        logToolbar.spacing = 10
+
+        countStatusLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        countStatusLabel.isHidden = true
+        countStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        fileProgressIndicator.style = .bar
+        fileProgressIndicator.minValue = 0
+        fileProgressIndicator.maxValue = 100
+        fileProgressIndicator.isIndeterminate = false
+        fileProgressIndicator.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        fileProgressLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        fileProgressLabel.lineBreakMode = .byWordWrapping
+        fileProgressLabel.maximumNumberOfLines = 2
+        fileProgressLabel.cell?.wraps = true
+        fileProgressLabel.cell?.usesSingleLineMode = false
+        fileProgressLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        fileProgressRow.orientation = .horizontal
+        fileProgressRow.alignment = .centerY
+        fileProgressRow.spacing = 12
+        fileProgressRow.addArrangedSubview(fileProgressIndicator)
+        fileProgressRow.addArrangedSubview(fileProgressLabel)
+        fileProgressRow.isHidden = true
+
+        toolSnapshotLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        toolSnapshotLabel.textColor = .secondaryLabelColor
+        toolSnapshotLabel.isSelectable = true
+        toolSnapshotLabel.maximumNumberOfLines = 2
+        toolSnapshotLabel.isHidden = true
+
+        latestDiagnosticsRow.orientation = .vertical
+        latestDiagnosticsRow.alignment = .leading
+        latestDiagnosticsRow.spacing = 4
+        for (label, color) in [(latestFailureLabel, NSColor.systemRed), (latestWarningLabel, NSColor.systemOrange)] {
+            label.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+            label.textColor = color
+            label.lineBreakMode = .byTruncatingMiddle
+            label.isSelectable = true
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            latestDiagnosticsRow.addArrangedSubview(label)
+            label.widthAnchor.constraint(equalTo: latestDiagnosticsRow.widthAnchor).isActive = true
+        }
+        latestDiagnosticsRow.isHidden = true
+
+        batchOverview.orientation = .vertical
+        batchOverview.alignment = .leading
+        batchOverview.spacing = 3
+        for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
+            label.font = .systemFont(ofSize: label === batchOverviewTitle ? 14 : 12,
+                                     weight: label === batchOverviewTitle ? .semibold : .regular)
+            label.textColor = .labelColor
+            label.isSelectable = true
+            label.lineBreakMode = .byWordWrapping
+            label.maximumNumberOfLines = 2
+            label.cell?.wraps = true
+            label.cell?.usesSingleLineMode = false
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            batchOverview.addArrangedSubview(label)
+            label.widthAnchor.constraint(equalTo: batchOverview.widthAnchor).isActive = true
+        }
+        batchOverview.isHidden = true
+
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusRecoveryButton.target = self
+        statusRecoveryButton.action = #selector(repairCore)
+        statusRecoveryButton.isHidden = true
+        progressIndicator.style = .spinning
+        progressIndicator.controlSize = .small
+        progressIndicator.isDisplayedWhenStopped = false
+        let statusSpacer = NSView()
+        statusSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let statusRow = NSStackView(views: [progressIndicator, statusLabel, statusRecoveryButton, statusSpacer])
+        statusRow.orientation = .horizontal
+        statusRow.alignment = .centerY
+        statusRow.spacing = 8
+        let stack = mainLayout
+        for view in [
+            header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow, compactActions,
+            historyRemovalNotice, countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
+        ] { stack.addArrangedSubview(view) }
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.setCustomSpacing(16, after: header)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for view in [
+            header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow, compactActions,
+            historyRemovalNotice, countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
+        ] {
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        root.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -16),
+        ])
+        collectMainFonts(in: stack)
+        applyLocalization()
+        applyInterfaceZoom(savedInterfaceZoom(preferences))
+        restoreOptions(for: .adjacent)
+        configurationChanged()
+        updateLogPresentation()
+    }
+
+    private func configureHost() {
+        host.onLog = { [weak self] text in self?.appendLog(text) }
+        host.onCompletion = { [weak self] result in self?.processingCompleted(result) }
+        resultNotifier.onUnreadChanged = { [weak self] in self?.refreshUnreadResults() }
+        resultNotifier.onOpenResult = { [weak self] in self?.activate(); self?.openHistory() }
+        resultNotifier.onDiagnostic = { [weak self] message in
+            self?.resultNotificationError = localized("notification.failed", message)
+            self?.refreshUnreadResults()
+        }
+        refreshUnreadResults()
+    }
+
+    private func collectMainFonts(in view: NSView) {
+        guard view !== logScroll else { return }
+        if let control = view as? NSControl {
+            let font = control.font ?? .systemFont(ofSize: NSFont.systemFontSize(for: control.controlSize))
+            mainFonts.append((control, font))
+        }
+        let children = (view as? NSStackView)?.arrangedSubviews ?? view.subviews
+        for child in children { collectMainFonts(in: child) }
+    }
+
+    private func applyInterfaceZoom(_ zoom: Int) {
+        let scale = CGFloat(zoom) / 100
+        guard interfaceScale != scale else { return }
+        let factor = scale / interfaceScale
+        interfaceScale = scale
+        let fonts = NSFontManager.shared
+        for (control, font) in mainFonts {
+            control.font = fonts.convert(font, toSize: font.pointSize * scale)
+        }
+        for constraint in logoSize { constraint.constant = mainLogoSize * scale }
+        logView.font = .monospacedSystemFont(ofSize: 12 * scale, weight: .regular)
+        for storage in [fullLogPresentation, privateLogPresentation] {
+            storage.beginEditing()
+            storage.enumerateAttribute(.font, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                if let font = value as? NSFont {
+                    storage.addAttribute(.font, value: fonts.convert(font, toSize: font.pointSize * factor), range: range)
+                }
+            }
+            storage.endEditing()
+        }
+        refreshPrivacyPresentation()
+        updateWindowSize()
+    }
+
+    @discardableResult
+    private func arrangeActions(for width: CGFloat) -> Bool {
+        guard let current = primaryActions.superview as? NSStackView else { return false }
+        let buttons = (actionRow.arrangedSubviews + primaryActions.arrangedSubviews)
+            .compactMap { $0 as? NSButton }.filter { !$0.isHidden }
+        let required = buttons.reduce(CGFloat(56)) { $0 + max(32, $1.intrinsicContentSize.width) + 8 }
+        let destination = width < required ? compactActions : actionRow
+        guard current !== destination else { return false }
+        destination.isHidden = false
+        current.removeArrangedSubview(primaryActions)
+        primaryActions.removeFromSuperview()
+        destination.addArrangedSubview(primaryActions)
+        compactActions.isHidden = destination !== compactActions
+        return true
+    }
+
+    @objc private func chooseTarget() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        panel.title = localized("panel.select.title")
+        if panel.runModal() == .OK, let path = panel.url?.path { acceptTarget(path) }
+    }
+
+    @objc private func chooseBackup() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        panel.title = localized("panel.backup.title")
+        if panel.runModal() == .OK, let path = panel.url?.path {
+            backupField.stringValue = path
+            configurationChanged()
+        }
+    }
+
+    private func acceptTarget(_ path: String) {
+        guard configurationControlsEnabled else {
+            appendLog("✗ \(localized("error.task_running"))")
+            return
+        }
+        selectedPhotosContainer = nil
+        targetField.stringValue = path
+        configurationChanged()
+    }
+
+    @objc private func choosePhotosScope() {
+        guard !restoreFixture else { return }
+        let library = targetField.stringValue
+        guard selectedOperation == .restoreJpeg,
+              isPhotosLibraryPackagePath(library),
+              !host.isRunning
+        else {
+            present(HostError(message: localized("error.photos_scope_unavailable")))
+            return
+        }
+        photosScopeButton.isEnabled = false
+        setLocalizedStatus("status.photos_scope_loading")
+        host.loadPhotosAuditContainers(library: library) { [weak self] result in
+            guard let self, self.targetField.stringValue == library,
+                  self.selectedOperation == .restoreJpeg, self.configurationControlsEnabled
+            else { return }
+            self.applyCapabilityState()
+            switch result {
+            case let .success(containers):
+                self.presentPhotosScopePicker(containers)
+            case let .failure(error):
+                self.present(error)
+            }
+        }
+    }
+
+    private func presentPhotosScopePicker(_ containers: [PhotosAuditContainer]) {
+        let alert = NSAlert()
+        alert.messageText = localized("photos.scope.picker.title")
+        alert.informativeText = localized("photos.scope.picker.info", containers.count)
+        alert.addButton(withTitle: localized("button.select"))
+        alert.addButton(withTitle: localized("alert.cancel"))
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 560, height: 26))
+        popup.addItem(withTitle: localized("photos.scope.entire_library"))
+        for container in containers {
+            let kind = localized("photos.scope.\(container.kind.rawValue)")
+            popup.addItem(withTitle: "\(kind)  \(container.path.joined(separator: " › "))")
+        }
+        if let selectedPhotosContainer,
+           let index = containers.firstIndex(of: selectedPhotosContainer)
+        {
+            popup.selectItem(at: index + 1)
+        }
+        alert.accessoryView = popup
+        if alert.runModal() == .alertFirstButtonReturn {
+            selectedPhotosContainer = popup.indexOfSelectedItem == 0
+                ? nil
+                : containers[safe: popup.indexOfSelectedItem - 1]
+            configurationChanged()
+        } else {
+            setLocalizedStatus("status.ready")
+        }
+    }
+
+    @objc private func configurationChanged() {
+        if isFastImgPhotosSelection, freshCheck.state == .on, !hasExplicitPhotosFreshSelection {
+            explicitPhotosFreshTarget = nil
+            freshCheck.state = .off
+        }
+        invalidatePreflight()
+        applyCapabilityState()
+        updateMetadataSafetyNotice()
+        guard configurationControlsEnabled else { return }
+        guard !targetField.stringValue.isEmpty else {
+            commandField.stringValue = ""
+            statusDisplay = .processor
+            refreshStatus()
+            return
+        }
+        if isDebugWindow {
+            commandField.stringValue = ""
+            setLocalizedStatus("debug.banner")
+            return
+        }
+        do {
+            commandField.stringValue = try host.terminalCommand(for: request())
+            setLocalizedStatus("status.ready")
+        } catch {
+            commandField.stringValue = ""
+            setStatus(error.localizedDescription)
+        }
+    }
+
+    @objc private func optionChanged(_ sender: NSButton) {
+        saveOption(sender)
+        if sender === shortestPathCheck, selectedOperation.backendMode == "fast-img" {
+            restoreOptions(for: selectedOperation)
+        }
+        configurationChanged()
+    }
+
+    @objc private func operationChanged() {
+        restoreOptions(for: selectedOperation)
+        configurationChanged()
+    }
+
+    private func setDeveloperMode(_ enabled: Bool) {
+        developerMode = enabled
+        preferences.set(developerMode, forKey: developerPreferenceKey)
+        updateOptionTitles()
+        refreshOperationPopup()
+        watchCheck.state = developerMode
+            && (preferences.object(forKey: optionKey("watch", for: selectedOperation)) as? Bool ?? false)
+            ? .on : .off
+        configurationChanged()
+        if !developerMode { diagnosticsPanel?.orderOut(nil) }
+    }
+
+    @objc private func resumeChoiceChanged(_ sender: NSButton) {
+        if sender === freshCheck {
+            if !isFastImgPhotosSelection { freshCheck.state = .on }
+            resumeCheck.state = .off
+            retryCheck.state = .off
+        } else if sender === resumeCheck || sender.state == .on {
+            resumeCheck.state = .on
+            freshCheck.state = .off
+            if selectedOperation.backendMode == "fast-img" { retryCheck.state = .on }
+        } else if selectedOperation.backendMode == "fast-img" {
+            resumeCheck.state = .off
+            freshCheck.state = isFastImgPhotosSelection ? .off : .on
+        }
+        if isFastImgPhotosSelection {
+            explicitPhotosFreshTarget = freshCheck.state == .on ? targetField.stringValue : nil
+        } else {
+            for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
+        }
+        configurationChanged()
+    }
+
+    @objc private func openInTerminal() {
+        guard !isDebugWindow, !restoreFixture, !historyRemovalInProgress,
+              developerMode, configurationControlsEnabled, !privacyEnabled else { return }
+        do {
+            let request = try request()
+            if request.operationMode.backendMode == "fast-img", !request.dryRun {
+                previewFastImg(request) { [weak self] approved in
+                    guard let self, !self.privacyEnabled else { return }
+                    do { self.setStatus(try self.host.openInTerminal(approved)) }
+                    catch { self.present(error) }
+                }
+            } else { setStatus(try host.openInTerminal(request)) }
+        }
+        catch { present(error) }
+    }
+
+    @objc private func copyCommand() {
+        guard !isDebugWindow, !privacyEnabled else { return }
+        do {
+            let command = try host.terminalCommand(for: request())
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            setLocalizedStatus("status.command_copied")
+        } catch { present(error) }
+    }
+
+    private func clearBatchLog() {
+        processEndedWithError = false
+        cleanupRecoveryResult = nil
+        cleanupRecoveryResultInvalid = false
+        sawProductionBusy = false
+        hasConfirmedFileFailures = false
+        let hadQuarantineResume = hasConfirmedPhotosQuarantine
+        hasConfirmedPhotosQuarantine = false
+        explicitPhotosFreshTarget = nil
+        if isFastImgPhotosSelection { freshCheck.state = .off }
+        if hadQuarantineResume { refreshQuarantineResumeControls() }
+        quarantineLogBlock = PhotosQuarantineLogBlock()
+        logView.string = ""
+        fullLogPresentation.setAttributedString(NSAttributedString(string: ""))
+        privateLogPresentation.setAttributedString(NSAttributedString(string: ""))
+        logPhase = PhaseLogPresentation()
+        diagnosticLogFolder.reset()
+        batchResults = BatchResults()
+        workerExecution = LiveWorkerExecution()
+        batchOverview.isHidden = true
+        latestDiagnostics = LatestDiagnostics()
+        refreshLatestDiagnostics()
+        fileProgress = FileStageProgress()
+        toolSnapshot = ToolSnapshotPresentation()
+        startupAdmission = ImgStartupAdmission()
+        startupAdmissionHasConflict = false
+        refreshToolSnapshot()
+        photosImportProgress = PhotosImportProgress()
+        gateActivity = GateCheckActivity()
+        refreshFileProgress()
+        photosDiagnostics.reset()
+        refreshDiagnostics()
+        countStatus = nil
+        countStatusLabel.isHidden = true
+        appendLog(localized("log.history", resolvedHistoryDirectory.path))
+        updateLogPresentation()
+    }
+
+    @objc private func openHistory() {
+        if historyPanel == nil { historyPanel = ProcessingHistoryPanel(directory: resolvedHistoryDirectory, preferences: preferences) }
+        if !isDebugWindow {
+            historyPanel?.canExecuteRemoval = { [weak self] in
+                guard let self else { return false }
+                return !self.host.isRunning && self.configurationControlsEnabled
+            }
+            historyPanel?.onRemovalExecutionChanged = { [weak self] busy in
+                self?.setHistoryRemovalInProgress(busy)
+            }
+            historyPanel?.canRetryFailed = { [weak self] in
+                guard let self else { return false }
+                return !isDebugWindow && !self.host.isRunning && !self.historyRemovalInProgress
+                    && self.configurationControlsEnabled && !self.restoreFixture
+            }
+            historyPanel?.onRetryFailed = { [weak self] selection in self?.runSelectedFailures(selection) }
+            historyPanel?.canRecoverCleanup = { [weak self] in self?.canRunHistoryCleanupRecovery == true }
+            historyPanel?.onRecoverCleanup = { [weak self] selection in self?.runHistoryCleanupRecovery(selection) }
+            historyPanel?.onRemoved = { [weak self] directory, _, runID in
+                guard let self, !self.host.isRunning, self.workerExecution.confirmedRunID == runID,
+                      self.resolvedHistoryDirectory.standardizedFileURL == directory.standardizedFileURL else { return }
+                self.lastRequest = nil
+                self.failedRetryAvailable = nil
+                self.clearBatchLog()
+                self.configurationChanged()
+            }
+        }
+        historyPanel?.refresh(directory: resolvedHistoryDirectory)
+        historyPanel?.show()
+        resultNotificationError = nil
+        resultNotifier.reviewAll()
+    }
+
+    func configureResultNotifications() { resultNotifier.configurePermission(openSettings: true) }
+
+    func reviewResultNotifications() { openHistory() }
+
+    private func refreshUnreadResults() {
+        historyButton.title = resultNotifier.unreadCount == 0 ? localized("button.history")
+            : localized("button.history_unread", String(resultNotifier.unreadCount))
+        if resultNotificationError != nil { historyButton.title += " · " + localized("notification.needs_attention") }
+        historyButton.setAccessibilityLabel(historyButton.title)
+        historyButton.setAccessibilityHelp([localized("notification.history_help"), resultNotificationError]
+            .compactMap { $0 }.joined(separator: " "))
+        historyButton.toolTip = resultNotificationError
+            ?? (privacyEnabled ? localized("button.history") : resolvedHistoryDirectory.path)
+        historyButton.setAccessibilityValue(resultNotifier.unreadCount == 0 ? localized("notification.no_new_results")
+            : localized("notification.unread_results", String(resultNotifier.unreadCount)))
+        if arrangeActions(for: window.contentView?.bounds.width ?? mainWindowContentSize.width) { updateWindowSize() }
+    }
+
+    private func announce(_ message: String, priority: NSAccessibilityPriorityLevel = .medium) {
+        guard !isBackgroundSelfTest, !isDebugWindow, NSApp.isActive, window.isKeyWindow else { return }
+        NSAccessibility.post(element: window, notification: .announcementRequested, userInfo: [
+            .announcement: message, .priority: priority.rawValue,
+        ])
+    }
+
+    private func publishResultNotification() {
+        guard resultNotifier.hasPendingTask, host.lastExitStatus != nil, !host.isRunning else { return }
+        let title = lastRequest?.recoverPhotosCleanup == true ? statusLabel.stringValue
+            : (batchOverview.isHidden ? localized("notification.result_ended") : batchOverviewTitle.stringValue)
+        let body = batchResults.summary ?? localized("notification.result_info")
+        announce(title + ". " + body, priority: .high)
+        resultNotifier.complete(resultVisible: NSApp.isActive && window.isKeyWindow && !window.isMiniaturized
+            && window.occlusionState.contains(.visible) && window.attachedSheet == nil,
+            title: title, body: body)
+        refreshUnreadResults()
+    }
+
+    private var canRunHistoryCleanupRecovery: Bool {
+        !isDebugWindow && !restoreFixture && !host.isRunning && !historyRemovalInProgress
+            && configurationControlsEnabled
+    }
+
+    private func runHistoryCleanupRecovery(_ selection: FastImgCleanupRecoverySelection) {
+        guard canRunHistoryCleanupRecovery else { return }
+        let operation: OperationMode
+        switch selection.strategy {
+        case "jxl": operation = .fastImgJxl
+        case "avif": operation = .fastImgAvif
+        default: return
+        }
+        var request = ProcessorRequest(targetPath: selection.sourceDirectory, processingMode: .imagesOnly,
+                                       operationMode: operation)
+        request.shortestPath = true
+        request.retry = true
+        request.recoverPhotosCleanup = true
+        request.expectedFastImgOutput = selection.workingCopy
+        window.makeKeyAndOrderFront(nil)
+        startHere(request)
+    }
+
+    private func runSelectedFailures(_ selection: FastImgFailedRetrySelection) {
+        guard !isDebugWindow, !restoreFixture, !host.isRunning,
+              !historyRemovalInProgress, configurationControlsEnabled else { return }
+        do {
+            let operation: OperationMode = selection.strategy == "avif" ? .fastImgAvif : .fastImgJxl
+            guard let item = operationPopup.itemArray.first(where: { ($0.representedObject as? String) == operation.rawValue })
+            else { throw HostError(message: localized("error.option_unavailable")) }
+            operationPopup.select(item)
+            operationChanged()
+            targetField.stringValue = selection.sourceDirectory
+            shortestPathCheck.state = selection.shortestPath ? .on : .off
+            dryRunCheck.state = .off; watchCheck.state = .off
+            var selected = try request()
+            selected.retryFailed = true; selected.retryFailedParent = selection.parentWorkingCopy
+            selected.retry = false; selected.resume = false; selected.fresh = false
+            selected.archive = selection.archive
+            previewFastImg(selected) { [weak self] in self?.startHere($0) }
+        } catch {
+            setProcessing(false)
+            present(error)
+        }
+    }
+
+    @objc private func showDiagnostics() {
+        guard developerMode else { return }
+        if diagnosticsPanel == nil {
+            let panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 440, height: 480),
+                styleMask: [.titled, .closable, .resizable, .utilityWindow],
+                backing: .buffered, defer: false
+            )
+            panel.contentMinSize = NSSize(width: 360, height: 300)
+            panel.title = localized("button.photos_diagnostics")
+            panel.isReleasedWhenClosed = false
+            diagnosticsTextView.isEditable = false
+            diagnosticsTextView.isSelectable = true
+            diagnosticsTextView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            diagnosticsTextView.textContainerInset = NSSize(width: 12, height: 12)
+            let scroll = NSScrollView(frame: panel.contentView!.bounds)
+            scroll.autoresizingMask = [.width, .height]
+            scroll.hasVerticalScroller = true
+            diagnosticsTextView.frame = scroll.contentView.bounds
+            diagnosticsTextView.isVerticallyResizable = true
+            diagnosticsTextView.textContainer?.widthTracksTextView = true
+            scroll.documentView = diagnosticsTextView
+            panel.contentView?.addSubview(scroll)
+            panel.center()
+            diagnosticsPanel = panel
+        }
+        refreshDiagnostics()
+        diagnosticsPanel?.makeKeyAndOrderFront(self)
+    }
+
+    private func refreshDiagnostics() {
+        diagnosticsTextView.string = photosDiagnostics.rendered()
+    }
+
+    @objc private func togglePause() {
+        guard host.canPause else { return }
+        do {
+            try host.setControlState(host.controlState == "paused" ? "running" : "paused")
+            pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
+            refreshProcessingStatus()
+            appendLog(statusLabel.stringValue)
+        } catch { present(error) }
+    }
+
+    @objc private func stopProcessing() {
+        guard host.isRunning else { return }
+        do {
+            try host.setControlState("cancelled")
+            pauseButton.isEnabled = false
+            stopButton.isEnabled = false
+            refreshProcessingStatus()
+            appendLog(statusLabel.stringValue)
+        } catch { present(error) }
+    }
+
+    func showAbout() { openSettings(section: "about") }
+
+    private func invalidatePreflight() {
+        preflightGeneration = UUID()
+        preflightQuery?.cancel()
+        preflightQuery = nil
+        preflightPanel?.showError(localized("preflight.changed"))
+    }
+
+    @objc private func inspectInput() {
+        guard configurationControlsEnabled, !host.isRunning, supportsPreflight, !privacyEnabled else { return }
+        do {
+            let request = try request()
+            if request.operationMode.backendMode == "fast-img" {
+                previewFastImg(request)
+                return
+            }
+            guard let binary = ProcessorLocator.resolve() else {
+                throw HostError(message: localized("status.processor_unavailable"))
+            }
+            invalidatePreflight()
+            let language = LocalizationCatalog.shared.language.resourceName
+                ?? Bundle.main.preferredLocalizations.first ?? "en"
+            preflightPanel?.close()
+            let panel = PreflightInspectorPanel(language: language)
+            preflightPanel = panel
+            let generation = preflightGeneration
+            panel.onClose = { [weak self] in
+                guard self?.preflightGeneration == generation else { return }
+                self?.invalidatePreflight()
+            }
+            panel.showLoading(input: request.targetPath)
+            let query = PreflightQuery()
+            preflightQuery = query
+            let mode: String
+            switch request.processingMode {
+            case .both: mode = "auto"
+            case .imagesOnly: mode = "images"
+            case .videosOnly: mode = "videos"
+            }
+            let arguments = ["--plan-json", "--mode", mode]
+                + (request.inPlace ? ["--in-place"] : []) + ["--", request.targetPath]
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Result { try query.run(binary, arguments: arguments) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.preflightGeneration == generation else { return }
+                    self.preflightQuery = nil
+                    do {
+                        try panel.showReport(data: result.get(), expectedInput: request.targetPath)
+                    } catch {
+                        panel.showError(error.localizedDescription)
+                    }
+                }
+            }
+        } catch { present(error) }
+    }
+
+    private var supportsPreflight: Bool {
+        selectedOperation == .adjacent || selectedOperation.backendMode == "fast-img"
+    }
+
+    private func previewFastImg(_ request: ProcessorRequest, context: String? = nil,
+                                afterMigration: Bool = false,
+                                launch: ((ProcessorRequest) -> Void)? = nil) {
+        guard !host.isRunning, !historyRemovalInProgress, configurationControlsEnabled else { return }
+        do {
+            _ = try ProcessorCommand.arguments(from: request)
+            guard let binary = ProcessorLocator.resolve() else {
+                throw HostError(message: localized("status.processor_unavailable"))
+            }
+            let arguments = try FastImgConflictPreview.arguments(for: request)
+            invalidatePreflight()
+            let generation = preflightGeneration
+            let query = PreflightQuery()
+            preflightQuery = query
+            setLocalizedStatus("preflight.fast.loading")
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Result { try query.run(binary, arguments: arguments) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.preflightGeneration == generation, !self.host.isRunning,
+                          !self.historyRemovalInProgress else { return }
+                    self.preflightQuery = nil
+                    do {
+                        let data = try result.get()
+                        if let migration = try FastImgConflictPreview.MigrationRequired.decodeIfPresent(data, for: request) {
+                            guard !afterMigration else { throw HostError(message: localized("preflight.fast.migration_pending")) }
+                            self.offerFastImgMigration(migration, request: request, binary: binary,
+                                                       generation: generation, launch: launch)
+                            return
+                        }
+                        let preview = try FastImgConflictPreview.decode(data, for: request)
+                        guard let launch else {
+                            self.fastImgPreviewAlert(preview, inspection: true).runModal()
+                            self.setLocalizedStatus("status.ready")
+                            return
+                        }
+                        var approved = request
+                        if preview.needsChoice || context != nil {
+                            let options = self.fastImgPreviewChoices(preview)
+                            let alert = self.fastImgPreviewAlert(preview, inspection: false)
+                            if let context { alert.informativeText = context + "\n\n" + alert.informativeText }
+                            for option in options { alert.addButton(withTitle: localized(option.title)) }
+                            alert.buttons.first?.keyEquivalent = "\u{1B}"
+                            alert.window.defaultButtonCell = alert.buttons.first?.cell as? NSButtonCell
+                            let response = alert.runModal()
+                            let selected = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+                            guard options.indices.contains(selected), let output = options[selected].output else {
+                                self.setLocalizedStatus("status.resume_choice_cancelled")
+                                return
+                            }
+                            let option = options[selected]
+                            guard self.preflightGeneration == generation, !self.host.isRunning,
+                                  !self.historyRemovalInProgress else { return }
+                            switch option.decision {
+                            case .continue: self.applyResumeDecision(fresh: false, to: &approved, updateOptions: false)
+                            case .fresh: self.applyResumeDecision(fresh: true, to: &approved, updateOptions: false)
+                            case .failedOnly:
+                                approved.resume = false; approved.retry = false; approved.fresh = false
+                                approved.retryFailed = true; approved.retryFailedParent = preview.previous?.output_path
+                            case .automatic: self.applyResumeDecision(fresh: true, to: &approved, updateOptions: false)
+                            }
+                            approved.expectedFastImgOutput = output
+                        } else {
+                            self.applyResumeDecision(fresh: true, to: &approved, updateOptions: false)
+                            approved.expectedFastImgOutput = preview.proposed_output
+                        }
+                        launch(approved)
+                    } catch {
+                        self.setLocalizedStatus("preflight.fast.unavailable")
+                        if !self.privacyEnabled { self.present(error) }
+                    }
+                }
+            }
+        } catch { present(error) }
+    }
+
+    private func offerFastImgMigration(_ migration: FastImgConflictPreview.MigrationRequired,
+                                       request: ProcessorRequest, binary: URL, generation: UUID,
+                                       launch: ((ProcessorRequest) -> Void)?) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localized("preflight.fast.migration_title")
+        alert.informativeText = localized("preflight.fast.migration_info")
+        alert.addButton(withTitle: localized(launch == nil ? "alert.ok" : "alert.cancel"))
+        if launch != nil { alert.addButton(withTitle: localized("preflight.fast.migration_update")) }
+        if launch == nil {
+            alert.runModal()
+            setLocalizedStatus("status.ready")
+            return
+        }
+        guard alert.runModal() == .alertSecondButtonReturn, let launch,
+              preflightGeneration == generation, !host.isRunning, !historyRemovalInProgress else {
+            setLocalizedStatus("status.resume_choice_cancelled")
+            return
+        }
+        let query = PreflightQuery()
+        preflightQuery = query
+        setLocalizedStatus("preflight.fast.migration_running")
+        let arguments = ["--migrate-fast-img-state", "--mode", "fast-img", "--strategy", migration.strategy,
+                         "--", migration.source_root]
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result { try query.run(binary, arguments: arguments, timeout: 120) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.preflightGeneration == generation else { return }
+                self.preflightQuery = nil
+                do {
+                    struct Receipt: Decodable {
+                        let schema_version: Int
+                        let kind: String
+                        let input_path: String
+                        let source_root: String
+                        let migrated: Int
+                        let retired: Int
+                    }
+                    let receipt = try JSONDecoder().decode(Receipt.self, from: result.get())
+                    guard receipt.schema_version == 1, receipt.kind == "fast_img_state_migration",
+                          FastImgDeliveryReceipt.samePath(receipt.input_path, migration.source_root),
+                          FastImgDeliveryReceipt.samePath(receipt.source_root, migration.source_root),
+                          receipt.migrated >= 0, receipt.retired >= 0 else {
+                        throw HostError(message: localized("preflight.fast.invalid"))
+                    }
+                    self.previewFastImg(request, context: localized("preflight.fast.migration_done"),
+                                        afterMigration: true, launch: launch)
+                } catch {
+                    self.setLocalizedStatus("preflight.fast.unavailable")
+                    if !self.privacyEnabled { self.present(error) }
+                }
+            }
+        }
+    }
+
+    private func fastImgPreviewAlert(_ preview: FastImgConflictPreview, inspection: Bool) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = inspection ? .informational : .warning
+        alert.messageText = localized("preflight.fast.title")
+        alert.informativeText = localized("preflight.fast.scope")
+            + (preview.storage?.observation.status == "observed" ? "\n\n" + localized("preflight.fast.storage_scope") : "")
+            + (preview.photos ? "\n\n" + localized("preflight.fast.photos") : "")
+            + (preview.fresh_unavailable_reason != nil ? "\n\n" + localized("preflight.fast.fresh_unavailable") : "")
+            + (preview.previous?.delivery_conflict == true ? "\n\n" + localized("preflight.fast.delivery_conflict") : "")
+            + (preview.failed_only?.state == .conflict ? "\n\n" + localized("preflight.fast.conflict") : "")
+            + (preview.decision == .continue && preview.previous == nil ? "\n\n" + localized("preflight.fast.no_checkpoint") : "")
+        let details = NSTextView(frame: NSRect(x: 0, y: 0, width: 430, height: 112))
+        details.string = preview.details(privacy: privacyEnabled)
+        details.font = .systemFont(ofSize: NSFont.systemFontSize)
+        details.textContainerInset = NSSize(width: 6, height: 4)
+        details.isEditable = false
+        details.isVerticallyResizable = true
+        details.autoresizingMask = [.width]
+        details.textContainer?.widthTracksTextView = true
+        details.setAccessibilityLabel(localized("preflight.fast.title"))
+        let scroll = NSScrollView(frame: details.frame)
+        scroll.borderType = .bezelBorder
+        scroll.hasVerticalScroller = true
+        scroll.documentView = details
+        alert.accessoryView = scroll
+        if inspection { alert.addButton(withTitle: localized("alert.ok")) }
+        return alert
+    }
+
+    private func fastImgPreviewChoices(_ preview: FastImgConflictPreview)
+        -> [(title: String, decision: FastImgConflictPreview.Decision, output: String?)] {
+        var choices: [(String, FastImgConflictPreview.Decision, String?)] = [("alert.cancel", .automatic, nil)]
+        if preview.decision == .automatic && preview.previous == nil {
+            choices.append(("button.run", .automatic, preview.proposed_output))
+        }
+        if [.automatic, .continue].contains(preview.decision), let previous = preview.previous,
+           previous.delivery_conflict != true,
+           !previous.terminal || previous.recorded_failed_count == 0 || previous.failed_retry_parent_output != nil {
+            let verifyingChild = previous.terminal && previous.failed_retry_parent_output != nil
+            choices.append((verifyingChild ? "preflight.fast.verify_saved" : "alert.resume.resume", .continue, previous.output_path))
+        }
+        if [.automatic, .failedOnly].contains(preview.decision), let child = preview.failed_only, child.state != .conflict {
+            choices.append((child.state == .completed ? "preflight.fast.verify_saved" : "retry.only_failed", .failedOnly, child.output_path))
+        }
+        if let fresh = preview.fresh_output,
+           preview.decision == .fresh || (preview.decision == .automatic && preview.previous != nil)
+            || (preview.decision == .continue && preview.previous == nil) {
+            choices.append(("alert.resume.fresh", .fresh, fresh))
+        }
+        return choices
+    }
+
+    @objc private func runHere() {
+        if isDebugWindow {
+            if !privacyEnabled { inspectInput() }
+            return
+        }
+        guard !restoreFixture, !host.isRunning, !historyRemovalInProgress else { return }
+        invalidatePreflight()
+        do {
+            let request = try request()
+            if request.operationMode.backendMode == "fast-img", !request.dryRun {
+                previewFastImg(request) { [weak self] in self?.startHere($0) }
+            } else { startHere(request) }
+        } catch { present(error) }
+    }
+
+    private func startHere(_ request: ProcessorRequest) {
+        do {
+            lastRequest = request
+            sawResumeDecision = false
+            failedRetryAvailable = nil
+            failedRetryAvailabilityInvalid = false
+            sawFailedRetryDecision = false
+            clearBatchLog()
+            try host.setControlState("running")
+            setProcessing(true)
+            if request.retryFailed { appendLog(localized("retry.history.start")) }
+            else { appendLog("▶︎ \(try host.terminalCommand(for: request))") }
+            host.startProcessing(request)
+        } catch {
+            setProcessing(false)
+            present(error)
+        }
+    }
+
+    private var selectedOperation: OperationMode {
+        operationPopup.selectedItem?.representedObject
+            .flatMap { OperationMode(rawValue: $0 as? String ?? "") } ?? .adjacent
+    }
+
+    private var isFastImgPhotosSelection: Bool {
+        selectedOperation.backendMode == "fast-img" && shortestPathCheck.state == .on
+    }
+
+    private var hasExplicitPhotosFreshSelection: Bool {
+        developerMode && freshCheck.state == .on
+            && FastImgDeliveryReceipt.samePath(explicitPhotosFreshTarget, targetField.stringValue)
+    }
+
+    private var canResumeConfirmedPhotosQuarantine: Bool {
+        hasConfirmedPhotosQuarantine && isFastImgPhotosSelection && !hasExplicitPhotosFreshSelection
+            && dryRunCheck.state != .on && watchCheck.state != .on
+            && lastRequest?.shortestPath == true && lastRequest?.retryFailed == false
+            && lastRequest?.operationMode == selectedOperation
+            && FastImgDeliveryReceipt.samePath(lastRequest?.targetPath, targetField.stringValue)
+    }
+
+    private func refreshQuarantineResumeControls() {
+        updateMetadataSafetyNotice()
+        if developerMode, !isDebugWindow {
+            commandField.stringValue = (try? host.terminalCommand(for: request())) ?? ""
+        }
+    }
+
+    private var isPhotosRestoreAudit: Bool {
+        selectedOperation == .restoreJpeg && isPhotosLibraryPath(targetField.stringValue)
+    }
+
+    private func applyCapabilityState() {
+        let capabilities = selectedOperation.capabilities
+        if restoreFixture {
+            runButton.isEnabled = false
+            openButton.isEnabled = false
+        }
+        preflightButton.isEnabled = configurationControlsEnabled && supportsPreflight
+            && !targetField.stringValue.isEmpty
+        preflightButton.toolTip = localized(supportsPreflight ? "preflight.title" : "preflight.unavailable")
+        settingsButton.isEnabled = configurationControlsEnabled
+        settingsButton.toolTip = localized("settings.title")
+        if let fixed = capabilities.fixedProcessingMode {
+            processingPopup.selectItem(
+                at: ProcessingMode.allCases.firstIndex { $0.rawValue == fixed.rawValue } ?? 0,
+            )
+        }
+        processingPopup.isEnabled = configurationControlsEnabled && capabilities.usesProcessingSelection
+        processingRow?.isHidden = !capabilities.usesProcessingSelection
+        ultimateCheck.isEnabled = false
+        ultimateCheck.state = capabilities.supportsUltimate ? .on : .off
+        verboseCheck.state = .on
+        verboseCheck.isEnabled = false
+        shortestPathCheck.isEnabled = configurationControlsEnabled && capabilities.supportsShortestPath
+        resumeCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
+        freshCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
+        let exposesArchive = capabilities.supportsArchive && selectedOperation != .adjacent
+        archiveCheck.isEnabled = configurationControlsEnabled && exposesArchive
+        retryCheck.isEnabled = configurationControlsEnabled && capabilities.supportsRetry
+        if selectedOperation.backendMode == "fast-img", resumeCheck.state == .on {
+            retryCheck.state = .on
+        }
+        for control in [forceCheck, plainCheck, inPlaceCheck] {
+            control.isEnabled = configurationControlsEnabled && capabilities.supportsStandardOptions
+        }
+        dryRunCheck.isEnabled = configurationControlsEnabled
+        ultimateCheck.isHidden = !developerMode || !capabilities.supportsUltimate
+        verboseCheck.isHidden = !developerMode
+        resumeCheck.isHidden = true
+        freshCheck.isHidden = true
+        retryCheck.isHidden = true
+        shortestPathCheck.isHidden = !capabilities.supportsShortestPath
+        archiveCheck.isHidden = !developerMode || !exposesArchive
+        for control in [forceCheck, plainCheck, inPlaceCheck] {
+            control.isHidden = !developerMode || !capabilities.supportsStandardOptions
+        }
+        watchCheck.isHidden = !developerMode
+        watchCheck.isEnabled = configurationControlsEnabled && developerMode
+        if !developerMode { watchCheck.state = .off }
+        copyButton.isHidden = !developerMode
+        openButton.isHidden = !developerMode
+        diagnosticsButton.isHidden = !developerMode
+        commandField.isHidden = !developerMode
+        let backupAvailable = selectedOperation == .collect || selectedOperation == .compare
+        backupRow.isHidden = !backupAvailable
+        backupButton.isEnabled = configurationControlsEnabled && backupAvailable
+        let photosScopeAvailable = isPhotosRestoreAudit && isPhotosLibraryPackagePath(targetField.stringValue)
+        if !photosScopeAvailable { selectedPhotosContainer = nil }
+        photosScopeRow.isHidden = !photosScopeAvailable
+        photosScopeButton.isEnabled = !restoreFixture && configurationControlsEnabled && photosScopeAvailable
+        photosScopeButton.title = selectedPhotosContainer.map {
+            let kind = localized("photos.scope.\($0.kind.rawValue)")
+            return "\(kind)  \($0.path.joined(separator: " › "))"
+        } ?? localized("photos.scope.entire_library")
+        // Disabling controls while a job runs must not discard the user's
+        // selections; only unsupported options should be cleared.
+        if !capabilities.supportsUltimate { ultimateCheck.state = .off }
+        if !capabilities.supportsShortestPath { shortestPathCheck.state = .off }
+        if !capabilities.supportsResume { resumeCheck.state = .off }
+        if !capabilities.supportsResume { freshCheck.state = .off }
+        if !exposesArchive { archiveCheck.state = .off }
+        if !capabilities.supportsRetry { retryCheck.state = .off }
+        if !capabilities.supportsStandardOptions {
+            for control in [forceCheck, plainCheck, inPlaceCheck] { control.state = .off }
+        }
+        for column in optionColumns {
+            column.isHidden = column.arrangedSubviews.allSatisfy(\.isHidden)
+        }
+        optionsSpacer.isHidden = developerMode
+        options.distribution = developerMode ? .fillEqually : .fill
+        refreshPrivacyPresentation()
+        if isDebugWindow {
+            openButton.isEnabled = false
+            copyButton.isEnabled = false
+            photosScopeButton.isEnabled = false
+            dryRunCheck.state = .on
+            dryRunCheck.isEnabled = false
+            shortestPathCheck.state = .off
+            shortestPathCheck.isEnabled = false
+            runButton.isEnabled = !restoreFixture && preflightButton.isEnabled
+        }
+    }
+
+    private func updateMetadataSafetyNotice() {
+        let key: String?
+        switch selectedOperation {
+        case .adjacent, .fastImgJxl, .mergeXmp:
+            key = "metadata.jxl_overlay"
+        case .restoreJpeg:
+            key = isPhotosRestoreAudit ? "metadata.restore_audit" : "metadata.restore_auto"
+        case .collect:
+            key = "metadata.recovery_collect"
+        case .compare:
+            key = "metadata.backup_compare"
+        default:
+            key = nil
+        }
+        metadataSafetyLabel.isHidden = key == nil
+        metadataSafetyLabel.stringValue = key.map { localized($0) } ?? ""
+        metadataSafetyLabel.toolTip = metadataSafetyLabel.stringValue
+        metadataSafetyLabel.setAccessibilityLabel(metadataSafetyLabel.stringValue)
+        let restoresJpeg = selectedOperation == .restoreJpeg
+        if let restoreItem = operationPopup.itemArray.first(where: { ($0.representedObject as? String) == OperationMode.restoreJpeg.rawValue }) {
+            restoreItem.title = localized(isPhotosLibraryPath(targetField.stringValue)
+                ? "operation.restore_jpeg_audit" : "operation.restore_jpeg")
+        }
+        let runKey: String
+        if canResumeConfirmedPhotosQuarantine { runKey = "alert.resume.resume" }
+        else if !restoresJpeg { runKey = "button.run" }
+        else if dryRunCheck.state == .on {
+            runKey = isPhotosRestoreAudit ? "button.preview_audit_restore_jpeg" : "button.preview_restore_jpeg"
+        } else { runKey = isPhotosRestoreAudit ? "button.audit_restore_jpeg" : "button.restore_jpeg" }
+        runButton.title = localized(runKey)
+        runButton.setAccessibilityLabel(runButton.title)
+        runButton.toolTip = historyRemovalInProgress ? historyRemovalNotice.stringValue
+            : canResumeConfirmedPhotosQuarantine ? localized("result.final_photos_quarantine_resume")
+            : restoresJpeg ? metadataSafetyLabel.stringValue : nil
+        runButton.setAccessibilityHelp(runButton.toolTip)
+        if isDebugWindow {
+            runButton.title = localized("debug.preview_action")
+            runButton.setAccessibilityLabel(runButton.title)
+            runButton.toolTip = localized("debug.preview_only")
+        }
+        settingsButton.toolTip = localized("settings.title")
+    }
+
+    private func request() throws -> ProcessorRequest {
+        guard !targetField.stringValue.isEmpty else {
+            throw HostError(message: localized("error.select_target"))
+        }
+        let processing = ProcessingMode.allCases[safe: processingPopup.indexOfSelectedItem] ?? .both
+        var request = ProcessorRequest(
+            targetPath: targetField.stringValue,
+            processingMode: processing,
+            operationMode: selectedOperation,
+            backupPath: selectedOperation == .collect || selectedOperation == .compare
+                ? backupField.stringValue : nil,
+            ultimate: ultimateCheck.state == .on,
+            verbose: true,
+            shortestPath: shortestPathCheck.state == .on,
+            resume: developerMode && resumeCheck.state == .on,
+            fresh: isFastImgPhotosSelection ? hasExplicitPhotosFreshSelection : developerMode && freshCheck.state == .on,
+            archive: developerMode && archiveCheck.state == .on,
+            retry: developerMode && retryCheck.state == .on,
+            force: forceCheck.state == .on,
+            dryRun: dryRunCheck.state == .on,
+            plain: plainCheck.state == .on,
+            inPlace: inPlaceCheck.state == .on,
+            watch: watchCheck.state == .on,
+            photosContainer: selectedPhotosContainer,
+            mediaSettings: MediaSettings(preferences: preferences),
+        )
+        if canResumeConfirmedPhotosQuarantine {
+            applyResumeDecision(fresh: false, to: &request, updateOptions: false)
+        }
+        return request
+    }
+
+    @objc private func toggleDisplayPrivacy() {
+        preferences.set(!privacyEnabled, forKey: DisplayPrivacy.preferenceKey)
+        NotificationCenter.default.post(name: DisplayPrivacy.changed, object: preferences)
+    }
+
+    @objc private func displayPrivacyChanged() {
+        invalidatePreflight()
+        preflightPanel?.close()
+        refreshPrivacyPresentation()
+        updateLogPresentation()
+    }
+
+    private func refreshPrivacyPresentation() {
+        refreshToolSnapshot()
+        let hidden = privacyEnabled
+        privacyButton.state = hidden ? .on : .off
+        privacyButton.image = NSImage(systemSymbolName: hidden ? "eye.slash" : "eye", accessibilityDescription: nil)
+        privacyButton.toolTip = localized("privacy.display.title") + "\n" + localized("privacy.display.scope")
+        privacyButton.setAccessibilityLabel(localized("privacy.display.title"))
+        privacyButton.setAccessibilityHelp(localized("privacy.display.scope"))
+        copyVisibleLogButton.toolTip = localized("privacy.display.copy_visible")
+        copyVisibleLogButton.setAccessibilityLabel(copyVisibleLogButton.toolTip)
+        for (field, label) in [(targetField, targetPrivacyLabel), (backupField, backupPrivacyLabel)] {
+            field.isHidden = hidden
+            field.setAccessibilityHidden(hidden)
+            label.isHidden = !hidden
+            label.stringValue = field.stringValue.isEmpty ? (field.placeholderString ?? "") : localized("privacy.display.hidden")
+        }
+        commandField.isHidden = !developerMode || hidden
+        copyButton.isHidden = !developerMode || hidden
+        openButton.isHidden = !developerMode || hidden
+        historyButton.toolTip = hidden ? localized("button.history") : resolvedHistoryDirectory.path
+        preflightButton.isEnabled = configurationControlsEnabled && supportsPreflight
+            && !targetField.stringValue.isEmpty && !hidden
+        if isDebugWindow { runButton.isEnabled = !restoreFixture && preflightButton.isEnabled }
+        photosScopeButton.title = hidden ? localized("privacy.display.hidden") : selectedPhotosContainer.map {
+            localized("photos.scope.\($0.kind.rawValue)") + "  " + $0.path.joined(separator: " › ")
+        } ?? localized("photos.scope.entire_library")
+        logView.textStorage?.setAttributedString(hidden ? privateLogPresentation : fullLogPresentation)
+    }
+
+    private var visibleLogText: String {
+        if logDetailsExpanded { return logView.string }
+        return [countStatusLabel, fileProgressLabel, toolSnapshotLabel, batchOverviewTitle, batchOverviewCounts,
+            batchOverviewDelivery, batchOverviewCleanup, latestFailureLabel, latestWarningLabel]
+            .filter { !$0.isHidden && !($0.superview?.isHidden ?? false) }
+            .map(\.stringValue).filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    @objc private func copyVisibleLog() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(visibleLogText, forType: .string)
+    }
+
+    private func appendLog(_ text: String, captureDiagnostics: Bool = true,
+                           now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        var latestChanged = false
+        var progressChanged = false
+        var replacePresentation = false
+        var presentationChanged = false
+        var displayLines: [String] = []
+        var privateLines: [String] = []
+        var lastBufferedDiagnostic: (line: String, index: Int)?
+        var rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
+        for line in rawLines {
+            let control = LogTone.message(line)
+            if let path = quarantineLogBlock.scopedPath(in: control) {
+                let finding = PhotosQuarantineLogBlock.pathPrefix + path
+                displayLines.append(finding)
+                privateLines.append(finding)
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                continue
+            }
+            if startupAdmission.ingest(line, request: lastRequest, hasMediaEvidence: hasStartedMediaEvidence) {
+                refreshToolSnapshot()
+                displayLines.append(startupAdmission.status)
+                privateLines.append(startupAdmission.status)
+                if let message = startupAdmission.event?.message {
+                    displayLines.append(message); privateLines.append(message)
+                }
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if control.hasPrefix(FastImgFailedRetryAvailable.prefix) {
+                do {
+                    guard !failedRetryAvailabilityInvalid, let available = try FastImgFailedRetryAvailable.decode(control),
+                          let request = lastRequest, request.operationMode.backendMode == "fast-img",
+                          !request.dryRun, FastImgDeliveryReceipt.samePath(request.targetPath, available.sourceDirectory),
+                          available.strategy == (request.operationMode.strategy ?? "jxl"),
+                          failedRetryAvailable == nil || failedRetryAvailable == available
+                    else { throw HostError(message: localized("retry.invalid")) }
+                    failedRetryAvailable = available
+                } catch {
+                    failedRetryAvailable = nil
+                    failedRetryAvailabilityInvalid = true
+                    let warning = "[WARN] " + localized("retry.invalid")
+                    displayLines.append(warning); privateLines.append(warning)
+                }
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            let recoveryRequested = lastRequest.map { $0.retryFailed || $0.retry || $0.resume } ?? false
+            if batchResults.ingestRetryReference(line, requested: recoveryRequested,
+                source: lastRequest?.targetPath, parent: lastRequest?.retryFailedParent,
+                strategy: lastRequest?.operationMode.strategy ?? "jxl", photos: lastRequest?.shortestPath, runID: workerExecution.singleSuccessfulImageRunID) {
+                if batchResults.failedRetryInvalid {
+                    let warning = "[WARN] " + localized("retry.invalid")
+                    displayLines.append(warning); privateLines.append(warning)
+                } else if control.hasPrefix(FastImgRetryReference.confirmedPrefix) || control.hasPrefix(FastImgRetryReference.finalizedPrefix) {
+                    let notice = localized(control.hasPrefix(FastImgRetryReference.finalizedPrefix) ? "retry.finalized.info" : "retry.reused.info")
+                    displayLines.append(notice); privateLines.append(notice)
+                }
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if toolSnapshot.ingest(line) {
+                refreshToolSnapshot()
+                let blocked = toolSnapshot.invalid || toolSnapshot.event?.state == .blocked
+                let notice = (blocked ? "[WARN] " : "") + toolSnapshot.label
+                displayLines.append(notice)
+                privateLines.append(notice)
+                if developerMode { displayLines.append(line) }
+                if blocked {
+                    if let message = toolSnapshot.event?.message { displayLines.append(message); privateLines.append(message) }
+                    if captureDiagnostics && latestDiagnostics.ingest(notice) { latestChanged = true }
+                }
+                continue
+            }
+            let processEvidenceWasInvalid = workerExecution.invalid
+            if workerExecution.ingest(line) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                if developerMode { displayLines.append(line) }
+                if workerExecution.invalid && !processEvidenceWasInvalid {
+                    let warning = "[WARN] " + localized("process.observation_invalid")
+                    displayLines.append(warning)
+                    privateLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                } else if let observation = workerExecution.latest, let signal = observation.signal {
+                    let detail = localized("process.signal", observation.pipeline.uppercased(),
+                        LiveWorkerExecution.signalDescription(signal))
+                    displayLines.append(detail)
+                    privateLines.append(detail)
+                }
+                continue
+            }
+            if batchResults.ingestTransportGap(line) {
+                let warning = "[WARN] " + (batchResults.transportGapNotice ?? localized("result.control_records_missing"))
+                displayLines.append(warning)
+                privateLines.append(warning)
+                if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                continue
+            }
+            if let phaseUpdate = logPhase.ingest(line, now: now) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                switch phaseUpdate {
+                case .changed(let phase, let replace):
+                    if phase == .processing { gateActivity = GateCheckActivity() }
+                    if replace {
+                        displayLines.removeAll(keepingCapacity: true)
+                        privateLines.removeAll(keepingCapacity: true)
+                        replacePresentation = true
+                    }
+                    displayLines.append("[PHASE] " + localized("log.phase.\(phase.rawValue)"))
+                    privateLines.append("[PHASE] " + localized("log.phase.\(phase.rawValue)"))
+                    progressChanged = true
+                case .invalid:
+                    let warning = "[WARN] " + localized("log.phase.invalid")
+                    displayLines.append(warning)
+                    privateLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                case .unchanged: break
+                }
+                continue
+            }
+            if photosImportProgress.ingest(line) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                if !photosImportProgress.invalid, photosImportProgress.event?.sequence == 1 {
+                    fileProgress = FileStageProgress()
+                    gateActivity = GateCheckActivity()
+                }
+                progressChanged = true
+                if developerMode { displayLines.append(line) }
+                if photosImportProgress.invalid {
+                    let warning = "[WARN] " + localized("photos.progress.invalid")
+                    displayLines.append(warning)
+                    privateLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                }
+                continue
+            }
+            if gateActivity.ingest(line, now: now) {
+                if gateActivity.invalid || (gateActivity.event?.state == "failed"
+                    && gateActivity.event?.isPhotosRelationshipCheck != true) {
+                    batchResults.markMandatoryEvidenceConflict()
+                }
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                progressChanged = true
+                if gateActivity.invalid {
+                    let warning = "[WARN] " + localized("gate.activity.invalid")
+                    displayLines.append(warning)
+                    privateLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                } else if let event = gateActivity.event, [3, 6].contains(event.total), announcedGate != event.gate {
+                    announcedGate = event.gate
+                    announce(localized(event.gate == "local" ? "notification.gate1" : "notification.gate2"))
+                }
+                continue
+            }
+            if fileProgress.ingest(line) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                progressChanged = true
+                continue
+            }
+            if let summary = batchResults.ingest(control) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                displayLines.append(developerMode ? "\(line)\n\(summary)" : summary)
+                privateLines.append(summary)
+                continue
+            }
+            if batchResults.ingestFastDelivery(line) {
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if batchResults.ingestTerminalEvidence(control, runID: workerExecution.confirmedRunID) {
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if control.hasPrefix(FastImgCleanupRecoveryResult.prefix) {
+                do {
+                    guard let receipt = try FastImgCleanupRecoveryResult.decode(control),
+                          lastRequest?.recoverPhotosCleanup == true,
+                          cleanupRecoveryResult == nil else {
+                        throw HostError(message: localized("cleanup.recovery.unconfirmed"))
+                    }
+                    cleanupRecoveryResult = receipt
+                } catch {
+                    cleanupRecoveryResultInvalid = true
+                }
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if batchResults.ingestOutputCleanup(line) {
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if line.hasPrefix(HistoryIgnoredSource.prefix) {
+                do {
+                    if let ignored = try HistoryIgnoredSource.decode(line) {
+                        displayLines.append(localized("history.ignored.live", ignored.source_path, ignored.userReason))
+                        if developerMode { displayLines.append(line) }
+                    }
+                } catch {
+                    let warning = "[WARN] " + localized("history.ignored.invalid")
+                    displayLines.append(warning)
+                    privateLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                }
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                continue
+            }
+            batchResults.observeMandatoryEvidence(line)
+            if !developerMode, control.hasPrefix("Error:"), LogTone.isQuarantineWrapperSummary(control) { continue }
+            var visibleLine = line
+            if !developerMode, line.hasPrefix("ERR:"),
+               control.range(of: #"^\[SKIP\s*\]"#, options: .regularExpression) != nil {
+                visibleLine = control
+            }
+            if line.hasPrefix(HistoryFileFailure.prefix) {
+                do {
+                    if let failure = try HistoryFileFailure.decode(line) {
+                        let reason = hasSeriousProcessingDiagnostic(failure.message) ? failure.message : failure.userReason
+                        visibleLine = if let phase = failure.failure_phase, phase == .sourceCleanup || phase == .metadataPreparation {
+                            "[FAIL] \(phase.label) · \(failure.source_path): \(reason)"
+                        } else {
+                            "[FAIL] \(failure.source_path): \(reason)"
+                        }
+                        if developerMode { displayLines.append(line) }
+                    }
+                } catch { visibleLine = "[WARN] " + localized("history.batch_issues.invalid") }
+                if captureDiagnostics && latestDiagnostics.ingest(visibleLine) { latestChanged = true }
+                displayLines.append(visibleLine)
+                privateLines.append(visibleLine)
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                continue
+            }
+            if DisplayPrivacy.problemTone(line) != nil { privateLines.append(visibleLine) }
+            if captureDiagnostics && latestDiagnostics.ingest(visibleLine) { latestChanged = true }
+            switch diagnosticLogFolder.ingest(visibleLine) {
+            case .append(let raw):
+                displayLines.append(raw)
+                let index = displayLines.count - 1
+                let tone = LogTone.classify(raw)
+                if tone == .warning || tone == .failure {
+                    lastBufferedDiagnostic = (raw, index)
+                } else {
+                    lastBufferedDiagnostic = nil
+                }
+            case .repeated(let raw, let occurrences):
+                let repeated = raw + " · " + localized("log.repeated_occurrences", String(occurrences))
+                if let buffered = lastBufferedDiagnostic,
+                   buffered.line == raw, buffered.index == displayLines.count - 1 {
+                    displayLines[buffered.index] = repeated
+                } else if !replacePresentation,
+                          let range = trailingLogLineRange(raw, in: fullLogPresentation.string as NSString) {
+                    let storage = fullLogPresentation
+                    let replacement = styledLog(repeated)
+                    storage.replaceCharacters(in: range, with: replacement)
+                    if !privacyEnabled { logView.textStorage?.replaceCharacters(in: range, with: replacement) }
+                    presentationChanged = true
+                } else {
+                    diagnosticLogFolder.reset()
+                    displayLines.append(raw)
+                    lastBufferedDiagnostic = nil
+                }
+            }
+        }
+        let displayText = displayLines.joined(separator: "\n")
+        if progressChanged { refreshFileProgress(now: now) }
+        if latestChanged { refreshLatestDiagnostics() }
+        var diagnosticsChanged = false
+        for line in rawLines where !line.isEmpty {
+            if photosDiagnostics.ingest(line) {
+                diagnosticsChanged = true
+                if photosDiagnostics.failed { batchResults.markMandatoryEvidenceConflict() }
+            }
+        }
+        if diagnosticsChanged { refreshDiagnostics() }
+        for line in rawLines where line.hasPrefix("MFB_LOG_DIRECTORY=") {
+            let encoded = Data(line.dropFirst("MFB_LOG_DIRECTORY=".count).utf8)
+            if let path = try? JSONDecoder().decode(String.self, from: encoded), path.hasPrefix("/") {
+                resolvedHistoryDirectory = URL(fileURLWithPath: path, isDirectory: true)
+                preferences.set(path, forKey: historyPreferenceKey)
+                historyButton.toolTip = privacyEnabled ? localized("button.history") : path
+            }
+        }
+        for raw in rawLines where !raw.isEmpty {
+            let message = LogTone.message(raw)
+            if ["MFB_RESUME_DECISION_REQUIRED:", "Error: MFB_RESUME_DECISION_REQUIRED:"].contains(where: message.hasPrefix) { sawResumeDecision = true }
+            if ["MFB_FAILED_RETRY_REQUIRED:", "Error: MFB_FAILED_RETRY_REQUIRED:"].contains(where: message.hasPrefix) { sawFailedRetryDecision = true }
+        }
+        if rawLines.contains(where: { raw in
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let message = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
+            return message.hasPrefix("Error: MFB_PRODUCTION_TASK_BUSY:")
+        }) { sawProductionBusy = true }
+        var countChanged = false
+        for line in rawLines {
+            if let value = countStatusValue(in: line) {
+                countStatus = value
+                countChanged = true
+            }
+        }
+        if countChanged { refreshCountStatus() }
+        guard !displayText.isEmpty || presentationChanged else { return }
+        let followsTail = logScroll.contentView.bounds.maxY >= logView.bounds.maxY - 2
+        logView.textStorage?.beginEditing()
+        appendPresentation(displayText, to: fullLogPresentation, replace: replacePresentation)
+        appendPresentation(privateLines.joined(separator: "\n"), to: privateLogPresentation, replace: replacePresentation)
+        logView.textStorage?.endEditing()
+        if followsTail { logView.scrollToEndOfDocument(nil) }
+    }
+
+    private func appendPresentation(_ text: String, to storage: NSMutableAttributedString, replace: Bool) {
+        let visible = storage === (privacyEnabled ? privateLogPresentation : fullLogPresentation) ? logView.textStorage : nil
+        if replace {
+            storage.setAttributedString(NSAttributedString(string: ""))
+            visible?.setAttributedString(NSAttributedString(string: ""))
+        }
+        guard !text.isEmpty else { return }
+        if storage.length > 0 {
+            let separator = NSAttributedString(string: "\n")
+            storage.append(separator)
+            visible?.append(separator)
+        }
+        let addition = styledLog(text)
+        storage.append(addition)
+        visible?.append(addition)
+        let lineCount = storage.string.utf8.reduce(1) { $0 + ($1 == 0x0A ? 1 : 0) }
+        var removed = 0
+        if lineCount > 3_000 {
+            let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
+            let retained = lines.suffix(2_999).joined(separator: "\n")
+            removed = storage.length - (retained as NSString).length
+        }
+        let marker = localized("log.visible_tail") + "\n"
+        let budget = 262_144 - (marker as NSString).length
+        if storage.length - removed > budget {
+            let start = storage.length - budget
+            let boundary = (storage.string as NSString).rangeOfComposedCharacterSequence(at: start)
+            removed = max(removed, NSMaxRange(boundary))
+            let newline = (storage.string as NSString).range(of: "\n", options: [],
+                range: NSRange(location: removed, length: storage.length - removed))
+            if newline.location != NSNotFound { removed = NSMaxRange(newline) }
+        }
+        if removed > 0 {
+            let range = NSRange(location: 0, length: removed)
+            let notice = styledLog(marker)
+            storage.deleteCharacters(in: range)
+            storage.insert(notice, at: 0)
+            visible?.deleteCharacters(in: range)
+            visible?.insert(notice, at: 0)
+        }
+    }
+
+    private func styledLog(_ text: String) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "")
+        for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            if index > 0 { result.append(NSAttributedString(string: "\n")) }
+            let tone: LogTone
+            if line.hasPrefix(PhotosQuarantineLogBlock.pathPrefix) {
+                tone = hasConfirmedPhotosQuarantine ? .warning : .failure
+            } else {
+                tone = LogTone.classify(String(line))
+            }
+            let restrained = hasConfirmedFileFailures && (tone == .failure || tone == .warning)
+                && !hasSeriousProcessingDiagnostic(String(line))
+            let rendered = NSMutableAttributedString(string: String(line), attributes: [
+                .foregroundColor: restrained ? NSColor.labelColor
+                    : tone == .failure ? processDiagnosticColor(String(line)) : tone.color,
+                .font: interfaceScale == 1 ? (restrained ? LogTone.normal.font : tone.font)
+                    : .monospacedSystemFont(ofSize: 12 * interfaceScale,
+                        weight: restrained || tone == .normal || tone == .muted ? .regular : .semibold),
+            ])
+            if restrained, let marker = line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:\[(?:ERROR|FAIL(?:ED)?|WARN(?:ING)?)\s*\]|(?:Error|Failed|Warning|错误|失败|警告|エラー|失敗):)"#,
+                                                  options: .regularExpression) {
+                rendered.addAttribute(.foregroundColor,
+                    value: processDiagnosticColor(String(line), confirmedFileFailure: true), range: NSRange(marker, in: line))
+            }
+            result.append(rendered)
+        }
+        return result
+    }
+
+    private func refreshCountStatus() {
+        guard let countStatus else { countStatusLabel.isHidden = true; return }
+        countStatusLabel.stringValue = localized("status.count", countStatus)
+        countStatusLabel.textColor = countStatus.uppercased() == "MATCH" ? .systemTeal
+            : countStatus.uppercased() == "EXPLAINED" ? .systemOrange : .systemRed
+        countStatusLabel.isHidden = false
+    }
+
+    private func refreshLatestDiagnostics() {
+        let retainedFileFailure = hasConfirmedFileFailures
+            && latestDiagnostics.failure.map { !hasSeriousProcessingDiagnostic($0) } == true
+        for (label, value, key) in [
+            (latestFailureLabel, latestDiagnostics.failure,
+             retainedFileFailure ? "log.unsuccessful_file" : "log.latest_failure"),
+            (latestWarningLabel, latestDiagnostics.warning, "log.latest_warning"),
+        ] {
+            label.isHidden = value == nil
+            label.stringValue = value.map { localized(key, $0) } ?? ""
+            label.toolTip = label.stringValue
+            label.setAccessibilityLabel(label.stringValue)
+        }
+        latestFailureLabel.textColor = retainedFileFailure ? .labelColor : .systemRed
+        latestFailureLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize,
+                                              weight: retainedFileFailure ? .regular : .medium)
+        latestDiagnosticsRow.isHidden = !logDetailsExpanded || (latestDiagnostics.failure == nil && latestDiagnostics.warning == nil)
+    }
+
+    @objc private func toggleLogDetails() {
+        logDetailsExpanded.toggle()
+        updateLogPresentation()
+        if !batchOverview.isHidden { refreshBatchOverview() }
+    }
+
+    private func updateLogPresentation() {
+        logScroll.isHidden = !logDetailsExpanded
+        statusLabel.isHidden = !batchOverview.isHidden
+            && (!logDetailsExpanded || statusLabel.stringValue == batchOverviewTitle.stringValue)
+        logDetailsButton.title = localized(logDetailsExpanded ? "log.details.hide" : "log.details.show")
+        logDetailsButton.image = NSImage(systemSymbolName: logDetailsExpanded ? "chevron.down" : "chevron.right",
+                                        accessibilityDescription: nil)
+        logDetailsButton.setAccessibilityLabel(logDetailsButton.title)
+        logDetailsButton.setAccessibilityExpanded(logDetailsExpanded)
+        refreshLatestDiagnostics()
+        updateWindowSize()
+    }
+
+    private func updateWindowSize() {
+        guard let content = window.contentView else { return }
+        let current = content.bounds.size
+        let optionWidths = optionColumns.compactMap { column in
+            column.arrangedSubviews.compactMap { $0.isHidden ? nil : $0.intrinsicContentSize.width }.max()
+        }
+        let minimumWidth = max(compactWindowWidth, optionWidths.reduce(0, +) + 64)
+        let width = max(current.width, minimumWidth)
+        arrangeActions(for: width)
+        content.layoutSubtreeIfNeeded()
+        let minimumHeight = max(360, ceil(mainLayout.fittingSize.height) + 48)
+        let height = logDetailsExpanded ? max(current.height, mainWindowContentSize.height, minimumHeight) : minimumHeight
+        let size = NSSize(width: width, height: height)
+        window.contentMinSize = NSSize(width: minimumWidth, height: minimumHeight)
+        if current != size { window.setContentSize(size) }
+    }
+
+    private func refreshToolSnapshot() {
+        toolSnapshotLabel.isHidden = toolSnapshot.event == nil && !toolSnapshot.invalid
+        toolSnapshotLabel.stringValue = toolSnapshot.label
+        toolSnapshotLabel.setAccessibilityLabel(toolSnapshot.label)
+        toolSnapshotLabel.textColor = toolSnapshot.invalid || toolSnapshot.event?.state == .blocked ? .systemOrange : .secondaryLabelColor
+        toolSnapshotLabel.toolTip = [toolSnapshot.label, toolSnapshot.event?.tool_names?.joined(separator: ", ")]
+            .compactMap { $0 }.joined(separator: "\n")
+    }
+
+    private func refreshFileProgress(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        if (!configurationControlsEnabled || photosProgressFixture),
+           photosImportProgress.invalid || photosImportProgress.event.map({ !$0.closed }) == true {
+            fileProgressRow.isHidden = false
+            fileProgressLabel.stringValue = photosImportProgress.label
+            fileProgressLabel.toolTip = photosImportProgress.label
+            fileProgressLabel.setAccessibilityLabel(photosImportProgress.label)
+            fileProgressLabel.textColor = photosImportProgress.invalid ? .systemOrange : .secondaryLabelColor
+            let percentage = photosImportProgress.invalid ? nil : photosImportProgress.event?.percentage
+            let active = !photosImportProgress.invalid && photosImportProgress.event?.closed == false
+                && photosImportProgress.event?.pending_total != 0
+            fileProgressIndicator.isHidden = percentage == nil && !active
+            fileProgressIndicator.isIndeterminate = percentage == nil && active
+            if fileProgressIndicator.isIndeterminate { fileProgressIndicator.startAnimation(nil) }
+            else { fileProgressIndicator.stopAnimation(nil) }
+            fileProgressIndicator.doubleValue = percentage ?? 0
+            fileProgressIndicator.setAccessibilityLabel(photosImportProgress.label)
+            return
+        }
+        if logPhase.phase == .verification, gateActivity.event != nil || gateActivity.invalid {
+            fileProgressRow.isHidden = false
+            fileProgressIndicator.isHidden = true
+            fileProgressIndicator.stopAnimation(nil)
+            let label = gateActivity.label(now: now)
+            fileProgressLabel.stringValue = label
+            fileProgressLabel.toolTip = label
+            fileProgressLabel.setAccessibilityLabel(label)
+            if let event = gateActivity.event, event.state == "failed" {
+                fileProgressLabel.textColor = event.isPhotosRelationshipCheck && event.check == "quarantine"
+                    ? .systemOrange : .systemRed
+            } else {
+                fileProgressLabel.textColor = .secondaryLabelColor
+            }
+            if let event = gateActivity.event, let files = event.file_progress {
+                fileProgressIndicator.isHidden = false
+                fileProgressIndicator.isIndeterminate = false
+                let percentage = Double(files.processed) / Double(files.total) * 100
+                fileProgressIndicator.doubleValue = event.state == "passed" ? percentage : min(99.99, percentage)
+                fileProgressIndicator.setAccessibilityLabel(label)
+            }
+            return
+        }
+        fileProgressIndicator.isHidden = fileProgress.event?.isSourcePreparation == true
+            && fileProgress.event?.state == "finished"
+        fileProgressLabel.textColor = .labelColor
+        fileProgressRow.isHidden = logPhase.phase == .verification || (fileProgress.event == nil && !fileProgress.invalid)
+        let label = fileProgress.label
+        if fileProgressLabel.stringValue != label {
+            fileProgressLabel.stringValue = label
+            fileProgressLabel.toolTip = label
+            fileProgressLabel.setAccessibilityLabel(label)
+        }
+        fileProgressIndicator.isIndeterminate = fileProgress.invalid || fileProgress.event?.percentage == nil
+            || fileProgress.event?.state == "finished"
+        let value = fileProgress.event?.percentage ?? 0
+        if fileProgressIndicator.doubleValue != value { fileProgressIndicator.doubleValue = value }
+        let stageLabel = fileProgress.event?.stageLabel ?? label
+        if fileProgressIndicator.accessibilityLabel() != stageLabel {
+            fileProgressIndicator.setAccessibilityLabel(stageLabel)
+        }
+        if !fileProgressIndicator.isHidden && fileProgressIndicator.isIndeterminate && !configurationControlsEnabled {
+            fileProgressIndicator.startAnimation(nil)
+        } else {
+            fileProgressIndicator.stopAnimation(nil)
+        }
+    }
+
+    private func applyResumeDecision(fresh: Bool, to request: inout ProcessorRequest, updateOptions: Bool = true) {
+        request.retryFailed = false
+        request.retryFailedParent = nil
+        request.resume = !fresh
+        request.fresh = fresh
+        request.retry = !fresh && (request.retry || request.operationMode.backendMode == "fast-img")
+        guard updateOptions, request.operationMode.backendMode != "fast-img" || !request.shortestPath else { return }
+        resumeCheck.state = request.resume ? .on : .off
+        freshCheck.state = request.fresh ? .on : .off
+        retryCheck.state = request.retry ? .on : .off
+        for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
+    }
+
+    private func applyFailedRetryDecision(_ available: FastImgFailedRetryAvailable, to request: inout ProcessorRequest) {
+        request.resume = false; request.retry = false; request.fresh = false
+        request.retryFailed = true; request.retryFailedParent = available.parentWorkingCopy
+        resumeCheck.state = .off; retryCheck.state = .off; freshCheck.state = .off
+        for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
+    }
+
+    func validateResumeChoiceForSelfTest() throws {
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/saved-task", processingMode: .imagesOnly,
+            operationMode: .fastImgJxl)
+        sawResumeDecision = true
+        var inspectedAlert: NSAlert?
+        processingCompleted(.failure(HostError(message: "MFB_RESUME_DECISION_REQUIRED: synthetic saved task")),
+                            resumeDecision: { alert in
+            // Exercise the real decision content and cancellation path without presenting a modal during builds.
+            alert.layout()
+            inspectedAlert = alert
+            return .alertThirdButtonReturn
+        })
+        guard let alert = inspectedAlert, alert.messageText == localized("alert.resume.title"),
+              alert.informativeText == localized("alert.resume.info"),
+              alert.buttons.map(\.title) == [localized("alert.resume.resume"), localized("alert.resume.fresh"), localized("alert.cancel")],
+              alert.window.contentView?.subviews.isEmpty == false, !alert.window.isVisible, NSApp.modalWindow == nil,
+              !processEndedWithError, batchOverview.isHidden, latestDiagnostics.failure == nil,
+              statusLabel.stringValue == localized("status.resume_choice_cancelled"), !host.isRunning else {
+            throw HostError(message: "Saved-task choice lost its content, appeared during self-test or presented cancellation as a media failure")
+        }
+        let source = "/synthetic/saved-task"
+        let saved = "/synthetic/saved-task_optimized"
+        let fresh = "/synthetic/saved-task_optimized_2"
+        let child = "/synthetic/saved-task_retry_failed"
+        var request = ProcessorRequest(targetPath: source, processingMode: .imagesOnly,
+            operationMode: .fastImgJxl, shortestPath: true)
+        var fields: [String: Any] = ["schema_version": 1, "kind": "fast_img_retry_plan", "input_path": source,
+            "source_root": source, "strategy": "jxl", "photos": true, "decision": "automatic",
+            "proposed_output": saved, "fresh_output": fresh,
+            "previous": ["output_path": saved, "stage": "cleanup_complete", "terminal": true, "recorded_failed_count": 2,
+                "failed_retry_parent_output": NSNull()],
+            "failed_only": ["output_path": child, "state": "available"],
+            "occupied_outputs": [["path": saved, "ownership": "saved_task"]],
+            "currently_verified_completed": NSNull(), "currently_verified_reusable": NSNull(),
+            "potential_duplicate_photos": NSNull(), "unknown": ["current_media_verification", "photos_duplicate_count"]]
+        func decode() throws -> FastImgConflictPreview {
+            try FastImgConflictPreview.decode(JSONSerialization.data(withJSONObject: fields), for: request)
+        }
+        let preview = try decode()
+        let choices = fastImgPreviewChoices(preview)
+        let report = fastImgPreviewAlert(preview, inspection: true)
+        report.layout()
+        guard choices.map(\.decision) == [.automatic, .failedOnly, .fresh], choices[0].output == nil,
+              choices[1].output == child, choices[2].output == fresh,
+              preview.details(privacy: false).contains(fresh), !preview.details(privacy: true).contains(source),
+              report.informativeText.contains(localized("preflight.fast.photos")), report.accessoryView is NSScrollView,
+              !report.window.isVisible else {
+            throw HostError(message: "Fast IMG conflict preview lost its output, decisions, unknown counts or display privacy")
+        }
+        let legacyFields = fields
+        fields["input_path"] = "/synthetic/unrelated"
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted the wrong input") }
+        fields["input_path"] = source
+        fields["currently_verified_reusable"] = 0
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted an invented reusable count") }
+        fields["currently_verified_reusable"] = NSNull()
+        fields["previous"] = ["output_path": saved, "stage": "importing", "terminal": true,
+            "recorded_failed_count": 2, "failed_retry_parent_output": NSNull()]
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted a contradictory saved stage") }
+        let migrationFields: [String: Any] = ["schema_version": 1, "kind": "fast_img_retry_plan_migration_required",
+            "input_path": source, "source_root": source, "strategy": "jxl", "photos": true, "decision": "automatic"]
+        let migrationData = try JSONSerialization.data(withJSONObject: migrationFields)
+        guard try FastImgConflictPreview.MigrationRequired.decodeIfPresent(migrationData, for: request)?.source_root == source else {
+            throw HostError(message: "Conflict preview lost the read-only legacy migration decision")
+        }
+        fields = legacyFields
+        fields["schema_version"] = 2
+        fields["fresh_unavailable_reason"] = NSNull()
+        let observation: [String: Any] = ["status": "observed", "directory": "/private/synthetic-filesystem",
+            "available_bytes": 1_234_567, "diagnostic": NSNull()]
+        fields["storage"] = ["output_path": saved, "observation": observation]
+        let withStorage = try decode()
+        guard withStorage.details(privacy: true).contains(localized("preflight.fast.storage_available", "1234567")),
+              !withStorage.details(privacy: true).contains("synthetic-filesystem"),
+              fastImgPreviewAlert(withStorage, inspection: true).informativeText
+                .contains(localized("preflight.fast.storage_scope")) else {
+            throw HostError(message: "Fast IMG conflict preview lost the read-only capacity snapshot or disclosed its path")
+        }
+        fields["storage"] = ["output_path": fresh, "observation": observation]
+        guard (try? decode()) == nil else { throw HostError(message: "Capacity snapshot accepted a different output") }
+        fields["storage"] = ["output_path": saved, "observation": [
+            "status": "unknown", "directory": NSNull(), "available_bytes": NSNull(), "diagnostic": "synthetic diagnostic"]]
+        guard try decode().details(privacy: true).contains(localized("preflight.fast.storage_unknown")) else {
+            throw HostError(message: "Capacity snapshot lost its unknown status")
+        }
+        fields["storage"] = nil
+        guard try decode().fresh_output == fresh else {
+            throw HostError(message: "Conflict preview rejected the available fresh output in schema 2")
+        }
+        fields["fresh_unavailable_reason"] = "private_working_copy_unavailable"
+        guard (try? decode()) == nil else {
+            throw HostError(message: "Conflict preview accepted both an available and an unavailable fresh output")
+        }
+        fields["fresh_output"] = NSNull()
+        guard (try? decode()) == nil else {
+            throw HostError(message: "Conflict preview offered a new failed-only child from an automatic plan with unavailable fresh storage")
+        }
+        fields["previous"] = ["output_path": saved, "stage": "gate2_failed", "terminal": false,
+            "recorded_failed_count": 0, "failed_retry_parent_output": NSNull()]
+        fields["failed_only"] = NSNull()
+        let recovery = try decode()
+        let recoveryChoices = fastImgPreviewChoices(recovery)
+        guard recoveryChoices.map(\.decision) == [.automatic, .continue], recoveryChoices[1].output == saved,
+              !recovery.details(privacy: false).contains(fresh),
+              fastImgPreviewAlert(recovery, inspection: false).informativeText.contains(localized("preflight.fast.fresh_unavailable")) else {
+            throw HostError(message: "Unavailable fresh output hid saved recovery or appeared as a fresh choice")
+        }
+        for language in ["en", "zh-Hans", "ja"] {
+            let keys = ["preflight.fast.fresh_unavailable", "preflight.fast.delivery_conflict"]
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path),
+                  keys.allSatisfy({ bundle.localizedString(forKey: $0, value: nil, table: nil) != $0 }) else {
+                throw HostError(message: "Missing Fast IMG conflict preview translation")
+            }
+        }
+        fields["fresh_unavailable_reason"] = nil
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted a missing schema 2 reason") }
+        fields["fresh_unavailable_reason"] = "unknown"
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted an unknown fresh output reason") }
+        fields["fresh_unavailable_reason"] = "private_working_copy_unavailable"
+        fields["photos"] = false
+        fields["unknown"] = ["current_media_verification"]
+        request.shortestPath = false
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted unavailable Photos storage for local output") }
+        request.shortestPath = true
+        fields["photos"] = true
+        fields["unknown"] = ["current_media_verification", "photos_duplicate_count"]
+        request.fresh = true
+        fields["decision"] = "fresh"
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted an unavailable fresh request") }
+        request.fresh = false
+        fields["decision"] = "continue"
+        request.retry = true
+        guard try fastImgPreviewChoices(decode())[safe: 1]?.output == saved else {
+            throw HostError(message: "Conflict preview lost exact explicit continuation with unavailable fresh storage")
+        }
+        request.retry = false
+        request.retryFailed = true
+        request.retryFailedParent = saved
+        fields["decision"] = "failed_only"
+        fields["proposed_output"] = child
+        fields["previous"] = legacyFields["previous"]
+        fields["failed_only"] = legacyFields["failed_only"]
+        guard (try? decode()) == nil else { throw HostError(message: "Conflict preview accepted a new failed-only child with unavailable fresh storage") }
+        fields["failed_only"] = ["output_path": child, "state": "existing"]
+        fields["occupied_outputs"] = [["path": saved, "ownership": "saved_task"], ["path": child, "ownership": "saved_task"]]
+        let retryChoices = try fastImgPreviewChoices(decode())
+        guard retryChoices.map(\.decision) == [.automatic, .failedOnly], retryChoices[1].output == child else {
+            throw HostError(message: "Conflict preview lost the exact saved failed-only child")
+        }
+        request.retryFailed = false
+        request.retryFailedParent = nil
+        fields["decision"] = "automatic"
+        fields["proposed_output"] = fresh
+        fields["fresh_output"] = fresh
+        fields["fresh_unavailable_reason"] = NSNull()
+        fields["previous"] = ["output_path": child, "stage": "gate2_failed", "terminal": false,
+            "recorded_failed_count": 0, "failed_retry_parent_output": saved, "delivery_conflict": true]
+        fields["failed_only"] = NSNull()
+        let mismatch = try decode()
+        let mismatchChoices = fastImgPreviewChoices(mismatch)
+        guard mismatchChoices.map(\.decision) == [.automatic, .fresh], mismatchChoices[1].output == fresh,
+              fastImgPreviewAlert(mismatch, inspection: false).informativeText.contains(localized("preflight.fast.delivery_conflict")),
+              mismatch.details(privacy: false).contains(child), !mismatch.details(privacy: true).contains(child) else {
+            throw HostError(message: "Delivery conflict offered stale recovery or lost a safe fresh choice")
+        }
+        fields["proposed_output"] = child
+        guard (try? decode()) == nil else { throw HostError(message: "Delivery conflict bound the stale child") }
+        fields["proposed_output"] = fresh
+        fields["failed_only"] = ["output_path": child, "state": "existing"]
+        guard (try? decode()) == nil else { throw HostError(message: "Delivery conflict offered an incompatible retry") }
+        request.retryFailed = true
+        request.retryFailedParent = saved
+        request.expectedFastImgOutput = child
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mfb-preview-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("synthetic.json")
+        try Data("{}".utf8).write(to: config, options: .atomic)
+        request.mediaSettings.fastImage.configurationFile = config.path
+        request.mediaSettings.photos = PhotosImportSettings(backend: .native, rootFolder: "Synthetic Root",
+                                                           album: "Synthetic Album", preserveTree: false)
+        let launchArgs = try ProcessorCommand.arguments(from: request)
+        let previewArgs = try FastImgConflictPreview.arguments(for: request)
+        let mediaArgs = ["--img-config", config.path, "--photos-backend", "native",
+                         "--photos-import-root", "Synthetic Root", "--photos-album-name", "Synthetic Album",
+                         "--preserve-folder-structure=false"]
+        guard let outputIndex = launchArgs.firstIndex(of: "--output"), launchArgs[safe: outputIndex + 1] == child,
+              previewArgs == ["--plan-json", "--mode", "fast-img", "--strategy", "jxl", "--shortest-path",
+                              "--retry-failed", "--retry-failed-parent", saved] + mediaArgs + ["--", source],
+              Array(launchArgs.suffix(mediaArgs.count + 1)) == mediaArgs + [source] else {
+            throw HostError(message: "Fast IMG conflict preview and launch disagreed on the failed-only Photos destination")
+        }
+    }
+
+    func validateStartupAdmissionForSelfTest() throws {
+        let input = "/synthetic/admission-source"
+        let initial = ProcessorRequest(targetPath: input, processingMode: .imagesOnly,
+            operationMode: .fastImgJxl, shortestPath: true, resume: true, retry: true)
+        func encoded(_ fields: [String: Any]) throws -> String {
+            ImgStartupAdmission.prefix
+                + String(decoding: try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]), as: UTF8.self)
+        }
+        let fields: [String: Any] = ["schema_version": 1, "pipeline": "img", "cause_code": "resume_tool_mode_changed",
+            "input_path": input, "requested_output": "/synthetic/admission-output", "message": "Saved task uses pinned tools."]
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path)
+            else { throw HostError(message: "Missing startup admission locale") }
+            for suffix in ["invalid", "resume_unknown", "resume_changed", "resume_tool_mode_changed", "tool_mode_info", "stopped", "fresh_info", "photos_warning", "start_fresh", "cancelled"] {
+                let key = "admission." + suffix
+                guard bundle.localizedString(forKey: key, value: nil, table: nil) != key
+                else { throw HostError(message: "Missing startup admission translation: \(key)") }
+            }
+        }
+
+        guard let operation = operationPopup.itemArray.first(where: {
+            ($0.representedObject as? String) == OperationMode.fastImgJxl.rawValue
+        }) else { throw HostError(message: "Startup fixture has no Fast IMG operation") }
+        operationPopup.select(operation)
+        operationChanged()
+        targetField.stringValue = input
+        shortestPathCheck.state = .on
+        lastRequest = initial
+        clearBatchLog()
+        resumeCheck.state = .on; retryCheck.state = .on; freshCheck.state = .off
+        let beforeOptions = [resumeCheck.state, retryCheck.state, freshCheck.state]
+        let spawned = LiveWorkerExecution.prefix + #"{"schema_version":1,"scope":"os_child_process","invocation_id":"admission-call","run_id":"admission-run","pipeline":"img","state":"spawned","pid":1234,"exit_code":null,"signal":null}"#
+        let exited = spawned.replacingOccurrences(of: #""state":"spawned""#, with: #""state":"exited""#)
+        appendLog(spawned)
+        appendLog(try encoded(fields))
+        appendLog("ERR: Error: Saved Fast IMG task uses pinned tools. Enable external tool pinning to resume it, or start a new task.")
+        appendLog(exited.replacingOccurrences(of: #""exit_code":null"#, with: #""exit_code":1"#))
+        appendLog(OutputCleanupReceipt.prefix + #"{"already_absent_files":null,"error":null,"outcome":"not_requested","output_path":"/synthetic/admission-output","pruned_directories":null,"removed_files":null,"run_id":"admission-run","schema_version":1}"#)
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":null,"skipped":null,"failed":null,"ignored":null,"unprocessed":null,"exit_code":1}"#)
+        appendLog("[FAIL] IMG: 成功 未知 · 跳过 未知 · 失败 未知 · 忽略 未知 · 未完成 未知 (exit=1)\n"
+            + "[Summary] succeeded=? failed=? skipped=? ignored=?\nUnprocessed: ?\n"
+            + "[PROCESSING FAILED] The batch did not complete. Review the error details above.\n[RESULT] 计数不完整")
+        var inspected: NSAlert?
+        var started: [ProcessorRequest] = []
+        processingCompleted(.failure(HostError(message: "synthetic admission stopped")), resumeDecision: { alert in
+            alert.layout(); inspected = alert
+            return .alertFirstButtonReturn
+        }, admissionStart: { started.append($0) })
+        guard let inspected else {
+            throw HostError(message: "Startup choice was not reached: admissionInvalid=\(startupAdmission.invalid), mediaEvidence=\(hasStartedMediaEvidence), resultInvalid=\(batchResults.invalid), toolInvalid=\(toolSnapshot.invalid), workerInvalid=\(workerExecution.invalid)")
+        }
+        let cancelledChecks: [(String, Bool)] = [
+            ("title", inspected.messageText == localized("admission.resume_tool_mode_changed")),
+            ("resume explanation", inspected.informativeText.contains(localized("admission.tool_mode_info"))),
+            ("buttons", inspected.buttons.map(\.title) == [localized("alert.cancel"), localized("admission.start_fresh")]),
+            ("fresh explanation", inspected.informativeText.contains(localized("admission.fresh_info"))),
+            ("Photos warning", inspected.informativeText.contains(localized("admission.photos_warning"))),
+            ("background alert", !inspected.window.isVisible && NSApp.modalWindow == nil),
+            ("no launch", started.isEmpty && !host.isRunning),
+            ("no media failure", !processEndedWithError && latestDiagnostics.failure == nil),
+            ("no media totals", batchOverview.isHidden && countStatusLabel.isHidden),
+            ("no tool fault", toolSnapshotLabel.isHidden),
+            ("cancel status", statusLabel.stringValue == localized("admission.cancelled")),
+            ("unchanged option controls", beforeOptions == [resumeCheck.state, retryCheck.state, freshCheck.state]),
+            ("unchanged request", lastRequest?.resume == true && lastRequest?.retry == true && lastRequest?.fresh == false),
+        ]
+        let failedCancellationChecks = cancelledChecks.filter { !$0.1 }.map(\.0)
+        guard failedCancellationChecks.isEmpty else {
+            throw HostError(message: "Startup cancellation failed: " + failedCancellationChecks.joined(separator: ", "))
+        }
+
+        processingCompleted(.failure(HostError(message: "synthetic admission stopped")), resumeDecision: { _ in
+            .alertSecondButtonReturn
+        }, admissionStart: { started.append($0) })
+        guard started.count == 1, let fresh = started.first,
+              fresh.targetPath == input, fresh.fresh, !fresh.resume, !fresh.retry, !fresh.retryFailed,
+              fresh.shortestPath, beforeOptions == [resumeCheck.state, retryCheck.state, freshCheck.state],
+              try ProcessorCommand.arguments(from: fresh).contains("--no-resume"),
+              !startupAdmission.isBlocked else {
+            throw HostError(message: "Explicit independent task did not use the existing fresh-request transition")
+        }
+        setProcessing(false)
+
+        for cause in ["resume_config_unknown", "resume_config_changed", "admission_failed"] {
+            var changed = fields; changed["cause_code"] = cause
+            var state = ImgStartupAdmission()
+            guard state.ingest(try encoded(changed), request: initial, hasMediaEvidence: false),
+                  !state.invalid, state.allowsIndependentTask == (cause != "admission_failed") else {
+                throw HostError(message: "Generic admission failure offered an unsafe recovery choice")
+            }
+        }
+        var badEvents: [[String: Any]] = []
+        var altered = fields; altered["input_path"] = "/synthetic/other-request"; badEvents.append(altered)
+        altered = fields; altered["requested_output"] = "relative-output"; badEvents.append(altered)
+        altered = fields; altered["schema_version"] = 2; badEvents.append(altered)
+        altered = fields; altered["cause_code"] = "tool_is_damaged"; badEvents.append(altered)
+        altered = fields; altered["unexpected"] = true; badEvents.append(altered)
+        for bad in badEvents {
+            var state = ImgStartupAdmission()
+            guard state.ingest(try encoded(bad), request: initial, hasMediaEvidence: false),
+                  state.invalid, !state.allowsIndependentTask else {
+                throw HostError(message: "Invalid or unrelated startup event enabled a new-task choice")
+            }
+        }
+        var conflict = ImgStartupAdmission()
+        _ = conflict.ingest(try encoded(fields), request: initial, hasMediaEvidence: false)
+        altered = fields; altered["cause_code"] = "resume_config_changed"
+        _ = conflict.ingest(try encoded(altered), request: initial, hasMediaEvidence: false)
+        guard conflict.invalid, !conflict.allowsIndependentTask else {
+            throw HostError(message: "Conflicting startup events enabled recovery")
+        }
+        var late = ImgStartupAdmission()
+        _ = late.ingest(try encoded(fields), request: initial, hasMediaEvidence: true)
+        guard late.invalid, !late.allowsIndependentTask else {
+            throw HostError(message: "Startup event concealed actual media-processing evidence")
+        }
+
+        lastRequest = initial
+        clearBatchLog()
+        altered = fields; altered["input_path"] = "/synthetic/unrelated-request"
+        appendLog(try encoded(altered))
+        var invalidChoices = 0
+        processingCompleted(.failure(HostError(message: "synthetic unrelated admission")), resumeDecision: { _ in
+            invalidChoices += 1; return .alertSecondButtonReturn
+        }, admissionStart: { started.append($0) })
+        guard invalidChoices == 0, started.count == 1, !host.isRunning,
+              statusLabel.stringValue == localized("admission.invalid") else {
+            throw HostError(message: "An unrelated startup event offered a new-task action")
+        }
+
+        lastRequest = initial
+        clearBatchLog()
+        altered = fields; altered["cause_code"] = "admission_failed"
+        appendLog(try encoded(altered))
+        var choices = 0
+        processingCompleted(.failure(HostError(message: "synthetic generic admission")), resumeDecision: { _ in
+            choices += 1; return .alertSecondButtonReturn
+        }, admissionStart: { started.append($0) })
+        guard choices == 0, started.count == 1, batchOverview.isHidden, !processEndedWithError,
+              statusLabel.stringValue == localized("admission.stopped"), !host.isRunning else {
+            throw HostError(message: "Generic admission failure started media or invented a batch result")
+        }
+
+        let toolFailure = ToolSnapshotPresentation.prefix
+            + #"{"schema_version":1,"state":"blocked","boundary":"persisted-external","cause_code":"snapshot_invalid"}"#
+        let competingFailures: [(String, [String])] = [
+            ("malformed progress", ["MFB_PROGRESS={}"]),
+            ("malformed Photos progress", [PhotosImportProgress.prefix + "{}"]),
+            ("malformed result", ["MFB_BATCH_RESULT={}"]),
+            ("tool fault", [toolFailure]),
+            ("invalid worker", [LiveWorkerExecution.prefix + "{}"]),
+            ("worker signal", [spawned, exited.replacingOccurrences(of: #""signal":null"#, with: #""signal":9"#)]),
+        ]
+        for (name, diagnostics) in competingFailures {
+            lastRequest = initial
+            if name == "tool fault" {
+                lastRequest?.resume = false
+                lastRequest?.retry = false
+            }
+            clearBatchLog()
+            appendLog(try encoded(fields))
+            appendLog(diagnostics.joined(separator: "\n"))
+            if name == "tool fault" {
+                appendLog("ERR: Error: MFB_RESUME_DECISION_REQUIRED: synthetic conflicting legacy choice")
+            }
+            appendLog("[ERROR] synthetic associated failure: " + name)
+            let recordedFailure = latestDiagnostics.failure
+            processingCompleted(.failure(HostError(message: "synthetic conflicting startup evidence: " + name)), resumeDecision: { _ in
+                choices += 1; return .alertSecondButtonReturn
+            }, admissionStart: { started.append($0) })
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard choices == 0, started.count == 1, processEndedWithError, !batchOverview.isHidden,
+                  recordedFailure != nil, latestDiagnostics.failure == recordedFailure, !host.isRunning else {
+                throw HostError(message: "Startup admission concealed independent failure evidence: " + name)
+            }
+            if name == "tool fault" {
+                guard !toolSnapshotLabel.isHidden,
+                      toolSnapshotLabel.stringValue == localized("tool_snapshot.snapshot_invalid") else {
+                    throw HostError(message: "Startup admission concealed the independent tool fault label")
+                }
+            }
+        }
+    }
+
+    func validateFailedRetryForSelfTest() throws {
+        func encoded(_ value: [String: Any]) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
+        }
+        let source = "/synthetic/retry-source"
+        let parent = "/synthetic/retry-parent"
+        let child = "/synthetic/retry-child"
+        let parentKey = String(repeating: "a", count: 64)
+        let requestKey = String(repeating: "b", count: 64)
+        let base: [String: Any] = ["schema_version": 1, "source_directory": source,
+            "parent_working_copy": parent, "parent_task_key": parentKey, "failed_count": 17, "strategy": "jxl"]
+        for completed in [false, true] {
+            lastRequest = ProcessorRequest(targetPath: source, processingMode: .imagesOnly, operationMode: .fastImgJxl)
+            failedRetryAvailable = nil; failedRetryAvailabilityInvalid = false
+            sawResumeDecision = false; sawFailedRetryDecision = false
+            var availability = base
+            availability["existing_child_complete"] = completed
+            availability["existing_child_working_copy"] = completed ? child : NSNull()
+            appendLog(FastImgFailedRetryAvailable.prefix + (try encoded(availability)))
+            appendLog("ERR: Error: MFB_FAILED_RETRY_REQUIRED: synthetic completed task")
+            var inspected: NSAlert?
+            processingCompleted(.failure(HostError(message: "synthetic retry choice")), resumeDecision: { alert in
+                alert.layout(); inspected = alert
+                return .alertThirdButtonReturn
+            })
+            guard let inspected, inspected.buttons.first?.title == localized(completed ? "retry.reused.open" : "retry.only_failed"),
+                  !inspected.buttons.contains(where: { $0.title == localized("alert.resume.resume") }),
+                  !completed || !inspected.informativeText.contains("17"),
+                  !processEndedWithError, !host.isRunning, batchOverview.isHidden,
+                  statusLabel.stringValue == localized("status.resume_choice_cancelled"), !inspected.window.isVisible,
+                  NSApp.modalWindow == nil else { throw HostError(message: "Failed-only choice lost cancellation, distinct semantics, or no-work reuse wording") }
+        }
+        var request = ProcessorRequest(targetPath: source, processingMode: .imagesOnly, operationMode: .fastImgJxl,
+            retryFailed: true, retryFailedParent: parent)
+        let arguments = try ProcessorCommand.arguments(from: request)
+        guard arguments.contains("--retry-failed"), arguments.contains("--retry-failed-parent"),
+              !arguments.contains("--retry"), !arguments.contains("--resume"), !arguments.contains("--no-resume")
+        else { throw HostError(message: "Failed-only request still aliases ordinary continue") }
+        request.resume = true
+        do { _ = try ProcessorCommand.arguments(from: request); throw HostError(message: "Conflicting recovery choices were admitted") }
+        catch let error as HostError where error.message == localized("error.resume_conflict") { }
+        request.resume = false
+        lastRequest = request
+        batchResults = BatchResults(); workerExecution = LiveWorkerExecution()
+        let reference: [String: Any] = ["schema_version": 1, "run_id": "run-retry", "source_directory": source,
+            "parent_working_copy": parent, "parent_task_key": parentKey, "request_key": requestKey,
+            "child_working_copy": child, "strategy": "jxl", "delivery_intent": ["kind": "local"]]
+        appendLog(FastImgRetryReference.requestPrefix + (try encoded(reference)))
+        for observation in ["spawned", "exited"] {
+            let event: [String: Any] = ["schema_version": 1, "scope": "os_child_process", "invocation_id": "retry-invocation",
+                "run_id": "run-retry", "pipeline": "img", "state": observation, "pid": 1234,
+                "exit_code": observation == "exited" ? 0 : NSNull(), "signal": NSNull()]
+            appendLog(LiveWorkerExecution.prefix + (try encoded(event)))
+        }
+        var reuse = reference
+        for key in ["newly_processed", "newly_delivered", "newly_saved_bytes"] { reuse[key] = 0 }
+        appendLog(FastImgRetryReference.confirmedPrefix + (try encoded(reuse)))
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":0,"exit_code":0}"#)
+        refreshBatchOverview(processExit: 0, exitedNormally: true)
+        guard batchResults.retryReuseIsConfirmed(processExit: 0, exitedNormally: true, runID: "run-retry"),
+              !batchResults.hasFastDelivery, batchResults.fastDeliveries.isEmpty,
+              batchOverviewTitle.stringValue == localized("retry.reused.title"), batchOverviewTitle.textColor == .labelColor,
+              batchOverviewCounts.stringValue == localized("retry.reused.counts"), batchOverviewCleanup.isHidden,
+              !batchResults.retryReuseIsConfirmed(processExit: 1, exitedNormally: true, runID: "run-retry"),
+              !batchResults.retryReuseIsConfirmed(processExit: 0, exitedNormally: false, runID: "run-retry")
+        else { throw HostError(message: "Reused retry became unknown failure, fresh delivery, new savings, or crash success") }
+        let hidden = batchResults.failedRetryReused?.detail(privacy: true) ?? ""
+        guard !hidden.contains(parent), !hidden.contains(child), hidden.contains(localized("privacy.display.hidden")) else {
+            throw HostError(message: "Normal retry references leaked private paths")
+        }
+        for mutation in ["newly_processed", "run_id", "unknown_field"] {
+            var changed = reuse
+            changed[mutation] = mutation == "run_id" ? "another-run" : 1
+            var invalid = BatchResults()
+            _ = invalid.ingestRetryReference(FastImgRetryReference.requestPrefix + (try encoded(reference)), requested: true,
+                source: source, parent: parent, strategy: "jxl", photos: false, runID: nil)
+            _ = invalid.ingestRetryReference(FastImgRetryReference.confirmedPrefix + (try encoded(changed)), requested: true,
+                source: source, parent: parent, strategy: "jxl", photos: false, runID: "run-retry")
+            guard invalid.failedRetryInvalid, invalid.failedRetryReused == nil else { throw HostError(message: "Invalid reused retry evidence was accepted") }
+        }
+        let selectedInput = source + "/one.jpeg"
+        let snapshot: [String: Any] = ["snapshot_blake3": String(repeating: "c", count: 64), "revision": 2,
+            "manifest_blake3": String(repeating: "d", count: 64), "task_key": String(repeating: "e", count: 64),
+            "primary_cleanup_blake3": String(repeating: "f", count: 64),
+            "tier2_cleanup_blake3": String(repeating: "a", count: 64)]
+        var finalRequest = reference
+        finalRequest["input_path"] = selectedInput; finalRequest["child_snapshot_before"] = snapshot
+        let finishEvidence: [String: Any] = ["schema": 1, "task_key": String(repeating: "e", count: 64),
+            "request_key": requestKey, "manifest_blake3": String(repeating: "d", count: 64),
+            "verified_snapshot_blake3": String(repeating: "c", count: 64), "verified_revision": 2,
+            "verified_primary_cleanup_blake3": String(repeating: "f", count: 64),
+            "verified_tier2_cleanup_blake3": String(repeating: "a", count: 64),
+            "verified_stage": "gate1_passed", "verified_tier2_in_progress": false, "verified_error": NSNull(),
+            "source_root_observation": "not_found", "verified_output_count": 3,
+            "verified_primary_photos_count": 0, "verified_original_photos_count": 0,
+            "observed_at": "2026-10-31T01:02:03Z"]
+        var finalized = finalRequest; finalized["evidence"] = finishEvidence
+        for key in ["newly_processed", "newly_delivered", "newly_saved_bytes"] { finalized[key] = 0 }
+        for useResume in [false, true] {
+            lastRequest = ProcessorRequest(targetPath: selectedInput, processingMode: .imagesOnly, operationMode: .fastImgJxl,
+                resume: useResume, retry: !useResume)
+            batchResults = BatchResults(); workerExecution = LiveWorkerExecution()
+            appendLog(FastImgRetryReference.requestPrefix + (try encoded(finalRequest)))
+            appendLog("MFB_FAST_IMG_RETRY_FINALIZED=" + (try encoded(finalized)))
+            guard batchResults.failedRetryFinalized == nil, !batchResults.failedRetryInvalid else {
+                throw HostError(message: "Raw worker finish-only claim became authoritative")
+            }
+            for observation in ["spawned", "exited"] {
+                let event: [String: Any] = ["schema_version": 1, "scope": "os_child_process", "invocation_id": "retry-invocation",
+                    "run_id": "run-retry", "pipeline": "img", "state": observation, "pid": 1234,
+                    "exit_code": observation == "exited" ? 0 : NSNull(), "signal": NSNull()]
+                appendLog(LiveWorkerExecution.prefix + (try encoded(event)))
+            }
+            appendLog(FastImgRetryReference.finalizedPrefix + (try encoded(finalized)))
+            appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":0,"exit_code":0}"#)
+            refreshBatchOverview(processExit: 0, exitedNormally: true)
+            let confirmed = batchResults.retryFinalizationIsConfirmed(processExit: 0, exitedNormally: true, runID: "run-retry")
+            guard confirmed, !batchResults.retryReuseIsConfirmed(processExit: 0, exitedNormally: true, runID: "run-retry"),
+                  !batchResults.hasFastDelivery, batchOverviewTitle.stringValue == localized("retry.finalized.title"),
+                  batchOverviewTitle.textColor == .labelColor, batchOverviewCounts.stringValue == localized("retry.finalized.counts"),
+                  batchOverviewDelivery.stringValue.contains(localized("retry.finalized.checked", "3", "0", "0")),
+                  batchOverviewCleanup.isHidden,
+                  !batchResults.retryFinalizationIsConfirmed(processExit: 1, exitedNormally: true, runID: "run-retry"),
+                  !batchResults.retryFinalizationIsConfirmed(processExit: 0, exitedNormally: false, runID: "run-retry"),
+                  !batchResults.retryFinalizationIsConfirmed(processExit: 0, exitedNormally: true, runID: "another-run")
+            else { throw HostError(message: "Finish-only recovery lost zero-work, actual reverification, scope or process identity") }
+            let privateDetail = batchResults.failedRetryFinalized?.detail(privacy: true) ?? ""
+            guard !privateDetail.contains(parent), !privateDetail.contains(child),
+                  privateDetail.contains(localized("retry.finalized.source_absent")) else {
+                throw HostError(message: "Finish-only details leaked paths or attributed missing source data to MFB")
+            }
+        }
+        for childOutcome in ["spawn-only", "signal", "nonzero"] {
+            lastRequest = ProcessorRequest(targetPath: selectedInput, processingMode: .imagesOnly, operationMode: .fastImgJxl,
+                retry: true)
+            batchResults = BatchResults(); workerExecution = LiveWorkerExecution()
+            appendLog(FastImgRetryReference.requestPrefix + (try encoded(finalRequest)))
+            let spawned: [String: Any] = ["schema_version": 1, "scope": "os_child_process", "invocation_id": "retry-invocation",
+                "run_id": "run-retry", "pipeline": "img", "state": "spawned", "pid": 1234,
+                "exit_code": NSNull(), "signal": NSNull()]
+            appendLog(LiveWorkerExecution.prefix + (try encoded(spawned)))
+            if childOutcome != "spawn-only" {
+                var exited = spawned; exited["state"] = "exited"
+                if childOutcome == "signal" { exited["signal"] = Int(SIGKILL) }
+                else { exited["exit_code"] = 1 }
+                appendLog(LiveWorkerExecution.prefix + (try encoded(exited)))
+            }
+            // A parent's exit 0 and a zero-count summary cannot replace the
+            // missing or unsuccessful OS-child lifecycle evidence.
+            appendLog(FastImgRetryReference.finalizedPrefix + (try encoded(finalized)))
+            appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":0,"exit_code":0}"#)
+            refreshBatchOverview(processExit: 0, exitedNormally: true)
+            guard workerExecution.singleSuccessfulImageRunID == nil, batchResults.failedRetryInvalid,
+                  !batchResults.retryFinalizationIsConfirmed(processExit: 0, exitedNormally: true,
+                    runID: workerExecution.singleSuccessfulImageRunID),
+                  batchOverviewTitle.stringValue != localized("retry.finalized.title") else {
+                throw HostError(message: "Finish-only GUI accepted parent exit 0 over \(childOutcome) worker evidence")
+            }
+        }
+        let evidenceMutations: [(String, Any)] = [("verified_revision", 3), ("task_key", parentKey),
+            ("manifest_blake3", parentKey), ("verified_snapshot_blake3", parentKey),
+            ("verified_primary_cleanup_blake3", parentKey), ("verified_primary_cleanup_blake3", NSNull()),
+            ("verified_tier2_cleanup_blake3", requestKey), ("verified_tier2_cleanup_blake3", NSNull()),
+            ("source_root_observation", "mfb_deleted"), ("verified_output_count", 0)]
+        for (key, value) in evidenceMutations {
+            var evidence = finishEvidence; evidence[key] = value
+            var altered = finalized; altered["evidence"] = evidence
+            var invalid = BatchResults()
+            _ = invalid.ingestRetryReference(FastImgRetryReference.requestPrefix + (try encoded(finalRequest)), requested: true,
+                source: selectedInput, parent: parent, strategy: "jxl", photos: false, runID: nil)
+            _ = invalid.ingestRetryReference(FastImgRetryReference.finalizedPrefix + (try encoded(altered)), requested: true,
+                source: selectedInput, parent: parent, strategy: "jxl", photos: false, runID: "run-retry")
+            guard invalid.failedRetryInvalid, invalid.failedRetryFinalized == nil else {
+                throw HostError(message: "Finish-only recovery accepted mismatched before-snapshot or evidence: \(key)")
+            }
+        }
+    }
+
+    func validateProductionBusyForSelfTest() throws {
+        setHistoryRemovalInProgress(true)
+        setProcessing(false)
+        runHere()
+        guard !historyRemovalNotice.isHidden, !runButton.isEnabled, !openButton.isEnabled,
+              !requestClose(), !host.isRunning else {
+            throw HostError(message: "History cleanup did not guard media launch and normal quit")
+        }
+        setHistoryRemovalInProgress(false)
+        guard historyRemovalNotice.isHidden, runButton.isEnabled, openButton.isEnabled else {
+            throw HostError(message: "History cleanup did not restore media controls")
+        }
+        appendLog("[FAIL] /synthetic/MFB_PRODUCTION_TASK_BUSY.jpg")
+        guard !sawProductionBusy else { throw HostError(message: "A filename was interpreted as task contention") }
+        appendLog("ERR: Error: MFB_PRODUCTION_TASK_BUSY: synthetic lease contention")
+        processingCompleted(.failure(HostError(message: "synthetic busy exit")))
+        guard !processEndedWithError, batchOverview.isHidden, latestDiagnostics.failure == nil,
+              statusLabel.stringValue == localized("error.production_busy"), !host.isRunning else {
+            throw HostError(message: "Task contention was presented as a failed media batch")
+        }
+    }
+
+    private var hasStartedMediaEvidence: Bool {
+        batchResults.totals.values.contains { $0.contains { $0 != nil } }
+            || batchResults.pendingTotals.values.contains { $0 != nil } || batchResults.hasFastDelivery
+            || batchResults.invalid || batchResults.fastDeliveryInvalid || batchResults.controlRecordsMissing
+            || batchResults.mandatoryEvidenceConflict || batchResults.outputCleanupInvalid
+            || fileProgress.invalid || photosImportProgress.invalid || gateActivity.invalid
+            || fileProgress.event != nil || photosImportProgress.event != nil || gateActivity.event != nil
+    }
+
+    private var startupAdmissionIsIsolated: Bool {
+        startupAdmission.isBlocked && !startupAdmissionHasConflict && !hasStartedMediaEvidence && !toolSnapshot.invalid
+            && toolSnapshot.event?.state != .blocked && !workerExecution.invalid
+            && (workerExecution.latest.map { $0.pipeline == "img" && $0.signal == nil } ?? true)
+    }
+
+    private func handleStartupAdmission(
+        _ result: Result<String, Error>,
+        decision: @MainActor (NSAlert) -> NSApplication.ModalResponse,
+        previewFresh: Bool,
+        start: (ProcessorRequest) -> Void
+    ) -> Bool {
+        guard case .failure = result, startupAdmission.isBlocked else { return false }
+        guard startupAdmissionIsIsolated else {
+            // Stopping resets live progress presenters. Their earlier invalid
+            // evidence must still dominate the launch-only interpretation.
+            startupAdmissionHasConflict = true
+            return false
+        }
+        processEndedWithError = false
+        batchOverview.isHidden = true
+        latestDiagnostics = LatestDiagnostics()
+        refreshLatestDiagnostics()
+        countStatusLabel.isHidden = true
+        setProcessing(false)
+        setStatus(startupAdmission.status)
+        guard !isDebugWindow, startupAdmission.allowsIndependentTask,
+              var retry = lastRequest, !retry.fresh,
+              FastImgDeliveryReceipt.samePath(startupAdmission.event?.input_path, retry.targetPath)
+        else { return true }
+        let toolModeInfo = startupAdmission.event?.cause_code == .resumeToolModeChanged
+            ? localized("admission.tool_mode_info") + "\n\n" : ""
+        if previewFresh {
+            let context = startupAdmission.status + "\n\n" + toolModeInfo + localized("admission.fresh_info")
+            applyResumeDecision(fresh: true, to: &retry, updateOptions: false)
+            retry.expectedFastImgOutput = nil
+            previewFastImg(retry, context: context) { [weak self] in self?.startHere($0) }
+            return true
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = startupAdmission.status
+        alert.informativeText = toolModeInfo + localized("admission.fresh_info")
+            + (retry.shortestPath ? "\n\n" + localized("admission.photos_warning") : "")
+        // Return and Escape both cancel. Starting another task always requires
+        // an explicit choice; there is deliberately no continue-old-task action.
+        alert.addButton(withTitle: localized("alert.cancel"))
+        alert.addButton(withTitle: localized("admission.start_fresh"))
+        guard decision(alert) == .alertSecondButtonReturn else {
+            setLocalizedStatus("admission.cancelled")
+            return true
+        }
+        applyResumeDecision(fresh: true, to: &retry, updateOptions: false)
+        retry.expectedFastImgOutput = nil
+        lastRequest = retry
+        sawResumeDecision = false; sawFailedRetryDecision = false
+        failedRetryAvailable = nil; failedRetryAvailabilityInvalid = false
+        clearBatchLog()
+        setProcessing(true)
+        start(retry)
+        return true
+    }
+
+    private func processingCompleted(_ result: Result<String, Error>,
+                                     resumeDecision: (@MainActor (NSAlert) -> NSApplication.ModalResponse)? = nil,
+                                     admissionStart: ((ProcessorRequest) -> Void)? = nil) {
+        toolSnapshot.finish()
+        refreshToolSnapshot()
+        if let request = lastRequest, request.recoverPhotosCleanup {
+            completeHistoryCleanupRecovery(request)
+            return
+        }
+        let choose = resumeDecision ?? { $0.runModal() }
+        if handleStartupAdmission(result, decision: choose, previewFresh: resumeDecision == nil, start: {
+            if let admissionStart { admissionStart($0) } else { host.startProcessing($0) }
+        }) { return }
+        if sawProductionBusy, batchResults.totals.isEmpty {
+            processEndedWithError = false
+            batchOverview.isHidden = true
+            latestDiagnostics = LatestDiagnostics()
+            refreshLatestDiagnostics()
+            setProcessing(false)
+            setLocalizedStatus("error.production_busy")
+            return
+        }
+        if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
+        let resumeChoicePending: Bool
+        if case .failure = result, !startupAdmissionHasConflict,
+           sawResumeDecision || sawFailedRetryDecision, let request = lastRequest {
+            resumeChoicePending = !request.resume && !request.fresh && !request.retryFailed
+        } else { resumeChoicePending = false }
+        defer {
+            if !resumeChoicePending {
+                refreshBatchOverview()
+                publishResultNotification()
+            }
+        }
+        let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
+        if host.controlState == "cancelled", host.lastExitStatus == 130 {
+            if !batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
+                                                    processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal) {
+                photosDiagnostics.markFailed()
+            }
+            refreshDiagnostics()
+            setProcessing(false)
+            if var retry = lastRequest, retry.operationMode.capabilities.supportsResume {
+                applyResumeDecision(fresh: false, to: &retry)
+                lastRequest = retry
+            }
+            setLocalizedStatus(batchResults.mandatoryEvidenceConflict ? "result.unconfirmed" : "status.stopped")
+            appendLog(statusLabel.stringValue + countSummary)
+            if closeWhenFinished { NSApp.terminate(nil) }
+            return
+        }
+        switch result {
+        case let .success(message):
+            setProcessing(false)
+            if batchResults.retryFinalizationIsConfirmed(processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal,
+                runID: workerExecution.singleSuccessfulImageRunID) {
+                setLocalizedStatus("retry.finalized.title")
+                appendLog(localized("retry.finalized.info"), captureDiagnostics: false)
+                return
+            }
+            if batchResults.retryReuseIsConfirmed(processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal,
+                runID: workerExecution.singleSuccessfulImageRunID) {
+                setLocalizedStatus("retry.reused.title")
+                appendLog(localized("retry.reused.info"), captureDiagnostics: false)
+                return
+            }
+            if batchResults.hasFailure {
+                setLocalizedStatus(batchResults.hasPartialSuccess ? "result.partially_completed"
+                    : (batchResults.hasFileFailures ? "result.finished_with_failures" : "result.stopped_with_error"))
+                appendLog("[FAIL] \(statusLabel.stringValue)" + countSummary,
+                          captureDiagnostics: latestDiagnostics.failure == nil)
+            } else if batchResults.isIncomplete
+                || (batchResults.hasUnprocessed && host.controlState != "paused")
+                || (batchResults.totals.isEmpty
+                && lastRequest.map { !$0.dryRun && [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid].contains($0.operationMode) } == true) {
+                setLocalizedStatus(batchResults.isIncomplete || batchResults.totals.isEmpty
+                    ? "result.incomplete" : "result.unfinished")
+                appendLog("[WARN] \(statusLabel.stringValue)" + countSummary,
+                          captureDiagnostics: latestDiagnostics.warning == nil)
+            } else {
+                setStatus(message)
+                appendLog("[DONE] \(message)" + countSummary)
+            }
+        case let .failure(error):
+            // A saved-task choice is a launch decision, not a media failure.
+            // Present it before recording failed delivery or a red error summary.
+            if !isDebugWindow, !startupAdmissionHasConflict,
+               (sawResumeDecision || sawFailedRetryDecision), var retry = lastRequest,
+                !retry.resume, !retry.fresh, !retry.retryFailed {
+                processEndedWithError = false
+                batchOverview.isHidden = true
+                latestDiagnostics = LatestDiagnostics()
+                refreshLatestDiagnostics()
+                setProcessing(false)
+                if resumeDecision == nil, retry.operationMode.backendMode == "fast-img" {
+                    retry.expectedFastImgOutput = nil
+                    previewFastImg(retry) { [weak self] in self?.startHere($0) }
+                    return
+                }
+                let alert = NSAlert()
+                alert.messageText = localized("alert.resume.title")
+                let available = failedRetryAvailable
+                alert.informativeText = available.map { $0.existingChildComplete
+                    ? localized("retry.reused.choice_info") : localized("retry.choice.info", String($0.failedCount)) }
+                    ?? localized("alert.resume.info")
+                if retry.shortestPath, retry.operationMode.backendMode == "fast-img" {
+                    alert.informativeText += "\n\n" + localized("alert.resume.photos_fresh")
+                }
+                alert.addButton(withTitle: localized(available == nil ? "alert.resume.resume"
+                    : available?.existingChildComplete == true ? "retry.reused.open" : "retry.only_failed"))
+                alert.addButton(withTitle: localized("alert.resume.fresh"))
+                alert.addButton(withTitle: localized("alert.cancel"))
+                switch choose(alert) {
+                case .alertFirstButtonReturn:
+                    if let available { applyFailedRetryDecision(available, to: &retry) }
+                    else { applyResumeDecision(fresh: false, to: &retry) }
+                case .alertSecondButtonReturn:
+                    applyResumeDecision(fresh: true, to: &retry)
+                default:
+                    setLocalizedStatus("status.resume_choice_cancelled")
+                    return
+                }
+                lastRequest = retry
+                sawResumeDecision = false
+                sawFailedRetryDecision = false
+                failedRetryAvailable = nil
+                failedRetryAvailabilityInvalid = false
+                batchResults = BatchResults()
+                workerExecution = LiveWorkerExecution()
+                batchOverview.isHidden = true
+                logPhase = PhaseLogPresentation()
+                diagnosticLogFolder.reset()
+                latestDiagnostics = LatestDiagnostics()
+                refreshLatestDiagnostics()
+                fileProgress = FileStageProgress()
+                photosImportProgress = PhotosImportProgress()
+                gateActivity = GateCheckActivity()
+                refreshFileProgress()
+                photosDiagnostics.reset()
+                refreshDiagnostics()
+                setProcessing(true)
+                host.startProcessing(retry)
+                return
+            }
+            let deliveryConfirmed = batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
+                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
+            let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(
+                photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
+                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
+            let quarantineBlocked = host.controlState != "cancelled" && lastRequest?.shortestPath == true
+                && batchResults.confirmedPhotosQuarantine(source: lastRequest?.targetPath,
+                    processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal) != nil
+            if !deliveryConfirmed && !deferred {
+                photosDiagnostics.markFailed()
+            }
+            refreshDiagnostics()
+            let interrupted = interruptedWithoutFileSummary
+            let failureMessage = quarantineBlocked ? localized("result.final_photos_quarantine_title")
+                : interrupted
+                ? localized("result.process_terminated") + " · " + localized("result.files_not_summarized")
+                    + "\n" + error.localizedDescription
+                : batchResults.hasPartialSuccess
+                ? localized("result.partially_completed") + " · " + error.localizedDescription
+                : error.localizedDescription
+            let tag = interrupted || deferred || quarantineBlocked
+                || (deliveryConfirmed && batchResults.hasFileFailures) ? "WARN" : "FAIL"
+            appendLog("[\(tag)] \(failureMessage)" + countSummary,
+                      captureDiagnostics: !quarantineBlocked && latestDiagnostics.failure == nil)
+            setProcessing(false)
+            if interrupted { setLocalizedStatus("result.process_terminated") }
+            else if batchResults.hasPartialSuccess { setLocalizedStatus("result.partially_completed") }
+            else if batchResults.hasFileFailures { setLocalizedStatus("result.finished_with_failures") }
+            else { setStatus(error.localizedDescription) }
+        }
+    }
+
+    func validateCleanupRecoveryForSelfTest() throws {
+        let fixture = URL(fileURLWithPath: "/private/tmp").appendingPathComponent(
+            "mfb-native-cleanup-self-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer {
+            do { try FileManager.default.removeItem(at: fixture) }
+            catch { fputs("Native cleanup self-test fixture cleanup failed: \(error)\n", stderr) }
+        }
+        let source = fixture.path
+        let output = fixture.appendingPathComponent("absent-working-copy").path
+        var request = ProcessorRequest(targetPath: source, processingMode: .imagesOnly, operationMode: .fastImgJxl)
+        request.recoverPhotosCleanup = true
+        request.expectedFastImgOutput = output
+        let arguments = try ProcessorCommand.arguments(from: request)
+        guard arguments == ["--mode", "fast-img", "--strategy", "jxl", "--shortest-path", "--retry",
+                            "--recover-photos-cleanup", "--output", output, "--", source] else {
+            throw HostError(message: "Cleanup recovery did not use its exclusive backend command")
+        }
+        lastRequest = request
+        let state = String(repeating: "a", count: 64)
+        let receipt = FastImgCleanupRecoveryResult.prefix + """
+        {"schema_version":1,"run_id":"cleanup-run","source_path":"\(source)","output_path":"\(output)","strategy":"jxl","checkpoint_blake3":"\(state)","outcome":"already_absent","verified":true}
+        """
+        let cleanup = OutputCleanupReceipt.prefix + """
+        {"schema_version":1,"run_id":"cleanup-run","output_path":"\(output)","outcome":"already_absent","error":null}
+        """
+        appendLog(receipt)
+        guard completedCleanupRecovery(for: request, status: 0, exitedNormally: true) == nil else {
+            throw HostError(message: "Cleanup recovery accepted a missing generic receipt")
+        }
+        appendLog(cleanup)
+        guard completedCleanupRecovery(for: request, status: 0, exitedNormally: true)?.outcome == "already_absent",
+              completedCleanupRecovery(for: request, status: 1, exitedNormally: true) == nil,
+              completedCleanupRecovery(for: request, status: 0, exitedNormally: false) == nil else {
+            throw HostError(message: "Cleanup-only completion did not bind the exact receipt and exit")
+        }
+        request.expectedFastImgOutput = "/synthetic/other-output"
+        guard completedCleanupRecovery(for: request, status: 0, exitedNormally: true) == nil else {
+            throw HostError(message: "Cleanup completion accepted the wrong output")
+        }
+        request.expectedFastImgOutput = output
+        appendLog(receipt.replacingOccurrences(of: "cleanup-run", with: "unrelated-run"))
+        guard completedCleanupRecovery(for: request, status: 0, exitedNormally: true) == nil else {
+            throw HostError(message: "Cleanup completion ignored conflicting run identity")
+        }
+    }
+
+    private func completedCleanupRecovery(for request: ProcessorRequest, status: Int32?, exitedNormally: Bool)
+        -> FastImgCleanupRecoveryResult? {
+        guard exitedNormally, let status, !cleanupRecoveryResultInvalid,
+              let receipt = cleanupRecoveryResult, request.recoverPhotosCleanup,
+              receipt.matches(source: request.targetPath, output: request.expectedFastImgOutput,
+                              strategy: request.operationMode.strategy),
+              receipt.expectsCleanExit ? status == 0 : (status != 0 && status != 130),
+              !batchResults.outputCleanupInvalid, !batchResults.mandatoryEvidenceConflict,
+              !batchResults.hasFastDelivery, batchResults.totals.isEmpty, batchResults.pendingTotals.isEmpty,
+              workerExecution.latest == nil, !workerExecution.invalid,
+              batchResults.outputCleanups.count == 1,
+              let cleanup = batchResults.outputCleanups.first, receipt.matches(cleanup) else { return nil }
+        return receipt
+    }
+
+    private func completeHistoryCleanupRecovery(_ request: ProcessorRequest) {
+        let receipt = completedCleanupRecovery(for: request, status: host.lastExitStatus,
+                                               exitedNormally: host.lastExitWasNormal)
+        let title: String
+        if host.controlState == "cancelled", host.lastExitStatus == 130 {
+            title = localized("cleanup.recovery.stopped")
+        } else if sawProductionBusy {
+            title = localized("error.production_busy")
+        } else {
+            title = receipt?.statusText ?? localized("cleanup.recovery.unconfirmed")
+        }
+        setProcessing(false)
+        batchOverview.isHidden = true
+        setStatus(title)
+        appendLog(title, captureDiagnostics: false)
+        historyPanel?.refresh(directory: resolvedHistoryDirectory)
+        publishResultNotification()
+        if closeWhenFinished { NSApp.terminate(nil) }
+    }
+
+    private var interruptedWithoutFileSummary: Bool {
+        processEndedWithError && host.controlState != "cancelled" && workerExecution.interruptionSignal != nil
+            && batchResults.totals.isEmpty && batchResults.pendingTotals.isEmpty && !batchResults.hasFastDelivery
+            && !batchResults.isIncomplete && !batchResults.mandatoryEvidenceConflict && !batchResults.outputCleanupInvalid
+    }
+
+    private func refreshBatchOverview(processExit: Int32? = nil, exitedNormally: Bool? = nil) {
+        if lastRequest?.recoverPhotosCleanup == true || startupAdmissionIsIsolated {
+            batchOverview.isHidden = true
+            return
+        }
+        let expectsFastDelivery = lastRequest.map {
+            !$0.dryRun && [.fastImgJxl, .fastImgAvif].contains($0.operationMode)
+        } ?? batchResults.hasFastDelivery
+        guard !host.isRunning, !batchResults.totals.isEmpty || batchResults.hasFastDelivery || expectsFastDelivery || processEndedWithError else {
+            batchOverview.isHidden = true
+            return
+        }
+        let photos = lastRequest?.shortestPath ?? false
+        let interrupted = interruptedWithoutFileSummary
+        let terminalExit = processExit ?? host.lastExitStatus ?? (deliveryFixture ? 1 : nil)
+        let normalExit = exitedNormally ?? (deliveryFixture || host.lastExitWasNormal)
+        let unavailableVerification = expectsFastDelivery && host.controlState != "cancelled"
+            ? batchResults.confirmedUnavailableVerification(photos: photos, processExit: terminalExit, exitedNormally: normalExit) : nil
+        let finalizedRetry = batchResults.retryFinalizationIsConfirmed(processExit: terminalExit, exitedNormally: normalExit,
+            runID: workerExecution.singleSuccessfulImageRunID)
+        if finalizedRetry || batchResults.retryReuseIsConfirmed(processExit: terminalExit, exitedNormally: normalExit,
+            runID: workerExecution.singleSuccessfulImageRunID) {
+            let prefix = finalizedRetry ? "retry.finalized" : "retry.reused"
+            batchOverviewTitle.stringValue = localized(prefix + ".title")
+            batchOverviewTitle.textColor = .labelColor
+            batchOverviewCounts.stringValue = localized(prefix + ".counts")
+            batchOverviewDelivery.stringValue = localized(prefix + ".info")
+            if let evidence = batchResults.failedRetryFinalized?.evidence {
+                batchOverviewDelivery.stringValue += "\n" + evidence.summary
+            }
+            batchOverviewDelivery.isHidden = false
+            batchOverviewCleanup.isHidden = true
+            for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery] {
+                label.toolTip = label.stringValue; label.setAccessibilityLabel(label.stringValue)
+            }
+            batchOverview.isHidden = false
+            fileProgressRow.isHidden = true
+            if finalizedRetry {
+                batchOverviewDelivery.toolTip = batchOverviewDelivery.stringValue + "\n" + localized("retry.finalized.source_absent")
+            }
+            setLocalizedStatus(prefix + ".title")
+            updateLogPresentation()
+            return
+        }
+        let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: terminalExit,
+            exitedNormally: normalExit)
+        let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(photos: photos,
+            source: lastRequest?.targetPath, processExit: terminalExit, exitedNormally: normalExit)
+        let quarantineBlocked = host.controlState != "cancelled" && photos
+            && batchResults.confirmedPhotosQuarantine(source: lastRequest?.targetPath,
+                processExit: terminalExit, exitedNormally: normalExit) != nil
+        let preparationStopped = host.controlState != "cancelled" && photos
+            && batchResults.photosPreparationStopped(source: lastRequest?.targetPath,
+                pendingCount: photosImportProgress.preparationStopPendingCount,
+                processExit: terminalExit, exitedNormally: normalExit)
+        let finalPhotosQuarantine = photos && !batchResults.fastDeliveryInvalid
+            ? processingCountTotal(batchResults.fastDeliveries.map { $0.finalPhotosQuarantineCount ?? 0 }) : nil
+        let quarantineLocations = quarantineBlocked ? batchResults.fastDeliveries.first?.finalPhotosQuarantineLocationsText : nil
+        let quarantineReason = quarantineLocations ?? finalPhotosQuarantine.flatMap { count in
+            count > 0 ? localized("result.final_photos_quarantine", String(count)) : nil
+        }
+        batchOverviewDelivery.maximumNumberOfLines = deferred || quarantineReason != nil || unavailableVerification != nil ? 0 : 2
+        let retainedOnly = confirmed && batchResults.fastDeliveries.allSatisfy(\.isRetainedOnly)
+        let quarantineChanged = hasConfirmedPhotosQuarantine != quarantineBlocked
+        let presentationChanged = hasConfirmedFileFailures != (confirmed && batchResults.hasFileFailures)
+            || quarantineChanged
+        hasConfirmedFileFailures = confirmed && batchResults.hasFileFailures
+        hasConfirmedPhotosQuarantine = quarantineBlocked
+        if quarantineChanged { refreshQuarantineResumeControls() }
+        if presentationChanged {
+            fullLogPresentation.setAttributedString(styledLog(fullLogPresentation.string))
+            privateLogPresentation.setAttributedString(styledLog(privateLogPresentation.string))
+            logView.textStorage?.setAttributedString(privacyEnabled ? privateLogPresentation : fullLogPresentation)
+        }
+        let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
+            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !deferred && !quarantineBlocked)
+            || (processEndedWithError && batchResults.totals.isEmpty)
+        let countsNeedReview = normalExit && !batchResults.hasCompleteCountReport
+            && !batchResults.fastDeliveryInvalid
+            && batchResults.fastDeliveries.allSatisfy {
+                $0.finalizationError == nil && $0.failedSourceVerificationError == nil && $0.retentionUnknownReason == nil
+            }
+            && (!batchResults.totals.isEmpty || (!batchResults.fastDeliveryInvalid && !batchResults.fastDeliveries.isEmpty))
+        let pending = processingCountTotal(Array(batchResults.pendingTotals.values))
+        let failures = processingCountTotal(batchResults.totals.values.map { $0[2] })
+        let title: String
+        if batchResults.mandatoryEvidenceConflict { title = batchResults.integritySummary ?? localized("result.unconfirmed") }
+        else if host.controlState == "cancelled" { title = localized("status.stopped") }
+        else if unavailableVerification != nil { title = localized("result.independent_verification.title") }
+        else if interrupted { title = localized("result.process_terminated") }
+        else if countsNeedReview { title = localized("result.counts_need_review") }
+        else if preparationStopped { title = localized("result.photos_preparation_stopped") }
+        else if uncertain { title = localized("result.unconfirmed") }
+        else if deferred { title = localized("result.delivery_deferred") }
+        else if quarantineBlocked { title = localized("result.final_photos_quarantine_title") }
+        else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
+        else if batchResults.hasPartialSuccess || retainedOnly { title = localized("result.attention_count", String(failures ?? 0)) }
+        else if batchResults.hasFileFailures { title = localized("result.finished_with_failures") }
+        else if batchResults.hasFailure { title = localized("result.stopped_with_error") }
+        else { title = localized("status.completed") }
+        batchOverviewTitle.stringValue = title
+        batchOverviewTitle.textColor = batchResults.mandatoryEvidenceConflict ? .systemRed
+            : host.controlState == "cancelled" ? .labelColor
+            : unavailableVerification != nil ? .systemOrange
+            : interrupted ? .systemOrange
+            : countsNeedReview ? .systemOrange
+            : uncertain ? .systemRed : deferred || quarantineBlocked ? .systemOrange
+            : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
+        batchOverviewCounts.stringValue = interrupted ? localized("result.files_not_summarized")
+            : logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
+            : batchResults.compactSummary
+        let value = { (number: Int?) in number.map(String.init) ?? localized("result.unknown") }
+        batchOverviewDelivery.isHidden = !batchResults.hasFastDelivery
+        if interrupted, let observation = workerExecution.latest, let signal = observation.signal {
+            batchOverviewDelivery.stringValue = localized("process.signal", observation.pipeline.uppercased(),
+                LiveWorkerExecution.signalDescription(signal))
+            batchOverviewDelivery.isHidden = false
+        }
+        let cleanupNeedsAttention = batchResults.outputCleanupInvalid
+            || batchResults.outputCleanups.contains(where: \.needsAttention)
+            || (photos && batchResults.outputCleanups.isEmpty)
+        batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || (!logDetailsExpanded && !cleanupNeedsAttention)
+        if batchResults.hasFastDelivery {
+            let usable = !batchResults.fastDeliveryInvalid
+            batchOverviewDelivery.stringValue = usable ? localized(uncertain || countsNeedReview || quarantineBlocked
+                ? "result.independent_delivery_facts" : "result.delivery_facts",
+                value(usable ? batchResults.fastDeliveryCount(\.encoded) : nil),
+                value(usable ? batchResults.fastDeliveryCount(\.photosVerified) : nil),
+                value(usable ? processingCountTotal(batchResults.fastDeliveries.map(\.sourceRetained)) : nil))
+                : localized("result.delivery_invalid")
+            if let quarantineReason {
+                batchOverviewDelivery.stringValue = quarantineReason + "\n" + batchOverviewDelivery.stringValue
+                if quarantineLocations != nil {
+                    batchOverviewDelivery.stringValue += "\n" + localized("result.final_photos_quarantine_resume")
+                }
+            }
+            if retainedOnly {
+                batchOverviewDelivery.stringValue = localized("result.retained_only_facts",
+                    value(processingCountTotal(batchResults.fastDeliveries.map(\.sourceRetained))))
+            } else if !logDetailsExpanded && !uncertain && !countsNeedReview && !quarantineBlocked {
+                if failures.map({ $0 > 0 }) == true {
+                    let retained = value(processingCountTotal(batchResults.fastDeliveries.map(\.failedSourcesRetained)))
+                    batchOverviewDelivery.stringValue = photos ? localized("result.photos_with_retained",
+                        value(batchResults.fastDeliveryCount(\.photosVerified)), retained)
+                        : localized("result.failed_sources_kept", retained)
+                } else if photos {
+                    batchOverviewDelivery.stringValue = localized("result.photos_local_count",
+                        value(batchResults.fastDeliveryCount(\.photosVerified)))
+                } else { batchOverviewDelivery.isHidden = true }
+            }
+            let cleanup = usable && !batchResults.fastDeliveries.isEmpty
+                && batchResults.fastDeliveries.allSatisfy { $0.primaryCleanupComplete && $0.finalizationError == nil }
+            let primary = logDetailsExpanded && photos && cleanup ? localized("result.cleanup_primary") + "\n" : ""
+            batchOverviewCleanup.stringValue = primary
+                + batchResults.outputCleanupText(detailed: logDetailsExpanded, privacy: privacyEnabled)
+            batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .labelColor
+            if retainedOnly && !cleanupNeedsAttention { batchOverviewCleanup.isHidden = true }
+            if deferred {
+                batchOverviewDelivery.stringValue = batchResults.fastDeliveries.filter(\.isDeferred)
+                    .map(\.deferredDetails).joined(separator: "\n")
+                batchOverviewCleanup.isHidden = !logDetailsExpanded
+            }
+        }
+        if let unavailableVerification {
+            let facts = batchOverviewDelivery.isHidden ? "" : "\n" + batchOverviewDelivery.stringValue
+            batchOverviewDelivery.stringValue = unavailableVerification.label + facts
+            batchOverviewDelivery.isHidden = false
+            batchOverviewCleanup.stringValue = batchResults.outputCleanupText(detailed: logDetailsExpanded, privacy: privacyEnabled)
+            batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .labelColor
+            batchOverviewCleanup.isHidden = !logDetailsExpanded && !cleanupNeedsAttention
+        }
+        for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
+            label.toolTip = label.stringValue
+            label.setAccessibilityLabel(label.stringValue)
+        }
+        batchOverview.isHidden = false
+        fileProgressRow.isHidden = true
+        if batchResults.mandatoryEvidenceConflict { setStatus(title) }
+        else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
+        else if unavailableVerification != nil { setLocalizedStatus("result.independent_verification.title") }
+        else if interrupted { setLocalizedStatus("result.process_terminated") }
+        else if countsNeedReview { setLocalizedStatus("result.counts_need_review") }
+        else if preparationStopped { setLocalizedStatus("result.photos_preparation_stopped") }
+        else if uncertain { setLocalizedStatus("result.unconfirmed") }
+        else if deferred { setLocalizedStatus("result.delivery_deferred") }
+        else if quarantineBlocked { setLocalizedStatus("result.final_photos_quarantine_title") }
+        else if batchResults.hasPartialSuccess || retainedOnly { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
+        updateLogPresentation()
+    }
+
+    @objc func showSettings() { openSettings(section: "general") }
+
+    private func openSettings(section: String) {
+        guard configurationControlsEnabled, window.attachedSheet == nil else { return }
+        settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode,
+            fast: selectedOperation.backendMode == "fast-img",
+            avif: selectedOperation == .fastImgAvif,
+            videos: selectedOperation == .adjacent ? processingPopup.indexOfSelectedItem == 2
+                : selectedOperation.backendMode != "fast-img",
+            interfaceOnly: selectedOperation == .restoreJpeg) { [weak self] in
+            guard let self else { return }
+            let language = self.preferences.string(forKey: languagePreferenceKey)
+                .flatMap(AppLanguage.init(rawValue:)) ?? .system
+            if language != LocalizationCatalog.shared.language { self.languageChanged(language) }
+            let appearance = self.preferences.string(forKey: appearancePreferenceKey)
+                .flatMap(AppAppearance.init(rawValue:)) ?? .system
+            appearance.apply()
+            let developer = self.preferences.bool(forKey: developerPreferenceKey)
+            if self.developerMode != developer { self.setDeveloperMode(developer) }
+            self.applyInterfaceZoom(savedInterfaceZoom(self.preferences))
+            self.configurationChanged()
+            self.updateWindowSize()
+        }
+        settingsPanel?.show(for: window, section: section)
+    }
+
+    @objc private func openHelp() {
+        if processingGuide == nil { processingGuide = ProcessingGuideController() }
+        processingGuide?.show(relativeTo: window, context: operationPopup.titleOfSelectedItem ?? "",
+            topic: selectedOperation == .restoreJpeg ? "restore" : nil)
+    }
+
+    @objc private func repairCore() {
+        guard configurationControlsEnabled, processorStatus != .ready else { return }
+        if developerMode {
+            let chooser = NSOpenPanel()
+            chooser.canChooseDirectories = false
+            chooser.allowsMultipleSelection = false
+            chooser.beginSheetModal(for: window) { [weak self] response in
+                guard response == .OK, let self, let url = chooser.url else { return }
+                guard FileManager.default.isExecutableFile(atPath: url.path) else {
+                    self.present(HostError(message: localized("status.processor_unavailable")))
+                    return
+                }
+                guiPreferences.set(url.path, forKey: "MFBGuiCoreBinary")
+                self.show()
+            }
+        } else if let url = URL(string: "https://github.com/nowaytouse/modern-format-boost/releases/tag/nightly") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func languageChanged(_ language: AppLanguage) {
+        invalidatePreflight()
+        preflightPanel?.close()
+        preflightPanel = nil
+        LocalizationCatalog.shared.select(language)
+        applyLocalization()
+        (NSApp.delegate as? AppDelegate)?.configureMenus()
+        updateMetadataSafetyNotice()
+        if !batchOverview.isHidden { refreshBatchOverview() }
+    }
+
+    private func replaceTitles(_ popup: NSPopUpButton, with titles: [String]) {
+        let selected = max(0, popup.indexOfSelectedItem)
+        popup.removeAllItems()
+        popup.addItems(withTitles: titles)
+        popup.selectItem(at: min(selected, max(0, titles.count - 1)))
+    }
+
+    private func applyLocalization() {
+        let locale = LocalizationCatalog.shared.language.resourceName ?? Bundle.main.preferredLocalizations.first ?? "en"
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        calendar.locale = Locale(identifier: locale)
+        elapsedFormatter.calendar = calendar
+        elapsedFormatter.allowedUnits = [.year, .month, .weekOfMonth, .day, .hour, .minute, .second]
+        elapsedFormatter.unitsStyle = .full
+        elapsedFormatter.maximumUnitCount = 3
+        elapsedFormatter.zeroFormattingBehavior = .dropAll
+        subtitleLabel.stringValue = localized(isDebugWindow ? "debug.banner" : "app.subtitle")
+        subtitleLabel.toolTip = subtitleLabel.stringValue
+        window.title = isDebugWindow ? localized("window.debug_title", appVersion) : "Modern Format Boost · \(appVersion)"
+        targetField.placeholderString = localized("field.target.placeholder")
+        backupField.placeholderString = localized("field.backup.placeholder")
+        targetField.setAccessibilityLabel(localized("field.target"))
+        backupField.setAccessibilityLabel(localized("field.backup"))
+        backupLabel.stringValue = localized("field.backup")
+        mediaLabel.stringValue = localized("field.media")
+        operationLabel.stringValue = localized("field.operation")
+        photosScopeLabel.stringValue = localized("field.photos_scope")
+        processingPopup.setAccessibilityLabel(mediaLabel.stringValue)
+        operationPopup.setAccessibilityLabel(operationLabel.stringValue)
+        photosScopeButton.setAccessibilityLabel(photosScopeLabel.stringValue)
+        chooseButton.title = localized("button.choose")
+        backupButton.title = localized("button.choose")
+        chooseButton.toolTip = localized("button.choose_target")
+        backupButton.toolTip = localized("button.choose_backup")
+        chooseButton.setAccessibilityLabel(chooseButton.toolTip)
+        backupButton.setAccessibilityLabel(backupButton.toolTip)
+        openButton.title = localized("button.open_terminal")
+        copyButton.title = localized("button.copy_command")
+        runButton.title = localized("button.run")
+        updateHistoryRemovalNotice()
+        historyPanel?.refreshRemovalAvailability()
+        refreshUnreadResults()
+        settingsButton.title = localized("settings.title")
+        settingsButton.toolTip = localized("settings.title")
+        settingsButton.setAccessibilityLabel(localized("settings.title"))
+        preflightButton.toolTip = localized("preflight.title")
+        preflightButton.setAccessibilityLabel(localized("preflight.title"))
+        helpButton.toolTip = localized("button.help")
+        helpButton.setAccessibilityLabel(localized("button.help"))
+        diagnosticsButton.toolTip = localized("button.photos_diagnostics")
+        diagnosticsButton.setAccessibilityLabel(localized("button.photos_diagnostics"))
+        diagnosticsPanel?.title = localized("button.photos_diagnostics")
+        historyButton.toolTip = privacyEnabled ? localized("button.history") : resolvedHistoryDirectory.path
+        refreshPrivacyPresentation()
+        pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
+        stopButton.title = localized("button.stop")
+        statusLabel.setAccessibilityLabel(localized("status.accessibility_label"))
+        updateOptionTitles()
+        commandField.placeholderString = localized("command.placeholder")
+        replaceTitles(processingPopup, with: [
+            localized("media.both"), localized("media.images"), localized("media.videos"),
+        ])
+        refreshOperationPopup()
+        refreshCountStatus()
+        refreshFileProgress()
+        refreshLatestDiagnostics()
+        refreshDiagnostics()
+        refreshStatus()
+        refreshProcessingStatus()
+        updateLogPresentation()
+    }
+
+    private func updateOptionTitles() {
+        for (control, key, flag) in [
+            (ultimateCheck, "option.ultimate", "--ultimate"),
+            (verboseCheck, "option.verbose", "--verbose"),
+            (shortestPathCheck, "option.shortest_path", "--shortest-path"),
+            (resumeCheck, "option.resume", "--resume"),
+            (freshCheck, "option.fresh", "--no-resume"),
+            (archiveCheck, "option.archive", "--archive"),
+            (retryCheck, "option.retry", "--retry"),
+            (forceCheck, "option.force", "--force"),
+            (dryRunCheck, "option.dry_run", "--dry-run"),
+            (plainCheck, "option.plain", "--plain"),
+            (inPlaceCheck, "option.in_place", "--in-place"),
+            (watchCheck, "option.watch", "--watch"),
+        ] { control.title = localized(key) + (developerMode ? " (\(flag))" : "") }
+        for (control, key) in [
+            (ultimateCheck, "option.ultimate.help"), (verboseCheck, "option.verbose.help"),
+            (shortestPathCheck, "option.shortest_path.help"), (resumeCheck, "option.resume.help"),
+            (freshCheck, "option.fresh.help"), (archiveCheck, "option.archive.help"),
+            (retryCheck, "option.retry.help"), (forceCheck, "option.force.help"),
+            (dryRunCheck, "option.dry_run.help"), (plainCheck, "option.plain.help"),
+            (inPlaceCheck, "option.in_place.help"), (watchCheck, "option.watch.help"),
+        ] { control.toolTip = localized(key) }
+        shortestPathCheck.toolTip = localized("option.shortest_path.help") + "\n"
+            + localized("photos.source.notice") + "\n" + localized("photos.source.detail")
+    }
+
+    private func refreshOperationPopup() {
+        let selected = selectedOperation
+        let keys = [
+            "adjacent", "fast_jxl", "fast_avif", "fast_video", "restore_jpeg", "collect",
+            "compare", "merge_xmp", "icloud_import", "diagnostic", "cache_clean", "database",
+        ]
+        operationPopup.removeAllItems()
+        for (operation, key) in zip(OperationMode.allCases, keys)
+            where developerMode || !operation.developerOnly {
+            operationPopup.addItem(withTitle: localized("operation.\(key)"))
+            operationPopup.lastItem?.representedObject = operation.rawValue
+        }
+        let retained = operationPopup.itemArray.first {
+            ($0.representedObject as? String) == selected.rawValue
+        }
+        operationPopup.select(retained ?? operationPopup.itemArray.first)
+        if selectedOperation != selected { restoreOptions(for: selectedOperation) }
+    }
+
+    private func setHistoryRemovalInProgress(_ busy: Bool) {
+        historyRemovalInProgress = busy
+        updateHistoryRemovalNotice()
+        runButton.isEnabled = !busy && configurationControlsEnabled && !restoreFixture
+        openButton.isEnabled = runButton.isEnabled
+        updateMetadataSafetyNotice()
+        updateWindowSize()
+    }
+
+    private func updateHistoryRemovalNotice() {
+        historyRemovalNotice.stringValue = localized("history.remove.processing_unavailable")
+        historyRemovalNotice.setAccessibilityLabel(historyRemovalNotice.stringValue)
+        historyRemovalNotice.isHidden = !historyRemovalInProgress
+    }
+
+    private func setProcessing(_ processing: Bool) {
+        if processing { invalidatePreflight() }
+        configurationControlsEnabled = !processing
+        (window.contentView as? NativeDropView)?.acceptsDrops = !processing
+        for control in [
+            chooseButton, backupButton, operationPopup, openButton, copyButton, runButton, settingsButton,
+        ] {
+            control.isEnabled = !processing
+        }
+        applyCapabilityState()
+        if historyRemovalInProgress {
+            runButton.isEnabled = false
+            openButton.isEnabled = false
+        }
+        historyPanel?.refreshRemovalAvailability()
+        pauseButton.isEnabled = processing && host.controlState != "cancelled"
+        stopButton.isEnabled = processing && host.controlState != "cancelled"
+        pauseButton.title = localized("button.pause")
+        if processing {
+            if processingStartedAt == nil {
+                resultNotifier.beginTask()
+                announcedGate = nil
+                processingStartedAt = ProcessingStart()
+                processingActivity = ProcessInfo.processInfo.beginActivity(
+                    options: .userInitiatedAllowingIdleSystemSleep,
+                    reason: "Processing user-selected media"
+                )
+                let timer = Timer(timeInterval: 1, target: self,
+                                  selector: #selector(refreshProcessingStatus), userInfo: nil, repeats: true)
+                RunLoop.main.add(timer, forMode: .common)
+                refreshTimer = timer
+            }
+            progressIndicator.startAnimation(nil)
+            refreshProcessingStatus()
+        } else {
+            refreshTimer?.invalidate()
+            refreshTimer = nil
+            processingStartedAt = nil
+            if let activity = processingActivity { ProcessInfo.processInfo.endActivity(activity) }
+            processingActivity = nil
+            progressIndicator.stopAnimation(nil)
+            fileProgress = FileStageProgress()
+            gateActivity = GateCheckActivity()
+            refreshFileProgress()
+        }
+    }
+
+    private func validateGateActivityForSelfTest() throws {
+        let oldPhase = logPhase
+        let oldActivity = gateActivity
+        let oldWarnings = latestDiagnostics
+        let oldBatch = batchResults
+        let oldLog = logView.string
+        let oldFullLog = NSAttributedString(attributedString: fullLogPresentation)
+        let oldPrivateLog = NSAttributedString(attributedString: privateLogPresentation)
+        defer {
+            fullLogPresentation.setAttributedString(oldFullLog)
+            privateLogPresentation.setAttributedString(oldPrivateLog)
+            logPhase = oldPhase
+            gateActivity = oldActivity
+            latestDiagnostics = oldWarnings
+            batchResults = oldBatch
+            logView.string = oldLog
+            refreshLatestDiagnostics()
+            refreshFileProgress()
+        }
+        let phase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        let activity = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"unit-gate","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}"#
+        appendLog(phase + "\n" + activity, now: 10)
+        refreshFileProgress(now: 75)
+        guard !fileProgressRow.isHidden, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.activity.running", localized("gate.check.metadata"), "3", "6")
+                + " · " + localized("gate.activity.updated", "65"),
+              !logView.string.contains("MFB_GATE_ACTIVITY="), fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+            throw HostError(message: "Gate activity fabricated file percentages, lost elapsed receipt age or accessibility")
+        }
+        let failed = activity.replacingOccurrences(of: "\"completed\":3", with: "\"completed\":4")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"failed\"")
+        appendLog(failed, now: 80)
+        guard gateActivity.event?.state == "failed", gateActivity.event?.completed == 4,
+              fileProgressLabel.stringValue == localized("gate.activity.failed", localized("gate.check.metadata"), "4", "6", "2") else {
+            throw HostError(message: "Gate failure hid unexecuted checks or claimed six completed checks")
+        }
+        appendLog(activity, now: 81)
+        guard gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.activity.invalid"),
+              latestDiagnostics.warning == "[WARN] " + localized("gate.activity.invalid") else {
+            throw HostError(message: "Contradictory Gate activity was silently accepted")
+        }
+        appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#, now: 90)
+        guard gateActivity.event == nil, !gateActivity.invalid else {
+            throw HostError(message: "A new processing phase retained obsolete verification activity")
+        }
+        let decode = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"decode-unit","gate":"local","check":"decode","completed":5,"total":6,"state":"running","file_progress":{"processed":0,"total":2}}"#
+        appendLog(phase + "\n" + decode, now: 91)
+        let one = decode.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":1")
+        appendLog(one, now: 92)
+        guard !fileProgressIndicator.isHidden, !fileProgressIndicator.isIndeterminate,
+              fileProgressIndicator.doubleValue == 50, gateActivity.event?.file_progress?.processed == 1 else {
+            throw HostError(message: "Decode progress did not use its real check denominator")
+        }
+        appendLog(decode, now: 93)
+        guard gateActivity.invalid, fileProgressIndicator.isHidden else {
+            throw HostError(message: "Decode check progress moved backwards")
+        }
+        gateActivity = GateCheckActivity()
+        appendLog(decode, now: 94)
+        let all = decode.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":2")
+        appendLog(all, now: 95)
+        guard fileProgressIndicator.doubleValue < 100 else { throw HostError(message: "Running decode checks claimed terminal completion") }
+        appendLog(all.replacingOccurrences(of: "\"completed\":5", with: "\"completed\":6")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"failed\""), now: 96)
+        guard gateActivity.event?.state == "failed", fileProgressLabel.textColor == .systemRed,
+              fileProgressLabel.stringValue.contains(localized("gate.activity.files", "2", "2")) else {
+            throw HostError(message: "Completed probe attempts hid a failed Gate")
+        }
+        gateActivity = GateCheckActivity()
+        _ = gateActivity.ingest(activity, now: 100)
+        setProcessing(false)
+        guard gateActivity.event == nil, !gateActivity.invalid else {
+            throw HostError(message: "Ending a run retained live Gate activity")
+        }
+        try validateGateFileProgressForSelfTest()
+    }
+
+    private static func gateFileFixtureEvent(check: String, processed: Int? = nil,
+                                             total: Int = 3, state: String = "running") throws -> String {
+        guard let index = ["count", "size", "blake3", "metadata", "orient", "decode"].firstIndex(of: check) else {
+            throw HostError(message: "Unknown synthetic Gate check")
+        }
+        var value: [String: Any] = ["schema_version": 1, "stage_id": "gate-file-fixture", "gate": "local",
+                                   "check": check, "completed": state == "running" ? index : index + 1,
+                                   "total": 6, "state": state]
+        if let processed { value["file_progress"] = ["processed": processed, "total": total] }
+        return "MFB_GATE_ACTIVITY=" + String(decoding: try JSONSerialization.data(withJSONObject: value), as: UTF8.self)
+    }
+
+    private func validateGateFileProgressForSelfTest() throws {
+        let phase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        for check in ["blake3", "metadata", "orient", "decode"] {
+            gateActivity = GateCheckActivity()
+            batchResults = BatchResults()
+            appendLog(phase + "\n" + (try Self.gateFileFixtureEvent(check: check, processed: 0)), now: 1)
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 1), now: 2)
+            let key = check == "decode" ? "gate.activity.files" : "gate.activity.files.\(check)"
+            guard !gateActivity.invalid, !fileProgressIndicator.isHidden,
+                  abs(fileProgressIndicator.doubleValue - 100.0 / 3) < 0.001,
+                  fileProgressLabel.stringValue.contains(localized(key, "1", "3")),
+                  fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+                throw HostError(message: "Gate file attempts lost their check-specific unit or accessibility: \(check)")
+            }
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 3), now: 3)
+            guard fileProgressIndicator.doubleValue < 100, gateActivity.event?.state == "running",
+                  batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
+                throw HostError(message: "Completed Gate attempts became successful media or a completed batch: \(check)")
+            }
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 3, state: "failed"), now: 4)
+            guard !gateActivity.invalid, gateActivity.event?.state == "failed", fileProgressIndicator.doubleValue < 100,
+                  fileProgressLabel.textColor == .systemRed, batchResults.mandatoryEvidenceConflict else {
+                throw HostError(message: "A failed Gate with all attempts finished was presented as complete: \(check)")
+            }
+            gateActivity = GateCheckActivity()
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 1), now: 5)
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 1, state: "failed"), now: 6)
+            guard !gateActivity.invalid, gateActivity.event?.file_progress?.processed == 1 else {
+                throw HostError(message: "Interrupted Gate attempts discarded their actual partial count: \(check)")
+            }
+            let start = try Self.gateFileFixtureEvent(check: check, processed: 1)
+            for next in [try Self.gateFileFixtureEvent(check: check, processed: 0),
+                         try Self.gateFileFixtureEvent(check: check, processed: 1, total: 4),
+                         try Self.gateFileFixtureEvent(check: check)] {
+                var invalid = GateCheckActivity()
+                _ = invalid.ingest(start, now: 1)
+                _ = invalid.ingest(next, now: 2)
+                guard invalid.invalid else { throw HostError(message: "Gate attempt count regressed, changed scope or disappeared: \(check)") }
+            }
+        }
+        gateActivity = GateCheckActivity()
+        batchResults = BatchResults()
+        for check in ["blake3", "metadata", "orient", "decode"] {
+            appendLog(try Self.gateFileFixtureEvent(check: check), now: 10)
+            guard !gateActivity.invalid, gateActivity.event?.file_progress == nil, fileProgressIndicator.isHidden else {
+                throw HostError(message: "A new Gate check kept the preceding check's denominator")
+            }
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 0, total: 2), now: 11)
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 2, total: 2), now: 12)
+            guard !gateActivity.invalid, fileProgressIndicator.doubleValue < 100 else {
+                throw HostError(message: "A new Gate check could not establish its own attempt count")
+            }
+        }
+        gateActivity = GateCheckActivity()
+        appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 3, state: "file_failures"), now: 13)
+        appendLog(try Self.gateFileFixtureEvent(check: "orient"), now: 14)
+        guard !gateActivity.invalid, gateActivity.event?.check == "orient", fileProgressIndicator.isHidden,
+              !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Completed local file failures blocked the next independent check or retained their denominator")
+        }
+        var invalid = GateCheckActivity()
+        _ = invalid.ingest(try Self.gateFileFixtureEvent(check: "count", processed: 0), now: 1)
+        guard invalid.invalid else { throw HostError(message: "An unmeasured Gate check accepted invented file counts") }
+
+        gateActivity = GateCheckActivity()
+        batchResults = BatchResults()
+        appendLog(phase + "\n" + (try Self.gateFileFixtureEvent(check: "metadata", processed: 0, total: 1_024)), now: 20)
+        let events = try (1...1_024).map { try Self.gateFileFixtureEvent(check: "metadata", processed: $0, total: 1_024) }
+        let started = ProcessInfo.processInfo.systemUptime
+        for offset in stride(from: 0, to: events.count, by: 64) {
+            autoreleasepool { appendLog(events[offset..<(offset + 64)].joined(separator: "\n"), now: 21) }
+        }
+        guard !gateActivity.invalid, gateActivity.event?.file_progress?.processed == 1_024,
+              fileProgressIndicator.doubleValue == 99.99, batchResults.totals.isEmpty,
+              !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Batched Gate progress lost attempts or fabricated completed media")
+        }
+        print("runtime progress stress: 1024 events in 16 deliveries, \(ProcessInfo.processInfo.systemUptime - started)s")
+        gateActivity = GateCheckActivity()
+        let contradictory = try [0, 2, 1, 3].map { try Self.gateFileFixtureEvent(check: "metadata", processed: $0) }
+        appendLog(contradictory.joined(separator: "\n"), now: 22)
+        guard batchResults.mandatoryEvidenceConflict,
+              latestDiagnostics.warning == "[WARN] " + localized("gate.activity.invalid"),
+              logView.string.contains(localized("gate.activity.invalid")) else {
+            throw HostError(message: "Batched progress discarded contradictory evidence or its diagnostic")
+        }
+    }
+
+    func showGateFileProgressFixture(caseName: String = "metadata") throws {
+        photosProgressFixture = true
+        clearBatchLog()
+        targetField.stringValue = "/synthetic/検証と归档/原件与输出/long-file-name-🌿.jpeg"
+        appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#)
+        switch caseName {
+        case "blake3", "metadata", "orient", "decode":
+            appendLog(try Self.gateFileFixtureEvent(check: caseName, processed: 0))
+            appendLog(try Self.gateFileFixtureEvent(check: caseName, processed: 2))
+        case "zero": appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 0))
+        case "complete": appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 3))
+        case "next":
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 3))
+            appendLog(try Self.gateFileFixtureEvent(check: "orient"))
+        case "failed":
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 2))
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 2, state: "failed"))
+        case "missing": appendLog(try Self.gateFileFixtureEvent(check: "metadata"))
+        case "backwards":
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 2))
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 1))
+        default: throw HostError(message: "Unknown Gate file-progress fixture case")
+        }
+        runButton.isEnabled = false
+        openButton.isEnabled = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func validateStatusLocalizationForSelfTest() throws {
+        let catalog = LocalizationCatalog.shared
+        let language = catalog.language
+        let previousProcessor = processorStatus
+        let previousDisplay = statusDisplay
+        let previousStartedAt = processingStartedAt
+        let previousTarget = targetField.stringValue
+        let previousBackup = backupField.stringValue
+        let previousCommand = commandField.stringValue
+        let optionStates = optionControls.map { $0.0.state }
+        defer {
+            processorStatus = previousProcessor
+            statusDisplay = previousDisplay
+            processingStartedAt = previousStartedAt
+            targetField.stringValue = previousTarget
+            backupField.stringValue = previousBackup
+            commandField.stringValue = previousCommand
+            languageChanged(language)
+        }
+        targetField.stringValue = "/synthetic/language-draft"
+        backupField.stringValue = "/synthetic/language-backup"
+        commandField.stringValue = "synthetic command preview"
+        for language in [AppLanguage.english, .simplifiedChinese, .japanese] {
+            languageChanged(language)
+            for reason in IndependentVerificationUnavailable.allCases {
+                guard !reason.label.hasPrefix("result.independent_verification.") else {
+                    throw HostError(message: "Missing localized independent verification cause: \(reason.rawValue)")
+                }
+            }
+            let repeatLabel = localized("log.repeated_occurrences", "3")
+            guard repeatLabel != "log.repeated_occurrences", repeatLabel.contains("3") else {
+                throw HostError(message: "Repeated-log count was not localized for every language")
+            }
+            for (state, key) in [(ProcessorReadiness.checking, "status.checking_processor"),
+                                 (.ready, "status.processor_ready"), (.unavailable, "status.processor_unavailable")] {
+                processorStatus = state
+                statusDisplay = .processor
+                languageChanged(language)
+                guard statusLabel.stringValue == localized(key), processorStatus == state,
+                      settingsButton.title == localized("settings.title"),
+                      settingsButton.accessibilityLabel() == localized("settings.title"),
+                      statusLabel.toolTip == statusLabel.stringValue,
+                      statusRecoveryButton.isHidden == (state != .unavailable) else {
+                    throw HostError(message: "Language change retained stale core readiness wording or changed readiness")
+                }
+            }
+            processorStatus = .failed(diagnostic: "synthetic original failure", truncated: true)
+            languageChanged(language)
+            guard statusLabel.stringValue == localized("status.processor_failed") + ": synthetic original failure\n"
+                + localized("status.processor_diagnostic_truncated"), processorStatus != .ready else {
+                throw HostError(message: "Language change lost the core failure evidence or relabeled it ready")
+            }
+            guard ProcessorReadiness.failed(diagnostic: "synthetic original failure", truncated: false).message
+                    == localized("status.processor_failed") + ": synthetic original failure" else {
+                throw HostError(message: "Untruncated startup output claimed missing diagnostics")
+            }
+            for key in ["log.omitted", "log.critical_overflow", "log.diagnostics_omitted", "log.visible_tail",
+                        "result.counts_need_review", "result.control_records_missing", "result.independent_delivery_facts",
+                        "status.processor_diagnostic_truncated", "gate.relationships.running", "gate.relationships.failed",
+                        "gate.relationships.passed", "gate.check.import_receipts", "gate.check.count_x3", "gate.check.sync",
+                        "gate.check.quarantine", "gate.check.chain"] {
+                guard localized(key) != key else { throw HostError(message: "Missing log visibility explanation: \(key)") }
+            }
+            let queue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0, maxCriticalBytes: 0, maxCriticalEntries: 0,
+                                              maxDiagnosticBytes: 0, maxDiagnosticEntries: 0)
+            _ = queue.enqueue((1...11).map { "ordinary \($0)" }.joined(separator: "\n"))
+            _ = queue.enqueue("[FAIL] synthetic diagnostic\nMFB_BATCH_RESULT={}")
+            func gap(_ controls: UInt64, _ diagnostics: UInt64) -> String {
+                ProcessLogBackpressure.gapPrefix + "{\"schema_version\":1,\"control_records\":\(controls),\"diagnostic_records\":\(diagnostics)}"
+            }
+            var gapResults = BatchResults()
+            _ = gapResults.ingestTransportGap(gap(1, 1))
+            let lostCritical = localized("log.critical_overflow", UInt64(1))
+            let omittedOrdinary = localized("log.omitted", UInt64(11))
+            guard queue.takeDelivery() == omittedOrdinary + "\n" + gap(1, 1),
+                  omittedOrdinary.contains("11"), lostCritical.contains("1"), gapResults.transportGapNotice == lostCritical,
+                  !queue.finishDelivery(), queue.isIdle else {
+                throw HostError(message: "Log visibility mixed ordinary and critical line counts")
+            }
+            _ = queue.enqueue("[FAIL] another diagnostic")
+            _ = gapResults.ingestTransportGap(gap(0, 1))
+            guard queue.takeDelivery() == gap(0, 1),
+                  gapResults.transportGapNotice == localized("log.diagnostics_omitted", UInt64(1)),
+                  !queue.enqueue("MFB_LOG_PHASE={}"), queue.finishDelivery(), !queue.isIdle,
+                  queue.takeDelivery() == gap(1, 0),
+                  !queue.finishDelivery(), queue.isIdle else {
+                throw HostError(message: "Critical-only overflow lost pending controls or inherited old counts")
+            }
+            setStatus("synthetic original diagnostic")
+            languageChanged(language)
+            guard statusLabel.stringValue == "synthetic original diagnostic" else {
+                throw HostError(message: "Language change replaced an actionable error with core readiness")
+            }
+            for key in ["status.ready", "result.partially_completed", "result.finished_with_failures", "status.stopped"] {
+                setLocalizedStatus(key)
+                languageChanged(language)
+                guard statusLabel.stringValue == localized(key) else {
+                    throw HostError(message: "Language change reset a completed, failed, or stopped status")
+                }
+            }
+        }
+        let epoch = Date(timeIntervalSince1970: 0)
+        languageChanged(.english)
+        for (seconds, unit) in [(65.0, "minute"), (3_600, "hour"), (86_700, "day"), (694_801, "week"), (31_017_600, "month"), (35_251_323, "year")] {
+            guard elapsedFormatter.string(from: epoch, to: epoch.addingTimeInterval(seconds))?.contains(unit) == true else {
+                throw HostError(message: "Elapsed time did not show the \(unit) unit")
+            }
+        }
+        let startedAt = ProcessingStart(date: epoch, uptime: ProcessInfo.processInfo.systemUptime - 35_251_323)
+        processingStartedAt = startedAt
+        languageChanged(.japanese)
+        guard statusLabel.stringValue.contains("年"), statusLabel.stringValue.contains("か月"),
+              statusLabel.stringValue.contains("週間"), statusRecoveryButton.isHidden,
+              processingStartedAt == startedAt, targetField.stringValue == "/synthetic/language-draft",
+              backupField.stringValue == "/synthetic/language-backup", commandField.stringValue == "synthetic command preview",
+              optionControls.map({ $0.0.state }) == optionStates else {
+            throw HostError(message: "Language change reset running state or the user's command draft")
+        }
+    }
+
+    private func validateFastDeliveryForSelfTest() throws {
+        let previousRequest = lastRequest
+        let previousDetails = logDetailsExpanded
+        defer {
+            lastRequest = previousRequest
+            logDetailsExpanded = previousDetails
+            updateLogPresentation()
+        }
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/results", processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl, shortestPath: true)
+        let receipt: [String: Any] = ["schema_version": 1, "succeeded": 1829, "skipped": 0,
+            "ignored": 2693, "failed": 1, "unprocessed": 0, "encoded": 1163,
+            "photos_verified": 1829, "source_retained": 1, "failed_sources_retained": 1,
+            "failed_sources_verified": 1, "failed_source_verification_error": NSNull(),
+            "retention_unknown_reason": NSNull(),
+            "primary_cleanup_complete": true, "finalization_error": NSNull()]
+        let batch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1829,"skipped":0,"failed":1,"ignored":2693,"unprocessed":0,"exit_code":1}"#
+        func line(_ fields: [String: Any]) throws -> String {
+            "MFB_FAST_IMG_RESULT=" + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        }
+        var reports = BatchResults()
+        _ = reports.ingest(batch)
+        guard try reports.ingestFastDelivery("ERR: " + line(receipt)),
+              reports.fastDeliveryIsConfirmed(photos: true, processExit: 1),
+              !reports.fastDeliveryIsConfirmed(photos: true, processExit: 9),
+              !reports.fastDeliveryIsConfirmed(photos: true, processExit: nil),
+              !reports.fastDeliveryIsConfirmed(photos: true, processExit: 1, exitedNormally: false) else {
+            throw HostError(message: "Delivery receipts did not separate a file-failure exit from a crash")
+        }
+        for (key, value) in [("photos_verified", 1828 as Any), ("source_retained", 0 as Any),
+                             ("succeeded", 1830 as Any), ("finalization_error", "cleanup failed" as Any),
+                             ("encoded", -1 as Any), ("failed", Int.max as Any), ("failed_sources_retained", 0 as Any),
+                             ("primary_cleanup_complete", false as Any)] {
+            var changed = receipt
+            changed[key] = value
+            var invalid = BatchResults()
+            _ = invalid.ingest(batch)
+            _ = try invalid.ingestFastDelivery(line(changed))
+            guard !invalid.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "Contradictory delivery fact was accepted: \(key)")
+            }
+        }
+        for missing in ["finalization_error", "failed_sources_retained", "retention_unknown_reason",
+                        "failed_sources_verified", "failed_source_verification_error"] {
+            var changed = receipt
+            changed.removeValue(forKey: missing)
+            var incomplete = BatchResults()
+            _ = incomplete.ingest(batch)
+            _ = try incomplete.ingestFastDelivery(line(changed))
+            guard !incomplete.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "A missing nullable receipt field was treated as proof: \(missing)")
+            }
+        }
+        for evidence in ["Count status: MISMATCH", "Integrity Issues: 1", "[GATE 3] verification FAIL",
+                         "[LOG] final processing summary write failed: disk full",
+                         "Error: write final processing summary; processing also failed: fast-img exited with code 1"] {
+            var conflict = BatchResults()
+            _ = conflict.ingest(batch)
+            _ = try conflict.ingestFastDelivery(line(receipt))
+            conflict.observeMandatoryEvidence(evidence)
+            conflict.observeMandatoryEvidence("Count status: MATCH")
+            guard !conflict.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "Later matching counts hid mandatory verification failure")
+            }
+        }
+        var wrongExit = BatchResults()
+        _ = wrongExit.ingest(batch.replacingOccurrences(of: "\"exit_code\":1", with: "\"exit_code\":9"))
+        _ = try wrongExit.ingestFastDelivery(line(receipt))
+        guard !wrongExit.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+            throw HostError(message: "The worker's unexpected exit was ignored")
+        }
+        _ = reports.ingestFastDelivery("MFB_FAST_IMG_RESULT={}")
+        _ = try reports.ingestFastDelivery(line(receipt))
+        guard !reports.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+            throw HostError(message: "A later receipt erased malformed-result evidence")
+        }
+        var diagnostics = LatestDiagnostics()
+        _ = diagnostics.ingest("[FAIL] h_1727272547459.jpeg: end-of-image marker is missing; source remains unmodified")
+        _ = diagnostics.ingest("Error: fast-img exited with code 1")
+        _ = diagnostics.ingest("Error: fast-img batch recorded 1 failed source(s); failed sources retained")
+        _ = diagnostics.ingest("Failed: 1")
+        _ = diagnostics.ingest("WARNING: Always keep a backup of your original media before optimization.")
+        guard diagnostics.failure?.contains("h_1727272547459.jpeg") == true, diagnostics.warning == nil else {
+            throw HostError(message: "Generic exit or backup advice displaced an actionable media error")
+        }
+        logDetailsExpanded = false
+        clearBatchLog()
+        appendLog(batch.replacingOccurrences(of: "\"unprocessed\":0", with: "\"unprocessed\":null"))
+        appendLog("MFB_FAST_IMG_RESULT={}")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+              batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Incomplete counters concealed an invalid delivery receipt")
+        }
+        clearBatchLog()
+        let cleanup: [String: Any] = ["schema_version": 1, "run_id": "synthetic-cleanup-run", "output_path": "/synthetic/results_optimized",
+            "outcome": "removed", "removed_files": 2, "already_absent_files": 0, "pruned_directories": 1, "error": NSNull()]
+        func cleanupLine(_ fields: [String: Any]) throws -> String {
+            OutputCleanupReceipt.prefix + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        }
+        var blockedVerification = cleanup
+        blockedVerification["outcome"] = "verification_blocked"
+        for key in ["removed_files", "already_absent_files", "pruned_directories"] { blockedVerification[key] = NSNull() }
+        let unavailableMarker = #"MFB_BATCH_VERIFICATION_UNAVAILABLE={"schema_version":1,"run_id":"synthetic-cleanup-run","reason":"checkpoint"}"#
+        func independentVerificationFixture() throws -> BatchResults {
+            var fixture = BatchResults()
+            _ = fixture.ingest(batch)
+            _ = fixture.ingestOutputCleanup(try cleanupLine(blockedVerification))
+            return fixture
+        }
+        for terminal in [unavailableMarker.replacingOccurrences(of: "checkpoint", with: "unknown"),
+                         unavailableMarker.replacingOccurrences(of: "synthetic-cleanup-run", with: "wrong-run")] {
+            var invalid = try independentVerificationFixture()
+            _ = invalid.ingestTerminalEvidence(terminal, runID: "synthetic-cleanup-run")
+            guard invalid.mandatoryEvidenceConflict, invalid.confirmedUnavailableVerification(photos: true, processExit: 1, exitedNormally: true) == nil else {
+                throw HostError(message: "Unbound independent verification evidence received a cause")
+            }
+        }
+        batchResults = try independentVerificationFixture()
+        _ = batchResults.ingestTerminalEvidence(unavailableMarker, runID: "synthetic-cleanup-run")
+        guard batchResults.confirmedUnavailableVerification(photos: true, processExit: 0, exitedNormally: true) == nil,
+              batchResults.confirmedUnavailableVerification(photos: false, processExit: 1, exitedNormally: true) == nil else {
+            throw HostError(message: "Contradictory exit or cleanup confirmed the independent verification cause")
+        }
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.independent_verification.title"),
+              batchOverviewTitle.textColor == .systemOrange,
+              batchOverviewDelivery.stringValue.contains(IndependentVerificationUnavailable.checkpoint.label),
+              batchOverviewDelivery.accessibilityLabel() == batchOverviewDelivery.stringValue,
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.verification_blocked"),
+              batchResults.totals["img"]?[0] == 1829 else {
+            throw HostError(message: "Independent verification failure lost its accessible cause, cleanup, or earlier counts")
+        }
+        appendLog("Integrity Issues: 1")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Independent verification unavailable masked an integrity failure")
+        }
+        clearBatchLog()
+        appendLog(try cleanupLine(cleanup))
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"metadata","completed":4,"total":6,"state":"file_failures"}"#)
+        appendLog("[GATE 1  ] metadata:❌ → FILE_FAILURES")
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"orient","completed":4,"total":6,"state":"running"}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"decode","completed":6,"total":6,"state":"file_failures","file_progress":{"processed":2,"total":2}}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"remaining-verified","gate":"local","check":"decode","completed":6,"total":6,"state":"passed"}"#)
+        appendLog("[FAIL] sample.jpeg: decoder failed")
+        appendLog(try line(receipt))
+        appendLog(batch)
+        processingCompleted(.failure(HostError(message: "synthetic exit=1")))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !batchOverview.isHidden,
+              batchOverviewTitle.stringValue == localized("result.attention_count", "1"),
+              batchOverviewTitle.textColor == .systemOrange, batchOverviewCounts.textColor == .labelColor,
+              batchOverviewDelivery.textColor == .labelColor,
+              batchOverviewDelivery.stringValue.contains("1829"), !batchOverviewDelivery.stringValue.contains("1163"),
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.removed"),
+              batchOverviewCleanup.isHidden, logScroll.isHidden, latestDiagnosticsRow.isHidden,
+              !logView.string.contains("MFB_FAST_IMG_RESULT="),
+              window.contentView!.bounds.height < mainWindowContentSize.height,
+              batchOverview.frame.width >= logScroll.frame.width - 1 else {
+            throw HostError(message: "Independent partial-result overview lost counts or overflowed the native layout")
+        }
+        let compact = batchOverviewCounts.stringValue
+        guard compact == batchResults.compactSummary, !compact.contains(" 0"),
+              processDiagnosticColor("[FAIL] sample.jpeg: decoder failed", confirmedFileFailure: true) == .systemOrange,
+              processDiagnosticColor("[FAIL] sample.jpeg: decoder failed") == .systemRed,
+              processDiagnosticColor("Integrity Issues: 1") == .systemRed,
+              processDiagnosticColor("[FATAL] disk unavailable") == .systemRed,
+              processDiagnosticColor("Error: No space left on device") == .systemRed,
+              !hasMandatoryVerificationFailure("Count status: EXPLAINED (1 fewer; all 1 listed below)"),
+              !hasMandatoryVerificationFailure("Integrity: WARNINGS"),
+              LogTone.classify("Count status: EXPLAINED (1 fewer; all 1 listed below)") == .warning,
+              LogTone.classify("Integrity: WARNINGS") == .warning else {
+            throw HostError(message: "Expected file failures were not separated from serious diagnostics")
+        }
+        logDetailsExpanded = true
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !logScroll.isHidden, logScroll.frame.height >= 260,
+              !batchOverviewCleanup.isHidden, batchOverviewDelivery.stringValue.contains("1163"),
+              statusLabel.isHidden,
+              latestFailureLabel.stringValue == localized("log.unsuccessful_file", "[FAIL] sample.jpeg: decoder failed"),
+              latestFailureLabel.textColor == .labelColor,
+              logDetailsButton.accessibilityLabel() == localized("log.details.hide") else {
+            throw HostError(message: "Expanding details lost original diagnostics or disclosure accessibility")
+        }
+        let fileDiagnostic = styledLog("[FAIL] sample.jpeg: decoder failed")
+        let paddedDiagnostic = styledLog("[FAIL    ] sample.jpeg: decoder failed")
+        let seriousDiagnostic = styledLog("[GATE 3] verification FAIL")
+        guard fileDiagnostic.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemOrange,
+              fileDiagnostic.attribute(.foregroundColor, at: 7, effectiveRange: nil) as? NSColor == .labelColor,
+              fileDiagnostic.attribute(.font, at: 7, effectiveRange: nil) as? NSFont == LogTone.normal.font,
+              paddedDiagnostic.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemOrange,
+              paddedDiagnostic.attribute(.foregroundColor, at: 11, effectiveRange: nil) as? NSColor == .labelColor,
+              seriousDiagnostic.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed else {
+            throw HostError(message: "Confirmed file diagnostics were overemphasized or serious failures were muted")
+        }
+        logDetailsExpanded = false
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        var remaining = cleanup
+        remaining["outcome"] = "residual"
+        clearBatchLog()
+        appendLog(try line(receipt))
+        appendLog(batch)
+        appendLog(try cleanupLine(remaining))
+        appendLog(try cleanupLine(remaining))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard !batchOverviewCleanup.isHidden, batchOverviewCleanup.textColor == .systemOrange,
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.residual"),
+              batchResults.outputCleanups.count == 1, batchResults.fastDeliveryCount(\.succeeded) == 1829,
+              batchOverviewTitle.stringValue == localized("result.attention_count", "1") else {
+            throw HostError(message: "Output cleanup hid leftovers, inflated counts or erased independently confirmed delivery")
+        }
+        appendLog(try cleanupLine(cleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchResults.outputCleanupInvalid, batchOverviewCleanup.stringValue == localized("cleanup.invalid"),
+              batchResults.fastDeliveryCount(\.succeeded) == 1829 else {
+            throw HostError(message: "Conflicting cleanup receipts were accepted or changed media counts")
+        }
+        appendLog("MFB_FAST_IMG_RESULT={}")
+        processingCompleted(.failure(HostError(message: "synthetic exit=1")))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
+            throw HostError(message: "Malformed delivery receipt was presented as a confirmed partial completion")
+        }
+        clearBatchLog()
+        var quarantinedReceipt = receipt
+        quarantinedReceipt["source_retained"] = 1830
+        quarantinedReceipt["primary_cleanup_complete"] = false
+        quarantinedReceipt["finalization_error"] =
+            "Gate 2 failed: quarantine expected=0 quarantined actual=2; wc preserved at /synthetic/private_output"
+        var blockedCleanup = cleanup
+        blockedCleanup["outcome"] = "verification_blocked"
+        for key in ["removed_files", "already_absent_files", "pruned_directories"] {
+            blockedCleanup[key] = NSNull()
+        }
+        appendLog(try line(quarantinedReceipt))
+        appendLog(batch)
+        appendLog(try cleanupLine(blockedCleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        let quarantineReason = localized("result.final_photos_quarantine", "2")
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+              batchOverviewTitle.textColor == .systemRed,
+              batchOverviewDelivery.stringValue == quarantineReason + "\n"
+                + localized("result.independent_delivery_facts", "1163", "1829", "1830"),
+              batchOverviewDelivery.accessibilityLabel() == batchOverviewDelivery.stringValue,
+              batchOverviewDelivery.maximumNumberOfLines == 0,
+              !batchOverviewDelivery.isHidden,
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.verification_blocked"),
+              batchResults.totals["img"]?[0] == 1829 else {
+            throw HostError(message: "Final Photos quarantine lost its reason, independent facts or blocked cleanup")
+        }
+        quarantinedReceipt["finalization_error"] =
+            "Gate 2 failed: chain expected=1 actual=0; wc preserved at /synthetic/quarantine expected=0 quarantined actual=2"
+        let unrecognized = try FastImgDeliveryReceipt.decode(line(quarantinedReceipt))
+        guard unrecognized != nil, unrecognized?.finalPhotosQuarantineCount == nil else {
+            throw HostError(message: "An unrelated final verification error was labeled quarantine")
+        }
+        let typedQuarantine: [String: Any] = ["schema_version": 1,
+            "source_directory": "/synthetic/results", "output_directory": "/synthetic/results_optimized",
+            "succeeded": 0, "skipped": 4, "ignored": 9, "failed": 0, "unprocessed": 4, "encoded": 4,
+            "photos_verified": 4, "source_retained": 8, "failed_sources_retained": 0,
+            "failed_sources_verified": 0, "failed_source_verification_error": NSNull(),
+            "retention_unknown_reason": NSNull(), "primary_cleanup_complete": false,
+            "primary_verification_complete": true, "photos_quarantine_blocked": 4,
+            "photos_quarantine_locations": ["working_copies": 0, "photos_originals": 4, "affected": 4],
+            "finalization_error": "Gate 2 failed: quarantine expected=0 quarantined actual=4; wc preserved at /synthetic/results_optimized"]
+        for (working, originals, affected) in [(-1, 4, 4), (5, 0, 4), (0, 3, 4), (0, 3, 3)] {
+            var invalid = typedQuarantine
+            invalid["photos_quarantine_locations"] = ["working_copies": working, "photos_originals": originals, "affected": affected]
+            guard (try? FastImgDeliveryReceipt.decode(line(invalid))) == nil else {
+                throw HostError(message: "Quarantine location counts contradicted the final item count")
+            }
+        }
+        var overlapping = typedQuarantine
+        overlapping["photos_quarantine_locations"] = ["working_copies": 2, "photos_originals": 4, "affected": 4]
+        guard try FastImgDeliveryReceipt.decode(line(overlapping))?.finalPhotosQuarantineLocationsText != nil else {
+            throw HostError(message: "A quarantined item at both locations invalidated the receipt")
+        }
+        let typedQuarantineBatch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":4,"failed":0,"ignored":9,"unprocessed":4,"exit_code":2}"#
+        var preparationReceipt = typedQuarantine
+        preparationReceipt.removeValue(forKey: "photos_quarantine_blocked")
+        preparationReceipt.removeValue(forKey: "photos_quarantine_locations")
+        preparationReceipt["photos_verified"] = 0
+        preparationReceipt["finalization_error"] = "synthetic Photos destination preparation failed"
+        for sequence in [5, 4] {
+            clearBatchLog()
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":1,"phase":"target_preparation","pending_total":4,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"reconciling","pending_total":4,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":3,"phase":"target_preparation","pending_total":4,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":\#(sequence),"phase":"stopped","pending_total":4,"verified":0}"#)
+            appendLog(try line(preparationReceipt))
+            appendLog(typedQuarantineBatch)
+            appendLog(try cleanupLine(blockedCleanup))
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            let expectedTitle = localized(sequence == 4 ? "result.photos_preparation_stopped" : "result.unconfirmed")
+            guard batchOverviewTitle.stringValue == expectedTitle, batchOverviewTitle.textColor == .systemRed,
+                  batchOverviewDelivery.stringValue == localized("result.independent_delivery_facts", "4", "0", "8"),
+                  batchOverviewCleanup.stringValue == localized("cleanup.outcome.verification_blocked") else {
+                throw HostError(message: "Photos preparation failure lost its retained-output evidence or named an unproven stop phase")
+            }
+        }
+        let typedQuarantineEnd = #"MFB_BATCH_PHOTOS_QUARANTINE_BLOCKED={"schema_version":1,"quarantined":4}"#
+        let gateNotice = "[GATE 2  ] count:✅ blake3_sample:✅ no_error:✅ count_x3:✅ sync:✅ quarantine:❌ chain:✅ → QUARANTINE_BLOCKED"
+        let wrapperNotice = "Final Photos verification blocked by quarantine on 4 item(s); sources and working copy retained"
+        let expectedSkip = "⚠️ WRN fast-img source skipped — original file retained file=sample.jxl reason=existing JXL verified; full E1–E11 winner is not smaller (1234 B)"
+        let legacyQuarantinedPath = "/synthetic/output/sample.jxl"
+        let scopedFinding = PhotosQuarantineLogBlock.pathPrefix + legacyQuarantinedPath
+        let taggedQuarantinedPath = "/synthetic/library/another.jxl"
+        let scopedTaggedFinding = PhotosQuarantineLogBlock.pathPrefix + taggedQuarantinedPath
+        func logColor(_ row: String) -> NSColor? {
+            guard let storage = logView.textStorage else { return nil }
+            let range = (storage.string as NSString).range(of: row)
+            guard range.location != NSNotFound else { return nil }
+            return storage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+        }
+        clearBatchLog()
+        appendLog(gateNotice)
+        appendLog("           quarantine: expected 0 quarantined, got 4")
+        appendLog("           ❌ " + legacyQuarantinedPath)
+        appendLog("           [QUARANTINE] " + taggedQuarantinedPath)
+        appendLog("Failed: 0")
+        appendLog(expectedSkip)
+        appendLog(try line(typedQuarantine))
+        appendLog(typedQuarantineBatch)
+        appendLog(try cleanupLine(blockedCleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed, logColor(scopedFinding) == .systemRed,
+              batchOverviewDelivery.stringValue.hasPrefix(localized("result.final_photos_quarantine", "4")) else {
+            throw HostError(message: "Quarantine worker evidence concealed a missing launcher verdict")
+        }
+        appendLog(typedQuarantineEnd)
+        appendLog("[WARN] " + wrapperNotice)
+        appendLog("ERR: Error: " + wrapperNotice)
+        for expanded in [false, true] {
+            logDetailsExpanded = expanded
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewTitle.stringValue == localized("result.final_photos_quarantine_title"),
+                  batchOverviewTitle.textColor == .systemOrange,
+                  batchOverviewDelivery.stringValue == localized("result.final_photos_quarantine_locations", "4", "0", "4") + "\n"
+                    + localized("result.independent_delivery_facts", "4", "4", "8") + "\n"
+                    + localized("result.final_photos_quarantine_resume"),
+                  batchOverviewDelivery.accessibilityLabel() == batchOverviewDelivery.stringValue,
+                  !batchOverviewCleanup.isHidden,
+                  batchOverviewCleanup.stringValue.hasPrefix(localized("cleanup.outcome.verification_blocked")),
+                  latestDiagnostics.failure == nil,
+                  latestDiagnostics.warning == nil, logView.string.contains("[WARN] IMG:"),
+                  !logView.string.contains("Error: " + wrapperNotice),
+                  logColor(scopedFinding) == .systemOrange, logColor(scopedTaggedFinding) == .systemOrange,
+                  logColor("Failed: 0") == .labelColor,
+                  LogTone.classify(gateNotice) == .warning, LogTone.classify(expectedSkip) == .normal else {
+                throw HostError(message: "Corroborated quarantine was reported as a generic failure or completed delivery")
+            }
+        }
+        do {
+            let previousOperation = operationPopup.indexOfSelectedItem
+            let previousTarget = targetField.stringValue
+            let previousPhotos = shortestPathCheck.state
+            let previousPreview = dryRunCheck.state
+            let previousWatch = watchCheck.state
+            defer {
+                operationPopup.selectItem(at: previousOperation)
+                targetField.stringValue = previousTarget
+                shortestPathCheck.state = previousPhotos
+                dryRunCheck.state = previousPreview
+                watchCheck.state = previousWatch
+                updateMetadataSafetyNotice()
+            }
+            let photoOperation = operationPopup.itemArray.first {
+                ($0.representedObject as? String) == OperationMode.fastImgJxl.rawValue
+            }
+            operationPopup.select(photoOperation)
+            targetField.stringValue = "/synthetic/results"
+            shortestPathCheck.state = .on
+            dryRunCheck.state = .off
+            watchCheck.state = .off
+            updateMetadataSafetyNotice()
+            let continuation = try request()
+            guard runButton.title == localized("alert.resume.resume"),
+                  continuation.resume, continuation.retry, !continuation.fresh else {
+                throw HostError(message: "The confirmed quarantine action failed to resume its saved Photos task")
+            }
+            targetField.stringValue = "/synthetic/other-input"
+            guard !(try request().resume), !canResumeConfirmedPhotosQuarantine else {
+                throw HostError(message: "A different source inherited the quarantine resume action")
+            }
+        }
+        let unrelatedPath = "❌ /synthetic/other/decoder.jpg"
+        appendLog(unrelatedPath)
+        guard logColor(unrelatedPath) == .systemRed, latestDiagnostics.failure == unrelatedPath else {
+            throw HostError(message: "Quarantine styling concealed an unrelated failure path")
+        }
+        appendLog("[GATE 2  ] count:❌ → FAIL")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed, batchResults.mandatoryEvidenceConflict,
+              logColor(scopedFinding) == .systemRed else {
+            throw HostError(message: "Corroborated quarantine concealed an independent Gate 2 failure")
+        }
+        for expanded in [false, true] {
+            clearBatchLog()
+            logDetailsExpanded = expanded
+            appendLog(try line(receipt))
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewTitle.stringValue == localized("result.counts_need_review"),
+                  batchOverviewTitle.textColor == .systemOrange,
+                  batchOverviewCounts.stringValue == localized("result.incomplete"),
+                  batchOverviewDelivery.stringValue == localized("result.independent_delivery_facts", "1163", "1829", "1"),
+                  !batchOverviewDelivery.isHidden,
+                  !batchResults.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "Missing counts erased independent delivery facts or claimed confirmed completion")
+            }
+            appendLog("MFB_BATCH_RESULT={}")
+            appendLog(batch)
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewCounts.stringValue == localized("result.invalid"),
+                  batchOverviewTitle.textColor == .systemOrange,
+                  !batchResults.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "A later count receipt erased an invalid report or repeated unknown fields")
+            }
+            appendLog(#"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":1,"diagnostic_records":0}"#)
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+                  batchOverviewTitle.textColor == .systemRed,
+                  batchOverviewCounts.stringValue == localized("result.control_records_missing"),
+                  batchOverviewDelivery.stringValue.contains("1829") else {
+                throw HostError(message: "Missing critical records were muted or independent receipt facts disappeared")
+            }
+        }
+        logDetailsExpanded = false
+        let retainedOnlyReceipt: [String: Any] = ["schema_version": 1,
+            "source_directory": "/synthetic/results", "output_directory": "/synthetic/results_optimized",
+            "succeeded": 0, "skipped": 4, "ignored": 9, "failed": 4, "unprocessed": 0, "encoded": 0,
+            "photos_verified": 0, "source_retained": 8, "failed_sources_retained": 4,
+            "failed_sources_verified": 4, "failed_source_verification_error": NSNull(),
+            "retention_unknown_reason": NSNull(), "primary_cleanup_complete": false,
+            "finalization_error": NSNull(), "retained_only_complete": true]
+        let retainedOnlyBatch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":4,"failed":4,"ignored":9,"unprocessed":0,"exit_code":1}"#
+        let retainedOnlyCompletion = #"MFB_BATCH_FILE_ERRORS_COMPLETE={"schema_version":1,"failed":4}"#
+        let noCleanup: [String: Any] = ["schema_version": 1, "run_id": "synthetic-retained-only-run",
+            "output_path": "/synthetic/results_optimized", "outcome": "not_requested", "error": NSNull()]
+        clearBatchLog()
+        appendLog("ERR: [FAIL] extensionless: source geometry unavailable")
+        appendLog("ERR: [SKIP] synthetic retained image")
+        appendLog(try line(retainedOnlyReceipt))
+        appendLog("ERR:    " + retainedOnlyBatch)
+        appendLog(try cleanupLine(noCleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Worker receipt concealed a missing launcher completion")
+        }
+        appendLog(retainedOnlyCompletion)
+        for expanded in [false, true] {
+            logDetailsExpanded = expanded
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewTitle.stringValue == localized("result.attention_count", "4"),
+                  batchOverviewTitle.textColor == .systemOrange, statusLabel.isHidden,
+                  batchOverviewDelivery.stringValue == localized("result.retained_only_facts", "8"),
+                  batchOverviewDelivery.accessibilityLabel() == batchOverviewDelivery.stringValue,
+                  !batchOverviewDelivery.isHidden, batchOverviewCleanup.isHidden,
+                  !fullLogPresentation.string.contains("ERR: [SKIP]"),
+                  !logView.string.contains("MFB_BATCH_FILE_ERRORS_COMPLETE=") else {
+                throw HostError(message: "Retained-only completion hid failures, invented delivery or repeated a status")
+            }
+        }
+        for exit in [Int32(2), Int32(130)] {
+            refreshBatchOverview(processExit: exit, exitedNormally: true)
+            guard batchOverviewTitle.textColor == .systemRed else {
+                throw HostError(message: "Retained-only completion concealed a different process exit")
+            }
+        }
+        appendLog("[FATAL] synthetic archive failure")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Retained-only completion concealed an infrastructure failure")
+        }
+        logDetailsExpanded = false
+        clearBatchLog()
+        appendLog(batch)
+        try host.setControlState("cancelled")
+        refreshBatchOverview(processExit: 130, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("status.stopped"),
+              batchOverviewTitle.textColor == .labelColor,
+              statusLabel.stringValue == localized("status.stopped") else {
+            throw HostError(message: "Ordinary cancellation became an integrity failure")
+        }
+        appendLog("Integrity Issues: 1")
+        appendLog("Count status: MATCH")
+        refreshBatchOverview(processExit: 130, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.integrity_issues", "1"),
+              batchOverviewTitle.textColor == .systemRed,
+              statusLabel.stringValue == localized("result.integrity_issues", "1"),
+              batchResults.totals["img"]?[0] == 1829 else {
+            throw HostError(message: "Cancellation or later matching counts concealed an integrity failure")
+        }
+        try host.setControlState("running")
+        clearBatchLog()
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/restore", processingMode: .imagesOnly,
+                                       operationMode: .restoreJpeg)
+        appendLog("Count status: MATCH\nIntegrity Issues:1269\nIntegrity: WARNINGS")
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":60831,"skipped":26042,"failed":0,"ignored":0,"unprocessed":0,"exit_code":1}"#)
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard countStatus == "MATCH", countStatusLabel.textColor == .systemTeal,
+              batchOverviewTitle.stringValue == localized("result.integrity_issues", "1269"),
+              batchOverviewTitle.textColor == .systemRed,
+              statusLabel.stringValue == batchOverviewTitle.stringValue,
+              batchOverviewCounts.stringValue.contains("60831"), batchOverviewCounts.stringValue.contains("26042"),
+              !batchOverviewCounts.stringValue.contains(localized("result.unknown")),
+              batchResults.hasCompleteCountReport, batchResults.mandatoryEvidenceConflict,
+              !batchResults.fastDeliveryIsConfirmed(photos: false, processExit: 1) else {
+            throw HostError(message: "Known integrity issues erased exact restore counts or became a count mismatch or confirmed success")
+        }
+        appendLog(#"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":1,"diagnostic_records":0}"#)
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+              batchOverviewCounts.stringValue == localized("result.control_records_missing") else {
+            throw HostError(message: "Known integrity issues concealed missing critical records")
+        }
+        clearBatchLog()
+        guard batchOverview.isHidden, !batchResults.hasFastDelivery else {
+            throw HostError(message: "Delivery overview leaked into the next batch")
+        }
+        processingCompleted(.failure(HostError(message: "synthetic crash without final receipts")))
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"), !batchOverview.isHidden else {
+            throw HostError(message: "A missing final receipt was not shown as an unconfirmed result")
+        }
+        clearBatchLog()
+    }
+
+    @discardableResult
+    private func configureDeferredDeliveryFixture() throws -> [String: Any] {
+        clearBatchLog()
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/delivery-input", processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl, shortestPath: true)
+        let receipt: [String: Any] = ["schema_version": 1, "succeeded": 0, "skipped": 0, "ignored": 0,
+            "failed": 1, "unprocessed": 3, "encoded": 3, "photos_verified": 0, "source_retained": 4,
+            "failed_sources_retained": 1, "failed_sources_verified": 1,
+            "failed_source_verification_error": NSNull(), "retention_unknown_reason": NSNull(),
+            "primary_cleanup_complete": false, "primary_verification_complete": true,
+            "photos_delivery_deferred": true, "source_directory": "/synthetic/delivery-input",
+            "output_directory": "/synthetic/delivery-output", "finalization_error": "synthetic Photos target unavailable"]
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":1,"ignored":0,"unprocessed":3,"exit_code":2}"#)
+        appendLog(FastImgDeliveryReceipt.prefix + String(decoding: try JSONSerialization.data(withJSONObject: receipt), as: UTF8.self))
+        appendLog("[WARN] synthetic Photos target unavailable")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        return receipt
+    }
+
+    func showDeferredDeliveryFixture() throws {
+        deliveryFixture = true
+        try configureDeferredDeliveryFixture()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func showCountReceiptFixture(missing: Bool) throws {
+        deliveryFixture = true
+        clearBatchLog()
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/results", processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl, shortestPath: true)
+        targetField.stringValue = "/synthetic/results"
+        let receipt: [String: Any] = ["schema_version": 1, "succeeded": 5709, "skipped": 0,
+            "failed": 81, "ignored": 6850, "unprocessed": 0, "encoded": 5693,
+            "photos_verified": 5709, "source_retained": 81, "failed_sources_retained": 81,
+            "failed_sources_verified": 81, "failed_source_verification_error": NSNull(),
+            "retention_unknown_reason": NSNull(), "primary_cleanup_complete": true,
+            "primary_verification_complete": true, "finalization_error": NSNull()]
+        let queue = ProcessLogBackpressure()
+        for _ in 0..<600 { _ = queue.enqueue("[WARN] synthetic diagnostic detail") }
+        _ = queue.enqueue(FastImgDeliveryReceipt.prefix
+            + String(decoding: try JSONSerialization.data(withJSONObject: receipt), as: UTF8.self))
+        _ = queue.enqueue("Count status: MATCH")
+        if !missing {
+            _ = queue.enqueue(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":5709,"skipped":0,"failed":81,"ignored":6850,"unprocessed":0,"exit_code":1}"#)
+        }
+        if let payload = queue.takeDelivery() { appendLog(payload) }
+        _ = queue.finishDelivery()
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func showResultNotificationsFixture() throws {
+        restoreFixture = true
+        try showCountReceiptFixture(missing: false)
+        resolvedHistoryDirectory = URL(fileURLWithPath: "/synthetic/notification-history", isDirectory: true)
+        resultNotifier.beginTask()
+        resultNotifier.complete(resultVisible: false, title: batchOverviewTitle.stringValue,
+            body: batchResults.summary ?? localized("notification.result_info"))
+        refreshUnreadResults()
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    func showToolRuntimeFixture() {
+        deliveryFixture = true
+        restoreFixture = true
+        targetField.stringValue = "/synthetic/tool-runtime"
+        clearBatchLog()
+        appendLog(ToolSnapshotPresentation.prefix + "{\"schema_version\":1,\"state\":\"ready\",\"pipeline\":\"img\",\"boundary\":\"persisted-external\",\"identity\":\"" + String(repeating: "a", count: 64) + "\",\"manifest_path\":\"/synthetic/manifest.json\",\"tool_names\":[\"cjxl\",\"djxl\",\"exiftool\",\"jxlinfo\"]}")
+        appendLog(ToolSnapshotPresentation.prefix + #"{"schema_version":1,"state":"blocked","pipeline":"img","boundary":"persisted-external","cause_code":"tool_changed","tool":"cjxl","message":"Synthetic tool change. No media was opened; pending work was retained."}"#)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func showProcessInterruptionFixture() {
+        deliveryFixture = true
+        restoreFixture = true // Reuse the existing fixture guard against execution and live Photos queries.
+        operationPopup.select(operationPopup.itemArray.first {
+            ($0.representedObject as? String) == OperationMode.fastImgJxl.rawValue
+        })
+        targetField.stringValue = "/synthetic/interrupted-scan"
+        operationChanged()
+        clearBatchLog()
+        lastRequest = ProcessorRequest(targetPath: targetField.stringValue, processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl)
+        appendLog(#"MFB_HISTORY_WORKER_EXECUTION={"schema_version":1,"scope":"os_child_process","invocation_id":"scan-fixture-1","run_id":"scan-fixture-run","pipeline":"img","state":"spawned","pid":1234,"exit_code":null,"signal":null}"#)
+        appendLog(#"MFB_PROGRESS={"schema_version":1,"stage_id":"scan-fixture","stage":"modern_source_inspection","processed":1,"total":2,"state":"running"}"#)
+        appendLog(#"MFB_HISTORY_WORKER_EXECUTION={"schema_version":1,"scope":"os_child_process","invocation_id":"scan-fixture-1","run_id":"scan-fixture-run","pipeline":"img","state":"exited","pid":1234,"exit_code":null,"signal":15}"#)
+        processingCompleted(.failure(HostError(message: "synthetic launcher exit=1; worker signal=15")))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func showRestoreFixture(photosAudit: Bool, integrityIssues: Bool = false) {
+        deliveryFixture = true
+        restoreFixture = true
+        targetField.stringValue = photosAudit ? "/synthetic/recovery.photoslibrary" : "/synthetic/reversible-archive"
+        operationPopup.select(operationPopup.itemArray.first {
+            ($0.representedObject as? String) == OperationMode.restoreJpeg.rawValue
+        })
+        operationChanged()
+        if integrityIssues {
+            lastRequest = ProcessorRequest(targetPath: targetField.stringValue, processingMode: .imagesOnly,
+                                           operationMode: .restoreJpeg)
+            appendLog("Count status: MATCH\nIntegrity Issues:1269\nIntegrity: WARNINGS")
+            appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":60831,"skipped":26042,"failed":0,"ignored":0,"unprocessed":0,"exit_code":1}"#)
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+        }
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func validateDeferredDeliveryForSelfTest() throws {
+        let previousRequest = lastRequest
+        let previousDetails = logDetailsExpanded
+        defer {
+            lastRequest = previousRequest
+            logDetailsExpanded = previousDetails
+            clearBatchLog()
+            updateLogPresentation()
+        }
+        let receipt = try configureDeferredDeliveryFixture()
+        guard batchOverviewTitle.stringValue == localized("result.delivery_deferred"),
+              batchOverviewTitle.textColor == .systemOrange,
+              batchOverviewDelivery.stringValue.contains("/synthetic/delivery-output"),
+              !batchResults.fastDeliveryIsConfirmed(photos: true, processExit: 1),
+              !batchResults.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: false),
+              !batchResults.deliveryIsDeferred(photos: false, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true),
+              !batchResults.deliveryIsDeferred(photos: true, source: "/synthetic/other", processExit: 1, exitedNormally: true) else {
+            throw HostError(message: "Deferred delivery lost its recorded facts or became confirmed delivery")
+        }
+        var contradictory = batchResults
+        _ = contradictory.ingestTerminalEvidence(#"MFB_BATCH_FILE_ERRORS_COMPLETE={"schema_version":1,"failed":1}"#)
+        guard !contradictory.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true) else {
+            throw HostError(message: "Conflicting terminal evidence was accepted as deferred delivery")
+        }
+        let batch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":1,"ignored":0,"unprocessed":3,"exit_code":2}"#
+        var duplicate = batchResults
+        _ = duplicate.ingest(batch)
+        _ = duplicate.ingestFastDelivery(FastImgDeliveryReceipt.prefix
+            + String(decoding: try JSONSerialization.data(withJSONObject: receipt), as: UTF8.self))
+        guard !duplicate.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true) else {
+            throw HostError(message: "Duplicate live receipts inflated a deferred delivery")
+        }
+        for (key, value) in [("photos_delivery_deferred", false as Any), ("primary_verification_complete", false as Any),
+                             ("failed_sources_verified", 0 as Any), ("retention_unknown_reason", "unknown" as Any),
+                             ("output_directory", "relative" as Any), ("encoded", 4 as Any),
+                             ("finalization_error", NSNull() as Any)] {
+            var changed = receipt
+            changed[key] = value
+            var results = BatchResults()
+            _ = results.ingest(batch)
+            _ = results.ingestFastDelivery(FastImgDeliveryReceipt.prefix
+                + String(decoding: try JSONSerialization.data(withJSONObject: changed), as: UTF8.self))
+            guard !results.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true) else {
+                throw HostError(message: "Invalid delivery-deferred evidence was accepted: \(key)")
+            }
+        }
+        var profile: [String: Any] = ["schema_version": 1, "backend": "native", "succeeded": false,
+            "delivery_deferred": true, "scope": "target_preparation", "committed_assets": 0,
+            "verified_assets": 0, "transaction_samples": 0]
+        func profileLine() throws -> String {
+            "[PHOTOS PROFILE] " + String(decoding: try JSONSerialization.data(withJSONObject: profile), as: UTF8.self)
+        }
+        appendLog(try profileLine())
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard !photosDiagnostics.failed, !batchResults.mandatoryEvidenceConflict,
+              batchOverviewTitle.stringValue == localized("result.delivery_deferred") else {
+            throw HostError(message: "A zero-commit deferred preparation became a failed Photos verification")
+        }
+        profile["committed_assets"] = 1
+        appendLog(try profileLine())
+        profile["committed_assets"] = 0
+        appendLog(try profileLine())
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard photosDiagnostics.failed, batchResults.mandatoryEvidenceConflict,
+              batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
+            throw HostError(message: "A later deferred profile concealed possible Photos side effects")
+        }
+        try configureDeferredDeliveryFixture()
+        appendLog("Integrity Issues: 1")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.integrity_issues", "1"),
+              batchOverviewTitle.textColor == .systemRed,
+              !batchResults.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true) else {
+            throw HostError(message: "Deferred delivery concealed an independent integrity failure")
+        }
+    }
+
+    private func configurePhotosCustodyFixture() {
+        clearBatchLog()
+        targetField.stringValue = "/synthetic/photos-originals"
+        appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"photos_custody","check":"inventory","completed":0,"total":1,"state":"running"}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"photos_custody","check":"original_bytes","completed":0,"total":1,"state":"running","file_progress":{"processed":0,"total":3}}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"photos_custody","check":"original_bytes","completed":0,"total":1,"state":"running","file_progress":{"processed":2,"total":3}}"#)
+    }
+
+    func showPhotosCustodyFixture() {
+        photosProgressFixture = true
+        configurePhotosCustodyFixture()
+        runButton.isEnabled = false
+        openButton.isEnabled = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func validatePhotosCustodyForSelfTest() throws {
+        let previousBatch = batchResults
+        let previousTarget = targetField.stringValue
+        let previousFixture = photosProgressFixture
+        let previousDeveloper = developerMode
+        defer {
+            photosProgressFixture = previousFixture
+            targetField.stringValue = previousTarget
+            developerMode = previousDeveloper
+            clearBatchLog()
+            batchResults = previousBatch
+        }
+        photosProgressFixture = true
+        developerMode = false
+        configurePhotosCustodyFixture()
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !gateActivity.invalid, !fileProgressRow.isHidden, !fileProgressIndicator.isHidden,
+              abs(fileProgressIndicator.doubleValue - 200.0 / 3) < 0.001,
+              fileProgressLabel.stringValue.contains(localized("gate.custody.running")),
+              fileProgressLabel.stringValue.contains(localized("gate.custody.files", "2", "3")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict,
+              !logView.string.contains("MFB_GATE_ACTIVITY=") else {
+            throw HostError(message: "Photos-original progress lost its byte-verified scope or affected final outcomes")
+        }
+        let running = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"photos_custody","check":"original_bytes","completed":0,"total":1,"state":"running","file_progress":{"processed":2,"total":3}}"#
+        let all = running.replacingOccurrences(of: "\"processed\":2", with: "\"processed\":3")
+        appendLog(all)
+        guard fileProgressIndicator.doubleValue < 100 else {
+            throw HostError(message: "Unclosed Photos-original verification reached terminal completion")
+        }
+        appendLog(all.replacingOccurrences(of: "\"completed\":0", with: "\"completed\":1")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"passed\""))
+        guard !gateActivity.invalid, fileProgressIndicator.doubleValue == 100,
+              fileProgressLabel.stringValue.contains(localized("gate.custody.passed")),
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Successful Photos-original verification became a batch completion")
+        }
+        gateActivity = GateCheckActivity()
+        let one = running.replacingOccurrences(of: "\"processed\":2", with: "\"processed\":1")
+        appendLog(one)
+        appendLog(one.replacingOccurrences(of: "\"completed\":0", with: "\"completed\":1")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"failed\""))
+        guard !gateActivity.invalid, gateActivity.event?.file_progress?.processed == 1,
+              abs(fileProgressIndicator.doubleValue - 100.0 / 3) < 0.001,
+              fileProgressLabel.textColor == .systemRed, batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Failed Photos-original verification discarded its matched-byte count or independent risk")
+        }
+        gateActivity = GateCheckActivity()
+        let zero = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-empty","gate":"photos_custody","check":"original_bytes","completed":0,"total":1,"state":"running"}"#
+        appendLog(zero)
+        appendLog(zero.replacingOccurrences(of: "\"completed\":0", with: "\"completed\":1")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"passed\""))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.custody.passed"), batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Empty Photos-original verification fabricated a percentage or erased an earlier failure")
+        }
+        for bad in [running.replacingOccurrences(of: "\"schema_version\":1", with: "\"schema_version\":2"),
+                    running.replacingOccurrences(of: "original_bytes", with: "decode"),
+                    running.replacingOccurrences(of: "original_bytes", with: "inventory"),
+                    running.replacingOccurrences(of: "\"total\":1", with: "\"total\":2"),
+                    running.replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"finished\""),
+                    running.replacingOccurrences(of: "\"completed\":0", with: "\"completed\":1")
+                        .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"passed\""),
+                    running.replacingOccurrences(of: "\"processed\":2", with: "\"processed\":4")] {
+            var invalid = GateCheckActivity()
+            _ = invalid.ingest(bad, now: 1)
+            guard invalid.invalid else { throw HostError(message: "Invalid Photos-original activity was accepted") }
+        }
+        var inventoryFailure = GateCheckActivity()
+        let inventory = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-inventory","gate":"photos_custody","check":"inventory","completed":0,"total":1,"state":"running"}"#
+        _ = inventoryFailure.ingest(inventory, now: 1)
+        _ = inventoryFailure.ingest(inventory.replacingOccurrences(of: "running", with: "failed"), now: 2)
+        guard !inventoryFailure.invalid, inventoryFailure.event?.file_progress == nil,
+              inventoryFailure.label(now: 2) == localized("gate.custody.failed") else {
+            throw HostError(message: "A failed Photos inventory invented matched-file progress")
+        }
+        var decreasing = GateCheckActivity()
+        _ = decreasing.ingest(running, now: 1)
+        _ = decreasing.ingest(one, now: 2)
+        guard decreasing.invalid else { throw HostError(message: "Photos-original matched count moved backwards") }
+        var changedGate = GateCheckActivity()
+        _ = changedGate.ingest(running, now: 1)
+        _ = changedGate.ingest(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}"#, now: 2)
+        guard changedGate.invalid else { throw HostError(message: "One stage identity changed its Gate scope") }
+
+        func finalActivity(_ check: String, completed: Int, total: Int, state: String = "running",
+                           processed: Int? = nil) throws -> String {
+            var record: [String: Any] = [
+                "schema_version": 1, "stage_id": "final-custody-\(total)", "gate": "photos_custody",
+                "check": check, "completed": completed, "total": total, "state": state,
+            ]
+            if let processed { record["file_progress"] = ["processed": processed, "total": 2] }
+            let data = try JSONSerialization.data(withJSONObject: record, options: .sortedKeys)
+            return "MFB_GATE_ACTIVITY=" + String(decoding: data, as: UTF8.self)
+        }
+        for checks in [["count", "size", "blake3", "metadata", "orient", "decode"], ["count", "size", "decode"]] {
+            gateActivity = GateCheckActivity()
+            appendLog(try finalActivity("inventory", completed: 0, total: checks.count))
+            for (index, check) in checks.enumerated() {
+                appendLog(try finalActivity(check, completed: index, total: checks.count))
+                if ["blake3", "metadata", "orient", "decode"].contains(check) {
+                    appendLog(try finalActivity(check, completed: index, total: checks.count, processed: 0))
+                    appendLog(try finalActivity(check, completed: index, total: checks.count, processed: 2))
+                    let label = localized("gate.activity.final.running", localized("gate.check.\(check)"),
+                                          String(index), String(checks.count))
+                    guard !gateActivity.invalid, fileProgressLabel.stringValue.contains(label),
+                          fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+                          !fileProgressIndicator.isHidden, fileProgressIndicator.doubleValue < 100 else {
+                        throw HostError(message: "Final Gate 2 activity lost its scope, file progress or accessibility label")
+                    }
+                }
+            }
+            appendLog(try finalActivity("decode", completed: checks.count, total: checks.count,
+                                        state: "passed", processed: 2))
+            guard !gateActivity.invalid, gateActivity.event?.state == "passed",
+                  fileProgressLabel.stringValue.contains(localized("gate.activity.final.passed", String(checks.count), String(checks.count))),
+                  fileProgressIndicator.doubleValue == 100, batchResults.totals.isEmpty else {
+                throw HostError(message: "Final Gate 2 completion was rejected or became a batch result")
+            }
+        }
+        for total in [0, 1, 2, 3, 5, 7] {
+            var malformed = GateCheckActivity()
+            _ = malformed.ingest(try finalActivity("metadata", completed: 3, total: total), now: 1)
+            guard malformed.invalid else { throw HostError(message: "Final Gate 2 accepted an invalid check total") }
+        }
+        var wrongFinalCheck = GateCheckActivity()
+        _ = wrongFinalCheck.ingest(try finalActivity("original_bytes", completed: 0, total: 6), now: 1)
+        guard wrongFinalCheck.invalid else { throw HostError(message: "Final Gate 2 confused its local checks with original-byte custody") }
+        try validateFinalSidecarActivityForSelfTest()
+        try validateFinalRelationshipActivityForSelfTest()
+    }
+
+    private func validateFinalSidecarActivityForSelfTest() throws {
+        func activity(_ stage: String, _ state: String = "running", processed: Int? = nil, total: Int = 2) throws -> String {
+            var record: [String: Any] = [
+                "schema_version": 1, "stage_id": stage, "gate": "photos_sidecars",
+                "check": "working_copy_aae", "completed": state == "running" ? 0 : 1,
+                "total": 1, "state": state,
+            ]
+            if let processed { record["file_progress"] = ["processed": processed, "total": total] }
+            return "MFB_GATE_ACTIVITY=" + String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+        }
+
+        batchResults = BatchResults()
+        let stage = "sidecar-verified"
+        appendLog(try activity(stage))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue.contains(localized("gate.sidecars.running")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+            throw HostError(message: "Preparing final sidecars invented file progress or lost its label")
+        }
+        for bad in [try activity(stage, processed: 1), try activity(stage, "passed", processed: 2)] {
+            var rejected = gateActivity
+            _ = rejected.ingest(bad, now: 2)
+            guard rejected.invalid else { throw HostError(message: "Sidecar progress skipped its initial zero count") }
+        }
+        for processed in [0, 1, 2] { appendLog(try activity(stage, processed: processed)) }
+        guard !gateActivity.invalid, !fileProgressIndicator.isHidden, fileProgressIndicator.doubleValue < 100,
+              fileProgressLabel.stringValue.contains(localized("gate.sidecars.files", "2", "2")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+            throw HostError(message: "Final sidecar activity lost its verified working-copy count")
+        }
+        for bad in [try activity(stage, processed: 2, total: 3), try activity(stage, "passed", processed: 1),
+                    try activity(stage, "failed"), try activity("unbound-sidecar", processed: 2)] {
+            var rejected = gateActivity
+            _ = rejected.ingest(bad, now: 2)
+            guard rejected.invalid else { throw HostError(message: "Invalid sidecar evidence was accepted") }
+        }
+        appendLog(try activity(stage, "passed", processed: 2))
+        guard !gateActivity.invalid, fileProgressIndicator.doubleValue == 100,
+              fileProgressLabel.stringValue.contains(localized("gate.sidecars.passed")),
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "Sidecar check completed without its count or was presented as batch completion")
+        }
+
+        appendLog(try activity("sidecar-failed"))
+        appendLog(try activity("sidecar-failed", processed: 0))
+        appendLog(try activity("sidecar-failed", "failed", processed: 1))
+        guard !gateActivity.invalid, fileProgressIndicator.doubleValue == 50,
+              fileProgressLabel.stringValue.contains(localized("gate.sidecars.failed")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+              batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Stopped sidecar verification did not preserve the verified count and failure")
+        }
+    }
+
+    private func validateFinalRelationshipActivityForSelfTest() throws {
+        // The preceding custody fixture deliberately records an independent failure.
+        batchResults = BatchResults()
+        func activity(_ check: String, _ completed: Int, _ state: String = "running", stage: String = "relationships-fixture",
+                      fileProgress: Int? = nil, fileTotal: Int = 3) throws -> String {
+            var record: [String: Any] = [
+                "schema_version": 1, "stage_id": stage, "gate": "photos_relationships",
+                "check": check, "completed": completed, "total": 5, "state": state,
+            ]
+            if let fileProgress { record["file_progress"] = ["processed": fileProgress, "total": fileTotal] }
+            return "MFB_GATE_ACTIVITY=" + String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+        }
+        let checks = ["import_receipts", "count_x3", "sync", "quarantine", "chain"]
+        for (index, check) in checks.enumerated() {
+            appendLog(try activity(check, index))
+            let label = localized("gate.relationships.running", localized("gate.check.\(check)"))
+            guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+                  fileProgressLabel.stringValue.contains(label),
+                  fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+                throw HostError(message: "Final Photos relationship activity lost its label or invented file progress")
+            }
+        }
+        appendLog(try activity("quarantine", 5, "failed"))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.relationships.failed", localized("gate.check.quarantine")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+              fileProgressLabel.textColor == .systemOrange, batchResults.totals.isEmpty,
+              !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "A relationship-check quarantine blocker became a contradictory batch result")
+        }
+        var replay = gateActivity
+        _ = replay.ingest(try activity("chain", 5, "passed"), now: 2)
+        guard replay.invalid else { throw HostError(message: "A completed relationship check erased its own failure") }
+
+        appendLog(try activity("import_receipts", 0, stage: "missing-inventory"))
+        appendLog(try activity("count_x3", 1, stage: "missing-inventory"))
+        appendLog(try activity("count_x3", 2, "failed", stage: "missing-inventory"))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.relationships.failed", localized("gate.check.count_x3")) else {
+            throw HostError(message: "Incomplete final Photos inventory fabricated progress")
+        }
+        for (index, check) in checks.enumerated() { appendLog(try activity(check, index, stage: "separate-check")) }
+        appendLog(try activity("chain", 5, "passed", stage: "separate-check"))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.relationships.passed"),
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "Relationship-check completion was presented as batch completion")
+        }
+        appendLog("[GATE 2] final verification FAIL")
+        guard batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Relationship-check completion concealed a later mandatory verification failure")
+        }
+        appendLog(try activity("import_receipts", 0, stage: "next-check"))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue.contains(localized("gate.relationships.running", localized("gate.check.import_receipts"))),
+              batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "A new activity kept stale completion text or concealed an earlier failure")
+        }
+        for (index, check) in checks.enumerated() { appendLog(try activity(check, index, stage: "chain-attempts")) }
+        for attempted in [0, 1, 3] {
+            appendLog(try activity("chain", 4, stage: "chain-attempts", fileProgress: attempted))
+            let label = localized("gate.relationships.files", String(attempted), "3")
+            guard !gateActivity.invalid, !fileProgressIndicator.isHidden,
+                  fileProgressIndicator.doubleValue < 100,
+                  fileProgressLabel.stringValue.contains(label),
+                  fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+                throw HostError(message: "Final chain lost its verified inventory denominator or accessibility label")
+            }
+        }
+        var wrongCount = gateActivity
+        _ = wrongCount.ingest(try activity("chain", 4, stage: "chain-attempts", fileProgress: 2), now: 2)
+        guard wrongCount.invalid else { throw HostError(message: "Final chain accepted a regressing attempt count") }
+        appendLog(try activity("chain", 5, "failed", stage: "chain-attempts", fileProgress: 3))
+        guard !gateActivity.invalid, fileProgressIndicator.doubleValue < 100,
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "Final chain failure was shown as a completed delivery")
+        }
+        for bad in [try activity("chain", 5, "passed", fileProgress: 3), try activity("quarantine", 2, "failed"),
+                    try activity("sync", 2, fileProgress: 1),
+                    try activity("quarantine", 5, "passed"), try activity("invented", 1), try activity("chain", 5, "passed")] {
+            var rejected = GateCheckActivity()
+            _ = rejected.ingest(bad, now: 1)
+            guard rejected.invalid else { throw HostError(message: "Invalid relationship-check activity was accepted") }
+        }
+    }
+
+    private func configurePhotosProgressFixture(handoff: Bool = false) throws {
+        clearBatchLog()
+        targetField.stringValue = "/synthetic/photos-pending-import"
+        lastRequest = ProcessorRequest(targetPath: targetField.stringValue, processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl, shortestPath: true)
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":1,"phase":"target_preparation","pending_total":3,"verified":0}"#)
+        if handoff {
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"stopped","pending_total":3,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":1,"phase":"target_preparation","pending_total":3,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":2,"phase":"verifying","pending_total":3,"verified":2}"#)
+        } else {
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"verifying","pending_total":3,"verified":2}"#)
+        }
+        refreshFileProgress()
+    }
+
+    func showPhotosProgressFixture(handoff: Bool = false) throws {
+        photosProgressFixture = true
+        try configurePhotosProgressFixture(handoff: handoff)
+        runButton.isEnabled = false
+        openButton.isEnabled = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func validatePhotosProgressForSelfTest() throws {
+        let previousRequest = lastRequest
+        let previousTarget = targetField.stringValue
+        let previousFixture = photosProgressFixture
+        let previousDeveloper = developerMode
+        defer {
+            photosProgressFixture = previousFixture
+            lastRequest = previousRequest
+            targetField.stringValue = previousTarget
+            developerMode = previousDeveloper
+            clearBatchLog()
+        }
+        photosProgressFixture = true
+        developerMode = false
+        try configurePhotosProgressFixture()
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !fileProgressRow.isHidden, !fileProgressIndicator.isHidden,
+              !fileProgressIndicator.isIndeterminate,
+              abs(fileProgressIndicator.doubleValue - 200.0 / 3) < 0.001,
+              fileProgressLabel.stringValue == photosImportProgress.label,
+              fileProgressLabel.accessibilityLabel() == photosImportProgress.label,
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict,
+              !logView.string.contains(PhotosImportProgress.prefix) else {
+            throw HostError(message: "Native Photos progress lost its pending-only scope or affected final outcomes")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":3,"phase":"stopped","pending_total":3,"verified":2}"#)
+        guard fileProgressRow.isHidden, photosImportProgress.event?.phase == "stopped",
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Stopped Photos progress claimed completion or changed the final verdict")
+        }
+        appendLog(#"[PHOTOS PROGRESS] backend=applescript verified=1"#)
+        guard fileProgressRow.isHidden else {
+            throw HostError(message: "A stopped native import masked AppleScript fallback progress")
+        }
+        clearBatchLog()
+        appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#)
+        let gateStart = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-photos-fixture","gate":"local","check":"inventory","completed":0,"total":6,"state":"running"}"#
+        appendLog(gateStart)
+        guard !fileProgressRow.isHidden, gateActivity.event != nil else {
+            throw HostError(message: "The Gate fixture did not expose its active stage")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":1,"phase":"target_preparation","pending_total":1,"verified":0}"#)
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"completed","pending_total":1,"verified":1}"#)
+        guard fileProgressRow.isHidden, gateActivity.event == nil else {
+            throw HostError(message: "Completed Photos progress revived a previous Gate stage")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":1,"phase":"target_preparation","pending_total":3,"verified":0}"#)
+        guard !fileProgressRow.isHidden, photosImportProgress.event?.verified == 0,
+              fileProgressIndicator.isIndeterminate else {
+            throw HostError(message: "A handed-off Photos operation inherited prior completed counts")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":2,"phase":"verifying","pending_total":3,"verified":2}"#)
+        guard !fileProgressRow.isHidden, photosImportProgress.event?.operation_id == "100-2",
+              photosImportProgress.event?.verified == 2, photosImportProgress.event?.pending_total == 3,
+              abs(fileProgressIndicator.doubleValue - 200.0 / 3) < 0.001 else {
+            throw HostError(message: "The handed-off Photos operation lost its independent pending scope")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":3,"phase":"completed","pending_total":3,"verified":3}"#)
+        appendLog(gateStart)
+        guard !fileProgressRow.isHidden, fileProgressLabel.stringValue == gateActivity.label(now: ProcessInfo.processInfo.systemUptime),
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Completed Photos progress masked a new Gate or changed final outcomes")
+        }
+        gateActivity = GateCheckActivity()
+        photosProgressFixture = false
+        refreshFileProgress()
+        guard fileProgressRow.isHidden else { throw HostError(message: "Ended Photos progress remained a running stage") }
+        clearBatchLog()
+        guard photosImportProgress.event == nil, !photosImportProgress.invalid else {
+            throw HostError(message: "Photos operation progress leaked into the next batch")
+        }
+    }
+
+    private func validateDiagnosticFoldingForSelfTest() throws {
+        var folder = ConsecutiveDiagnosticLogFolder()
+        let first = "[WARN] /tmp/clip-1.mov frame=17"
+        let otherPath = "[WARN] /tmp/clip-2.mov frame=17"
+        let otherNumber = "[WARN] /tmp/clip-1.mov frame=18"
+        guard folder.ingest(first) == .append(first),
+              folder.ingest(first) == .repeated(first, occurrences: 2),
+              folder.ingest(otherPath) == .append(otherPath),
+              folder.ingest(otherNumber) == .append(otherNumber),
+              folder.ingest("routine detail") == .append("routine detail"),
+              folder.ingest(otherNumber) == .append(otherNumber) else {
+            throw HostError(message: "Diagnostic folding merged distinct lines or crossed a normal log line")
+        }
+        folder.reset()
+        guard folder.ingest(first) == .append(first) else {
+            throw HostError(message: "Diagnostic folding did not reset for a new run")
+        }
+
+        let unicodeLine = "[ERROR] 🚀 /tmp/映像-7.mov frame=71"
+        let retained = NSMutableAttributedString(string: "trimmed history 🧪\n" + unicodeLine)
+        guard let range = trailingLogLineRange(unicodeLine, in: retained.string as NSString) else {
+            throw HostError(message: "UTF-16 tail range did not find a retained Unicode diagnostic")
+        }
+        let summary = unicodeLine + " · " + localized("log.repeated_occurrences", "2")
+        retained.replaceCharacters(in: range, with: styledLog(summary))
+        guard retained.string.hasSuffix(summary),
+              trailingLogLineRange(unicodeLine, in: retained.string as NSString) != nil,
+              trailingLogLineRange(unicodeLine, in: NSString(string: "trimmed unrelated tail")) == nil else {
+            throw HostError(message: "Trimmed-log replacement lost its row or matched an unrelated tail")
+        }
+
+        let oldLog = NSAttributedString(attributedString: logView.textStorage!)
+        let oldFullLog = NSAttributedString(attributedString: fullLogPresentation)
+        let oldPrivateLog = NSAttributedString(attributedString: privateLogPresentation)
+        let oldFolder = diagnosticLogFolder
+        let oldPhase = logPhase
+        let oldLatest = latestDiagnostics
+        let oldBatch = batchResults
+        let oldProgress = fileProgress
+        let oldGate = gateActivity
+        let oldPhotosDiagnostics = photosDiagnostics
+        let oldCountStatus = countStatus
+        let oldCountStatusText = countStatusLabel.stringValue
+        let oldCountStatusHidden = countStatusLabel.isHidden
+        defer {
+            logView.textStorage?.setAttributedString(oldLog)
+            fullLogPresentation.setAttributedString(oldFullLog)
+            privateLogPresentation.setAttributedString(oldPrivateLog)
+            diagnosticLogFolder = oldFolder
+            logPhase = oldPhase
+            latestDiagnostics = oldLatest
+            batchResults = oldBatch
+            fileProgress = oldProgress
+            gateActivity = oldGate
+            photosDiagnostics = oldPhotosDiagnostics
+            countStatus = oldCountStatus
+            countStatusLabel.stringValue = oldCountStatusText
+            countStatusLabel.isHidden = oldCountStatusHidden
+            refreshLatestDiagnostics()
+            refreshFileProgress()
+            refreshDiagnostics()
+        }
+
+        clearBatchLog()
+        appendLog(String(repeating: "🧪 long diagnostic ", count: 40_000) + "\nretained tail")
+        guard fullLogPresentation.length <= 262_144,
+              privateLogPresentation.length <= 262_144,
+              logView.string.hasSuffix("retained tail"),
+              logView.textLayoutManager == nil,
+              !logView.isContinuousSpellCheckingEnabled,
+              !logView.isGrammarCheckingEnabled else {
+            throw HostError(message: "Runtime log presentation exceeded its character budget or enabled text checking")
+        }
+        let stressStart = ProcessInfo.processInfo.systemUptime
+        for batch in 0..<500 {
+            autoreleasepool {
+                appendLog((0..<8).map { "detail 🧪 batch=\(batch) row=\($0) " + String(repeating: "x", count: 80) }.joined(separator: "\n"))
+            }
+        }
+        guard fullLogPresentation.length <= 262_144,
+              logView.string == fullLogPresentation.string,
+              logView.string.hasSuffix(String(repeating: "x", count: 80)),
+              !batchResults.hasFailure else {
+            throw HostError(message: "Sustained runtime logs lost their bounded tail or changed result evidence")
+        }
+        print("runtime log stress: 500 batches, \(fullLogPresentation.length) UTF-16 units, \(ProcessInfo.processInfo.systemUptime - stressStart)s")
+        clearBatchLog()
+        appendLog((0..<3_001).map { "detail \($0)" }.joined(separator: "\n"))
+        let visibleTail = logView.string.components(separatedBy: "\n")
+        guard visibleTail.count == 3_000, visibleTail.first == localized("log.visible_tail"),
+              visibleTail.dropFirst().first == "detail 2", visibleTail.last == "detail 3000",
+              latestDiagnostics.warning == nil, !batchResults.hasFailure else {
+            throw HostError(message: "Visible log trimming lost the current tail or fabricated a failure")
+        }
+        let error = "[ERROR] 🚀 /tmp/映像-7.mov frame=71"
+        appendLog(error + "\n" + error)
+        let repeatedTwo = error + " · " + localized("log.repeated_occurrences", "2")
+        guard logView.string.split(separator: "\n", omittingEmptySubsequences: false).count <= 3_000,
+              logView.string.components(separatedBy: "\n").filter({ $0 == repeatedTwo }).count == 1,
+              latestDiagnostics.failure == LogTone.message(error),
+              !batchResults.hasFailure, batchResults.totals.isEmpty else {
+            throw HostError(message: "Consecutive diagnostics were not folded safely after log trimming")
+        }
+        appendLog(error)
+        let repeatedThree = error + " · " + localized("log.repeated_occurrences", "3")
+        guard logView.string.components(separatedBy: "\n").filter({ $0 == repeatedThree }).count == 1,
+              latestDiagnostics.failure == LogTone.message(error),
+              !batchResults.hasFailure, batchResults.totals.isEmpty else {
+            throw HostError(message: "Repeated rows across append chunks changed diagnostics or batch counts")
+        }
+        appendLog("ordinary separator")
+        appendLog(error)
+        guard logView.string.components(separatedBy: "\n").filter({ $0 == error }).count == 1 else {
+            throw HostError(message: "A non-diagnostic row did not break consecutive folding")
+        }
+        appendLog("[Summary] succeeded=0 failed=1")
+        guard latestDiagnostics.failure == LogTone.message(error) else {
+            throw HostError(message: "A repeated diagnostic or terminal summary replaced the actionable error")
+        }
+
+        logPhase = PhaseLogPresentation(now: 0)
+        diagnosticLogFolder.reset()
+        logView.string = ""
+        fullLogPresentation.setAttributedString(NSAttributedString(string: ""))
+        privateLogPresentation.setAttributedString(NSAttributedString(string: ""))
+        let processing = #"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#
+        let verification = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        appendLog(processing, now: 3)
+        appendLog(error + "\n" + error, now: 3)
+        appendLog(verification, now: 4)
+        appendLog(error, now: 4)
+        let visibleErrors = logView.string.components(separatedBy: "\n").filter {
+            $0 == error || $0 == repeatedTwo
+        }
+        guard visibleErrors == [repeatedTwo, error] else {
+            throw HostError(message: "A phase presentation transition did not reset diagnostic folding")
+        }
+
+        clearBatchLog()
+        appendLog(error)
+        guard !logView.string.contains(localized("log.repeated_occurrences", "2")),
+              !logView.string.contains(localized("log.visible_tail")) else {
+            throw HostError(message: "A new batch retained the previous batch's repeat count")
+        }
+        clearBatchLog()
+        let fileFailure = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/file.jpg",
+            absolute_path: "/synthetic/file.jpg", message: "synthetic decoder failed", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", reason_code: nil)
+        let marker = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(fileFailure), as: UTF8.self)
+        func largeFailure(_ bytes: Int) -> HistoryFileFailure {
+            HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "synthetic.jpg", absolute_path: nil,
+                message: String(repeating: "x", count: bytes), run_id: "run", invocation_id: "invocation", reason_code: nil)
+        }
+        let overhead = try JSONEncoder().encode(largeFailure(0)).count
+        let messageBudget = maxProcessLogChunkBytes - HistoryFileFailure.prefix.utf8.count - 1 - overhead
+        let largest = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(largeFailure(messageBudget)), as: UTF8.self)
+        var transport = Data((largest + "\n").utf8)
+        guard transport.count == maxProcessLogChunkBytes,
+              drainProcessLogChunks(&transport, flush: false) == [largest], transport.isEmpty,
+              try HistoryFileFailure.decode(largest) != nil else {
+            throw HostError(message: "File failure wire budget split a valid JSON observation")
+        }
+        let tooLarge = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(largeFailure(messageBudget + 1)), as: UTF8.self)
+        let oversizedResult = Swift.Result { try HistoryFileFailure.decode(tooLarge) }
+        guard case .failure = oversizedResult else { throw HostError(message: "Oversized file failure wire payload was accepted") }
+        appendLog(marker)
+        let visibleFailure = "[FAIL] /synthetic/file.jpg: synthetic decoder failed"
+        guard latestDiagnostics.failure == visibleFailure,
+              developerMode || !logView.string.contains(HistoryFileFailure.prefix),
+              !batchResults.hasFailure, batchResults.totals.isEmpty else {
+            throw HostError(message: "File failure marker appeared as raw JSON or changed authoritative media counts")
+        }
+        appendLog(marker)
+        guard logView.string.components(separatedBy: "\n").filter({ $0 == visibleFailure }).count == 2 else {
+            throw HostError(message: "File observation presentation was folded by diagnostic text instead of exact observation identity")
+        }
+        appendLog("MFB_FILE_FAILURE={invalid}")
+        guard latestDiagnostics.warning == "[WARN] " + localized("history.batch_issues.invalid"),
+              latestDiagnostics.failure == visibleFailure else {
+            throw HostError(message: "Malformed file failure marker hid the previous actionable error")
+        }
+        clearBatchLog()
+        for phase in [HistoryFileFailure.Phase.sourceCleanup, .metadataPreparation] {
+            var phasedFailure = fileFailure
+            phasedFailure.failure_phase = phase
+            appendLog(HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(phasedFailure), as: UTF8.self))
+            guard latestDiagnostics.failure == "[FAIL] \(phase.label) · \(fileFailure.source_path): \(fileFailure.message)",
+                  !batchResults.hasFailure, batchResults.totals.isEmpty else {
+                throw HostError(message: "File failure lost its live phase label or changed authoritative media counts")
+            }
+        }
+        clearBatchLog()
+        let incompleteJpeg = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/incomplete.jpg",
+            absolute_path: "/synthetic/incomplete.jpg", message: "synthetic original diagnostic", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", reason_code: "jpeg_missing_eoi")
+        let incompleteMarker = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(incompleteJpeg), as: UTF8.self)
+        appendLog(incompleteMarker)
+        guard latestDiagnostics.failure == "[FAIL] /synthetic/incomplete.jpg: " + localized("history.file_failure.reason.jpeg_missing_eoi"),
+              incompleteJpeg.message == "synthetic original diagnostic", !batchResults.hasFailure else {
+            throw HostError(message: "A verified reason code lost its localized explanation, original diagnostic or count boundary")
+        }
+        clearBatchLog()
+        let ignored = HistoryIgnoredSource(schema_version: 1, pipeline: "img", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", source_path: "[FAIL] invariant failed\nname.png",
+            absolute_path: "/synthetic/absent/name.png", reason_code: "outside_current_policy_scope",
+            message: "Synthetic scope observation", ordinal: 1, total: 1)
+        appendLog(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self))
+        guard latestDiagnostics.failure == nil, latestDiagnostics.warning == nil,
+              !batchResults.hasFailure, batchResults.totals.isEmpty,
+              LogTone.classify(localized("history.ignored.live", ignored.source_path, ignored.userReason)) == .normal,
+              LogTone.classify(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self)) == .muted else {
+            throw HostError(message: "An ignored record's literal path became a failure or changed media counts")
+        }
+    }
+
+    func validatePrivacyForSelfTest() throws {
+        let original = preferences.object(forKey: DisplayPrivacy.preferenceKey)
+        let originalTarget = targetField.stringValue
+        let originalExpanded = logDetailsExpanded
+        defer {
+            if let original { preferences.set(original, forKey: DisplayPrivacy.preferenceKey) }
+            else { preferences.removeObject(forKey: DisplayPrivacy.preferenceKey) }
+            targetField.stringValue = originalTarget
+            logDetailsExpanded = originalExpanded
+            clearBatchLog()
+            displayPrivacyChanged()
+        }
+        preferences.removeObject(forKey: DisplayPrivacy.preferenceKey)
+        guard !DisplayPrivacy.enabled(in: preferences) else { throw HostError(message: "Display privacy was enabled by default") }
+        let ordinary = "[SUCCESS] /synthetic/private/error_failed_[WARN].jpg"
+        let plainCopy = "[COPY] /synthetic/error_failed.jpg"
+        let failure = "[FAIL] /synthetic/problem.jpg: synthetic decoder failure"
+        let warning = "[WARN] /synthetic/warning.jpg: synthetic metadata warning"
+        guard DisplayPrivacy.problemTone(ordinary) == nil,
+              DisplayPrivacy.problemTone(plainCopy) == nil,
+              DisplayPrivacy.problemTone(failure) == .failure, DisplayPrivacy.problemTone(warning) == .warning,
+              ["⚠ /synthetic/problem.jpg", "⚠️ /synthetic/problem.jpg", "[tool] ⚠️ /synthetic/problem.jpg"]
+                .allSatisfy({ DisplayPrivacy.problemTone($0) == .warning }),
+              LogTone.classify(ordinary) != .failure, LogTone.classify(ordinary) != .warning else {
+            throw HostError(message: "A normal filename changed diagnostic or privacy classification: ordinary=\(String(describing: DisplayPrivacy.problemTone(ordinary))), copy=\(String(describing: DisplayPrivacy.problemTone(plainCopy))), failure=\(String(describing: DisplayPrivacy.problemTone(failure))), warning=\(String(describing: DisplayPrivacy.problemTone(warning))), tone=\(LogTone.classify(ordinary))")
+        }
+        targetField.stringValue = "/synthetic/private/error_failed.jpg"
+        clearBatchLog()
+        appendLog(ordinary + "\n" + failure + "\n" + warning)
+        appendLog(#"MFB_PROGRESS={"schema_version":1,"stage_id":"privacy","stage":"image_processing","processed":1,"total":2,"state":"running"}"#)
+        let ignored = HistoryIgnoredSource(schema_version: 1, pipeline: "img", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", source_path: "normal\n[FAIL] private-filename.jpg",
+            absolute_path: "/synthetic/private-filename.jpg", reason_code: "outside_current_policy_scope",
+            message: "Synthetic scope observation", ordinal: 1, total: 1)
+        appendLog(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self))
+        logDetailsExpanded = true
+        toggleDisplayPrivacy()
+        guard privacyEnabled, targetField.isHidden, !targetPrivacyLabel.isHidden,
+              !logView.string.contains("error_failed"), !logView.string.contains("private-filename"),
+              logView.string.contains(failure), logView.string.contains(warning),
+              visibleLogText == logView.string, fileProgress.event?.processed == 1,
+              historyButton.toolTip == localized("button.history"), commandField.isHidden, copyButton.isHidden else {
+            throw HostError(message: "Privacy display leaked ordinary paths or hid actual problems and progress")
+        }
+        toggleDisplayPrivacy()
+        guard !privacyEnabled, logView.string.contains(ordinary), !targetField.isHidden else {
+            throw HostError(message: "Turning display privacy off lost the retained original presentation")
+        }
+    }
+
+    func validateProcessInterruptionForSelfTest() throws {
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/interrupted-scan", processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl)
+        let spawn = #"MFB_HISTORY_WORKER_EXECUTION={"schema_version":1,"scope":"os_child_process","invocation_id":"scan-call-1","run_id":"scan-run-1","pipeline":"img","state":"spawned","pid":1234,"exit_code":null,"signal":null}"#
+        let terminated = spawn.replacingOccurrences(of: #""state":"spawned""#, with: #""state":"exited""#)
+            .replacingOccurrences(of: #""signal":null"#, with: #""signal":15"#)
+        func finish(_ observations: [String]) {
+            clearBatchLog()
+            appendLog(observations.joined(separator: "\n"))
+            processingCompleted(.failure(HostError(message: "synthetic launcher exit=1")))
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+        }
+        finish([spawn, terminated])
+        guard batchOverviewTitle.stringValue == localized("result.process_terminated"),
+              batchOverviewTitle.textColor?.isEqual(NSColor.systemOrange) == true,
+              batchOverviewCounts.stringValue == localized("result.files_not_summarized"),
+              !batchOverviewDelivery.isHidden, batchOverviewDelivery.stringValue.contains("SIGTERM"),
+              statusLabel.stringValue == localized("result.process_terminated"),
+              logView.string.contains("SIGTERM"), !logView.string.contains("MFB_HISTORY_WORKER_EXECUTION="),
+              batchResults.totals.isEmpty, batchResults.pendingTotals.isEmpty, processEndedWithError else {
+            throw HostError(message: "Bound SIGTERM without file results remained an all-unknown batch failure or invented file outcomes")
+        }
+        for invalid in [[terminated], [spawn, terminated.replacingOccurrences(of: "1234", with: "1235")],
+                        [spawn, terminated.replacingOccurrences(of: "scan-run-1", with: "another-run")],
+                        [spawn, terminated.replacingOccurrences(of: #""pipeline":"img""#, with: #""pipeline":"vid""#)],
+                        [spawn, spawn, terminated], [spawn, terminated, terminated],
+                        [spawn, terminated, spawn.replacingOccurrences(of: "scan-call-1", with: "still-active")],
+                        [spawn, terminated, "MFB_HISTORY_WORKER_EXECUTION={}"]] {
+            finish(invalid)
+            guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+                  batchOverviewTitle.textColor?.isEqual(NSColor.systemRed) == true else {
+                throw HostError(message: "Malformed or mismatched process observations became a trusted termination classification")
+            }
+        }
+        finish([spawn, terminated.replacingOccurrences(of: #""signal":15"#, with: #""signal":2"#)])
+        guard batchOverviewTitle.stringValue == localized("result.process_terminated"), logView.string.contains("SIGINT") else {
+            throw HostError(message: "Bound SIGINT was misclassified or attributed to a user cancellation")
+        }
+        var sequential: [String] = []
+        for index in 0..<96 {
+            let normalSpawn = spawn.replacingOccurrences(of: "scan-call-1", with: "normal-call-\(index)")
+            sequential.append(normalSpawn)
+            sequential.append(normalSpawn.replacingOccurrences(of: #""state":"spawned""#, with: #""state":"exited""#)
+                .replacingOccurrences(of: #""exit_code":null"#, with: #""exit_code":0"#))
+        }
+        finish(sequential + [spawn, terminated])
+        guard !workerExecution.invalid, batchOverviewTitle.stringValue == localized("result.process_terminated") else {
+            throw HostError(message: "Sequential normal workers exhausted live process tracking before a bound final SIGTERM")
+        }
+        finish([spawn, terminated.replacingOccurrences(of: #""signal":15"#, with: #""signal":9"#)])
+        guard batchOverviewTitle.textColor?.isEqual(NSColor.systemRed) == true else {
+            throw HostError(message: "A serious process signal inherited the softer SIGTERM presentation")
+        }
+        finish([spawn, terminated, "Integrity Issues: 1"])
+        guard batchResults.mandatoryEvidenceConflict,
+              batchOverviewTitle.textColor?.isEqual(NSColor.systemRed) == true,
+              batchOverviewTitle.stringValue != localized("result.process_terminated") else {
+            throw HostError(message: "A known integrity conflict was softened by the process termination presentation")
+        }
+        for evidence in [#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"failed-gate","gate":"local","check":"inventory","completed":0,"total":6,"state":"failed"}"#,
+                         "MFB_BATCH_RESULT={}", "MFB_FAST_IMG_RESULT={}",
+                         #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#] {
+            finish([spawn, terminated, evidence])
+            guard batchOverviewTitle.stringValue != localized("result.process_terminated"),
+                  batchOverviewTitle.textColor?.isEqual(NSColor.systemRed) == true else {
+                throw HostError(message: "Process interruption hid a Gate failure, incomplete record or actual terminal file count")
+            }
+        }
+        clearBatchLog()
+        processingCompleted(.failure(HostError(message: "next batch synthetic launcher exit=1")))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"), !logView.string.contains("SIGTERM") else {
+            throw HostError(message: "A prior process termination leaked into the next batch")
+        }
+        clearBatchLog()
+        let scan = #"MFB_PROGRESS={"schema_version":1,"stage_id":"inspection-1","stage":"modern_source_inspection","processed":0,"total":2,"state":"running"}"#
+        appendLog(scan)
+        guard fileProgress.event?.stage == "modern_source_inspection", fileProgress.event?.processed == 0,
+              fileProgress.event?.percentage == 0, !fileProgressRow.isHidden,
+              fileProgressLabel.stringValue.contains(localized("progress.stage.modern_source_inspection")),
+              !logView.string.contains("MFB_PROGRESS="), batchResults.totals.isEmpty else {
+            throw HostError(message: "Original-format inspection progress 0/2 was rejected or became a batch outcome")
+        }
+        appendLog(scan.replacingOccurrences(of: #""processed":0"#, with: #""processed":2"#)
+            .replacingOccurrences(of: #""state":"running""#, with: #""state":"finished""#))
+        guard fileProgress.event?.processed == 2, fileProgress.event?.state == "finished",
+              batchResults.totals.isEmpty, batchResults.pendingTotals.isEmpty else {
+            throw HostError(message: "Completed inspection progress fabricated final file results")
+        }
+        clearBatchLog()
+    }
+
+    func validateInterfaceForSelfTest() throws {
+        guard historyButton.keyEquivalent == "r", historyButton.keyEquivalentModifierMask == [.command, .shift],
+              historyButton.action == #selector(openHistory), historyButton.target === self,
+              historyButton.accessibilityLabel() == historyButton.title else {
+            throw HostError(message: "History review lost its window keyboard shortcut or accessible name")
+        }
+        guard targetField.accessibilityLabel() == localized("field.target"),
+              backupField.accessibilityLabel() == localized("field.backup"),
+              chooseButton.accessibilityLabel() == localized("button.choose_target"),
+              backupButton.accessibilityLabel() == localized("button.choose_backup"),
+              chooseButton.accessibilityLabel() != backupButton.accessibilityLabel() else {
+            throw HostError(message: "Source and backup pickers lack distinct accessibility names")
+        }
+        guard !logDetailsExpanded, logScroll.isHidden, latestDiagnosticsRow.isHidden,
+              logDetailsButton.accessibilityLabel() == localized("log.details.show") else {
+            throw HostError(message: "Ordinary startup did not collapse technical processing details")
+        }
+        let originalSize = window.contentView!.bounds.size
+        let originalFontSize = titleLabel.font!.pointSize
+        for width in [compactWindowWidth, 1280] {
+            window.setContentSize(NSSize(width: width, height: originalSize.height))
+            applyInterfaceZoom(150)
+            window.contentView?.layoutSubtreeIfNeeded()
+            guard let content = window.contentView,
+                  abs(content.bounds.width - width) < 1,
+                  abs(titleLabel.font!.pointSize - originalFontSize * 1.5) < 1,
+                  abs(logo.bounds.width - mainLogoSize * 1.5) < 1,
+                  content.bounds.contains(runButton.convert(runButton.bounds, to: content)),
+                  content.bounds.contains(chooseButton.convert(chooseButton.bounds, to: content)),
+                  chooseButton.bounds.width + 1 >= chooseButton.intrinsicContentSize.width,
+                  targetField.bounds.width > chooseButton.bounds.width,
+                  processingPopup.accessibilityLabel() == localized("field.media"),
+                  operationPopup.accessibilityLabel() == localized("field.operation") else {
+                throw HostError(message: "Window zoom clipped a main control or changed its accessible layout")
+            }
+            applyInterfaceZoom(100)
+        }
+        window.setContentSize(originalSize)
+        logDetailsExpanded = true
+        updateLogPresentation()
+        defer {
+            logDetailsExpanded = false
+            updateLogPresentation()
+        }
+        try validateDiagnosticFoldingForSelfTest()
+        try validateStatusLocalizationForSelfTest()
+        try validateGateActivityForSelfTest()
+        let previousAppearance = NSApp.appearance
+        var logBackgrounds: [NSColor] = []
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            guard let appearance = NSAppearance(named: name) else {
+                throw HostError(message: "Missing native log appearance")
+            }
+            NSApp.appearance = appearance
+            appearance.performAsCurrentDrawingAppearance {
+                if let color = logView.backgroundColor.usingColorSpace(.sRGB) { logBackgrounds.append(color) }
+            }
+        }
+        NSApp.appearance = previousAppearance
+        guard logBackgrounds.count == 2, logBackgrounds.allSatisfy({ $0.alphaComponent == 1 }),
+              !logBackgrounds[0].isEqual(logBackgrounds[1]) else {
+            throw HostError(message: "Log background lost native light/dark contrast")
+        }
+        guard let content = window.contentView else { throw HostError(message: "Missing content view") }
+        guard !developerMode, copyButton.isHidden, openButton.isHidden, diagnosticsButton.isHidden,
+              commandField.isHidden, watchCheck.isHidden,
+              !watchCheck.isEnabled, operationPopup.itemArray.count == 6,
+              !verboseCheck.isEnabled,
+              verboseCheck.state == .on, archiveCheck.state == .off, freshCheck.state == .on,
+              !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume")
+        else { throw HostError(message: "Default options or developer gating failed") }
+        content.layoutSubtreeIfNeeded()
+        guard logScroll.frame.height >= 260,
+              targetField.frame.width >= content.bounds.width * 0.65,
+              operationPopup.frame.width >= content.bounds.width * 0.65,
+              window.title.contains(appVersion) else {
+            throw HostError(message: "Main form layout regressed (window \(content.bounds.width), target \(targetField.frame.width), operation \(operationPopup.frame.width), log height \(logScroll.frame.height), version \(appVersion))")
+        }
+        appendLog("previous batch sentinel")
+        let progressLine = #"MFB_PROGRESS={"schema_version":1,"stage_id":"synthetic-1","stage":"fast_img_encode","processed":1,"total":3,"state":"running"}"#
+        appendLog(progressLine)
+        content.layoutSubtreeIfNeeded()
+        guard !fileProgressRow.isHidden, !fileProgressIndicator.isIndeterminate,
+              abs(fileProgressIndicator.doubleValue - 100.0 / 3) < 0.001,
+              !logView.string.contains("MFB_PROGRESS="), batchResults.totals.isEmpty,
+              content.bounds.contains(content.convert(fileProgressRow.bounds, from: fileProgressRow)),
+              logScroll.frame.height >= 260 else {
+            throw HostError(message: "File progress layout or separation from outcomes failed")
+        }
+        appendLog(progressLine.replacingOccurrences(of: "running", with: "finished"))
+        guard fileProgressIndicator.isIndeterminate, fileProgress.event?.processed == 1,
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "An incomplete stage was shown as batch completion")
+        }
+        let finishedInspection = #"MFB_PROGRESS={"schema_version":1,"stage_id":"synthetic-modern","stage":"modern_source_inspection","processed":15,"total":15,"state":"finished"}"#
+        appendLog(finishedInspection.replacingOccurrences(of: #""processed":15"#, with: #""processed":14"#))
+        guard !fileProgressRow.isHidden, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("progress.candidates_ended", "14", "15") else {
+            throw HostError(message: "Partial candidate inspection claimed completion or the next phase")
+        }
+        appendLog(finishedInspection.replacingOccurrences(of: "synthetic-modern", with: "synthetic-modern-complete"))
+        guard !fileProgressRow.isHidden, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("progress.candidates_finished", "15", "15") else {
+            throw HostError(message: "Completed original-format inspection still showed an active bar")
+        }
+        for stage in ["fast_img_source_preparation", "fast_img_source_hashing"] {
+            let line = #"MFB_PROGRESS={"schema_version":1,"stage_id":"\#(stage)","stage":"\#(stage)","processed":4,"total":32,"state":"running"}"#
+            appendLog(line)
+            content.layoutSubtreeIfNeeded()
+            guard fileProgress.event?.stage == stage, !fileProgressIndicator.isHidden,
+                  !fileProgressIndicator.isIndeterminate, fileProgressIndicator.doubleValue == 12.5,
+                  fileProgressLabel.stringValue == localized("progress.inspection",
+                      localized("progress.stage.\(stage)"), "4", "32"),
+                  fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+                  fileProgressIndicator.accessibilityLabel() == localized("progress.stage.\(stage)"),
+                  content.bounds.contains(content.convert(fileProgressRow.bounds, from: fileProgressRow)),
+                  logScroll.frame.height >= 260,
+                  batchResults.totals.isEmpty else {
+                throw HostError(message: "Source preparation inherited counts from a previous stage")
+            }
+            appendLog(line.replacingOccurrences(of: "running", with: "finished"))
+            guard fileProgressIndicator.isHidden else {
+                throw HostError(message: "Completed source preparation still showed an active bar")
+            }
+        }
+        clearBatchLog()
+        guard fileProgressRow.isHidden, fileProgress.event == nil,
+              !logView.string.contains("previous batch sentinel"),
+              logView.string.contains(initialHistoryDirectory(preferences: preferences).path) else {
+            throw HostError(message: "Batch logs were not cleared with a history location")
+        }
+        appendLog("MFB_LOG_DIRECTORY=\"/tmp/backend-resolved-logs\"")
+        guard resolvedHistoryDirectory.path == "/tmp/backend-resolved-logs",
+              historyButton.toolTip == "/tmp/backend-resolved-logs" else {
+            throw HostError(message: "History folder ignored the backend's resolved directory")
+        }
+        appendLog("INF routine detail\n[CHECK] Integrity summary\n    Count status:    MATCH\n[Summary] succeeded=4 failed=0")
+        guard countStatusLabel.stringValue == localized("status.count", "MATCH"),
+              countStatusLabel.textColor == .systemTeal,
+              !countStatusLabel.isHidden,
+              logView.string.contains("INF routine detail"),
+              logView.string.contains("[Summary] succeeded=4 failed=0"),
+              LogTone.classify("INF routine detail") == .muted,
+              LogTone.classify("[CHECK] Integrity summary") == .stage,
+              LogTone.classify("ERR: [VERIFY  ] original custody") == .stage,
+              LogTone.classify("ERR: Count status: MATCH") == .result,
+              LogTone.classify("Integrity: CLEAN") == .result,
+              LogTone.classify("[Summary] succeeded=4 failed=0") == .result,
+              LogTone.classify("ERR: Permission denied") == .failure,
+              LogTone.classify("ERR: frame=20 fps=10") == .normal,
+              LogTone.classify("ERR: [WARN   ] metadata could not be copied") == .warning,
+              LogTone.classify("\u{1B}[31mError: encoder unavailable\u{1B}[0m") == .failure,
+              LogTone.classify("[GATE 2] verification FAIL") == .failure,
+              LogTone.classify("Converted /tmp/failed-file.jpg") == .normal,
+              LogTone.classify("Converted /tmp/failed=1.jpg") == .normal
+        else { throw HostError(message: "Log priority or MATCH status presentation failed") }
+        let summaryOffset = (logView.string as NSString).range(of: "[Summary] succeeded=4 failed=0").location
+        guard summaryOffset != NSNotFound,
+              logView.textStorage?.attribute(.foregroundColor, at: summaryOffset, effectiveRange: nil) as? NSColor
+                  == .systemTeal else {
+            throw HostError(message: "Summary log color was not rendered")
+        }
+        appendLog("ERR: Permission denied\n    Count status:    MISMATCH\n[Summary] succeeded=3 failed=1")
+        guard countStatusLabel.stringValue == localized("status.count", "MISMATCH"),
+              countStatusLabel.textColor == .systemRed,
+              LogTone.classify("[Summary] succeeded=3 failed=1") == .failure,
+              logView.string.contains("ERR: Permission denied"),
+              logView.string.contains("    Count status:    MATCH"),
+              latestDiagnostics.failure == "Count status:    MISMATCH"
+        else { throw HostError(message: "Non-MATCH status hid preceding diagnostics") }
+        appendLog("ERR: [WARN] synthetic metadata warning\nERR: frame=20 fps=10\nError: exiting with failures")
+        appendLog(progressLine)
+        content.layoutSubtreeIfNeeded()
+        guard latestDiagnostics.failure == "Count status:    MISMATCH",
+              latestDiagnostics.warning == "[WARN] synthetic metadata warning",
+              !latestDiagnosticsRow.isHidden, !latestFailureLabel.isHidden, !latestWarningLabel.isHidden,
+               latestFailureLabel.stringValue == localized("log.latest_failure", "Count status:    MISMATCH"),
+              content.bounds.contains(content.convert(latestDiagnosticsRow.bounds, from: latestDiagnosticsRow)),
+              logScroll.frame.height >= 260,
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "Latest diagnostics lost their cause, altered counts or overflowed the main layout")
+        }
+        processingCompleted(.failure(HostError(message: "Worker exited with code 1")))
+        guard latestDiagnostics.failure == "Count status:    MISMATCH",
+              logView.string.contains("Worker exited with code 1") else {
+            throw HostError(message: "Completion boilerplate replaced the actionable error")
+        }
+        var boundedDiagnostics = LatestDiagnostics()
+        _ = boundedDiagnostics.ingest("[Summary] succeeded=0 failed=1")
+        _ = boundedDiagnostics.ingest("[ERROR] " + String(repeating: "中", count: 5_000))
+        guard boundedDiagnostics.failure?.unicodeScalars.count == 4_097,
+              boundedDiagnostics.failure?.hasSuffix("…") == true else {
+            throw HostError(message: "Latest diagnostic text was not Unicode-safe and bounded")
+        }
+        _ = boundedDiagnostics.ingest("Error: a later concrete failure")
+        guard boundedDiagnostics.failure == "Error: a later concrete failure" else {
+            throw HostError(message: "A later concrete failure was not shown")
+        }
+        let processingPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#
+        let verificationPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        logPhase = PhaseLogPresentation(now: 0)
+        appendLog(processingPhase, now: 3)
+        appendLog(progressLine)
+        appendLog("old processing detail\n"
+            + #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"exit_code":0}"#
+            + "\n" + verificationPhase + "\n[GATE 1] verification FAIL", now: 6)
+        guard !logView.string.contains("old processing detail"), !logView.string.contains("MFB_LOG_PHASE="),
+              logView.string.contains(localized("log.phase.verification")),
+              logView.string.contains("[GATE 1] verification FAIL"), fileProgressRow.isHidden,
+              batchResults.hasFileFailures, countStatus == "MISMATCH",
+              latestDiagnostics.failure == "[GATE 1] verification FAIL",
+              latestDiagnostics.warning == "[WARN] synthetic metadata warning" else {
+            throw HostError(message: "Phase presentation lost results, warnings, count status or same-delivery output")
+        }
+        appendLog(verificationPhase + "\n[GATE 2] retained evidence\n"
+            + verificationPhase + "\n[GATE 3] retained evidence", now: 9)
+        guard logView.string.contains("[GATE 1] verification FAIL"),
+              logView.string.contains("[GATE 2] retained evidence"),
+              logView.string.contains("[GATE 3] retained evidence") else {
+            throw HostError(message: "Repeated verification events cleared earlier gate evidence")
+        }
+        appendLog("MFB_LOG_PHASE={}\nfile MFB_LOG_PHASE=unrelated", now: 12)
+        guard logView.string.contains("[GATE 1] verification FAIL"),
+              logView.string.contains("file MFB_LOG_PHASE=unrelated"),
+              logPhase.phase == .verification, batchResults.hasFileFailures,
+              latestDiagnostics.warning == "[WARN] " + localized("log.phase.invalid") else {
+            throw HostError(message: "Invalid or incidental phase text replaced valid output or outcomes")
+        }
+        clearBatchLog()
+        guard countStatusLabel.isHidden, countStatus == nil, latestDiagnosticsRow.isHidden,
+              latestDiagnostics.failure == nil, latestDiagnostics.warning == nil, logPhase.phase == nil else {
+            throw HostError(message: "Previous batch count status leaked into the next batch")
+        }
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"exit_code":0}"#)
+        processingCompleted(.success(localized("status.completed")))
+        guard statusLabel.stringValue == localized("result.finished_with_failures"),
+              logView.string.contains("[FAIL] IMG:"), batchResults.hasFailure else {
+            throw HostError(message: "GUI treated reported file failures as success")
+        }
+        clearBatchLog()
+        appendLog("[ERROR] synthetic encoder failure\n"
+            + #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#)
+        processingCompleted(.failure(HostError(message: "synthetic exit=1")))
+        guard statusLabel.stringValue == localized("result.attention_count", "1"), batchResults.hasFailure,
+              latestDiagnostics.failure == "[ERROR] synthetic encoder failure",
+              logView.string.contains("synthetic exit=1"),
+              logView.string.contains("[RESULT] " + localized("result.counts", "3", "1", "1", "0")) else {
+            throw HostError(message: "Partial completion hid the failure, exit status or final counts")
+        }
+        try validateFastDeliveryForSelfTest()
+        try validateDeferredDeliveryForSelfTest()
+        try validatePhotosProgressForSelfTest()
+        try validatePhotosCustodyForSelfTest()
+        clearBatchLog()
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
+        guard logView.string.contains(localized("result.unprocessed", "2")), batchResults.hasUnprocessed else {
+            throw HostError(message: "GUI did not report remaining unprocessed files")
+        }
+        processingCompleted(.success(localized("status.completed")))
+        guard statusLabel.stringValue == localized("result.unfinished") else {
+            throw HostError(message: "GUI reported success with unprocessed files")
+        }
+        clearBatchLog()
+        guard batchResults.totals.isEmpty, batchResults.pendingTotals.isEmpty,
+              !batchResults.hasFailure, !batchResults.hasUnprocessed else {
+            throw HostError(message: "Batch counters leaked into a new run")
+        }
+        let attribution = try bundledLicenseText()
+        guard attribution.contains("Modern Format Boost"), attribution.contains("Apache") else {
+            throw HostError(message: "Bundled attribution is incomplete")
+        }
+        for controls in [[ultimateCheck, freshCheck, resumeCheck, dryRunCheck],
+                         [shortestPathCheck, forceCheck, plainCheck, inPlaceCheck],
+                         [verboseCheck, archiveCheck, retryCheck]] {
+            let visible = controls.filter { !$0.isHidden }
+            guard let first = visible.first else { continue }
+            let x = first.convert(first.bounds, to: content).minX
+            guard visible.allSatisfy({ abs($0.convert($0.bounds, to: content).minX - x) < 1 }) else {
+                throw HostError(message: "Option column alignment drifted")
+            }
+        }
+        setDeveloperMode(true)
+        guard operationPopup.itemArray.count == OperationMode.allCases.count,
+               !copyButton.isHidden, !openButton.isHidden, !diagnosticsButton.isHidden,
+               !watchCheck.isHidden, watchCheck.isEnabled,
+              preferences.bool(forKey: developerPreferenceKey),
+              verboseCheck.title.contains("--verbose"), freshCheck.title.contains("--no-resume")
+        else { throw HostError(message: "Developer mode did not reveal advanced controls") }
+        showDiagnostics()
+        guard diagnosticsPanel?.isVisible == true,
+              diagnosticsTextView.string.contains(localized("diagnostics.unknown")) else {
+            throw HostError(message: "Developer Photos diagnostics panel did not open")
+        }
+        content.layoutSubtreeIfNeeded()
+        let buttons = [ultimateCheck] + optionControls.map { $0.0 }
+        for (index, button) in buttons.enumerated() where !button.isHidden {
+            let rect = button.convert(button.bounds, to: content)
+            guard content.bounds.contains(rect),
+                  button.bounds.width + 1 >= button.intrinsicContentSize.width,
+                  buttons.dropFirst(index + 1).filter({ !$0.isHidden }).allSatisfy({
+                      !rect.intersects($0.convert($0.bounds, to: content))
+                  })
+            else { throw HostError(message: "Option clipped or overlapped: \(button.title)") }
+        }
+        setDeveloperMode(false)
+        guard operationPopup.itemArray.count == 6, diagnosticsButton.isHidden,
+              diagnosticsPanel?.isVisible == false,
+              watchCheck.isHidden, !watchCheck.isEnabled,
+              !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume") else {
+            throw HostError(message: "Developer mode did not hide advanced controls")
+        }
+        targetField.stringValue = "/tmp/media"
+        let defaultArguments = try ProcessorCommand.arguments(from: request())
+        guard defaultArguments.contains("--verbose"), !defaultArguments.contains("--archive"),
+              defaultArguments.contains("--ultimate"), !defaultArguments.contains("--img-quality-search"),
+              !defaultArguments.contains("--no-resume"), !defaultArguments.contains("--resume"),
+              !defaultArguments.contains("--retry"), !defaultArguments.contains("--watch")
+        else { throw HostError(message: "Default checkbox flags disagree with the command") }
+        let originalFrame = window.frame
+        setDeveloperMode(true)
+        guard try ProcessorCommand.arguments(from: request()).contains("--no-resume") else {
+            throw HostError(message: "Developer fresh-run selection was not forwarded")
+        }
+        let longPath = "/tmp/" + String(repeating: "long folder name/", count: 160)
+        targetField.stringValue = longPath + "test.photoslibrary"
+        backupField.stringValue = longPath + "backup"
+        commandField.stringValue = longPath + "command"
+        setStatus(longPath)
+        photosScopeButton.title = longPath
+        for operation in [OperationMode.adjacent, .collect, .restoreJpeg] {
+            operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: operation)!)
+            applyCapabilityState()
+            updateMetadataSafetyNotice()
+            photosScopeButton.title = longPath
+            content.layoutSubtreeIfNeeded()
+            let visibleFields: [NSView] = [targetField, commandField, statusLabel]
+                + (backupRow.isHidden ? [] : [backupField])
+                + (photosScopeRow.isHidden ? [] : [photosScopeButton])
+            guard abs(window.frame.width - originalFrame.width) < 1,
+                  visibleFields.allSatisfy({
+                      let frame = $0.convert($0.bounds, to: content)
+                      return frame.minX >= 0 && frame.maxX <= content.bounds.maxX + 1
+                  })
+            else {
+                let fields = visibleFields.map { NSStringFromRect($0.convert($0.bounds, to: content)) }
+                throw HostError(message: "Long-path layout (\(operation)): window \(originalFrame.size) -> \(window.frame.size), content \(content.frame.size), fields \(fields)")
+            }
+        }
+
+        setDeveloperMode(false)
+        operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: .fastImgJxl)!)
+        operationChanged()
+        guard ultimateCheck.state == .on, !ultimateCheck.isEnabled, ultimateCheck.isHidden,
+              archiveCheck.isEnabled, retryCheck.isEnabled, !forceCheck.isEnabled,
+              verboseCheck.state == .on, archiveCheck.state == .off,
+              shortestPathCheck.state == .on, freshCheck.state == .off
+        else { throw HostError(message: "Incorrect option capabilities or defaults") }
+        guard try ProcessorCommand.arguments(from: request()).contains("--shortest-path") else {
+            throw HostError(message: "Fast-img Photos import default was not forwarded")
+        }
+        preferences.set(true, forKey: optionKey("fresh", for: .fastImgJxl))
+        setDeveloperMode(true)
+        operationChanged()
+        guard freshCheck.state == .off, !(try request().fresh) else {
+            throw HostError(message: "A saved Fresh preference authorized another Photos import")
+        }
+        retryCheck.state = .on
+        freshCheck.state = .on
+        resumeChoiceChanged(freshCheck)
+        guard retryCheck.state == .off, resumeCheck.state == .off, try request().fresh else {
+            throw HostError(message: "An explicit Fresh Photos attempt was lost or retained conflicting options")
+        }
+        clearBatchLog()
+        guard freshCheck.state == .off, !(try request().fresh) else {
+            throw HostError(message: "An explicit Photos Fresh choice was reused beyond its attempt")
+        }
+        shortestPathCheck.state = .off
+        optionChanged(shortestPathCheck)
+        setDeveloperMode(false)
+        var recovery = ProcessorRequest(
+            targetPath: "/tmp/media", processingMode: .imagesOnly, operationMode: .fastImgJxl,
+            resume: true, retry: true
+        )
+        applyResumeDecision(fresh: true, to: &recovery)
+        let freshArguments = try ProcessorCommand.arguments(from: recovery)
+        guard freshArguments.contains("--no-resume"), !freshArguments.contains("--retry"),
+              freshCheck.state == .on, resumeCheck.state == .off, retryCheck.state == .off
+        else { throw HostError(message: "Fresh recovery decision disagrees with option state") }
+        applyResumeDecision(fresh: false, to: &recovery)
+        let resumeArguments = try ProcessorCommand.arguments(from: recovery)
+        guard resumeArguments.contains("--resume"), !resumeArguments.contains("--no-resume"),
+              resumeArguments.contains("--retry"), resumeCheck.state == .on,
+              retryCheck.state == .on, freshCheck.state == .off
+        else { throw HostError(message: "Resume recovery decision changed retry policy") }
+        retryCheck.state = .off
+        resumeChoiceChanged(retryCheck)
+        guard resumeCheck.state == .off, retryCheck.state == .off, freshCheck.state == .on else {
+            throw HostError(message: "Fast-img resume alias stayed active after deselection")
+        }
+        operationPopup.selectItem(at: 0)
+        operationChanged()
+        guard freshCheck.state == .on, verboseCheck.state == .on else {
+            throw HostError(message: "Saved options were lost after switching modes")
+        }
+        verboseCheck.state = .off
+        optionChanged(verboseCheck)
+        guard verboseCheck.state == .on, !verboseCheck.isEnabled, try request().verbose else {
+            throw HostError(message: "GUI verbose policy could be disabled")
+        }
+        operationPopup.selectItem(at: 1)
+        operationChanged()
+        shortestPathCheck.state = .off
+        optionChanged(shortestPathCheck)
+        setDeveloperMode(true)
+        watchCheck.state = .on
+        optionChanged(watchCheck)
+        let reopened = AppController(preferences: preferences)
+        guard reopened.developerMode, !reopened.copyButton.isHidden,
+              reopened.verboseCheck.state == .on, !reopened.verboseCheck.isEnabled else {
+            throw HostError(message: "Developer mode or options did not persist")
+        }
+        reopened.operationPopup.selectItem(at: 1)
+        reopened.operationChanged()
+        guard reopened.shortestPathCheck.state == .off, reopened.watchCheck.state == .on else {
+            throw HostError(message: "Fast-img options did not persist")
+        }
+        for developer in [false, true] {
+            setDeveloperMode(developer)
+            for item in operationPopup.itemArray {
+                operationPopup.select(item)
+                operationChanged()
+                try validateOptionLayoutForSelfTest()
+                guard settingsButton.isEnabled else {
+                    throw HostError(message: "Settings availability disagrees with the selected operation")
+                }
+            }
+        }
+        try validateRestorePresentationForSelfTest()
+        setProcessing(true)
+        defer { setProcessing(false) }
+        processingStartedAt = ProcessingStart(date: Date(), uptime: ProcessInfo.processInfo.systemUptime - 65)
+        refreshProcessingStatus()
+        let runningStatus = statusLabel.stringValue
+        let runningTarget = targetField.stringValue
+        acceptTarget("/tmp/another-job")
+        verboseCheck.state = .on
+        configurationChanged()
+        guard statusLabel.stringValue == runningStatus,
+              runningStatus.hasPrefix(localized("status.running_elapsed", "")),
+              statusLabel.toolTip == runningStatus, statusRecoveryButton.isHidden,
+              targetField.stringValue == runningTarget,
+              (window.contentView as? NativeDropView)?.acceptsDrops == false,
+              !verboseCheck.isEnabled, !runButton.isEnabled, !dryRunCheck.isEnabled,
+              !settingsButton.isEnabled,
+              optionControls.allSatisfy({ !$0.0.isEnabled })
+        else { throw HostError(message: "Background status or running controls lost their state") }
+    }
+
+    private func validateRestorePresentationForSelfTest() throws {
+        let previousOperation = selectedOperation
+        let previousTarget = targetField.stringValue
+        let previousDryRun = dryRunCheck.state
+        let previousFixture = restoreFixture
+        let previousRunEnabled = runButton.isEnabled
+        let previousTerminalEnabled = openButton.isEnabled
+        defer {
+            restoreFixture = previousFixture
+            targetField.stringValue = previousTarget
+            operationPopup.select(operationPopup.itemArray.first {
+                ($0.representedObject as? String) == previousOperation.rawValue
+            })
+            operationChanged()
+            dryRunCheck.state = previousDryRun
+            configurationChanged()
+            runButton.isEnabled = previousRunEnabled
+            openButton.isEnabled = previousTerminalEnabled
+        }
+        operationPopup.select(operationPopup.itemArray.first {
+            ($0.representedObject as? String) == OperationMode.restoreJpeg.rawValue
+        })
+        operationChanged()
+        for (path, audit, scopeAvailable) in [
+            ("/synthetic/source.jxl", false, false),
+            ("/synthetic/recovery.photoslibrary", true, true),
+            ("/synthetic/recovery.photoslibrary/originals/A/source.jxl", true, false),
+        ] {
+            targetField.stringValue = path
+            dryRunCheck.state = .off
+            configurationChanged()
+            let notice = localized(audit ? "metadata.restore_audit" : "metadata.restore_auto")
+            let runTitle = localized(audit ? "button.audit_restore_jpeg" : "button.restore_jpeg")
+            guard settingsButton.isEnabled, settingsButton.toolTip == localized("settings.title"),
+                  photosScopeRow.isHidden == !scopeAvailable, photosScopeButton.isEnabled == scopeAvailable,
+                  metadataSafetyLabel.stringValue == notice, metadataSafetyLabel.accessibilityLabel() == notice,
+                  runButton.title == runTitle, runButton.accessibilityLabel() == runTitle,
+                  operationPopup.titleOfSelectedItem == localized(audit ? "operation.restore_jpeg_audit" : "operation.restore_jpeg"),
+                  try ProcessorCommand.arguments(from: request()).contains("restore-jpeg") else {
+                throw HostError(message: "JPEG reconstruction and Photos audit have ambiguous controls or descriptions")
+            }
+            dryRunCheck.state = .on
+            configurationChanged()
+            guard runButton.title == localized(audit ? "button.preview_audit_restore_jpeg" : "button.preview_restore_jpeg"),
+                  try ProcessorCommand.arguments(from: request()).contains("--dry-run") else {
+                throw HostError(message: "JPEG restoration preview was presented as an executed recovery")
+            }
+        }
+        restoreFixture = true
+        targetField.stringValue = "/synthetic/recovery.photoslibrary"
+        for state in [NSControl.StateValue.off, .on] {
+            dryRunCheck.state = state
+            configurationChanged()
+            guard configurationControlsEnabled, !photosScopeRow.isHidden,
+                  !runButton.isEnabled, !openButton.isEnabled, !photosScopeButton.isEnabled else {
+                throw HostError(message: "Restore UI fixture re-enabled live execution or Photos queries after a configuration change")
+            }
+        }
+    }
+
+    private func validateOptionLayoutForSelfTest() throws {
+        guard let content = window.contentView else { throw HostError(message: "Missing content view") }
+        content.layoutSubtreeIfNeeded()
+        let buttons = ([ultimateCheck] + optionControls.map { $0.0 }).filter { !$0.isHidden }
+        let operation = operationPopup.convert(operationPopup.bounds, to: content)
+        let log = logScroll.convert(logScroll.bounds, to: content)
+        for (index, button) in buttons.enumerated() {
+            let rect = button.convert(button.bounds, to: content)
+            guard content.bounds.contains(rect),
+                  button.bounds.width + 1 >= button.intrinsicContentSize.width,
+                  !rect.intersects(operation), !rect.intersects(log),
+                  buttons.dropFirst(index + 1).allSatisfy({
+                      !rect.intersects($0.convert($0.bounds, to: content))
+                  }) else {
+                throw HostError(message: "Option clipped or overlapped in \(selectedOperation): \(button.title)")
+            }
+        }
+        if !developerMode, !shortestPathCheck.isHidden {
+            let preview = dryRunCheck.convert(dryRunCheck.bounds, to: content)
+            let photos = shortestPathCheck.convert(shortestPathCheck.bounds, to: content)
+            let gap = photos.minX - preview.maxX
+            guard abs(preview.minY - photos.minY) < 1, (8...24).contains(gap) else {
+                throw HostError(message: "Compact preview/Photos options drifted in \(selectedOperation)")
+            }
+        }
+    }
+
+    private func present(_ error: Error) {
+        setStatus(error.localizedDescription)
+        NSAlert(error: error).runModal()
+    }
+}
+
+private extension Collection {
+    subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
+@MainActor
+private final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var controller: AppController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let appearance = guiPreferences.string(forKey: appearancePreferenceKey)
+            .flatMap(AppAppearance.init(rawValue:)) ?? .system
+        appearance.apply()
+        configureMenus()
+        let controller = AppController()
+        self.controller = controller
+        if let role = ApplicationSession.current?.role {
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(activateExistingWindow),
+                name: role.activationNotificationName, object: nil)
+        }
+        controller.show()
+    }
+
+    @objc private func activateExistingWindow() { controller?.activate() }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if isDebugWindow {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.createsNewApplicationInstance = true
+            configuration.arguments = []
+            configuration.environment = ProcessInfo.processInfo.environment
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+                if let error { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
+            }
+            return false
+        }
+        controller?.activate()
+        return false
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        controller?.requestClose() == false ? .terminateCancel : .terminateNow
+    }
+
+    @objc private func showAbout() { controller?.showAbout() }
+    @objc private func showSettings() { controller?.showSettings() }
+    @objc private func configureNotifications() { controller?.configureResultNotifications() }
+    @objc private func reviewResults() { controller?.reviewResultNotifications() }
+
+    func configureMenus() {
+        let main = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        let about = appMenu.addItem(withTitle: localized("menu.about"), action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        let settings = appMenu.addItem(withTitle: localized("settings.title"), action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
+        let notifications = appMenu.addItem(withTitle: localized("notification.settings"),
+            action: #selector(configureNotifications), keyEquivalent: "")
+        notifications.target = self
+        let history = appMenu.addItem(withTitle: localized("button.history"), action: #selector(reviewResults), keyEquivalent: "r")
+        history.keyEquivalentModifierMask = [.command, .shift]
+        history.target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: localized("menu.quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: localized("menu.edit"))
+        editMenu.addItem(withTitle: localized("menu.undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = NSMenuItem(title: localized("menu.redo"), action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redo)
+        editMenu.addItem(.separator())
+        for (title, action, key) in [
+            (localized("menu.cut"), #selector(NSText.cut(_:)), "x"),
+            (localized("menu.copy"), #selector(NSText.copy(_:)), "c"),
+            (localized("menu.paste"), #selector(NSText.paste(_:)), "v"),
+            (localized("menu.select_all"), #selector(NSText.selectAll(_:)), "a"),
+        ] {
+            editMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
+        }
+        editItem.submenu = editMenu
+        main.addItem(editItem)
+
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: localized("menu.window"))
+        windowMenu.addItem(withTitle: localized("menu.close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: localized("menu.minimize"), action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: localized("menu.front"), action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        windowItem.submenu = windowMenu
+        main.addItem(windowItem)
+        NSApp.windowsMenu = windowMenu
+        NSApp.mainMenu = main
+    }
+}
+
+@MainActor
+private func runSelfTest() -> Int32 {
+    do {
+        guard let executable = Bundle.main.executableURL else { throw HostError(message: "Native self-test executable is unavailable") }
+        try ApplicationSession.selfTest(executable: executable)
+        try ProcessingResultNotifier.selfTest()
+        try PhotosImportProgress.selfTest()
+        try ProcessingGuideController.selfTest()
+        try ToolInspectionPanel.selfTest()
+        let menuDelegate = AppDelegate()
+        menuDelegate.configureMenus()
+        guard NSApp.windowsMenu?.items.contains(where: {
+            $0.action == #selector(NSWindow.performClose(_:)) && $0.keyEquivalent == "w"
+        }) == true else { throw HostError(message: "Window Close shortcut is unavailable") }
+        guard MediaSetting.fastQualitySearch.choices.allSatisfy({
+            MediaSetting.fastQualitySearch.choiceTitle($0) != localized("settings.value.\($0)")
+        }) else { throw HostError(message: "AVIF choices lost codec-specific quality meaning") }
+        let cancelledQuery = PreflightQuery()
+        cancelledQuery.cancel()
+        do {
+            _ = try cancelledQuery.run(URL(fileURLWithPath: "/bin/echo"), arguments: ["must not run"])
+            throw HostError(message: "Cancelled preflight launched a child")
+        } catch {
+            guard error.localizedDescription == localized("preflight.cancelled") else { throw error }
+        }
+        let echo = try PreflightQuery().run(URL(fileURLWithPath: "/bin/echo"), arguments: ["synthetic report"])
+        guard String(data: echo, encoding: .utf8) == "synthetic report\n" else {
+            throw HostError(message: "Preflight capture lost child output")
+        }
+        let deadlineStart = ProcessInfo.processInfo.systemUptime
+        do {
+            _ = try PreflightQuery().run(URL(fileURLWithPath: "/bin/sleep"), arguments: ["5"], timeout: 0.05)
+            throw HostError(message: "Preflight timeout returned a successful report")
+        } catch {
+            guard error.localizedDescription == localized("preflight.cancelled"),
+                  ProcessInfo.processInfo.systemUptime - deadlineStart < 2 else { throw error }
+        }
+        do {
+            _ = try PreflightQuery().run(URL(fileURLWithPath: "/usr/bin/printf"), arguments: ["%1100000s", "x"])
+            throw HostError(message: "Oversized preflight returned a partial report")
+        } catch {
+            guard error.localizedDescription == localized("preflight.too_large") else { throw error }
+        }
+        try runProcessingHistorySelfTests()
+        let sourceDocument: [String: Any] = [
+            "config": ["img": ["jpeg_effort": 9, "jxl_distance": 0.0]],
+            "sources": ["img.jpeg_effort": "CLI", "img.jxl_distance": "default"],
+            "source_chain": ["img.jpeg_effort": ["default", "/synthetic/project.json", "CLI"], "img.jxl_distance": ["default"]],
+        ]
+        let sourceData = try JSONSerialization.data(withJSONObject: sourceDocument)
+        let sourceSettings = try EffectiveRuntimeSettings.decode(sourceData)
+        let sourcePreview = try sourceSettings.originDescription(key: "img.jpeg_effort", guiOverride: true)
+        guard sourcePreview.contains("img.jpeg_effort = 9"), sourceSettings["img.jxl_distance"] == "0",
+              sourcePreview.contains("1. default\n2. /synthetic/project.json\n3. CLI (GUI)") else {
+            throw HostError(message: "Configuration preview lost its real values or override order")
+        }
+        for invalidChains: Any in [NSNull(), [:], ["img.jpeg_effort": []],
+                                  ["img.jpeg_effort": ["default"]], ["img.jpeg_effort": ["", "CLI"]],
+                                  ["img.jpeg_effort": ["CLI"], "extra": ["default"]]] {
+            var invalid = sourceDocument
+            invalid["source_chain"] = invalidChains
+            let data = try JSONSerialization.data(withJSONObject: invalid)
+            guard (try? EffectiveRuntimeSettings.decode(data)) == nil else {
+                throw HostError(message: "Invalid configuration provenance was accepted")
+            }
+        }
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            guard let iconURL = Bundle.main.url(forResource: "icon", withExtension: "icns"),
+                  let image = NSImage(contentsOf: iconURL), image.isValid,
+                  image.representations.contains(where: { $0.pixelsWide == 1024 && $0.pixelsHigh == 1024 })
+            else {
+                fputs("native-host self-test bundled application icon failed\n", stderr)
+                return 1
+            }
+        }
+        guard mainWindowStyleMask.contains(.resizable),
+              compactWindowWidth < mainWindowContentSize.width
+        else {
+            fputs("native-host self-test window sizing failed\n", stderr)
+            return 1
+        }
+        if Bundle.main.bundleURL.pathExtension == "app",
+           ProcessorLocator.resolveTool(named: "img") == nil
+        {
+            fputs("native-host self-test bundled img lookup failed\n", stderr)
+            return 1
+        }
+        let request = ProcessorRequest(
+            targetPath: "/tmp/media", processingMode: .imagesOnly, operationMode: .fastImgJxl,
+            ultimate: true, verbose: true, shortestPath: true, resume: true,
+        )
+        let expected = [
+            "--images-only", "--mode", "fast-img", "--strategy", "jxl", "--ultimate",
+            "--verbose", "--shortest-path", "--resume", "/tmp/media",
+        ]
+        guard try ProcessorCommand.arguments(from: request) == expected else {
+            fputs("native-host self-test argument mapping failed\n", stderr)
+            return 1
+        }
+        let standard = ProcessorRequest(
+            targetPath: "/tmp", processingMode: .imagesOnly, operationMode: .adjacent,
+            archive: true, force: true, dryRun: true, plain: true, inPlace: true, watch: true
+        )
+        var configured = request
+        configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11",
+                                            .imgJxlDistance: "0.25", .imgJxlEffort: "8", .imgQualitySearch: "fixed", .imgJxlSearch: "adaptive",
+                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false", .fastErrorMode: "fail-fast",
+                                           .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
+                                           .imgDatabase: "false", .imgSizeTolerance: "true", .imgSizeToleranceBytes: "4096", .imgErrorMode: "log-and-continue",
+                                           .vidCodec: "av1", .vidErrorMode: "fail-fast", .vidForceMsSsimLong: "false"]
+        let configuredArguments = try ProcessorCommand.arguments(from: configured)
+        guard configuredArguments.contains("--img-fallback-policy"),
+              configuredArguments.contains("strict"), !configuredArguments.contains("same-semantics"),
+              configuredArguments.contains("--photos-native-batch-size"),
+              configuredArguments.contains("--preserve-folder-structure=false"),
+              configuredArguments.contains("--img-allow-database=false"),
+              configuredArguments.contains("--img-error-mode"), configuredArguments.contains("fail-fast"),
+              !configuredArguments.contains("log-and-continue"),
+              !configuredArguments.contains("--img-allow-size-tolerance=true"),
+               !configuredArguments.contains("--img-size-tolerance-bytes"),
+              !configuredArguments.contains("--vid-codec"), configuredArguments.last == request.targetPath,
+              try configured.mediaSettings.arguments(operation: .adjacent, processing: .videosOnly)
+                == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast", "--vid-force-ms-ssim-long=false"],
+              try configured.mediaSettings.arguments(operation: .fastVid, processing: .videosOnly).isEmpty,
+              try configured.mediaSettings.arguments(operation: .restoreJpeg, processing: .imagesOnly).isEmpty
+        else { throw HostError(message: "Media settings leaked across processing modes") }
+        let effective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
+        guard effective["img.jpeg_effort"] == "9", effective["img.allow_database"] == "false",
+              effective["execution.error_mode"] == "fail-fast",
+              effective.sourceChain["execution.error_mode"]?.last == "CLI",
+              effective["photos.native_batch_size"] == "200", effective["photos.backend"] == "native",
+              effective["photos.preserve_folder_structure"] == "false",
+              effective.sourceChain["img.jpeg_effort"]?.first == "default",
+              effective.sourceChain["img.jpeg_effort"]?.last == "CLI",
+              effective.sourceChain["photos.native_batch_size"]?.last == "CLI" else {
+            throw HostError(message: "GUI settings do not match the effective backend configuration")
+        }
+        let videoEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.videoRuntimeArguments(inheritedOnly: false), tool: "vid")
+        guard videoEffective["vid.codec"] == "av1", videoEffective.sources["vid.codec"] == "CLI",
+              videoEffective["vid.force_ms_ssim_long"] == "false",
+              videoEffective.sourceChain["vid.force_ms_ssim_long"] == ["default", "CLI"],
+              videoEffective.sourceChain["vid.codec"] == ["default", "CLI"],
+              videoEffective["execution.error_mode"] == "fail-fast",
+              videoEffective.sourceChain["execution.error_mode"]?.last == "CLI",
+              (try videoEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)") else {
+            throw HostError(message: "Video settings do not match the effective backend configuration")
+        }
+        let imageEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: false))
+        guard imageEffective["execution.error_mode"] == "log-and-continue",
+               imageEffective["img.jxl_distance"] == "0.25", imageEffective["img.jxl_effort"] == "8",
+               imageEffective["img.quality_search"] == "fixed", imageEffective["img.jxl_effort_search"] == "adaptive",
+              imageEffective["img.allow_size_tolerance"] == "true",
+               imageEffective["img.size_tolerance_bytes"] == "4096",
+               imageEffective.sourceChain["img.size_tolerance_bytes"]?.last == "CLI",
+              imageEffective.sourceChain["img.allow_size_tolerance"]?.last == "CLI",
+              try configured.mediaSettings.arguments(operation: .adjacent, processing: .imagesOnly)
+                .contains("--img-allow-size-tolerance=true"),
+              imageEffective.sourceChain["execution.error_mode"]?.last == "CLI",
+              (try imageEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)"),
+              !configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: true).contains("--error-mode"),
+              !configured.mediaSettings.videoRuntimeArguments(inheritedOnly: true).contains("--error-mode"),
+              configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode"),
+              !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: true).contains("--error-mode") else {
+            throw HostError(message: "Failure query arguments lost per-mode overrides or invented inherited policies")
+        }
+        var explorationSettings = configured.mediaSettings
+        explorationSettings.values[.imgQualitySearch] = "adaptive"
+        let explorationArguments = try explorationSettings.arguments(operation: .adjacent, processing: .imagesOnly)
+        let explorationRuntimeArguments = explorationSettings.runtimeArguments(fast: false, inheritedOnly: false)
+        let explorationEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + explorationRuntimeArguments)
+        guard explorationEffective["img.jxl_distance"] == nil, explorationEffective["img.jxl_effort"] == "8",
+              explorationEffective.sourceChain["img.jxl_effort"]?.last == "CLI",
+              explorationEffective["img.quality_search"] == "adaptive", explorationSettings.image.jxlDistance == 0.25,
+              !explorationArguments.contains("--img-jxl-distance"),
+              explorationArguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 }) == explorationRuntimeArguments else {
+            throw HostError(message: "Distance exploration preview lost its effort scope, inactive fixed distance, or canonical arguments")
+        }
+        configured.mediaSettings.values[.fastToolPolicy] = "single"
+        let toolEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
+        guard toolEffective["tools.policy"] == "single", toolEffective.sources["tools.policy"] == "CLI",
+              try configured.mediaSettings.arguments(operation: .adjacent, processing: .videosOnly)
+                == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast", "--vid-force-ms-ssim-long=false"] else {
+            throw HostError(message: "Tool selection was not resolved or leaked into video settings")
+        }
+        var cacheSettings = MediaSettings()
+        cacheSettings.values = [.cacheMaxBytes: "123456789", .cacheTtlSeconds: "654321"]
+        let cacheArguments = ["--cache-max-bytes", "123456789", "--cache-ttl-seconds", "654321"]
+        for mode in [OperationMode.adjacent, .fastImgJxl, .fastImgAvif, .fastVid] {
+            guard try cacheSettings.arguments(operation: mode, processing: .videosOnly) == cacheArguments else {
+                throw HostError(message: "Cache settings did not reach a processing mode")
+            }
+        }
+        guard try cacheSettings.arguments(operation: .restoreJpeg, processing: .imagesOnly).isEmpty,
+              cacheSettings.runtimeArguments(fast: false, inheritedOnly: true).isEmpty,
+              cacheSettings.runtimeArguments(fast: true, inheritedOnly: true).isEmpty,
+              cacheSettings.videoRuntimeArguments(inheritedOnly: true).isEmpty else {
+            throw HostError(message: "Cache overrides leaked into inherited config or restoration")
+        }
+        for (tool, arguments) in [
+            ("img", cacheSettings.runtimeArguments(fast: false, inheritedOnly: false)),
+            ("img", cacheSettings.runtimeArguments(fast: true, inheritedOnly: false)),
+            ("vid", cacheSettings.videoRuntimeArguments(inheritedOnly: false)),
+        ] {
+            let resolved = try queryRuntimeSettings(arguments: ["--no-config"] + arguments, tool: tool)
+            guard resolved["cache.path_tree_max_bytes"] == "123456789",
+                  resolved["cache.path_tree_ttl_seconds"] == "654321",
+                  resolved.sources["cache.path_tree_max_bytes"] == "CLI",
+                  resolved.sources["cache.path_tree_ttl_seconds"] == "CLI" else {
+                throw HostError(message: "Cache controls disagree with the effective backend configuration")
+            }
+        }
+        configured.mediaSettings.values[.fastJpegEffort] = "12"
+        do {
+            _ = try ProcessorCommand.arguments(from: configured)
+            throw HostError(message: "Out-of-range JPEG effort accepted")
+        } catch let error as HostError where error.message.hasPrefix("Out-of-range") { throw error }
+        catch {}
+        var results = BatchResults()
+        let mixedResult = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#
+        var mixed = BatchResults()
+        let mixedLine = mixed.ingest(mixedResult)
+        guard mixed.hasPartialSuccess, mixed.hasFailure, !mixed.isIncomplete,
+              mixedLine?.hasPrefix("[FAIL]") == true,
+              !mixed.fastDeliveryIsConfirmed(photos: true, processExit: 1),
+              mixed.summary == localized("result.counts", "3", "2", "1", "0")
+                + " · " + localized("result.unprocessed", "0"),
+              !hasPartialProcessingSuccess(succeeded: [nil], failed: [1], countsComplete: true),
+              !hasPartialProcessingSuccess(succeeded: [Int.max], failed: [1], countsComplete: true),
+              !hasPartialProcessingSuccess(succeeded: [1], failed: [1], countsComplete: false),
+              !hasPartialProcessingSuccess(succeeded: [], failed: [], countsComplete: true) else {
+            throw HostError(message: "Partial success or checked final counts were incorrectly classified")
+        }
+        for code in [0, 9] {
+            var unconfirmed = BatchResults()
+            let line = unconfirmed.ingest(mixedResult.replacingOccurrences(of: "\"exit_code\":1", with: "\"exit_code\":\(code)"))
+            guard line?.hasPrefix("[FAIL]") == true,
+                  !unconfirmed.fastDeliveryIsConfirmed(photos: true, processExit: Int32(code)) else {
+                throw HostError(message: "Counts alone softened an unconfirmed failure or unexpected exit")
+            }
+        }
+        for event in [
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":2,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":0,"failed":1,"ignored":0,"unprocessed":null,"exit_code":1}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":0,"failed":1,"ignored":0,"unprocessed":1,"exit_code":1}"#,
+        ] {
+            var notPartial = BatchResults()
+            _ = notPartial.ingest(event)
+            guard !notPartial.hasPartialSuccess, notPartial.hasFailure else {
+                throw HostError(message: "Skipped, unknown or unfinished items became partial success")
+            }
+        }
+        _ = mixed.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"vid","succeeded":1,"skipped":0,"failed":0,"ignored":1,"unprocessed":0,"exit_code":0}"#)
+        guard mixed.hasPartialSuccess, mixed.summary == localized("result.counts", "4", "2", "1", "1")
+            + " · " + localized("result.unprocessed", "0") else {
+            throw HostError(message: "Combined media final counts lost their receipt scope")
+        }
+        _ = mixed.ingest("MFB_BATCH_RESULT={}")
+        guard !mixed.hasPartialSuccess, mixed.isIncomplete,
+              mixed.summary == localized("result.invalid") else {
+            throw HostError(message: "Malformed receipt left partial counts appearing complete")
+        }
+        var diagnosticGap = BatchResults()
+        _ = diagnosticGap.ingest(mixedResult)
+        _ = diagnosticGap.ingestTransportGap(#"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":0,"diagnostic_records":3000}"#)
+        guard diagnosticGap.hasCompleteCountReport, diagnosticGap.hasPartialSuccess,
+              !diagnosticGap.mandatoryEvidenceConflict else {
+            throw HostError(message: "Omitted diagnostic details invalidated an intact result receipt")
+        }
+        for gap in [
+            #"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":1,"diagnostic_records":0}"#,
+            "MFB_GUI_TRANSPORT_GAP={}",
+            #"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":-1,"diagnostic_records":0}"#,
+            #"MFB_GUI_TRANSPORT_GAP={"schema_version":2,"control_records":0,"diagnostic_records":1}"#,
+            #"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":0,"diagnostic_records":0}"#,
+        ] {
+            var missing = BatchResults()
+            _ = missing.ingestTransportGap(gap)
+            _ = missing.ingest(mixedResult)
+            guard !missing.hasCompleteCountReport, missing.isIncomplete, missing.mandatoryEvidenceConflict,
+                  missing.summary == localized("result.control_records_missing"), !missing.hasPartialSuccess else {
+                throw HostError(message: "A valid result concealed missing or malformed critical transport evidence")
+            }
+        }
+        let skipped = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":0,"ignored":1,"exit_code":0}"#
+        let legacyLine = results.ingest(skipped)
+        guard legacyLine?.contains(localized("result.unprocessed", localized("result.unknown"))) == true,
+              !results.hasFailure, !results.isIncomplete,
+              results.totals["img"] == [3, 2, 0, 1],
+              results.pendingTotals["img"] != nil, (results.pendingTotals["img"] ?? nil) == nil,
+              !results.hasUnprocessed else {
+            throw HostError(message: "Skipped files counted as failures")
+        }
+        var nullPending = BatchResults()
+        let nullPendingLine = nullPending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":null,"exit_code":0}"#)
+        guard nullPendingLine?.contains(localized("result.unprocessed", localized("result.unknown"))) == true,
+              !nullPending.isIncomplete, nullPending.pendingTotals["img"] != nil,
+              (nullPending.pendingTotals["img"] ?? nil) == nil else {
+            throw HostError(message: "Legacy null pending count became zero or incomplete")
+        }
+        var pending = BatchResults()
+        let pendingLine = pending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
+        _ = pending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":3,"exit_code":0}"#)
+        guard pendingLine?.contains(localized("result.unprocessed", "2")) == true,
+              (pending.pendingTotals["img"] ?? nil) == 5, pending.hasUnprocessed, !pending.isIncomplete else {
+            throw HostError(message: "Pending counts were not reported and aggregated separately")
+        }
+        var pendingOverflow = BatchResults()
+        let maxPending = String(Int.max)
+        _ = pendingOverflow.ingest("MFB_BATCH_RESULT={\"schema_version\":1,\"media\":\"img\",\"succeeded\":0,\"skipped\":0,\"failed\":0,\"ignored\":0,\"unprocessed\":\(maxPending),\"exit_code\":0}")
+        _ = pendingOverflow.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":1,"exit_code":0}"#)
+        guard pendingOverflow.pendingTotalOverflowed, pendingOverflow.isIncomplete,
+              (pendingOverflow.pendingTotals["img"] ?? nil) == nil else {
+            throw HostError(message: "Overflowing pending aggregate was treated as a known total")
+        }
+        var inventoryOverflow = BatchResults()
+        _ = inventoryOverflow.ingest("MFB_BATCH_RESULT={\"schema_version\":1,\"media\":\"img\",\"succeeded\":\(Int.max),\"skipped\":1,\"failed\":0,\"ignored\":0,\"exit_code\":0}")
+        guard inventoryOverflow.invalid, inventoryOverflow.isIncomplete else {
+            throw HostError(message: "Overflowing event inventory was accepted")
+        }
+        var aggregateOverflow = BatchResults()
+        _ = aggregateOverflow.ingest("MFB_BATCH_RESULT={\"schema_version\":1,\"media\":\"img\",\"succeeded\":\(Int.max),\"skipped\":0,\"failed\":0,\"ignored\":0,\"exit_code\":0}")
+        _ = aggregateOverflow.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"vid","succeeded":0,"skipped":1,"failed":0,"ignored":0,"exit_code":0}"#)
+        guard aggregateOverflow.isIncomplete else {
+            throw HostError(message: "Overflowing combined inventory was accepted")
+        }
+        for event in [
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":-1,"exit_code":0}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":"bad","exit_code":0}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":9223372036854775808,"exit_code":0}"#,
+        ] {
+            var invalidPending = BatchResults()
+            _ = invalidPending.ingest(event)
+            guard invalidPending.invalid, invalidPending.isIncomplete, invalidPending.pendingTotals.isEmpty else {
+                throw HostError(message: "Malformed or negative pending count was accepted")
+            }
+        }
+        var invalidAfterPending = BatchResults()
+        _ = invalidAfterPending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
+        _ = invalidAfterPending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":-1,"exit_code":0}"#)
+        guard invalidAfterPending.invalid, invalidAfterPending.isIncomplete,
+              invalidAfterPending.pendingTotals["img"] != nil,
+              (invalidAfterPending.pendingTotals["img"] ?? nil) == nil else {
+            throw HostError(message: "Invalid pending count preserved a partial aggregate as known")
+        }
+        _ = results.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":null,"skipped":0,"failed":1,"ignored":null,"exit_code":1}"#)
+        guard results.hasFailure, results.isIncomplete, results.totals["img"] == [nil, 2, 1, nil] else {
+            throw HostError(message: "Batch result hid a failure or invented missing counts")
+        }
+        _ = results.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":-1,"exit_code":0}"#)
+        guard results.invalid, results.totals["img"] == [nil, 2, 1, nil] else {
+            throw HostError(message: "Malformed results replaced verified counts")
+        }
+        guard try ProcessorCommand.arguments(from: standard) == [
+            "--images-only", "--ultimate", "--archive", "--force", "--dry-run",
+            "--plain", "--in-place", "--watch", "/tmp",
+        ] else {
+            fputs("native-host self-test standard flags or quiet default failed\n", stderr)
+            return 1
+        }
+        do {
+            _ = try ProcessorCommand.arguments(from: ProcessorRequest(
+                targetPath: "/tmp/media", processingMode: .imagesOnly, operationMode: .fastImgJxl,
+                fresh: true, retry: true
+            ))
+            fputs("native-host self-test retry/fresh conflict was accepted\n", stderr)
+            return 1
+        } catch {}
+        try ToolSnapshotPresentation.selfTest()
+        guard conciseProcessLog("DEBUG codec internals") == nil,
+              conciseProcessLog("ERR: DEBUG codec internals") == nil,
+              conciseProcessLog("ERR: INFO codec internals") == nil,
+              conciseProcessLog("[ENCODE] 1/20 synthetic.jpg") != nil,
+              conciseProcessLog("ERROR: could not open debug image") != nil,
+              conciseProcessLog("ERR: Permission denied") == "ERR: Permission denied",
+              conciseProcessLog("Progress 50% ") == "Progress 50% ",
+              conciseProcessLog("50% ") == "50% ",
+              conciseProcessLog("处理失败：权限不足") != nil
+        else {
+            fputs("native-host self-test concise logs dropped a failure or progress\n", stderr)
+            return 1
+        }
+        let restore = ProcessorRequest(
+            targetPath: "/tmp/archive", processingMode: .videosOnly, operationMode: .restoreJpeg,
+            ultimate: false, verbose: true,
+        )
+        let restoreExpected = [
+            "--images-only", "--mode", "restore-jpeg", "--verbose", "/tmp/archive",
+        ]
+        guard try ProcessorCommand.arguments(from: restore) == restoreExpected else {
+            fputs("native-host self-test restore capability mapping failed\n", stderr)
+            return 1
+        }
+        let collect = ProcessorRequest(
+            targetPath: "/tmp/audited",
+            processingMode: .both,
+            operationMode: .collect,
+            backupPath: "/tmp/backup",
+            ultimate: false,
+            verbose: true
+        )
+        guard try ProcessorCommand.arguments(from: collect) == [
+            "--mode", "collect", "--verbose", "--backup", "/tmp/backup", "/tmp/audited",
+        ] else {
+            fputs("native-host self-test recovery backup mapping failed\n", stderr)
+            return 1
+        }
+        let compare = ProcessorRequest(
+            targetPath: "/tmp/current.photoslibrary",
+            processingMode: .both,
+            operationMode: .compare,
+            backupPath: "/tmp/backup.photoslibrary",
+            ultimate: false,
+            verbose: true
+        )
+        guard try ProcessorCommand.arguments(from: compare) == [
+            "--mode", "compare", "--verbose", "--backup", "/tmp/backup.photoslibrary", "/tmp/current.photoslibrary",
+        ] else {
+            fputs("native-host self-test backup comparison mapping failed\n", stderr)
+            return 1
+        }
+        let album = PhotosAuditContainer(
+            kind: .album,
+            id: "11111111-1111-1111-1111-111111111111",
+            name: "Archive",
+            parentID: nil,
+            path: ["Archive"]
+        )
+        let scopedRestore = ProcessorRequest(
+            targetPath: "/tmp/debug.photoslibrary",
+            processingMode: .imagesOnly,
+            operationMode: .restoreJpeg,
+            ultimate: false,
+            verbose: true,
+            photosContainer: album
+        )
+        guard try ProcessorCommand.arguments(from: scopedRestore) == [
+            "--images-only", "--mode", "restore-jpeg", "--verbose",
+            "--photos-album-id", album.id, "/tmp/debug.photoslibrary",
+        ] else {
+            fputs("native-host self-test Photos album scope mapping failed\n", stderr)
+            return 1
+        }
+        do {
+            _ = try ProcessorCommand.arguments(from: ProcessorRequest(
+                targetPath: "/tmp/video", processingMode: .imagesOnly,
+                operationMode: .fastVid, ultimate: true, verbose: false,
+            ))
+            fputs("native-host self-test unsupported FastVid ultimate flag was accepted\n", stderr)
+            return 1
+        } catch {}
+        guard processingRequiresPhotosAutomation(request),
+              processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .iCloudImport)),
+              processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .videosOnly, operationMode: .fastVid, shortestPath: true)),
+               !processingRequiresPhotosAutomation(restore),
+               !processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .iCloudImport, dryRun: true)),
+              processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/debug.photoslibrary", processingMode: .imagesOnly, operationMode: .restoreJpeg, ultimate: false)),
+              !processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .fastImgJxl))
+        else {
+            fputs("native-host self-test Photos Automation routing failed\n", stderr)
+            return 1
+        }
+        for localization in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: localization, ofType: "lproj"),
+                  let bundle = Bundle(path: path),
+                  bundle.localizedString(forKey: "button.run", value: "button.run", table: nil)
+                      != "button.run",
+                  bundle.localizedString(forKey: "status.count", value: "status.count", table: nil)
+                      .contains("%@"),
+                  ["result.process_terminated", "result.files_not_summarized", "process.signal", "process.observation_invalid",
+                   "progress.stage.modern_source_inspection", "progress.inspection"].allSatisfy({
+                      bundle.localizedString(forKey: $0, value: $0, table: nil) != $0
+                  })
+            else {
+                fputs("native-host self-test missing localization: \(localization)\n", stderr)
+                return 1
+            }
+        }
+        let hostile = ProcessorRequest(
+            targetPath: "/tmp/media'$(id)", processingMode: .both, operationMode: .fastImgJxl,
+            ultimate: false, verbose: false,
+        )
+        let shell = try ProcessorCommand.terminalShellCommand(
+            binary: URL(fileURLWithPath: "/tmp/processor"),
+            arguments: ProcessorCommand.arguments(from: hostile),
+        )
+        guard shell == "cd '/tmp' && '/tmp/processor' '--images-only' '--mode' 'fast-img' '--strategy' 'jxl' '/tmp/media'\"'\"'$(id)'" else {
+            fputs("native-host self-test shell quoting failed: \(shell)\n", stderr)
+            return 1
+        }
+        var oversized = Data(repeating: 0x61, count: maxProcessLogChunkBytes + 17)
+        let chunks = drainProcessLogChunks(&oversized, flush: false)
+        guard chunks.count == 1, chunks[0].utf8.count == maxProcessLogChunkBytes, oversized.count == 17 else {
+            fputs("native-host self-test log chunk bound failed\n", stderr)
+            return 1
+        }
+        let boundedPipe = Pipe()
+        boundedPipe.fileHandleForWriting.write(Data(repeating: 0x61, count: 128))
+        try boundedPipe.fileHandleForWriting.close()
+        let boundedCapture = try readBoundedProcessOutput(
+            boundedPipe.fileHandleForReading,
+            limit: 32
+        )
+        guard boundedCapture.exceeded, boundedCapture.data.count == 32 else {
+            fputs("native-host self-test process output bound failed\n", stderr)
+            return 1
+        }
+        let floodPipe = Pipe()
+        let floodWriter = DispatchGroup()
+        var heapBefore = malloc_statistics_t()
+        malloc_zone_statistics(nil, &heapBefore)
+        floodWriter.enter()
+        DispatchQueue.global(qos: .utility).async {
+            defer { floodPipe.fileHandleForWriting.closeFile(); floodWriter.leave() }
+            let chunk = Data(repeating: 0x61, count: 65_536)
+            for _ in 0..<1_024 {
+                autoreleasepool { floodPipe.fileHandleForWriting.write(chunk) }
+            }
+        }
+        let floodCapture = try readBoundedProcessOutput(floodPipe.fileHandleForReading, limit: 32)
+        floodWriter.wait()
+        var heapAfter = malloc_statistics_t()
+        malloc_zone_statistics(nil, &heapAfter)
+        guard floodCapture.exceeded, floodCapture.data == Data(repeating: 0x61, count: 32),
+              heapAfter.size_in_use <= heapBefore.size_in_use + 8 * 1_024 * 1_024 else {
+            throw HostError(message: "Bounded process capture retained discarded output or failed to drain the pipe")
+        }
+        try floodPipe.fileHandleForReading.close()
+        var readFailed = false
+        do { _ = try readBoundedProcessOutput(floodPipe.fileHandleForReading, limit: 32) }
+        catch { readFailed = true }
+        guard readFailed else { throw HostError(message: "Process capture concealed a read failure") }
+        let backpressure = ProcessLogBackpressure(maxBytes: 32, maxEntries: 2)
+        let processingPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#
+        let verificationPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        var phaseLog = PhaseLogPresentation(now: 0)
+        guard phaseLog.ingest(processingPhase, now: 0.5) == .changed(.processing, replace: false),
+              phaseLog.ingest(verificationPhase, now: 1) == .changed(.verification, replace: false),
+              phaseLog.ingest(verificationPhase, now: 4) == .unchanged,
+              phaseLog.ingest("ERR: " + processingPhase, now: 5) == .changed(.processing, replace: true),
+              phaseLog.ingest(verificationPhase, now: 6) == .changed(.verification, replace: false),
+              phaseLog.ingest("[INFO] " + processingPhase, now: 8) == nil else {
+            throw HostError(message: "Log phases flashed, repeated or interpreted incidental text")
+        }
+        for invalid in ["MFB_LOG_PHASE={}", processingPhase.replacingOccurrences(of: ":1", with: ":2"),
+                        processingPhase.replacingOccurrences(of: "processing", with: "completed"),
+                        "MFB_LOG_PHASE=" + String(repeating: "x", count: 513)] {
+            guard phaseLog.ingest(invalid, now: 9) == .invalid, phaseLog.phase == .verification else {
+                throw HostError(message: "Malformed phase event changed the current phase")
+            }
+        }
+        let activityLine = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"gate-test","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}"#
+        var gate = GateCheckActivity()
+        guard !gate.ingest("[INFO] " + activityLine, now: 1), gate.event == nil,
+              gate.ingest(activityLine, now: 1), gate.event?.completed == 3,
+              gate.label(now: 66).hasSuffix(localized("gate.activity.updated", "65")),
+              gate.ingest(activityLine.replacingOccurrences(of: "\"completed\":3", with: "\"completed\":4")
+                .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"failed\""), now: 70),
+              gate.event?.state == "failed", !gate.label(now: 80).contains("100%"),
+              gate.ingest(activityLine, now: 81), gate.invalid, gate.event == nil else {
+            throw HostError(message: "Gate activity accepted incidental output, regressed checks or claimed batch percentages")
+        }
+        for malformed in ["MFB_GATE_ACTIVITY={}", activityLine.replacingOccurrences(of: ":1,", with: ":2,"),
+                          activityLine.replacingOccurrences(of: "metadata", with: "unknown"),
+                          activityLine.replacingOccurrences(of: "\"total\":6", with: "\"total\":7"),
+                          activityLine.replacingOccurrences(of: "\"completed\":3", with: "\"completed\":-1"),
+                          activityLine.replacingOccurrences(of: "running", with: "passed"),
+                          "MFB_GATE_ACTIVITY=" + String(repeating: "x", count: 1_025)] {
+            guard gate.ingest(malformed, now: 90), gate.invalid, gate.event == nil else {
+                throw HostError(message: "Invalid Gate schema, check, counts or outcome were accepted")
+            }
+        }
+        let allPassed = activityLine.replacingOccurrences(of: "gate-test", with: "new-gate")
+            .replacingOccurrences(of: "metadata", with: "decode")
+            .replacingOccurrences(of: "\"completed\":3", with: "\"completed\":6")
+            .replacingOccurrences(of: "running", with: "passed")
+        guard gate.ingest(allPassed, now: 100), !gate.invalid, gate.event?.state == "passed", gate.event?.completed == 6 else {
+            throw HostError(message: "A valid independent Gate did not replace stale invalid activity")
+        }
+        let inventoryRunning = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"inventory-test","gate":"local","check":"inventory","completed":0,"total":6,"state":"running"}"#
+        let inventoryFailed = inventoryRunning.replacingOccurrences(of: "running", with: "failed")
+        guard gate.ingest(inventoryRunning, now: 101), !gate.invalid,
+              gate.ingest(inventoryFailed, now: 102), !gate.invalid,
+              gate.event?.check == "inventory", gate.event?.state == "failed", gate.event?.completed == 0,
+              gate.label(now: 103) == localized("gate.activity.failed", localized("gate.check.inventory"), "0", "6", "6"),
+              gate.ingest(inventoryRunning, now: 104), gate.invalid else {
+            throw HostError(message: "Inventory failure was rejected as malformed activity or reopened its terminal Gate")
+        }
+        let phaseQueue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0)
+        _ = phaseQueue.enqueue(processingPhase + "\n[WARN] retained warning\n" + verificationPhase)
+        guard phaseQueue.takeDelivery() == processingPhase + "\n[WARN] retained warning\n" + verificationPhase,
+              !phaseQueue.finishDelivery(), phaseQueue.isIdle else {
+            throw HostError(message: "Backpressure reordered or discarded phase boundaries and diagnostics")
+        }
+        _ = phaseQueue.enqueue(verificationPhase + "\n" + activityLine + "\n[WARN] gate example")
+        guard phaseQueue.takeDelivery() == verificationPhase + "\n" + activityLine + "\n[WARN] gate example",
+              !phaseQueue.finishDelivery(), phaseQueue.isIdle else {
+            throw HostError(message: "Backpressure dropped or reordered Gate activity after exhausting ordinary output")
+        }
+        var fileProgress = FileStageProgress()
+        let stageStart = #"MFB_PROGRESS={"schema_version":1,"stage_id":"unit-1","stage":"image_processing","processed":0,"total":20000,"state":"running"}"#
+        let almostComplete = stageStart.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":19999")
+        guard fileProgress.ingest(stageStart), fileProgress.event?.percentage == 0,
+              fileProgress.ingest(almostComplete), fileProgress.event?.percentage == 99.99,
+              fileProgress.ingest(almostComplete.replacingOccurrences(of: "running", with: "finished")),
+              fileProgress.event?.processed == 19999, fileProgress.event?.state == "finished",
+              fileProgress.ingest(stageStart), fileProgress.invalid, fileProgress.event == nil else {
+            throw HostError(message: "Progress regressed, rounded unfinished work to 100%, or fabricated completion")
+        }
+        for invalid in [
+            stageStart.replacingOccurrences(of: "\"schema_version\":1", with: "\"schema_version\":2"),
+            stageStart.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":-1"),
+            stageStart.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":20001"),
+            stageStart.replacingOccurrences(of: "20000", with: "18446744073709551616"),
+            stageStart.replacingOccurrences(of: "image_processing", with: "unknown_stage"),
+            "MFB_PROGRESS={}",
+        ] {
+            guard fileProgress.ingest(invalid), fileProgress.invalid, fileProgress.event == nil else {
+                throw HostError(message: "Invalid progress invented a percentage")
+            }
+        }
+        let emptyStage = stageStart.replacingOccurrences(of: "20000", with: "0")
+        guard fileProgress.ingest(emptyStage), fileProgress.event?.percentage == nil,
+              fileProgress.ingest(stageStart.replacingOccurrences(of: "unit-1", with: "unit-2")),
+              fileProgress.event?.percentage == 0 else {
+            throw HostError(message: "An empty or subsequent stage inherited a fake percentage")
+        }
+        let coalesced = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0, maxCriticalBytes: 1_024, maxCriticalEntries: 1)
+        for _ in 0..<1_000 { _ = coalesced.enqueue(stageStart) }
+        _ = coalesced.enqueue(almostComplete)
+        _ = coalesced.enqueue(skipped)
+        guard let snapshot = coalesced.takeDelivery(), snapshot.contains(almostComplete),
+              !snapshot.contains(stageStart), snapshot.contains(skipped), !snapshot.contains("MFB_BATCH_RESULT={}"),
+              !coalesced.finishDelivery(), coalesced.isIdle else {
+            throw HostError(message: "Progress flooded the diagnostic reserve or displaced a result")
+        }
+        let expectedBackpressure = "first\nsecond\n\(localized("log.omitted", UInt64(1)))"
+        guard backpressure.enqueue("first"), !backpressure.enqueue("second"),
+              !backpressure.enqueue("omitted"),
+              backpressure.takeDelivery() == expectedBackpressure,
+              !backpressure.finishDelivery(), backpressure.isIdle
+        else {
+            fputs("native-host self-test log backpressure failed\n", stderr)
+            return 1
+        }
+        let reserved = ProcessLogBackpressure(maxBytes: 8, maxEntries: 1)
+        _ = reserved.enqueue("routine")
+        _ = reserved.enqueue("omitted")
+        _ = reserved.enqueue(skipped + "\nERR: Permission denied")
+        guard let delivered = reserved.takeDelivery(), delivered.contains(skipped),
+              delivered.contains("ERR: Permission denied"), !reserved.finishDelivery(), reserved.isIdle else {
+            fputs("native-host self-test critical log reserve failed\n", stderr)
+            return 1
+        }
+        let exhausted = ProcessLogBackpressure(maxBytes: 8, maxEntries: 1, maxCriticalBytes: 8, maxCriticalEntries: 1)
+        _ = exhausted.enqueue(skipped)
+        func transportGaps(in payload: String) throws -> [(control: UInt64, diagnostic: UInt64)] {
+            struct Gap: Decodable {
+                let schema_version: Int
+                let control_records: UInt64
+                let diagnostic_records: UInt64
+            }
+            return try payload.split(separator: "\n").compactMap { line in
+                guard line.hasPrefix(ProcessLogBackpressure.gapPrefix) else { return nil }
+                let data = Data(line.dropFirst(ProcessLogBackpressure.gapPrefix.count).utf8)
+                let gap = try JSONDecoder().decode(Gap.self, from: data)
+                guard gap.schema_version == 1 else { throw HostError(message: "Unexpected GUI transport gap schema") }
+                return (gap.control_records, gap.diagnostic_records)
+            }
+        }
+        let exhaustedPayload = exhausted.takeDelivery() ?? ""
+        let exhaustedGaps = try transportGaps(in: exhaustedPayload)
+        guard exhaustedGaps.count == 1, exhaustedGaps[0].control == 1, exhaustedGaps[0].diagnostic == 0,
+              !exhaustedPayload.contains("MFB_BATCH_RESULT={}"), !exhausted.finishDelivery(), exhausted.isIdle else {
+            throw HostError(message: "Missing result evidence was not reported as an explicit control gap")
+        }
+        let exactResult = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":5709,"skipped":0,"failed":81,"ignored":6850,"unprocessed":0,"exit_code":1}"#
+        for prefix in ["[WARN]", "[FAIL]"] {
+            let flooded = ProcessLogBackpressure()
+            for ordinal in 0..<513 { _ = flooded.enqueue("\(prefix) synthetic file diagnostic \(ordinal)") }
+            _ = flooded.enqueue(exactResult)
+            let payload = flooded.takeDelivery() ?? ""
+            let gaps = try transportGaps(in: payload)
+            var retainedResults = BatchResults()
+            for line in payload.split(separator: "\n") {
+                if !retainedResults.ingestTransportGap(String(line)) { _ = retainedResults.ingest(String(line)) }
+            }
+            guard gaps.count == 1, gaps[0].control == 0, gaps[0].diagnostic == 257,
+                  let resultRange = payload.range(of: exactResult),
+                  let diagnosticRange = payload.range(of: "\(prefix) synthetic file diagnostic 255"),
+                  payload.contains("\(prefix) synthetic file diagnostic 255"),
+                  !payload.contains("\(prefix) synthetic file diagnostic 256\n"),
+                  resultRange.lowerBound > diagnosticRange.lowerBound,
+                  !payload.contains("MFB_BATCH_RESULT={}"), !retainedResults.invalid, !retainedResults.isIncomplete,
+                  !retainedResults.controlRecordsMissing, !retainedResults.mandatoryEvidenceConflict,
+                  retainedResults.totals["img"] == [5709, 0, 81, 6850], (retainedResults.pendingTotals["img"] ?? nil) == 0,
+                  !flooded.finishDelivery(), flooded.isIdle else {
+                throw HostError(message: "Diagnostic overflow erased exact final processing counts or reordered evidence")
+            }
+        }
+        let fileFailure = #"MFB_FILE_FAILURE={"schema_version":1,"pipeline":"img","source_path":"sample.jpeg","message":"synthetic file decode failure","run_id":"synthetic-run","invocation_id":"synthetic-invocation"}"#
+        let ignoredSource = #"MFB_FAST_IMG_IGNORED={"schema_version":1,"pipeline":"img","run_id":"synthetic-run","invocation_id":"synthetic-invocation","source_path":"sample.png","absolute_path":"/synthetic/sample.png","reason_code":"synthetic_reason","message":"synthetic excluded source","ordinal":1,"total":1}"#
+        for record in [fileFailure, ignoredSource] {
+            let structuredDiagnostics = ProcessLogBackpressure(maxDiagnosticEntries: 1)
+            _ = structuredDiagnostics.enqueue(record)
+            _ = structuredDiagnostics.enqueue(record)
+            _ = structuredDiagnostics.enqueue(exactResult)
+            let payload = structuredDiagnostics.takeDelivery() ?? ""
+            let gaps = try transportGaps(in: payload)
+            guard gaps.count == 1, gaps[0].control == 0, gaps[0].diagnostic == 1,
+                  payload.contains(record), payload.contains(exactResult),
+                  !structuredDiagnostics.finishDelivery(), structuredDiagnostics.isIdle else {
+                throw HostError(message: "Per-file structured diagnostics consumed the final result reserve")
+            }
+        }
+        let seriousFileFailure = fileFailure.replacingOccurrences(of: "synthetic file decode failure", with: "No space left on device")
+        for safety in [exactResult, "ERR: Integrity Issues: 1", "ERR: Permission denied", "[GATE 3] verification FAIL",
+                       seriousFileFailure, "MFB_FILE_FAILURE={}", "MFB_FAST_IMG_IGNORED={}"] {
+            let bounded = ProcessLogBackpressure(maxCriticalBytes: 0, maxCriticalEntries: 0)
+            _ = bounded.enqueue(safety)
+            let payload = bounded.takeDelivery() ?? ""
+            let gaps = try transportGaps(in: payload)
+            var safetyResults = BatchResults()
+            for line in payload.split(separator: "\n") { _ = safetyResults.ingestTransportGap(String(line)) }
+            _ = safetyResults.ingest(exactResult)
+            guard gaps.count == 1, gaps[0].control == 1, gaps[0].diagnostic == 0,
+                  safetyResults.controlRecordsMissing, safetyResults.mandatoryEvidenceConflict,
+                  safetyResults.totals["img"] == [5709, 0, 81, 6850],
+                  !bounded.finishDelivery(), bounded.isIdle else {
+                throw HostError(message: "Missing safety evidence became an ordinary diagnostic omission")
+            }
+        }
+        let boundedDiagnostics = ProcessLogBackpressure(maxDiagnosticBytes: 8, maxDiagnosticEntries: 1)
+        _ = boundedDiagnostics.enqueue("[WARN] " + String(repeating: "x", count: 1_024))
+        let boundedPayload = boundedDiagnostics.takeDelivery() ?? ""
+        let boundedGaps = try transportGaps(in: boundedPayload)
+        guard boundedGaps.count == 1, boundedGaps[0].control == 0, boundedGaps[0].diagnostic == 1,
+              !boundedPayload.contains("xxxxxxxx"), boundedPayload.utf8.count < 256,
+              !boundedDiagnostics.finishDelivery(), boundedDiagnostics.isIdle else {
+            throw HostError(message: "Oversized diagnostic escaped its byte budget or invalidated result evidence")
+        }
+        let concurrent = ProcessLogBackpressure(maxDiagnosticBytes: 1_024, maxDiagnosticEntries: 8)
+        DispatchQueue.concurrentPerform(iterations: 1_000) { _ in
+            _ = concurrent.enqueue("[WARN] synthetic concurrent diagnostic")
+        }
+        _ = concurrent.enqueue(exactResult)
+        let concurrentPayload = concurrent.takeDelivery() ?? ""
+        let concurrentGaps = try transportGaps(in: concurrentPayload)
+        guard concurrentGaps.count == 1, concurrentGaps[0].control == 0, concurrentGaps[0].diagnostic == 992,
+              concurrentPayload.components(separatedBy: "[WARN] synthetic concurrent diagnostic").count == 9,
+              concurrentPayload.contains(exactResult), !concurrent.finishDelivery(), concurrent.isIdle else {
+            throw HostError(message: "Concurrent diagnostic bursts lost omission counts or displaced final results")
+        }
+        var diagnostics = PhotosDiagnostics()
+        diagnostics.ingest("ERR: [PHOTOS PROGRESS] backend=native committed=250 verified=100 peak_backlog=150")
+        guard diagnostics.committedAssets == 250, diagnostics.verifiedAssets == 100,
+              diagnostics.peakBacklog == 150, diagnostics.profile == nil else {
+            fputs("native-host self-test Photos progress parsing failed\n", stderr)
+            return 1
+        }
+        diagnostics.ingest("ERR: [PHOTOS PROFILE] {\"schema_version\":1,\"backend\":\"native\",\"succeeded\":false,\"committed_assets\":250,\"verified_assets\":100,\"total_seconds\":20.0,\"verified_assets_per_second\":5.0,\"transaction_samples\":2,\"transaction_p95_seconds\":4.0,\"helper_peak_rss_bytes\":1048576,\"phases\":{\"native_transaction\":{\"calls\":2,\"seconds\":7.0}}}")
+        guard diagnostics.failed, diagnostics.profile?.transactionSamples == 2,
+              diagnostics.profile?.transactionP95Seconds == 4,
+              diagnostics.profile?.helperPeakRssBytes == 1_048_576,
+              diagnostics.profile?.importBatchSize == nil,
+              diagnostics.rendered().contains(localized("diagnostics.unknown")) else {
+            fputs("native-host self-test Photos profile or missing-data handling failed\n", stderr)
+            return 1
+        }
+        diagnostics.ingest("ERR: [PHOTOS PROFILE] malformed")
+        diagnostics.markFailed()
+        guard diagnostics.profile?.transactionSamples == 2, diagnostics.failed else {
+            fputs("native-host self-test failed Photos diagnostics were lost\n", stderr)
+            return 1
+        }
+        diagnostics.reset()
+        diagnostics.ingest("ERR: [PHOTOS PROGRESS] backend=applescript committed=0 verified=3 peak_backlog=0")
+        guard diagnostics.committedAssets == nil, diagnostics.verifiedAssets == 3,
+              diagnostics.peakBacklog == nil, !diagnostics.failed else {
+            fputs("native-host self-test Photos diagnostics leaked across batches\n", stderr)
+            return 1
+        }
+        let lock = NSLock()
+        var completed = false
+        var fired = 0
+        let once = {
+            lock.lock()
+            let alreadyDone = completed
+            if !alreadyDone { completed = true }
+            lock.unlock()
+            if !alreadyDone { fired += 1 }
+        }
+        once(); once()
+        guard fired == 1 else {
+            fputs("native-host self-test watchdog exactly-once failed\n", stderr)
+            return 1
+        }
+        try MainActor.assumeIsolated {
+            _ = NSApplication.shared
+            let suite = "MFBGuiSelfTest.\(UUID().uuidString)"
+            let preferences = UserDefaults(suiteName: suite)!
+            defer { preferences.removePersistentDomain(forName: suite) }
+            guard initialHistoryDirectory(preferences: preferences, environment: [:]) == historyDirectory else {
+                throw HostError(message: "History default did not resolve the logs directory")
+            }
+            preferences.set("/tmp/saved-history", forKey: historyPreferenceKey)
+            guard initialHistoryDirectory(preferences: preferences, environment: [:]).path == "/tmp/saved-history",
+                  initialHistoryDirectory(preferences: preferences, environment: ["MFB_HOME_ROOT": "/tmp/custom-home"]).path == "/tmp/custom-home/logs",
+                  initialHistoryDirectory(preferences: preferences, environment: ["MFB_LOG_DIR": "/tmp/explicit-logs", "MFB_HOME_ROOT": "/tmp/custom-home"]).path == "/tmp/explicit-logs" else {
+                throw HostError(message: "History directory overrides or remembered backend path regressed")
+            }
+            preferences.removeObject(forKey: historyPreferenceKey)
+            preferences.set("8", forKey: MediaSetting.imgJpegEffort.preferenceKey)
+            let beforeSettingsRead = preferences.persistentDomain(forName: suite)! as NSDictionary
+            let independent = MediaSettings(preferences: preferences)
+            guard independent.values[.imgJpegEffort] == "8", independent.values[.fastJpegEffort] == nil,
+                  beforeSettingsRead.isEqual(to: preferences.persistentDomain(forName: suite)!) else {
+                throw HostError(message: "Reading settings wrote preferences or copied standard IMG into Fast IMG")
+            }
+            preferences.set("10", forKey: MediaSetting.fastJpegEffort.preferenceKey)
+            guard MediaSettings(preferences: preferences).values[.fastJpegEffort] == "10",
+                  MediaSettings(preferences: preferences).values[.imgJpegEffort] == "8" else {
+                throw HostError(message: "Current independent image preferences were not retained")
+            }
+            try MediaSettings().save(to: preferences)
+            let controlHost = NativeHost()
+            try controlHost.validateControlForSelfTest()
+            try controlHost.validateLogDrainForSelfTest()
+            try AppController(preferences: preferences).validateProductionBusyForSelfTest()
+            let readOnlyHost = NativeHost(readOnly: true)
+            var rejectedReadOnly = false
+            readOnlyHost.onCompletion = { result in
+                if case let .failure(error) = result { rejectedReadOnly = error.localizedDescription == localized("debug.preview_only") }
+            }
+            let readOnlyRequest = ProcessorRequest(targetPath: "/synthetic/read-only-debug", processingMode: .imagesOnly,
+                                                   operationMode: .fastImgJxl)
+            readOnlyHost.startProcessing(readOnlyRequest)
+            guard rejectedReadOnly, !readOnlyHost.isRunning, readOnlyHost.lastExitStatus == nil else {
+                throw HostError(message: "Read-only debug started a media processor")
+            }
+            do {
+                _ = try readOnlyHost.terminalCommand(for: readOnlyRequest)
+                throw HostError(message: "Read-only debug exposed a production terminal command")
+            } catch {
+                guard error.localizedDescription == localized("debug.preview_only") else { throw error }
+            }
+            try AppController(preferences: preferences).validatePrivacyForSelfTest()
+            try AppController(preferences: preferences).validateResumeChoiceForSelfTest()
+            try AppController(preferences: preferences).validateStartupAdmissionForSelfTest()
+            try AppController(preferences: preferences).validateFailedRetryForSelfTest()
+            try AppController(preferences: preferences).validateCleanupRecoveryForSelfTest()
+            try AppController(preferences: preferences).validateProcessInterruptionForSelfTest()
+            try AppController(preferences: preferences).validateInterfaceForSelfTest()
+            try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/synthetic/privacy-history"), preferences: preferences).validatePrivacyForSelfTest()
+            let preflightFailures = PreflightInspectorPanel.selfTest()
+            guard preflightFailures.isEmpty else {
+                throw HostError(message: preflightFailures.joined(separator: "\n"))
+            }
+            try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/tmp/history-self-test")).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, interfaceOnly: true, applied: {}).validateInterfaceSettingsForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, applied: {}).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, developer: true, applied: {}).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, fast: true, applied: {}).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, developer: true, fast: true, applied: {}).validateForSelfTest()
+            for developer in [false, true] {
+                let avifPanel = MediaSettingsPanel(preferences: preferences, developer: developer, fast: true, avif: true, applied: {})
+                try avifPanel.validateEncodingScopesForSelfTest()
+                let videoPanel = MediaSettingsPanel(preferences: preferences, developer: developer, videos: true, applied: {})
+                try videoPanel.validateEncodingScopesForSelfTest()
+                try videoPanel.validatePhotosForSelfTest()
+                try videoPanel.validateCachePolicyForSelfTest()
+            }
+        }
+        print("native-host self-test passed")
+        return 0
+    } catch {
+        fputs("native-host self-test failed: \(error.localizedDescription)\n", stderr)
+        return 1
+    }
+}
+
+@MainActor
+private final class BackgroundPresentationMonitor {
+    private var observers: [NSObjectProtocol] = []
+    private(set) var violations = Set<String>()
+
+    init() {
+        let center = NotificationCenter.default
+        let names: [Notification.Name] = [NSApplication.didBecomeActiveNotification, NSWindow.didBecomeKeyNotification,
+            NSWindow.didBecomeMainNotification, NSWindow.willBeginSheetNotification,
+            NSWindow.didChangeOcclusionStateNotification, NSWindow.didExposeNotification, NSWindow.didUpdateNotification]
+        observers = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    let attemptedPresentation = notification.name == NSApplication.didBecomeActiveNotification
+                        || notification.name == NSWindow.willBeginSheetNotification
+                        || notification.name == NSWindow.didBecomeKeyNotification
+                        || notification.name == NSWindow.didBecomeMainNotification
+                    if attemptedPresentation || NSApp.isActive || NSApp.windows.contains(where: \.isVisible) {
+                        self?.violations.insert(notification.name.rawValue)
+                    }
+                }
+            }
+        }
+    }
+
+    func stop() {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers.removeAll()
+    }
+}
+
+@MainActor
+private func runForegroundFixture(_ application: NSApplication, holding owner: AnyObject) {
+    let observer = ApplicationSession.current.map { session in
+        DistributedNotificationCenter.default().addObserver(forName: session.role.activationNotificationName,
+            object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                NSApp.activate(ignoringOtherApps: true)
+                (NSApp.mainWindow ?? NSApp.windows.first(where: \.isVisible))?.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+    defer { if let observer { DistributedNotificationCenter.default().removeObserver(observer) } }
+    application.activate(ignoringOtherApps: true)
+    withExtendedLifetime(owner) { application.run() }
+}
+
+if let status = ApplicationSession.runLeaseTestChildIfRequested() { exit(status) }
+
+if isBackgroundSelfTest {
+    exit(MainActor.assumeIsolated {
+        let application = NSApplication.shared
+        guard application.activationPolicy() == .prohibited || application.setActivationPolicy(.prohibited) else {
+            fputs("native-host self-test could not disable application activation\n", stderr)
+            return 1
+        }
+        let presentation = BackgroundPresentationMonitor()
+        defer { presentation.stop() }
+        let result = runSelfTest()
+        guard application.activationPolicy() == .prohibited, !application.isActive,
+              !application.windows.contains(where: \.isVisible), presentation.violations.isEmpty else {
+            fputs("native-host self-test activated the application or presented a window: \(presentation.violations.sorted())\n", stderr)
+            return 1
+        }
+        return result
+    })
+}
+
+do {
+    if case let .alreadyRunning(role) = try ApplicationSession.bootstrap() {
+        if role == .debug { fputs(localized("debug.already_open") + "\n", stderr) }
+        DistributedNotificationCenter.default().postNotificationName(role.activationNotificationName, object: nil,
+                                                                     userInfo: nil, deliverImmediately: true)
+        exit(0)
+    }
+} catch {
+    MainActor.assumeIsolated { _ = NSAlert(error: error).runModal() }
+    exit(70)
+}
+
+if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
+    || CommandLine.arguments.contains("--notification-ui-fixture")
+    || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture")
+    || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture")
+    || CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
+    || CommandLine.arguments.contains("--restore-integrity-ui-fixture") || CommandLine.arguments.contains("--interrupted-scan-ui-fixture")
+    || CommandLine.arguments.contains("--tool-runtime-ui-fixture") || CommandLine.arguments.contains("--gate-file-progress-ui-fixture") {
+    MainActor.assumeIsolated {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        let suite = "MFBDeliveryFixture.\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let controller = AppController(preferences: preferences)
+        do {
+            if let index = CommandLine.arguments.firstIndex(of: "--gate-file-progress-ui-fixture") {
+                let next = CommandLine.arguments[safe: index + 1]
+                try controller.showGateFileProgressFixture(caseName: next.flatMap { $0.hasPrefix("-") ? nil : $0 } ?? "metadata")
+            }
+            else if CommandLine.arguments.contains("--tool-runtime-ui-fixture") { controller.showToolRuntimeFixture() }
+            else if CommandLine.arguments.contains("--interrupted-scan-ui-fixture") { controller.showProcessInterruptionFixture() }
+            else if CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
+                || CommandLine.arguments.contains("--restore-integrity-ui-fixture") {
+                controller.showRestoreFixture(photosAudit: CommandLine.arguments.contains("--restore-audit-ui-fixture"),
+                    integrityIssues: CommandLine.arguments.contains("--restore-integrity-ui-fixture"))
+            }
+            else if CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture") {
+                try controller.showCountReceiptFixture(missing: CommandLine.arguments.contains("--missing-counts-ui-fixture"))
+            }
+            else if CommandLine.arguments.contains("--notification-ui-fixture") { try controller.showResultNotificationsFixture() }
+            else if CommandLine.arguments.contains("--photos-custody-ui-fixture") { controller.showPhotosCustodyFixture() }
+            else if CommandLine.arguments.contains("--photos-progress-ui-fixture")
+                || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") {
+                try controller.showPhotosProgressFixture(handoff: CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture"))
+            }
+            else { try controller.showDeferredDeliveryFixture() }
+        }
+        catch { fputs("Native fixture failed: \(error.localizedDescription)\n", stderr); exit(1) }
+        runForegroundFixture(application, holding: controller)
+    }
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--history-removal-ui-fixture") {
+    MainActor.assumeIsolated {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        let suite = "MFBHistoryRemovalFixture.\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(CommandLine.arguments.contains("--display-privacy"), forKey: "MFBGuiDisplayPrivacy")
+        let panel = ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/private/tmp/mfb-synthetic-history-removal"), preferences: preferences)
+        panel.showRemovalFixture()
+        runForegroundFixture(application, holding: panel)
+    }
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--preflight-ui-fixture") {
+    MainActor.assumeIsolated {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        let language = LocalizationCatalog.shared.language.resourceName
+            ?? Bundle.main.preferredLocalizations.first ?? "en"
+        AppAppearance(rawValue: guiPreferences.string(forKey: appearancePreferenceKey) ?? "system")?.apply()
+        let panel = PreflightInspectorPanel(language: language)
+        panel.onClose = { application.terminate(nil) }
+        panel.showTestFixture()
+        runForegroundFixture(application, holding: panel)
+    }
+    exit(0)
+}
+
+MainActor.assumeIsolated {
+    let application = NSApplication.shared
+    let delegate = AppDelegate()
+    application.delegate = delegate
+    application.run()
+}

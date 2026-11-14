@@ -1,0 +1,44 @@
+{
+  "config_version": 1,
+  "execution": {
+    "error_mode": "log-and-continue"
+  },
+  "img": {
+    "allow_database": false,
+    "quality_heuristic": false,
+    "allow_size_tolerance": false,
+    "size_tolerance_bytes": 524288,
+    "avif_quality": 100,
+    "avif_speed": 0,
+    "jpeg_effort": 11,
+    "jxl_distance": null,
+    "jxl_effort": null,
+    "jxl_effort_search": "fixed",
+    "jpeg_effort_search": "fixed",
+    "quality_search": "mode-default",
+    "fallback_policy": "strict"
+  },
+  "vid": {
+    "codec": "hevc"
+  },
+  "photos": {
+    "backend": "native",
+    "import_root": null,
+    "album_name": null,
+    "preserve_folder_structure": true,
+    "native_batch_size": 100,
+    "import_batch_size": 50,
+    "verification_batch_size": 250,
+    "adaptive_batching": false,
+    "native_min_batch_size": 50,
+    "native_max_batch_size": 1000,
+    "target_batch_seconds": 10
+  },
+  "performance": {
+    "mode": "adaptive"
+  },
+  "tools": {
+    "policy": "fallback",
+    "paths": {}
+  }
+}

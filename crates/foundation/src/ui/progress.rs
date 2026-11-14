@@ -1,0 +1,2674 @@
+//! Progress Bar Module
+//!
+//! Unified Progress Bar System:
+//! - Project-wide unified style: ████████▓▓░░░░░░
+//! - Thicker and more prominent progress bars
+//! - Fixed display at the bottom of the terminal
+//! - Detailed progress parameters (current file, ETA, speed, SSIM, CRF, etc.)
+//!
+//! Reference: media/CONTRIBUTING.md - Visual Progress Bar requirement
+
+use crate::modern_ui::progress_style;
+use crate::progress_mode::format_duration_compact;
+use console::{measure_text_width, truncate_str};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+use std::io::{self, Write};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+};
+use std::time::{Duration, Instant};
+
+static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
+static FILE_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static GATE_ACTIVITY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static PHOTOS_OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogPhase {
+    Processing,
+    Verification,
+}
+
+#[derive(serde::Serialize)]
+struct LogPhaseEvent {
+    schema_version: u8,
+    phase: LogPhase,
+}
+
+fn write_marker<W: Write>(writer: &mut W, name: &str, json: &[u8]) -> io::Result<()> {
+    let mut line = Vec::new();
+    line.extend_from_slice(b"\n");
+    line.extend_from_slice(name.as_bytes());
+    line.push(b'=');
+    line.extend_from_slice(json);
+    line.push(b'\n');
+    writer.write_all(&line)?;
+    writer.flush()
+}
+
+fn write_terminal_marker(name: &str, json: &[u8], branch: &'static str) -> io::Result<()> {
+    // Keep machine-readable events on a separate PTY line with terminal writes serialized.
+    let _terminal_guard = crate::media_conversion_gate::delivery_terminal_lock_guard(branch);
+    let mut stdout = io::stdout().lock();
+    write_marker(&mut stdout, name, json)
+}
+
+pub(crate) fn emit_log_phase(phase: LogPhase) {
+    if std::env::var_os("MFB_SESSION_ID").is_none_or(|id| id.is_empty()) {
+        return;
+    }
+    let result = serde_json::to_vec(&LogPhaseEvent {
+        schema_version: 1,
+        phase,
+    })
+    .map_err(io::Error::other)
+    .and_then(|json| write_terminal_marker("MFB_LOG_PHASE", &json, "log_phase_emit"));
+    if let Err(error) = result {
+        tracing::error!(%error, "failed to write log phase event");
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GateActivityState {
+    Running,
+    Passed,
+    FileFailures,
+    Failed,
+}
+
+#[derive(serde::Serialize)]
+struct GateActivityEvent<'a> {
+    schema_version: u8,
+    stage_id: &'a str,
+    gate: GateActivityKind,
+    check: &'static str,
+    completed: usize,
+    total: usize,
+    state: GateActivityState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_progress: Option<GateFileProgress>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+/// Per-check progress; `total` is this check's inventory, not necessarily the run's media count.
+/// For Local Gate 1, `processed` counts completed attempts, including failures;
+/// Photos custody uses it for successfully byte-matched files.
+pub(crate) struct GateFileProgress {
+    /// Completed attempts or successful byte matches, according to the gate kind.
+    pub(crate) processed: usize,
+    /// Number of work items in this check's established inventory.
+    pub(crate) total: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GateActivityKind {
+    Local,
+    PhotosCustody,
+    PhotosSidecars,
+    PhotosRelationships,
+}
+
+pub(crate) struct GateActivity {
+    stage_id: Option<String>,
+    gate: GateActivityKind,
+}
+
+impl GateActivity {
+    pub(crate) fn new(gate: GateActivityKind) -> Self {
+        Self {
+            gate,
+            stage_id: std::env::var_os("MFB_SESSION_ID")
+                .filter(|id| !id.is_empty())
+                .map(|_| {
+                    format!(
+                        "{}-{}",
+                        std::process::id(),
+                        GATE_ACTIVITY_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+                    )
+                }),
+        }
+    }
+
+    pub(crate) fn emit(
+        &self,
+        check: &'static str,
+        completed: usize,
+        total: usize,
+        state: GateActivityState,
+        file_progress: Option<GateFileProgress>,
+    ) {
+        let Some(stage_id) = &self.stage_id else {
+            return;
+        };
+        let event = GateActivityEvent {
+            schema_version: 1,
+            stage_id,
+            gate: self.gate,
+            check,
+            completed,
+            total,
+            state,
+            file_progress,
+        };
+        let result = serde_json::to_vec(&event)
+            .map_err(io::Error::other)
+            .and_then(|json| {
+                write_terminal_marker("MFB_GATE_ACTIVITY", &json, "local_gate_activity_emit")
+            });
+        if let Err(error) = result {
+            tracing::error!(%error, %stage_id, check, completed, total, ?state,
+                "failed to write gate activity event");
+        }
+    }
+}
+
+/// Run the existing final sidecar check with session-scoped activity.
+/// `None` starts the check without file progress. A subsequent pair gives
+/// verified working-copy AAE rows and their fixed total.
+///
+/// # Errors
+/// Returns the check's original error without changing its outcome.
+pub fn with_final_sidecar_activity<E>(
+    check: impl FnOnce(&mut dyn FnMut(Option<(usize, usize)>)) -> Result<(), E>,
+) -> Result<(), E> {
+    use GateActivityState::{Failed, Passed, Running};
+
+    let activity = GateActivity::new(GateActivityKind::PhotosSidecars);
+    let mut started = false;
+    let mut files = None;
+    let mut last_emit = Instant::now();
+    let result = check(&mut |update| {
+        if let Some((processed, total)) = update {
+            files = Some(GateFileProgress { processed, total });
+            let now = Instant::now();
+            if processed == 0 || now.duration_since(last_emit) >= Duration::from_millis(250) {
+                activity.emit("working_copy_aae", 0, 1, Running, files);
+                last_emit = now;
+            }
+        } else {
+            started = true;
+            activity.emit("working_copy_aae", 0, 1, Running, None);
+        }
+    });
+    if started {
+        activity.emit(
+            "working_copy_aae",
+            1,
+            1,
+            if result.is_ok() { Passed } else { Failed },
+            files,
+        );
+    }
+    result
+}
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PhotosImportPhase {
+    TargetPreparation,
+    Reconciling,
+    Importing,
+    Verifying,
+    Completed,
+    Stopped,
+}
+
+#[derive(serde::Serialize)]
+struct PhotosImportEvent<'a> {
+    schema_version: u8,
+    scope: &'static str,
+    operation_id: &'a str,
+    sequence: u64,
+    phase: PhotosImportPhase,
+    pending_total: u64,
+    verified: u64,
+}
+
+/// Operation-local pending assets only; never a delivery or deletion receipt.
+pub(crate) struct PhotosImportProgress {
+    operation_id: String,
+    sequence: u64,
+    pending_total: u64,
+    remaining: std::collections::BTreeSet<String>,
+    phase: PhotosImportPhase,
+    closed: bool,
+}
+
+impl PhotosImportProgress {
+    pub(crate) fn new<'a>(sources: impl IntoIterator<Item = &'a str>) -> anyhow::Result<Self> {
+        let mut remaining = std::collections::BTreeSet::new();
+        for source in sources {
+            anyhow::ensure!(
+                !source.is_empty() && remaining.insert(source.to_owned()),
+                "Photos progress requires unique pending source identities"
+            );
+        }
+        let pending_total = u64::try_from(remaining.len())?;
+        anyhow::ensure!(
+            i64::try_from(pending_total).is_ok(),
+            "Photos progress inventory too large"
+        );
+        let id = PHOTOS_OPERATION_SEQUENCE
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("Photos progress operation identity exhausted"))?;
+        let progress = Self {
+            operation_id: format!("{}-{id}", std::process::id()),
+            sequence: 1,
+            pending_total,
+            remaining,
+            phase: PhotosImportPhase::TargetPreparation,
+            closed: false,
+        };
+        progress.emit();
+        Ok(progress)
+    }
+
+    pub(crate) fn verified_count(&self) -> anyhow::Result<u64> {
+        let remaining = u64::try_from(self.remaining.len())?;
+        self.pending_total
+            .checked_sub(remaining)
+            .ok_or_else(|| anyhow::anyhow!("Photos progress inventory changed"))
+    }
+
+    fn event(&self) -> anyhow::Result<PhotosImportEvent<'_>> {
+        Ok(PhotosImportEvent {
+            schema_version: 1,
+            scope: "current_pending_import",
+            operation_id: &self.operation_id,
+            sequence: self.sequence,
+            phase: self.phase,
+            pending_total: self.pending_total,
+            verified: self.verified_count()?,
+        })
+    }
+
+    fn emit(&self) {
+        if std::env::var_os("MFB_SESSION_ID").is_none_or(|id| id.is_empty()) {
+            return;
+        }
+        let result = self.event().and_then(|event| {
+            let json = serde_json::to_vec(&event)?;
+            Ok(write_terminal_marker(
+                "MFB_PHOTOS_PROGRESS",
+                &json,
+                "photos_progress_emit",
+            )?)
+        });
+        if let Err(error) = result {
+            tracing::error!(%error, "failed to write Photos operation progress");
+        }
+    }
+
+    pub(crate) fn phase(&mut self, phase: PhotosImportPhase) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.closed, "Photos progress operation already closed");
+        anyhow::ensure!(
+            !matches!(
+                phase,
+                PhotosImportPhase::Completed | PhotosImportPhase::Stopped
+            ),
+            "Photos progress terminal state requires explicit closure"
+        );
+        self.advance(phase)
+    }
+
+    fn advance(&mut self, phase: PhotosImportPhase) -> anyhow::Result<()> {
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("Photos progress sequence exhausted"))?;
+        self.phase = phase;
+        self.emit();
+        Ok(())
+    }
+
+    pub(crate) fn checkpointed<'a>(
+        &mut self,
+        sources: impl IntoIterator<Item = &'a str>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.closed, "Photos progress operation already closed");
+        let mut completed = std::collections::BTreeSet::new();
+        for source in sources {
+            anyhow::ensure!(
+                self.remaining.contains(source) && completed.insert(source),
+                "Photos checkpoint progress has an unknown or repeated source"
+            );
+        }
+        for source in completed {
+            self.remaining.remove(source);
+        }
+        self.advance(self.phase)
+    }
+
+    pub(crate) fn complete(&mut self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.closed && self.remaining.is_empty(),
+            "Photos progress still has pending assets"
+        );
+        self.advance(PhotosImportPhase::Completed)?;
+        self.closed = true;
+        Ok(())
+    }
+}
+
+impl Drop for PhotosImportProgress {
+    fn drop(&mut self) {
+        if !self.closed
+            && let Err(error) = self.advance(PhotosImportPhase::Stopped)
+        {
+            tracing::error!(%error, "failed to close Photos operation progress");
+        }
+    }
+}
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileProgressStage {
+    ImageProcessing,
+    VideoProcessing,
+    FastImgEncode,
+    ModernSourceInspection,
+    FastImgSourcePreparation,
+    FastImgSourceHashing,
+}
+
+#[derive(serde::Serialize)]
+struct FileProgressEvent<'a> {
+    schema_version: u8,
+    stage_id: &'a str,
+    stage: FileProgressStage,
+    processed: u64,
+    total: u64,
+    state: &'static str,
+}
+
+struct FileProgressState {
+    processed: u64,
+    total: u64,
+    finished: bool,
+    last_emit: Instant,
+}
+
+impl FileProgressState {
+    fn update(&mut self, processed: u64, finish: bool, now: Instant) -> bool {
+        if self.finished || processed > self.total {
+            return false;
+        }
+        self.processed = self.processed.max(processed);
+        self.finished = finish;
+        if finish || now.duration_since(self.last_emit) >= Duration::from_millis(250) {
+            self.last_emit = now;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Counts classified files within one stage, independently of terminal rendering.
+pub struct FileStageProgress {
+    stage_id: String,
+    stage: FileProgressStage,
+    state: Option<Mutex<FileProgressState>>,
+}
+
+impl FileStageProgress {
+    #[must_use]
+    pub fn new(total: u64, stage: FileProgressStage) -> Self {
+        let enabled = std::env::var_os("MFB_SESSION_ID").is_some_and(|id| !id.is_empty());
+        let reporter = Self {
+            stage_id: format!(
+                "{}-{}",
+                std::process::id(),
+                FILE_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ),
+            stage,
+            state: enabled.then(|| {
+                Mutex::new(FileProgressState {
+                    processed: 0,
+                    total,
+                    finished: false,
+                    last_emit: Instant::now(),
+                })
+            }),
+        };
+        if enabled {
+            emit_log_phase(LogPhase::Processing);
+        }
+        if let Some(snapshot) = &reporter.state {
+            let snapshot = crate::media_conversion_gate::mutex_guard_or_recover(
+                "file_stage_progress_start",
+                snapshot.lock(),
+            );
+            reporter.emit(&snapshot);
+        }
+        reporter
+    }
+
+    fn emit(&self, state: &FileProgressState) {
+        let event = FileProgressEvent {
+            schema_version: 1,
+            stage_id: &self.stage_id,
+            stage: self.stage,
+            processed: state.processed,
+            total: state.total,
+            state: if state.finished {
+                "finished"
+            } else {
+                "running"
+            },
+        };
+        let result = serde_json::to_vec(&event)
+            .map_err(io::Error::other)
+            .and_then(|json| {
+                write_terminal_marker("MFB_PROGRESS", &json, "file_stage_progress_emit")
+            });
+        if let Err(error) = result {
+            tracing::error!(%error, "failed to write file stage progress");
+        }
+    }
+
+    pub fn set(&self, processed: u64) {
+        if let Some(state) = &self.state {
+            let mut state = crate::media_conversion_gate::mutex_guard_or_recover(
+                "file_stage_progress_update",
+                state.lock(),
+            );
+            if processed > state.total {
+                tracing::error!(
+                    processed,
+                    total = state.total,
+                    "file stage progress exceeds inventory"
+                );
+                return;
+            }
+            if state.update(processed, false, Instant::now()) {
+                self.emit(&state);
+            }
+        }
+    }
+
+    pub fn finish(&self) {
+        if let Some(state) = &self.state {
+            let mut state = crate::media_conversion_gate::mutex_guard_or_recover(
+                "file_stage_progress_finish",
+                state.lock(),
+            );
+            let processed = state.processed;
+            if state.update(processed, true, Instant::now()) {
+                self.emit(&state);
+            }
+        }
+    }
+}
+
+impl Drop for FileStageProgress {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+const SUB_SPINNER_TEMPLATE: &str = "  {spinner:.green} {prefix:.dim}: {msg}";
+const EXPLORE_BAR_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ \
+                                    {percent:>3}% • {pos}/{len} • {msg}";
+const SIMPLE_SPINNER_TEMPLATE: &str = "{spinner:.green} {msg}";
+
+fn bar_progress_style(template: &str, with_ticks: bool) -> ProgressStyle {
+    let style = match ProgressStyle::default_bar().template(template) {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::error!(%template, ?err, "invalid indicatif bar template; using default");
+            ProgressStyle::default_bar()
+        }
+    };
+    let style = style.progress_chars(progress_style::PROGRESS_CHARS);
+    if with_ticks {
+        style.tick_chars(progress_style::SPINNER_CHARS)
+    } else {
+        style
+    }
+}
+
+fn spinner_progress_style(template: &str) -> ProgressStyle {
+    let style = match ProgressStyle::default_spinner().template(template) {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::error!(%template, ?err, "invalid indicatif spinner template; using default");
+            ProgressStyle::default_spinner()
+        }
+    };
+    style
+        .progress_chars(progress_style::PROGRESS_CHARS)
+        .tick_chars(progress_style::SPINNER_CHARS)
+}
+
+fn bar_status_msg(icon_emoji: &str, icon_plain: &str, message: &str) -> String {
+    format!(
+        "{} {message}",
+        crate::media_conversion_gate::ui_icon_pick(icon_emoji, icon_plain)
+    )
+}
+
+pub struct CoarseProgressBar {
+    total: u64,
+    current: AtomicU64,
+    start_time: Instant,
+    prefix: String,
+    last_render: Arc<Mutex<Instant>>,
+    message: Arc<Mutex<String>>,
+    is_finished: AtomicBool,
+    enabled: bool,
+    file_stage: Option<FileStageProgress>,
+}
+
+fn progress_line_enabled() -> bool {
+    if std::env::var(crate::constants::ENV_FORCE_COLOR).is_ok() {
+        return true;
+    }
+    console::Term::stderr().is_term()
+}
+
+pub(crate) fn terminal_columns() -> usize {
+    match std::env::var(crate::constants::ENV_COLUMNS) {
+        Ok(cols) => match cols.parse::<usize>() {
+            Ok(parsed) if parsed > 0 => return parsed,
+            Ok(_) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "terminal_columns",
+                    format!(
+                        "{} must be greater than zero; falling back to terminal query",
+                        crate::constants::ENV_COLUMNS
+                    ),
+                );
+            }
+            Err(e) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "terminal_columns",
+                    format!(
+                        "failed to parse {}='{cols}': {e}; falling back to terminal query",
+                        crate::constants::ENV_COLUMNS
+                    ),
+                );
+            }
+        },
+        Err(std::env::VarError::NotPresent) => {}
+        Err(e) => {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "terminal_columns",
+                format!(
+                    "failed to read {}: {e}; falling back to terminal query",
+                    crate::constants::ENV_COLUMNS
+                ),
+            );
+        }
+    }
+
+    let (_, cols) = console::Term::stderr().size();
+    usize::from(cols)
+}
+
+fn truncate_progress_message(msg: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    if measure_text_width(msg) <= max_width {
+        return msg.to_string();
+    }
+
+    truncate_str(msg, max_width, "…").into_owned()
+}
+
+fn dynamic_bar_width(terminal_width: usize, reserved_width: usize) -> usize {
+    let remaining = terminal_width.saturating_sub(reserved_width);
+    let preferred = remaining.min(progress_style::BAR_WIDTH);
+
+    if terminal_width >= 120 {
+        preferred.clamp(14, progress_style::BAR_WIDTH)
+    } else if terminal_width >= 96 {
+        preferred.clamp(10, 24)
+    } else if terminal_width >= 72 {
+        preferred.clamp(8, 16)
+    } else {
+        preferred.clamp(6, 10)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProgressVariant {
+    flags: u8,
+}
+
+const SHOW_BAR: u8 = 1;
+const SHOW_ELAPSED: u8 = 2;
+const SHOW_ETA: u8 = 4;
+const SHOW_MESSAGE: u8 = 8;
+
+impl ProgressVariant {
+    const fn get_all(message_empty: bool) -> [Self; 5] {
+        [
+            Self {
+                flags: SHOW_BAR
+                    | SHOW_ELAPSED
+                    | SHOW_ETA
+                    | if message_empty { 0 } else { SHOW_MESSAGE },
+            },
+            Self {
+                flags: SHOW_BAR | SHOW_ELAPSED | SHOW_ETA,
+            },
+            Self {
+                flags: SHOW_BAR | SHOW_ELAPSED,
+            },
+            Self { flags: SHOW_BAR },
+            Self { flags: 0 },
+        ]
+    }
+
+    const fn show_bar(self) -> bool {
+        (self.flags & SHOW_BAR) != 0
+    }
+
+    const fn show_elapsed(self) -> bool {
+        (self.flags & SHOW_ELAPSED) != 0
+    }
+
+    const fn show_eta(self) -> bool {
+        (self.flags & SHOW_ETA) != 0
+    }
+
+    const fn show_message(self) -> bool {
+        (self.flags & SHOW_MESSAGE) != 0
+    }
+}
+
+fn calculate_fixed_width(variant: ProgressVariant, widths: &LayoutWidths) -> usize {
+    let mut fixed_width = widths.prefix + 1;
+    if !variant.show_bar() {
+        fixed_width += widths.percent + 3;
+    }
+    fixed_width += widths.counts;
+
+    if variant.show_elapsed() {
+        fixed_width += 3 + measure_text_width("⏱️ ") + widths.elapsed;
+    }
+    if variant.show_eta() {
+        fixed_width += 3 + measure_text_width("ETA ") + widths.eta_val;
+    }
+    if widths.stats > 0 {
+        fixed_width += widths.stats;
+    }
+
+    if variant.show_bar() {
+        fixed_width += 1 + widths.bar_left + widths.bar_right + 1;
+    }
+    fixed_width
+}
+
+struct LayoutWidths {
+    prefix: usize,
+    percent: usize,
+    counts: usize,
+    elapsed: usize,
+    eta_val: usize,
+    stats: usize,
+    bar_left: usize,
+    bar_right: usize,
+}
+
+#[derive(Clone, Copy)]
+struct AssembleContext<'a> {
+    prefix: &'a str,
+    variant: ProgressVariant,
+    percent: f64,
+    bar_width: usize,
+    percent_str: &'a str,
+    counts_str: &'a str,
+    elapsed_str: &'a str,
+    eta_str: &'a str,
+    message_text: &'a str,
+    stats: &'a str,
+    terminal_width: usize,
+}
+
+fn build_coarse_progress_line(
+    prefix: &str,
+    percent: f64,
+    current: u64,
+    total: u64,
+    elapsed: Duration,
+    eta_str: &str,
+    message: &str,
+    stats: &str,
+    terminal_width: usize,
+) -> String {
+    let color = "\x1b[32m";
+    let percent_str = format!("{percent:>5.1}%");
+    let counts_str = format!("{current}/{total}");
+    let elapsed_str = format_duration_compact(elapsed);
+
+    let widths = LayoutWidths {
+        prefix: measure_text_width(prefix),
+        percent: measure_text_width(&percent_str),
+        counts: measure_text_width(&counts_str),
+        elapsed: measure_text_width(&elapsed_str),
+        eta_val: measure_text_width(eta_str),
+        stats: measure_text_width(stats),
+        bar_left: measure_text_width(progress_style::BAR_LEFT),
+        bar_right: measure_text_width(progress_style::BAR_RIGHT),
+    };
+
+    for variant in ProgressVariant::get_all(message.is_empty()) {
+        let fixed_width = calculate_fixed_width(variant, &widths);
+        let min_bar = if variant.show_bar() { 6 } else { 0 };
+        let mut bar_width = if variant.show_bar() {
+            dynamic_bar_width(terminal_width, fixed_width)
+        } else {
+            0
+        };
+
+        if variant.show_bar() && bar_width < min_bar {
+            continue;
+        }
+
+        let message_text = if variant.show_message() {
+            let available = terminal_width.saturating_sub(fixed_width + bar_width + 3);
+            if available < 6 {
+                if variant.show_bar() && bar_width > min_bar {
+                    let needed = 6_usize.saturating_sub(available);
+                    if bar_width.saturating_sub(needed) >= min_bar {
+                        bar_width -= needed;
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+            truncate_progress_message(message, available.clamp(6, 24))
+        } else {
+            String::new()
+        };
+
+        let final_fixed =
+            fixed_width + message_text.len() + (if message_text.is_empty() { 0 } else { 3 });
+        if variant.show_bar() && bar_width + final_fixed > terminal_width {
+            bar_width = terminal_width.saturating_sub(final_fixed + 1).max(min_bar);
+            if bar_width < min_bar {
+                continue;
+            }
+        }
+
+        let line_res = assemble_coarse_line(AssembleContext {
+            prefix,
+            variant,
+            percent,
+            bar_width,
+            percent_str: &percent_str,
+            counts_str: &counts_str,
+            elapsed_str: &elapsed_str,
+            eta_str,
+            message_text: &message_text,
+            stats,
+            terminal_width,
+        });
+
+        match line_res {
+            Ok(Some(line)) => return line,
+            Ok(None) => {}
+            Err(e) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "progress_line",
+                    format!("failed to assemble coarse progress line: {e}"),
+                );
+            }
+        }
+    }
+
+    fallback_coarse_line(color, prefix, percent, &percent_str, &counts_str, stats)
+}
+
+fn assemble_coarse_line(ctx: AssembleContext<'_>) -> crate::unified_error::Result<Option<String>> {
+    let color = "\x1b[32m";
+    let mut line = String::with_capacity(ctx.terminal_width + 32);
+    line.push_str(color);
+    line.push_str(ctx.prefix);
+    line.push(' ');
+
+    if ctx.variant.show_bar() {
+        let filled = crate::numeric_cast::f64_to_usize_strict(
+            ((ctx.percent / 100.0) * crate::numeric_cast::usize_to_f64(ctx.bar_width)).round(),
+            "progress_bar_filled",
+        )
+        .ok_or_else(|| {
+            crate::unified_error::ImgQualityError::NumericError(
+                "Invalid progress_bar_filled: NaN/Inf/overflow".into(),
+            )
+        })?;
+        let empty = ctx.bar_width.saturating_sub(filled);
+        line.push_str(progress_style::BAR_LEFT);
+        for _ in 0..filled {
+            line.push('█');
+        }
+        for _ in 0..empty {
+            line.push('░');
+        }
+        line.push_str(progress_style::BAR_RIGHT);
+        line.push(' ');
+    }
+
+    if !ctx.variant.show_bar() {
+        line.push_str(ctx.percent_str);
+        line.push_str(" • ");
+    }
+    line.push_str(ctx.counts_str);
+
+    if ctx.variant.show_elapsed() {
+        line.push_str(" • ⏱️ ");
+        line.push_str(ctx.elapsed_str);
+    }
+    if ctx.variant.show_eta() {
+        line.push_str(" • ETA ");
+        line.push_str(ctx.eta_str);
+    }
+    if !ctx.message_text.is_empty() {
+        line.push_str(" • ");
+        line.push_str(ctx.message_text);
+    }
+
+    line.push_str("\x1b[0m");
+    line.push_str(ctx.stats);
+
+    if measure_text_width(&line) <= ctx.terminal_width.saturating_sub(1).max(32) {
+        Ok(Some(line))
+    } else {
+        Ok(None)
+    }
+}
+
+fn fallback_coarse_line(
+    color: &str,
+    prefix: &str,
+    percent: f64,
+    percent_str: &str,
+    counts_str: &str,
+    stats: &str,
+) -> String {
+    use std::fmt::Write as _;
+    let mut final_line = format!("{color}{prefix} ");
+    if percent < 100.0_f64 {
+        let _ = write!(final_line, "{percent_str} • ");
+    }
+    let _ = write!(final_line, "{counts_str}\x1b[0m{stats}");
+    final_line
+}
+
+fn build_finished_progress_line(
+    prefix: &str,
+    total: u64,
+    elapsed: Duration,
+    stats: &str,
+    terminal_width: usize,
+) -> String {
+    build_coarse_progress_line(
+        prefix,
+        100.0,
+        total,
+        total.max(1),
+        elapsed,
+        "---",
+        crate::infra::static_logs::messages::MSG_PROGRESS_DONE,
+        stats,
+        terminal_width,
+    )
+}
+
+fn set_active_progress_line(line: Option<String>) {
+    let mut guard = crate::media_conversion_gate::mutex_guard_or_recover(
+        "progress_active_line_set",
+        ACTIVE_PROGRESS_LINE.lock(),
+    );
+    *guard = line;
+}
+
+pub fn active_progress_line() -> Option<String> {
+    crate::media_conversion_gate::mutex_guard_or_recover(
+        "progress_active_line_read",
+        ACTIVE_PROGRESS_LINE.lock(),
+    )
+    .clone()
+}
+
+#[must_use]
+pub fn wrap_output(line: &str) -> String {
+    match active_progress_line() {
+        None => format!("{line}\n"),
+        Some(progress_line) => {
+            // 1. \r: move to start
+            // 2. \x1b[2K: clear entire line
+            // 3. line + \n: print the actual log message and go to next line
+            // 4. \r + progress_line: print progress bar at the new start
+            format!("\r\x1b[2K{line}\n\r{progress_line}")
+        }
+    }
+}
+
+impl CoarseProgressBar {
+    #[must_use]
+    pub fn new(total: u64, prefix: &str) -> Self {
+        let enabled = progress_line_enabled();
+        if enabled {
+            let _guard =
+                crate::media_conversion_gate::delivery_terminal_lock_guard("progress_coarse_new");
+            eprint!("\x1b[?25l");
+            let _ = io::stderr().flush();
+        }
+
+        Self {
+            total,
+            current: AtomicU64::new(0),
+            start_time: Instant::now(),
+            prefix: prefix.to_string(),
+            last_render: Arc::new(Mutex::new(Instant::now())),
+            message: Arc::new(Mutex::new(String::new())),
+            is_finished: AtomicBool::new(false),
+            enabled,
+            file_stage: None,
+        }
+    }
+
+    #[must_use]
+    pub fn new_file_stage(total: u64, prefix: &str, stage: FileProgressStage) -> Self {
+        let mut bar = Self::new(total, prefix);
+        bar.file_stage = Some(FileStageProgress::new(total, stage));
+        bar
+    }
+
+    pub fn set(&self, current: u64) {
+        self.current.fetch_max(current, Ordering::Relaxed);
+        if let Some(stage) = &self.file_stage {
+            stage.set(current);
+        }
+
+        if !self.enabled {
+            return;
+        }
+
+        match self.last_render.try_lock() {
+            Ok(mut last) if last.elapsed() >= Duration::from_millis(33) => {
+                self.render();
+                *last = Instant::now();
+            }
+            Ok(_) => {}
+            Err(e) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "coarse_progress_render",
+                    format!("failed to acquire progress render throttle lock: {e}"),
+                );
+            }
+        }
+    }
+
+    pub fn inc(&self) {
+        let current = self.current.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(stage) = &self.file_stage {
+            stage.set(current);
+        }
+        if current.is_multiple_of(10) {
+            self.set(current);
+        }
+    }
+
+    pub fn set_message(&self, msg: &str) {
+        let mut current_message = crate::media_conversion_gate::mutex_guard_or_recover(
+            "coarse_progress_message",
+            self.message.lock(),
+        );
+        *current_message = msg.to_string();
+        drop(current_message);
+        self.set(self.current.load(Ordering::Relaxed));
+    }
+
+    pub fn println(&self, msg: &str) {
+        crate::progress_mode::emit_stderr(msg);
+    }
+
+    fn render(&self) {
+        if self.is_finished.load(Ordering::Relaxed)
+            || !self.enabled
+            || crate::ctrlc_guard::is_prompt_active()
+        {
+            return;
+        }
+
+        let current = self.current.load(Ordering::Relaxed);
+        let total = self.total.max(1);
+        let percent = (crate::numeric_cast::u64_to_f64(current)
+            / crate::numeric_cast::u64_to_f64(total)
+            * 100.0)
+            .min(100.0);
+        let elapsed = self.start_time.elapsed();
+        let message = crate::media_conversion_gate::delivery_progress_mutex_string_or_empty(
+            "progress_coarse_message",
+            self.message.lock(),
+        );
+        let stats = crate::progress_mode::get_current_stats_string();
+
+        let eta_str = if current > 0 && current < total {
+            let remaining_secs = crate::numeric_cast::f64_to_u64_strict(
+                (elapsed.as_secs_f64() / percent) * (100.0 - percent),
+                "eta_remaining_secs",
+            );
+            match remaining_secs {
+                None => {
+                    crate::media_conversion_gate::delivery_progress_eta_unknown_audit();
+                    crate::infra::static_logs::messages::MSG_PROGRESS_UNKNOWN.to_string()
+                }
+                Some(secs) => format_eta_simple(secs),
+            }
+        } else {
+            crate::infra::static_logs::messages::MSG_PROGRESS_INACTIVE.to_string()
+        };
+        let terminal_width = terminal_columns().max(48);
+        let line = build_coarse_progress_line(
+            &self.prefix,
+            percent,
+            current,
+            total,
+            elapsed,
+            &eta_str,
+            &message,
+            &stats,
+            terminal_width,
+        );
+
+        let _guard =
+            crate::media_conversion_gate::delivery_terminal_lock_guard("progress_coarse_render");
+        set_active_progress_line(None);
+        eprint!("\r\x1b[K{line}");
+        set_active_progress_line(Some(line));
+        let _ = io::stderr().flush();
+    }
+
+    pub fn finish(&self) {
+        if let Some(stage) = &self.file_stage {
+            stage.finish();
+        }
+        if self.is_finished.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let total = self.total;
+        let elapsed = self.start_time.elapsed();
+
+        let stats = crate::progress_mode::get_current_stats_string();
+        let terminal_width = terminal_columns().max(48);
+        let line =
+            build_finished_progress_line(&self.prefix, total, elapsed, &stats, terminal_width);
+
+        let _guard =
+            crate::media_conversion_gate::delivery_terminal_lock_guard("progress_coarse_finish");
+        set_active_progress_line(None);
+        eprint!("\r\x1b[K{line}\n");
+
+        eprint!("\x1b[?25h");
+        let _ = io::stderr().flush();
+    }
+
+    pub fn finish_and_clear(&self) {
+        if let Some(stage) = &self.file_stage {
+            stage.finish();
+        }
+        if self.is_finished.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        if self.enabled {
+            let _guard = crate::media_conversion_gate::delivery_terminal_lock_guard(
+                "progress_coarse_finish_and_clear",
+            );
+            set_active_progress_line(None);
+            eprint!("\r\x1b[K");
+            eprint!("\x1b[?25h");
+            let _ = io::stderr().flush();
+        }
+    }
+}
+
+impl Drop for CoarseProgressBar {
+    fn drop(&mut self) {
+        if !self.is_finished.load(Ordering::Relaxed) {
+            self.finish();
+        }
+    }
+}
+
+pub struct DetailedCoarseProgressBar {
+    prefix: String,
+    total_iterations: u64,
+    current_iteration: AtomicU64,
+    input_size: u64,
+    current_crf: AtomicU32,
+    current_size: AtomicU64,
+    /// SSIM bits; meaning depends on `has_ssim` (0.0 is a valid value).
+    current_ssim: AtomicU64,
+    has_ssim: AtomicBool,
+    best_crf: AtomicU32,
+    has_best_crf: AtomicBool,
+    has_crf: AtomicBool,
+    start_time: Instant,
+    last_render: Arc<Mutex<Instant>>,
+    is_finished: AtomicBool,
+}
+
+impl DetailedCoarseProgressBar {
+    #[must_use]
+    pub fn new(prefix: &str, input_size: u64, total_iterations: u64) -> Self {
+        eprint!("\x1b[?25l");
+        let _ = io::stderr().flush();
+
+        Self {
+            prefix: prefix.to_string(),
+            total_iterations,
+            current_iteration: AtomicU64::new(0),
+            input_size,
+            current_crf: AtomicU32::new(0),
+            current_size: AtomicU64::new(0),
+            current_ssim: AtomicU64::new(0),
+            has_ssim: AtomicBool::new(false),
+            best_crf: AtomicU32::new(0),
+            has_best_crf: AtomicBool::new(false),
+            has_crf: AtomicBool::new(false),
+            start_time: Instant::now(),
+            last_render: Arc::new(Mutex::new(Instant::now())),
+            is_finished: AtomicBool::new(false),
+        }
+    }
+
+    pub fn inc_iteration(&self, crf: f32, size: u64, ssim: Option<f64>) {
+        let iter = self.current_iteration.fetch_add(1, Ordering::Relaxed) + 1;
+
+        self.current_crf.store(crf.to_bits(), Ordering::Relaxed);
+        self.has_crf.store(true, Ordering::Relaxed);
+        self.current_size.store(size, Ordering::Relaxed);
+        if let Some(s) = ssim {
+            self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
+            self.has_ssim.store(true, Ordering::Relaxed);
+        }
+
+        if size < self.input_size {
+            self.best_crf.store(crf.to_bits(), Ordering::Relaxed);
+            self.has_best_crf.store(true, Ordering::Relaxed);
+        }
+
+        self.render(iter, crf, size, ssim);
+    }
+
+    fn render(&self, iter: u64, crf: f32, size: u64, ssim: Option<f64>) {
+        if self.is_finished.load(Ordering::Relaxed) || crate::ctrlc_guard::is_prompt_active() {
+            return;
+        }
+
+        match self.last_render.try_lock() {
+            Ok(mut last) => {
+                if last.elapsed() < Duration::from_millis(33) {
+                    return;
+                }
+                *last = Instant::now();
+            }
+            Err(e) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "explore_progress_render",
+                    format!("failed to acquire explore progress render throttle lock: {e}"),
+                );
+                return;
+            }
+        }
+
+        let total = self.total_iterations.max(1);
+        let percent = (crate::numeric_cast::u64_to_f64(iter)
+            / crate::numeric_cast::u64_to_f64(total)
+            * 100.0)
+            .min(100.0);
+        let elapsed = self.start_time.elapsed();
+
+        let size_pct = if self.input_size > 0 {
+            ((crate::numeric_cast::u64_to_f64(size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0_f64)
+                * 100.0_f64
+        } else {
+            0.0_f64
+        };
+
+        let icon = if size < self.input_size {
+            "💾"
+        } else {
+            "📈"
+        };
+
+        let ssim_str = crate::media_conversion_gate::explore_progress_ssim_token_pending(ssim);
+
+        let best_str = if self.has_best_crf.load(Ordering::Relaxed) {
+            let best_crf = f32::from_bits(self.best_crf.load(Ordering::Relaxed));
+            crate::media_conversion_gate::ui_optional_crf_display_suffix(Some(best_crf), "Best:")
+        } else {
+            String::new()
+        };
+
+        let terminal_width = terminal_columns().max(48);
+        let prefix_width = measure_text_width(&self.prefix);
+        let reserved = if ssim_str.is_empty() { 65 } else { 78 };
+
+        let bar_width = dynamic_bar_width(terminal_width, reserved + prefix_width);
+        // Ensure we don't overflow the subtraction
+        let available_for_prefix = terminal_width.saturating_sub(reserved + bar_width);
+        let filled = crate::numeric_cast::f64_to_usize_sat(
+            ((percent / 100.0) * crate::numeric_cast::usize_to_f64(bar_width)).round(),
+        );
+        let empty = bar_width.saturating_sub(filled);
+        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+
+        let color = "\x1b[32m";
+        let line = format!(
+            "{color}{prefix} {bar_left}{color}{bar}{color}▏ CRF {crf:.1} • {size:+.1}% {icon} • \
+             {ssim} • {best} • {iter}/{total} • ⏱️ {elapsed:.1}s\x1b[0m",
+            color = color,
+            prefix = truncate_progress_message(&self.prefix, available_for_prefix),
+            bar_left = progress_style::BAR_LEFT,
+            bar = bar,
+            crf = crf,
+            size = size_pct,
+            icon = icon,
+            ssim = ssim_str,
+            best = best_str,
+            iter = iter,
+            total = total,
+            elapsed = elapsed.as_secs_f64()
+        );
+
+        let _guard =
+            crate::media_conversion_gate::delivery_terminal_lock_guard("progress_explore_render");
+        set_active_progress_line(None);
+        eprint!("\r\x1b[K{line}");
+        set_active_progress_line(Some(line));
+        let _ = io::stderr().flush();
+    }
+
+    /// Print a message to the terminal without interfering with the progress
+    /// bar.
+    ///
+    /// # Panics
+    /// Panics if the internal clock is invalid (e.g. `ImageMagick`'s internal
+    /// property interpretation).
+    pub fn println(&self, msg: &str) {
+        crate::progress_mode::emit_stderr(msg);
+    }
+
+    pub fn finish(&self, final_crf: f32, final_size: u64, final_ssim: Option<f64>) {
+        if self.is_finished.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let elapsed = self.start_time.elapsed();
+
+        let size_pct = if self.input_size > 0 {
+            ((crate::numeric_cast::u64_to_f64(final_size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0_f64)
+                * 100.0_f64
+        } else {
+            0.0_f64
+        };
+
+        let ssim_str = crate::media_conversion_gate::explore_progress_ssim_token(
+            final_ssim,
+            "coarse progress finish",
+        );
+
+        let icon = crate::modern_ui::symbols::ok_warn_icon(size_pct < 0.0_f64);
+        let iter = self.current_iteration.load(Ordering::Relaxed);
+
+        let bar_width: usize = progress_style::BAR_WIDTH;
+        let bar_fill = if crate::progress_mode::is_plain_mode() {
+            '#'
+        } else {
+            '█'
+        };
+        let bar: String = std::iter::repeat_n(bar_fill, bar_width).collect();
+        let color = "\x1b[32m";
+        let done_icon =
+            crate::media_conversion_gate::ui_icon_pick(crate::modern_ui::symbols::SUCCESS, "[OK]");
+        let clock = crate::media_conversion_gate::ui_icon_pick(
+            crate::modern_ui::symbols::CLOCK,
+            crate::modern_ui::symbols::plain::CLOCK,
+        );
+
+        // Visual progress bar (UX)
+        eprint!(
+            "\r\x1b[K{color}{prefix} {bar_left}{color}{bar}{color}▏ {done_icon} 100% • CRF \
+             {final_crf:.1} • {size_pct:+.1}% {icon} • {ssim} • {iter} iterations • {clock} \
+             {elapsed:.1}s\x1b[0m\n",
+            color = color,
+            prefix = self.prefix,
+            bar_left = progress_style::BAR_LEFT,
+            bar = bar,
+            done_icon = done_icon,
+            final_crf = final_crf,
+            size_pct = size_pct,
+            icon = icon,
+            ssim = ssim_str,
+            iter = iter,
+            clock = clock,
+            elapsed = elapsed.as_secs_f64()
+        );
+
+        // Structured audit log
+        let elapsed_secs = elapsed.as_secs_f64();
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_FINAL_REPORT,
+            format!(
+                "Optimization Audit: Finalized CRF={final_crf:.1}, size={size_pct:+.1}%, \
+                 SSIM={ssim_str}, iters={iter}, elapsed={elapsed_secs:.1}s"
+            )
+        );
+
+        eprint!("\x1b[?25h");
+        let _ = io::stderr().flush();
+    }
+
+    pub fn fail(&self, error: &str) {
+        if self.is_finished.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        crate::media_conversion_gate::delivery_progress_explore_failed(&self.prefix, error);
+
+        let err_icon = crate::media_conversion_gate::ui_icon_pick(
+            crate::modern_ui::symbols::ERROR,
+            crate::modern_ui::symbols::plain::ERROR,
+        );
+        eprint!("\r\x1b[K{err_icon} {} {}\n", self.prefix, error);
+        eprint!("\x1b[?25h");
+        let _ = io::stderr().flush();
+    }
+}
+
+impl Drop for DetailedCoarseProgressBar {
+    fn drop(&mut self) {
+        if !self.is_finished.load(Ordering::Relaxed) {
+            eprint!("\r\x1b[K");
+            eprint!("\x1b[?25h");
+            let _ = io::stderr().flush();
+        }
+    }
+}
+
+fn format_eta_simple(seconds: u64) -> String {
+    if seconds > 86400 {
+        return ">1d".to_string();
+    }
+    if seconds >= 3600 {
+        format!("{}h{}m", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{}m{}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+pub struct FixedBottom {
+    bar: ProgressBar,
+    start_time: Instant,
+    total: u64,
+    processed: AtomicU64,
+    succeeded: AtomicU64,
+    failed: AtomicU64,
+    skipped: AtomicU64,
+    input_bytes: AtomicU64,
+    output_bytes: AtomicU64,
+    current_file: Arc<Mutex<String>>,
+    current_stage: Arc<Mutex<String>>,
+}
+
+impl FixedBottom {
+    /// Create a new fixed-bottom progress bar for batch processing.
+    #[must_use]
+    pub fn new(total: u64, prefix: &str) -> Self {
+        let bar = ProgressBar::new(total);
+
+        bar.set_style(bar_progress_style(progress_style::BATCH_TEMPLATE, true));
+        bar.set_prefix(prefix.to_string());
+        bar.enable_steady_tick(Duration::from_millis(100)); // Lower frequency for better lock fairness
+
+        // UX: Lower refresh rate to 10Hz to reduce terminal/PTY lock contention.
+        // This ensures Ctrl+C handlers can grab the lock even during high-frequency
+        // updates.
+        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(10));
+
+        Self {
+            bar,
+            start_time: Instant::now(),
+            total,
+            processed: AtomicU64::new(0),
+            succeeded: AtomicU64::new(0),
+            failed: AtomicU64::new(0),
+            skipped: AtomicU64::new(0),
+            input_bytes: AtomicU64::new(0),
+            output_bytes: AtomicU64::new(0),
+            current_file: Arc::new(Mutex::new(String::new())),
+            current_stage: Arc::new(Mutex::new(String::new())),
+        }
+    }
+
+    pub fn set_current_file(&self, filename: &str) {
+        let mut current_file = crate::media_conversion_gate::mutex_guard_or_recover(
+            "batch_progress_current_file",
+            self.current_file.lock(),
+        );
+        *current_file = filename.to_string();
+        drop(current_file);
+        self.update_message();
+    }
+
+    pub fn set_stage(&self, stage: &str) {
+        let mut current_stage = crate::media_conversion_gate::mutex_guard_or_recover(
+            "batch_progress_stage",
+            self.current_stage.lock(),
+        );
+        *current_stage = stage.to_string();
+        drop(current_stage);
+        self.update_message();
+    }
+
+    fn update_message(&self) {
+        let file = crate::media_conversion_gate::delivery_progress_mutex_string_or_empty(
+            "progress_file_mutex_poisoned",
+            self.current_file.lock(),
+        );
+        let stage = crate::media_conversion_gate::delivery_progress_mutex_string_or_empty(
+            "progress_stage_mutex_poisoned",
+            self.current_stage.lock(),
+        );
+
+        let msg = if !stage.is_empty() && !file.is_empty() {
+            format!("{} | {}", stage, truncate_filename(&file, 40))
+        } else if !file.is_empty() {
+            truncate_filename(&file, 50)
+        } else if !stage.is_empty() {
+            stage
+        } else {
+            "Processing...".to_string()
+        };
+
+        self.bar.set_message(msg);
+    }
+
+    pub fn success(&self, input_size: u64, output_size: u64) {
+        self.processed.fetch_add(1, Ordering::Relaxed);
+        self.succeeded.fetch_add(1, Ordering::Relaxed);
+        self.input_bytes.fetch_add(input_size, Ordering::Relaxed);
+        self.output_bytes.fetch_add(output_size, Ordering::Relaxed);
+        self.bar.inc(1);
+    }
+
+    pub fn fail(&self) {
+        self.processed.fetch_add(1, Ordering::Relaxed);
+        self.failed.fetch_add(1, Ordering::Relaxed);
+        self.bar.inc(1);
+    }
+
+    pub fn skip(&self) {
+        self.processed.fetch_add(1, Ordering::Relaxed);
+        self.skipped.fetch_add(1, Ordering::Relaxed);
+        self.bar.inc(1);
+    }
+
+    pub fn stats(&self) -> Stats {
+        let input = self.input_bytes.load(Ordering::Relaxed);
+        let output = self.output_bytes.load(Ordering::Relaxed);
+        Stats {
+            total: self.total,
+            processed: self.processed.load(Ordering::Relaxed),
+            succeeded: self.succeeded.load(Ordering::Relaxed),
+            failed: self.failed.load(Ordering::Relaxed),
+            skipped: self.skipped.load(Ordering::Relaxed),
+            input_bytes: input,
+            output_bytes: output,
+            elapsed: self.start_time.elapsed(),
+            compression_ratio: if input > 0 {
+                crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input)
+            } else {
+                1.0
+            },
+        }
+    }
+
+    pub fn finish(&self) {
+        let stats = self.stats();
+        let saved = stats.input_bytes.saturating_sub(stats.output_bytes);
+
+        let msg = format!(
+            "{} succeeded, {} failed, {} skipped | Saved: {}",
+            stats.succeeded,
+            stats.failed,
+            stats.skipped,
+            format_bytes(saved)
+        );
+
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_SYSTEM,
+            &format!("Batch Complete: {msg}")
+        );
+
+        self.bar.finish_with_message(bar_status_msg(
+            crate::modern_ui::symbols::SUCCESS,
+            crate::modern_ui::symbols::plain::SUCCESS,
+            &msg,
+        ));
+    }
+
+    pub const fn bar(&self) -> &ProgressBar {
+        &self.bar
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Stats {
+    pub total: u64,
+    pub processed: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub skipped: u64,
+    pub input_bytes: u64,
+    pub output_bytes: u64,
+    pub elapsed: Duration,
+    pub compression_ratio: f64,
+}
+
+pub struct Explore {
+    start_time: Instant,
+    input_size: u64,
+    current_crf: Arc<Mutex<Option<f32>>>,
+    current_ssim: Arc<Mutex<Option<f64>>>,
+    current_size: Arc<Mutex<Option<u64>>>,
+    iterations: AtomicUsize,
+    stage: Arc<Mutex<String>>,
+    best_crf: Arc<Mutex<Option<f32>>>,
+    best_ssim: Arc<Mutex<Option<f64>>>,
+}
+
+impl Explore {
+    #[must_use]
+    pub fn new(input_size: u64) -> Self {
+        Self {
+            start_time: Instant::now(),
+            input_size,
+            current_crf: Arc::new(Mutex::new(None)),
+            current_ssim: Arc::new(Mutex::new(None)),
+            current_size: Arc::new(Mutex::new(None)),
+            iterations: AtomicUsize::new(0),
+            stage: Arc::new(Mutex::new("Initializing".to_string())),
+            best_crf: Arc::new(Mutex::new(None)),
+            best_ssim: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn update_crf(&self, crf: f32, size: u64, ssim: Option<f64>) {
+        {
+            let mut guard = crate::media_conversion_gate::mutex_guard_or_recover(
+                "explore_progress_current_crf_set",
+                self.current_crf.lock(),
+            );
+            *guard = Some(crf);
+        }
+        {
+            let mut guard = crate::media_conversion_gate::mutex_guard_or_recover(
+                "explore_progress_current_size_set",
+                self.current_size.lock(),
+            );
+            *guard = Some(size);
+        }
+        {
+            let mut guard = crate::media_conversion_gate::mutex_guard_or_recover(
+                "explore_progress_current_ssim_set",
+                self.current_ssim.lock(),
+            );
+            *guard = ssim;
+        }
+        self.iterations.fetch_add(1, Ordering::Relaxed);
+        self.print_status();
+    }
+
+    pub fn set_stage(&self, stage: &str) {
+        {
+            let mut guard = crate::media_conversion_gate::mutex_guard_or_recover(
+                "explore_progress_stage_set",
+                self.stage.lock(),
+            );
+            *guard = stage.to_string();
+        }
+        self.print_status();
+    }
+
+    pub fn update_best(&self, crf: f32, ssim: f64) {
+        {
+            let mut best_crf = crate::media_conversion_gate::mutex_guard_or_recover(
+                "explore_progress_best_crf",
+                self.best_crf.lock(),
+            );
+            *best_crf = Some(crf);
+        }
+        {
+            let mut best_ssim = crate::media_conversion_gate::mutex_guard_or_recover(
+                "explore_progress_best_ssim",
+                self.best_ssim.lock(),
+            );
+            *best_ssim = Some(ssim);
+        }
+    }
+
+    fn print_status(&self) {
+        let crf = crate::media_conversion_gate::progress_explore_crf_or_zero(
+            self.current_crf.lock(),
+            "explore progress current_crf",
+        );
+        let size = crate::media_conversion_gate::progress_explore_size_or_zero(
+            self.current_size.lock(),
+            "explore progress current_size",
+        );
+        let ssim = crate::media_conversion_gate::progress_explore_optional_f64_or_none(
+            self.current_ssim.lock(),
+            "explore progress current_ssim",
+        );
+        let stage = crate::media_conversion_gate::delivery_progress_mutex_string_or_empty(
+            "explore_status_stage_mutex_poisoned",
+            self.stage.lock(),
+        );
+        let iter = self.iterations.load(Ordering::Relaxed);
+        let best_crf = crate::media_conversion_gate::progress_explore_crf_or_zero(
+            self.best_crf.lock(),
+            "explore progress best_crf",
+        );
+        let best_ssim = crate::media_conversion_gate::progress_explore_ssim_or_zero(
+            self.best_ssim.lock(),
+            "explore progress best_ssim",
+        );
+        let crf_str = crate::media_conversion_gate::ui_f32_display_or_placeholder(
+            crf,
+            "---",
+            "explore progress CRF",
+        );
+        let best_crf_str = crate::media_conversion_gate::ui_f32_display_or_placeholder(
+            best_crf,
+            "---",
+            "explore progress best_crf",
+        );
+        let best_ssim_str = crate::media_conversion_gate::ui_f64_display_or_placeholder(
+            best_ssim,
+            "---",
+            "explore progress best_ssim",
+        );
+
+        let size_change = match (size, self.input_size > 0) {
+            (Some(size), true) => {
+                ((crate::numeric_cast::u64_to_f64(size)
+                    / crate::numeric_cast::u64_to_f64(self.input_size))
+                    - 1.0_f64)
+                    * 100.0_f64
+            }
+            _ => f64::NAN,
+        };
+        let size_change_str = if size_change.is_finite() {
+            format!("{size_change:+.1}%")
+        } else {
+            "---".to_string()
+        };
+
+        let elapsed = self.start_time.elapsed();
+        let ssim_str = crate::media_conversion_gate::ui_f64_display_or_placeholder(
+            ssim,
+            "---",
+            "explore progress SSIM",
+        );
+        let compress_icon = match size {
+            Some(size) => crate::modern_ui::symbols::ok_fail_icon(size < self.input_size),
+            None => crate::modern_ui::symbols::ok_fail_icon(false),
+        };
+        let search = crate::media_conversion_gate::ui_icon_pick(
+            crate::modern_ui::symbols::SEARCH,
+            crate::modern_ui::symbols::plain::SEARCH,
+        );
+        let clock = crate::media_conversion_gate::ui_icon_pick(
+            crate::modern_ui::symbols::CLOCK,
+            crate::modern_ui::symbols::plain::CLOCK,
+        );
+
+        let line = format!(
+            "{search} Explore: {stage} • CRF {crf_str} • SSIM {ssim_str} • Size {size_change_str} \
+             {compress_icon} • Iter {iter} • Best: CRF {best_crf_str} / SSIM {best_ssim_str} • \
+             {clock} {elapsed:.1}s",
+            elapsed = elapsed.as_secs_f64()
+        );
+
+        if crate::ctrlc_guard::is_prompt_active() {
+            return;
+        }
+
+        let _guard = crate::media_conversion_gate::delivery_terminal_lock_guard(
+            "progress_explore_stage_render",
+        );
+        set_active_progress_line(None);
+        eprint!("\r\x1b[K{line}");
+        set_active_progress_line(Some(line));
+        let _ = io::stderr().flush();
+    }
+
+    pub fn finish(&self, result_crf: f32, result_ssim: f64, result_size: u64) {
+        let size_change = if self.input_size > 0 {
+            ((crate::numeric_cast::u64_to_f64(result_size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0_f64)
+                * 100.0_f64
+        } else {
+            0.0_f64
+        };
+        let elapsed = self.start_time.elapsed();
+        let iter = self.iterations.load(Ordering::Relaxed);
+
+        let log_msg = format!(
+            "Explore Done: CRF {result_crf:.1} • SSIM {result_ssim:.4} • Size {size_change:+.1}% \
+             • {iter} iter in {elapsed:.1}s",
+            elapsed = elapsed.as_secs_f64()
+        );
+
+        crate::log_info!(crate::infra::static_logs::messages::LABEL_SYSTEM, &log_msg);
+
+        let _guard =
+            crate::media_conversion_gate::delivery_terminal_lock_guard("progress_explore_finish");
+        set_active_progress_line(None);
+        let _ = write!(io::stderr(), "\r\x1b[K");
+        crate::ui_stderr::line(
+            crate::modern_ui::symbols::SUCCESS,
+            crate::modern_ui::symbols::plain::SUCCESS,
+            log_msg,
+        );
+        let _ = io::stderr().flush();
+    }
+}
+
+pub struct ExploreLogger {
+    input_size: u64,
+    start_time: Instant,
+    iterations: usize,
+    best_crf: f32,
+    best_ssim: Option<f64>,
+    best_size: u64,
+    show_progress_bar: bool,
+}
+
+impl ExploreLogger {
+    #[must_use]
+    pub fn new(input_size: u64, show_progress_bar: bool) -> Self {
+        Self {
+            input_size,
+            start_time: Instant::now(),
+            iterations: 0,
+            best_crf: 0.0,
+            best_ssim: None,
+            best_size: 0,
+            show_progress_bar,
+        }
+    }
+
+    pub fn stage(&mut self, name: &str) {
+        if self.show_progress_bar {
+            crate::ui_stderr::line(
+                crate::modern_ui::symbols::DIAMOND,
+                crate::modern_ui::symbols::plain::BULLET,
+                format!("\n   {name}"),
+            );
+        }
+    }
+
+    pub fn test(&mut self, crf: f32, size: u64, ssim: Option<f64>) {
+        self.iterations += 1;
+        let size_change = self.calc_change(size);
+        let compress_ok = size < self.input_size;
+
+        if self.show_progress_bar {
+            let ssim_str = crate::media_conversion_gate::explore_progress_ssim_token(
+                ssim,
+                "video exploration progress bar",
+            );
+            let icon = crate::modern_ui::symbols::ok_fail_icon(compress_ok);
+            let spin = crate::media_conversion_gate::ui_icon_pick("🔄", "~");
+            let _ = write!(
+                io::stderr(),
+                "\r\x1b[K   {spin} CRF {crf:.1}: {size_change:+.1}% {icon} {ssim_str}"
+            );
+            let _ = io::stderr().flush();
+        }
+    }
+
+    pub fn new_best(&mut self, crf: f32, size: u64, ssim: f64) {
+        self.best_crf = crf;
+        self.best_size = size;
+        self.best_ssim = Some(ssim);
+
+        if self.show_progress_bar {
+            crate::ui_stderr::line(
+                " ← ",
+                " <- ",
+                format!(
+                    "{} New best!",
+                    crate::media_conversion_gate::ui_icon_pick(
+                        crate::modern_ui::symbols::TARGET,
+                        crate::modern_ui::symbols::plain::NEW_BEST
+                    )
+                ),
+            );
+        }
+    }
+
+    pub fn direction(&self, msg: &str) {
+        if self.show_progress_bar {
+            crate::progress_mode::emit_stderr(&format!("\r\x1b[K      {msg}"));
+        }
+    }
+
+    pub fn early_stop(&self, reason: &str) {
+        if self.show_progress_bar {
+            crate::ui_stderr::line(
+                crate::modern_ui::symbols::GPU,
+                crate::modern_ui::symbols::plain::GPU,
+                format!("\r   Early stop: {reason}"),
+            );
+        }
+    }
+
+    fn calc_change(&self, size: u64) -> f64 {
+        if self.input_size > 0 {
+            ((crate::numeric_cast::u64_to_f64(size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0)
+                * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    pub fn finish(&self) {
+        let elapsed = self.start_time.elapsed();
+        let size_change = self.calc_change(self.best_size);
+        let saved = self.input_size.saturating_sub(self.best_size);
+
+        let ssim_summary = crate::media_conversion_gate::explore_progress_ssim_token(
+            self.best_ssim,
+            "explore logger summary",
+        );
+        let log_msg = format!(
+            "Explore Summary: CRF {crf:.1} | {ssim_summary} | {change:+.1}% | Saved: {saved_str} \
+             | Iter: {iter}",
+            crf = self.best_crf,
+            change = size_change,
+            saved_str = format_bytes(saved),
+            iter = self.iterations
+        );
+
+        crate::log_info!(crate::infra::static_logs::messages::LABEL_SYSTEM, &log_msg);
+
+        if !self.show_progress_bar {
+            return;
+        }
+
+        crate::progress_mode::emit_stderr("\r\x1b[K");
+        let rule = if crate::progress_mode::is_plain_mode() {
+            "   ================================================"
+        } else {
+            "   ═══════════════════════════════════════════════════"
+        };
+        crate::progress_mode::emit_stderr(rule);
+        crate::ui_stderr::line(
+            crate::modern_ui::symbols::CHART,
+            crate::modern_ui::symbols::plain::CHART,
+            format!(
+                "   Result: CRF {:.1} | {} | {:+.1}%",
+                self.best_crf,
+                crate::media_conversion_gate::explore_progress_ssim_token(
+                    self.best_ssim,
+                    "explore logger result",
+                ),
+                size_change
+            ),
+        );
+        if saved > 0 {
+            crate::progress_mode::emit_stderr(&format!(
+                "   💾 Saved: {} ({:.2} MB)",
+                format_bytes(saved),
+                crate::numeric_cast::u64_to_f64(saved) / 1_024.0_f64 / 1_024.0_f64
+            ));
+        }
+        crate::progress_mode::emit_stderr(&format!(
+            "   📈 Iterations: {} | Time: {:.1}s",
+            self.iterations,
+            elapsed.as_secs_f64()
+        ));
+    }
+}
+
+/// Create a professional-looking spinner.
+#[must_use]
+pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+
+    if crate::progress_mode::is_quiet_mode() {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        pb.set_style(spinner_progress_style(progress_style::SPINNER_TEMPLATE));
+        pb.set_prefix(prefix.to_string());
+        pb.enable_steady_tick(Duration::from_millis(8));
+        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+    }
+    pb
+}
+
+/// Create a standard progress bar.
+#[must_use]
+pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
+    let pb = ProgressBar::new(total);
+
+    if crate::progress_mode::is_quiet_mode() {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        // Use a custom template that doesn't include elapsed time
+        // We'll handle time formatting in the progress updates
+        pb.set_style(bar_progress_style(EXPLORE_BAR_TEMPLATE, true));
+        pb.set_prefix(prefix.to_string());
+        pb.enable_steady_tick(Duration::from_millis(8));
+        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+    }
+    pb
+}
+
+/// Create a detailed progress bar for batch operations.
+#[must_use]
+pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
+    let pb = ProgressBar::new(total);
+
+    if crate::progress_mode::is_quiet_mode() {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        pb.set_style(bar_progress_style(progress_style::BATCH_TEMPLATE, true));
+        pb.set_prefix(prefix.to_string());
+        pb.enable_steady_tick(Duration::from_millis(8));
+        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+    }
+    pb
+}
+
+/// Create a compact progress bar.
+#[must_use]
+pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
+    let pb = ProgressBar::new(total);
+
+    if crate::progress_mode::is_quiet_mode() {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        pb.set_style(bar_progress_style(progress_style::COMPACT_TEMPLATE, false));
+        pb.set_prefix(prefix.to_string());
+        pb.enable_steady_tick(Duration::from_millis(8));
+        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+    }
+    pb
+}
+
+#[must_use]
+pub fn create_progress_bar_with_eta(total: u64, prefix: &str) -> SmartProgressBar {
+    SmartProgressBar::new(total, prefix)
+}
+
+pub struct SmartProgressBar {
+    bar: ProgressBar,
+    start_time: Instant,
+    total: u64,
+    processed: u64,
+    recent_times: Vec<f64>,
+    last_update: Instant,
+}
+
+impl SmartProgressBar {
+    /// Create a new `SmartProgressBar`.
+    #[must_use]
+    pub fn new(total: u64, prefix: &str) -> Self {
+        let bar = ProgressBar::new(total);
+
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            bar.set_style(bar_progress_style(progress_style::BATCH_TEMPLATE, true));
+            bar.set_prefix(prefix.to_string());
+            bar.enable_steady_tick(Duration::from_millis(8));
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+        }
+
+        Self {
+            bar,
+            start_time: Instant::now(),
+            total,
+            processed: 0,
+            recent_times: Vec::with_capacity(10),
+            last_update: Instant::now(),
+        }
+    }
+
+    pub fn inc(&mut self, message: &str) {
+        let elapsed = self.last_update.elapsed().as_secs_f64();
+        self.last_update = Instant::now();
+
+        if self.recent_times.len() >= 10 {
+            self.recent_times.remove(0);
+        }
+        self.recent_times.push(elapsed);
+
+        self.processed += 1;
+        self.bar.inc(1);
+
+        let remaining = self.total.saturating_sub(self.processed);
+        let eta = if !self.recent_times.is_empty() && remaining > 0 {
+            let avg_time: f64 = self.recent_times.iter().sum::<f64>()
+                / crate::numeric_cast::usize_to_f64(self.recent_times.len());
+            let eta_secs = avg_time * crate::numeric_cast::u64_to_f64(remaining);
+            format_eta(eta_secs)
+        } else {
+            "calculating...".to_string()
+        };
+
+        self.bar.set_message(format!("{eta} | {message}"));
+    }
+
+    pub fn finish(&self) {
+        let total_time = self.start_time.elapsed();
+        self.bar
+            .finish_with_message(format!("Done in {}", format_duration(total_time)));
+    }
+
+    #[must_use]
+    pub const fn bar(&self) -> &ProgressBar {
+        &self.bar
+    }
+}
+
+fn format_eta(seconds: f64) -> String {
+    if seconds.is_nan() || seconds.is_infinite() || seconds < 0.0_f64 {
+        return "unknown".to_string();
+    }
+
+    let Some(secs) = crate::numeric_cast::f64_to_u64_strict(seconds, "format_duration_secs") else {
+        return "unknown".to_string();
+    };
+
+    if secs > 86400 {
+        return ">24h".to_string();
+    }
+
+    if secs >= 3600 {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+/// Create a simple spinner with a message.
+#[must_use]
+pub fn create_spinner(message: &str) -> ProgressBar {
+    let spinner = ProgressBar::new_spinner();
+
+    if crate::progress_mode::is_quiet_mode() {
+        spinner.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        spinner.set_style(spinner_progress_style(SIMPLE_SPINNER_TEMPLATE));
+        spinner.set_message(message.to_string());
+        spinner.enable_steady_tick(Duration::from_millis(8));
+        spinner.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+    }
+    spinner
+}
+
+#[must_use]
+pub fn create_multi() -> MultiProgress {
+    MultiProgress::new()
+}
+
+pub struct Batch {
+    pub total: u64,
+    pub processed: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub skipped: u64,
+    bar: ProgressBar,
+}
+
+impl Batch {
+    #[must_use]
+    pub fn new(total: u64, prefix: &str) -> Self {
+        Self {
+            total,
+            processed: 0,
+            succeeded: 0,
+            failed: 0,
+            skipped: 0,
+            bar: create_progress_bar(total, prefix),
+        }
+    }
+
+    pub fn success(&mut self, message: &str) {
+        self.processed += 1;
+        self.succeeded += 1;
+        self.bar.set_message(bar_status_msg(
+            crate::modern_ui::symbols::SUCCESS,
+            crate::modern_ui::symbols::plain::SUCCESS,
+            message,
+        ));
+        self.bar.inc(1);
+    }
+
+    pub fn fail(&mut self, message: &str) {
+        self.processed += 1;
+        self.failed += 1;
+        self.bar.set_message(bar_status_msg(
+            crate::modern_ui::symbols::ERROR,
+            crate::modern_ui::symbols::plain::ERROR,
+            message,
+        ));
+        self.bar.inc(1);
+    }
+
+    pub fn skip(&mut self, message: &str) {
+        self.processed += 1;
+        self.skipped += 1;
+        self.bar.set_message(bar_status_msg(
+            crate::modern_ui::symbols::SKIP,
+            crate::modern_ui::symbols::plain::SKIP,
+            message,
+        ));
+        self.bar.inc(1);
+    }
+
+    pub fn finish(&self) {
+        let msg = format!(
+            "Complete: {} succeeded, {} failed, {} skipped",
+            self.succeeded, self.failed, self.skipped
+        );
+        crate::log_info!(crate::infra::static_logs::messages::LABEL_SYSTEM, &msg);
+        self.bar.finish_with_message(msg);
+    }
+
+    #[must_use]
+    pub const fn bar(&self) -> &ProgressBar {
+        &self.bar
+    }
+}
+
+fn truncate_filename(filename: &str, max_len: usize) -> String {
+    if max_len == 0 {
+        return String::new();
+    }
+    if measure_text_width(filename) <= max_len {
+        filename.to_string()
+    } else {
+        truncate_str(filename, max_len, "…").into_owned()
+    }
+}
+
+#[must_use]
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!(
+            "{:.2} GB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(GB)
+        )
+    } else if bytes >= MB {
+        format!(
+            "{:.2} MB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(MB)
+        )
+    } else if bytes >= KB {
+        format!(
+            "{:.2} KB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(KB)
+        )
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+#[must_use]
+pub fn format_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs >= 3600 {
+        format!("{}h {}m {}s", secs / 3600, (secs % 3600) / 60, secs % 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+pub struct GlobalProgressManager {
+    multi: MultiProgress,
+    main_bar: Option<ProgressBar>,
+    sub_bar: Option<ProgressBar>,
+}
+
+impl GlobalProgressManager {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            multi: MultiProgress::new(),
+            main_bar: None,
+            sub_bar: None,
+        }
+    }
+
+    /// Create the main progress bar.
+    pub fn create_main(&mut self, total: u64, prefix: &str) -> &ProgressBar {
+        let bar = self.multi.add(ProgressBar::new(total));
+
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            bar.set_style(bar_progress_style(progress_style::BATCH_TEMPLATE, true));
+            bar.set_prefix(prefix.to_string());
+            bar.enable_steady_tick(Duration::from_millis(8));
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+        }
+        self.main_bar.insert(bar)
+    }
+
+    /// Create a sub-spinner.
+    pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
+        let bar = self.multi.add(ProgressBar::new_spinner());
+
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            bar.set_style(spinner_progress_style(SUB_SPINNER_TEMPLATE));
+            bar.set_prefix(prefix.to_string());
+            bar.enable_steady_tick(Duration::from_millis(8));
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+        }
+        self.sub_bar.insert(bar)
+    }
+
+    pub fn inc_main(&self) {
+        if let Some(bar) = &self.main_bar {
+            bar.inc(1);
+        }
+    }
+
+    pub fn set_main_message(&self, msg: &str) {
+        if let Some(bar) = &self.main_bar {
+            bar.set_message(msg.to_string());
+        }
+    }
+
+    pub fn set_sub_message(&self, msg: &str) {
+        if let Some(bar) = &self.sub_bar {
+            bar.set_message(msg.to_string());
+        }
+    }
+
+    pub fn finish_all(&self, summary: &str) {
+        if let Some(bar) = &self.sub_bar {
+            bar.finish_and_clear();
+        }
+        if let Some(bar) = &self.main_bar {
+            bar.finish_with_message(summary.to_string());
+        }
+    }
+}
+
+impl Default for GlobalProgressManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use console::measure_text_width;
+
+    #[test]
+    fn photos_operation_progress_counts_unique_checkpointed_pending_assets() -> anyhow::Result<()> {
+        let mut progress = PhotosImportProgress::new(["first", "second"])?;
+        let initial = serde_json::to_value(progress.event()?)?;
+        assert_eq!(initial["scope"], "current_pending_import");
+        assert_eq!(initial["phase"], "target_preparation");
+        assert_eq!(initial["sequence"], 1);
+        assert_eq!(initial["pending_total"], 2);
+        assert_eq!(initial["verified"], 0);
+        progress.phase(PhotosImportPhase::Reconciling)?;
+        progress.checkpointed(["first"])?;
+        assert_eq!(progress.event()?.verified, 1);
+        for invalid in [
+            vec!["first"],
+            vec!["second", "second"],
+            vec!["second", "unknown"],
+        ] {
+            assert!(progress.checkpointed(invalid).is_err());
+            assert_eq!(progress.event()?.verified, 1);
+        }
+        assert!(progress.complete().is_err());
+        progress.phase(PhotosImportPhase::Importing)?;
+        progress.phase(PhotosImportPhase::Verifying)?;
+        progress.checkpointed(["second"])?;
+        progress.complete()?;
+        let final_event = serde_json::to_value(progress.event()?)?;
+        assert_eq!(final_event["phase"], "completed");
+        assert_eq!(final_event["verified"], 2);
+        assert_eq!(final_event["pending_total"], 2);
+        assert!(final_event["sequence"].as_u64().unwrap() > 1);
+        assert!(progress.phase(PhotosImportPhase::Importing).is_err());
+        assert!(progress.checkpointed(["first"]).is_err());
+        assert!(PhotosImportProgress::new(["same", "same"]).is_err());
+        let mut empty = PhotosImportProgress::new([])?;
+        empty.complete()?;
+        assert_eq!(empty.event()?.verified, 0);
+        assert_eq!(empty.event()?.pending_total, 0);
+        assert_ne!(empty.operation_id, progress.operation_id);
+        let mut output = Vec::new();
+        write_marker(
+            &mut output,
+            "MFB_PHOTOS_PROGRESS",
+            &serde_json::to_vec(&empty.event()?)?,
+        )?;
+        assert!(output.starts_with(b"\nMFB_PHOTOS_PROGRESS="));
+        assert!(output.ends_with(b"\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn log_phase_marker_has_versioned_snake_case_schema_and_shared_framing() {
+        for (phase, expected) in [
+            (LogPhase::Processing, "processing"),
+            (LogPhase::Verification, "verification"),
+        ] {
+            let json = serde_json::to_vec(&LogPhaseEvent {
+                schema_version: 1,
+                phase,
+            })
+            .expect("serialize log phase event");
+            assert_eq!(
+                json,
+                format!("{{\"schema_version\":1,\"phase\":\"{expected}\"}}").as_bytes()
+            );
+
+            let mut output = Vec::new();
+            write_marker(&mut output, "MFB_LOG_PHASE", &json).expect("write log phase marker");
+            assert_eq!(
+                output,
+                format!("\nMFB_LOG_PHASE={{\"schema_version\":1,\"phase\":\"{expected}\"}}\n")
+                    .as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn local_gate_activity_marker_has_explicit_check_counts_and_terminal_state() {
+        for (check, completed, state, expected) in [
+            ("inventory", 0, GateActivityState::Running, "running"),
+            ("count", 1, GateActivityState::Failed, "failed"),
+            (
+                "metadata",
+                4,
+                GateActivityState::FileFailures,
+                "file_failures",
+            ),
+            (
+                "decode",
+                6,
+                GateActivityState::FileFailures,
+                "file_failures",
+            ),
+            ("decode", 6, GateActivityState::Passed, "passed"),
+        ] {
+            let json = serde_json::to_vec(&GateActivityEvent {
+                schema_version: 1,
+                stage_id: "123-4",
+                gate: GateActivityKind::Local,
+                check,
+                completed,
+                total: 6,
+                state,
+                file_progress: None,
+            })
+            .expect("serialize gate activity");
+            let expected_json = format!(
+                "{{\"schema_version\":1,\"stage_id\":\"123-4\",\"gate\":\"local\",\"check\":\"{check}\",\"completed\":{completed},\"total\":6,\"state\":\"{expected}\"}}"
+            );
+            assert_eq!(json, expected_json.as_bytes());
+            let mut output = Vec::new();
+            write_marker(&mut output, "MFB_GATE_ACTIVITY", &json).expect("write gate activity");
+            assert_eq!(
+                output,
+                format!("\nMFB_GATE_ACTIVITY={expected_json}\n").as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn local_gate_activity_is_session_scoped_with_independent_concurrent_ids() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let _disabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "");
+        let disabled = GateActivity::new(GateActivityKind::Local);
+        assert!(disabled.stage_id.is_none());
+        disabled.emit("inventory", 0, 6, GateActivityState::Running, None);
+
+        let _enabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "synthetic-gate");
+        let reporters: [_; 16] = std::array::from_fn(|_| {
+            std::thread::spawn(|| GateActivity::new(GateActivityKind::Local).stage_id.unwrap())
+        });
+        let ids: std::collections::BTreeSet<_> = reporters
+            .into_iter()
+            .map(|thread| thread.join().expect("gate reporter thread"))
+            .collect();
+        assert_eq!(ids.len(), 16);
+        let prefix = format!("{}-", std::process::id());
+        assert!(ids.iter().all(|id| id.starts_with(&prefix)));
+        let custody = GateActivity::new(GateActivityKind::PhotosCustody);
+        assert!(!ids.contains(custody.stage_id.as_ref().unwrap()));
+        let event = serde_json::to_value(GateActivityEvent {
+            schema_version: 1,
+            stage_id: custody.stage_id.as_ref().unwrap(),
+            gate: custody.gate,
+            check: "original_bytes",
+            completed: 1,
+            total: 1,
+            state: GateActivityState::Failed,
+            file_progress: Some(GateFileProgress {
+                processed: 1,
+                total: 3,
+            }),
+        })
+        .unwrap();
+        assert_eq!(event["gate"], "photos_custody");
+        assert_eq!(event["state"], "failed");
+        assert_eq!(event["file_progress"]["processed"], 1);
+    }
+
+    #[test]
+    fn shared_marker_writer_returns_io_errors() {
+        struct FailingWriter {
+            fail_write: bool,
+            fail_flush: bool,
+        }
+
+        impl Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                if self.fail_write {
+                    Err(io::Error::other("write failed"))
+                } else {
+                    Ok(1)
+                }
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                if self.fail_flush {
+                    Err(io::Error::other("flush failed"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        for (mut writer, expected) in [
+            (
+                FailingWriter {
+                    fail_write: true,
+                    fail_flush: false,
+                },
+                "write failed",
+            ),
+            (
+                FailingWriter {
+                    fail_write: false,
+                    fail_flush: true,
+                },
+                "flush failed",
+            ),
+        ] {
+            for marker in ["MFB_LOG_PHASE", "MFB_GATE_ACTIVITY"] {
+                let error = write_marker(&mut writer, marker, b"{}").unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::Other);
+                assert_eq!(error.to_string(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn coarse_file_count_preserves_max_after_out_of_order_updates() {
+        let bar = CoarseProgressBar::new(10, "test");
+        bar.set(7);
+        bar.set(3);
+        bar.set_message("updated label");
+        assert_eq!(bar.current.load(Ordering::Relaxed), 7);
+        bar.finish_and_clear();
+    }
+
+    #[test]
+    fn file_stage_updates_are_monotonic_throttled_and_finish_at_actual_count() {
+        let start = Instant::now();
+        let mut state = FileProgressState {
+            processed: 0,
+            total: 10,
+            finished: false,
+            last_emit: start,
+        };
+        assert!(!state.update(4, false, start + Duration::from_millis(100)));
+        assert_eq!(state.processed, 4);
+        assert!(state.update(2, false, start + Duration::from_millis(250)));
+        assert_eq!(state.processed, 4);
+        assert!(!state.update(11, false, start + Duration::from_millis(500)));
+        assert_eq!(state.processed, 4);
+        assert!(state.update(4, true, start + Duration::from_millis(251)));
+        assert_eq!(state.processed, 4);
+        assert!(state.finished);
+        assert!(!state.update(10, true, start + Duration::from_secs(1)));
+        assert_eq!(state.processed, 4);
+    }
+
+    #[test]
+    fn file_stage_event_has_explicit_schema_without_paths_or_success_claims() {
+        for (stage, expected) in [
+            (FileProgressStage::ImageProcessing, "image_processing"),
+            (FileProgressStage::VideoProcessing, "video_processing"),
+            (FileProgressStage::FastImgEncode, "fast_img_encode"),
+            (
+                FileProgressStage::ModernSourceInspection,
+                "modern_source_inspection",
+            ),
+            (
+                FileProgressStage::FastImgSourcePreparation,
+                "fast_img_source_preparation",
+            ),
+            (
+                FileProgressStage::FastImgSourceHashing,
+                "fast_img_source_hashing",
+            ),
+        ] {
+            let json = serde_json::to_value(FileProgressEvent {
+                schema_version: 1,
+                stage_id: "42-3",
+                stage,
+                processed: 2,
+                total: 7,
+                state: "finished",
+            })
+            .expect("serialize file progress event");
+            assert_eq!(
+                json,
+                serde_json::json!({
+                    "schema_version": 1, "stage_id": "42-3", "stage": expected,
+                    "processed": 2, "total": 7, "state": "finished",
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(500), "500 B");
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1536), "1.50 KB");
+        assert_eq!(format_bytes(1_048_576), "1.00 MB");
+    }
+
+    #[test]
+    fn test_format_duration() {
+        assert_eq!(format_duration(Duration::from_secs(30)), "30s");
+        assert_eq!(format_duration(Duration::from_secs(90)), "1m 30s");
+        assert_eq!(format_duration(Duration::from_secs(3661)), "1h 1m 1s");
+    }
+
+    #[test]
+    fn test_truncate_filename() {
+        assert_eq!(truncate_filename("short.txt", 20), "short.txt");
+        let truncated = truncate_filename("very_long_filename_that_needs_truncation.txt", 20);
+        assert!(measure_text_width(&truncated) <= 20);
+        assert!(truncated.contains('…'));
+    }
+
+    #[test]
+    fn test_build_coarse_progress_line_fits_narrow_terminal() {
+        let stats = crate::progress_mode::get_current_stats_string();
+        let line = build_coarse_progress_line(
+            "Running",
+            42.5,
+            17,
+            40,
+            Duration::from_secs(95),
+            "2m10s",
+            "a_very_long_filename_that_should_be_trimmed_for_narrow_windows.jpeg",
+            &stats,
+            72,
+        );
+        assert!(
+            measure_text_width(&line) <= 71,
+            "line width {} exceeds terminal budget",
+            measure_text_width(&line)
+        );
+    }
+}

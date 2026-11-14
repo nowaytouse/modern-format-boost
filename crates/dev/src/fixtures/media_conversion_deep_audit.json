@@ -1,0 +1,21 @@
+{
+  "allowlist": {
+    "total": 0,
+    "live": 0,
+    "stale": 0
+  },
+  "numeric_forgery_scan": {
+    "hits_total": 0,
+    "unallowlisted": 0,
+    "unallowlisted_samples": []
+  },
+  "extended_scan": {
+    "map_or_high_improvement": 0,
+    "unwrap_or_else_estimate": 0,
+    "mutex_poison_inline": 0,
+    "temp_dir_inline": 0
+  },
+  "extended_samples": {},
+  "stale_allowlist": [],
+  "live_allowlist": []
+}

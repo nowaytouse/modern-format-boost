@@ -1,0 +1,2038 @@
+//! Modern Format Boost - Workspace Auditor in Rust.
+//! Checks code formatting, Cargo.toml validity, changelog versions, and runs
+//! tests. `--fix` is a local, formatter-only mode and exits before audits;
+//! `--ci` and `--collect-all` retain independent failures and report them once.
+
+use anyhow::{Context, Result, bail};
+use clap::{Parser, ValueEnum};
+use dev::infra::hardening::read_text_file;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
+
+#[path = "check_all/diagnostics.rs"]
+mod diagnostics;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum CheckGroup {
+    #[default]
+    All,
+    Format,
+    Compile,
+    Clippy,
+    Tests,
+    Audit,
+    Coverage,
+}
+
+impl CheckGroup {
+    fn includes(self, group: Self) -> bool {
+        self == Self::All || self == group
+    }
+}
+
+const NIGHTLY_COMPONENTS: [&str; 5] = ["clippy", "rustfmt", "miri", "rust-src", "llvm-tools"];
+const FUZZ_SMOKE_ENGINE_ARGS: [&str; 3] = ["-runs=1", "-max_total_time=5", "-timeout=5"];
+static COLLECT_FAILURES: AtomicBool = AtomicBool::new(false);
+static RECORDED_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum PackageScope {
+    Workspace,
+    Img,
+    Vid,
+}
+
+impl PackageScope {
+    const fn package_name(self) -> Option<&'static str> {
+        match self {
+            Self::Workspace => None,
+            Self::Img => Some("img"),
+            Self::Vid => Some("vid"),
+        }
+    }
+}
+
+#[derive(Parser, Debug)]
+#[command(name = "check_all", about = "MFB Multi-Language Auditor")]
+struct Args {
+    /// Run one independent group; all retains the complete aggregate audit.
+    #[arg(long, value_enum, default_value_t = CheckGroup::All, conflicts_with = "fix")]
+    group: CheckGroup,
+    #[arg(long = "allow-non-nightly", help = "Don't enforce branch check")]
+    allow_non_nightly: bool,
+
+    #[arg(long = "required-only", help = "Skip optional checks")]
+    required_only: bool,
+
+    #[arg(long = "no-expensive", help = "Skip slow checks")]
+    no_expensive: bool,
+
+    #[arg(
+        long = "package",
+        value_enum,
+        default_value_t = PackageScope::Workspace,
+        help = "Limit Rust compilation, lint, docs, and tests to one package (local profile)"
+    )]
+    package: PackageScope,
+
+    #[arg(
+        long = "fix",
+        help = "Format all tracked workspace files, then exit without checks or audits"
+    )]
+    fix: bool,
+
+    #[arg(long = "build", help = "Run full release build")]
+    build: bool,
+
+    #[arg(long = "ai-smell", help = "Run AI smell detection")]
+    ai_smell: bool,
+
+    #[arg(long = "miri", help = "Run library tests under Miri")]
+    miri: bool,
+
+    #[arg(long = "sanitizers", help = "Run library tests with AddressSanitizer")]
+    sanitizers: bool,
+
+    #[arg(long = "mutants", help = "Run cargo-mutants")]
+    mutants: bool,
+
+    #[arg(long = "fuzz-list", help = "Discover and list fuzz targets")]
+    fuzz_list: bool,
+
+    #[arg(long = "fuzz-smoke", help = "Run each fuzz target briefly")]
+    fuzz_smoke: bool,
+
+    #[arg(long = "install-nightly", help = "Install/update nightly toolchain")]
+    install_nightly: bool,
+
+    #[arg(long = "branch", default_value_t = default_branch(), help = "Required branch name")]
+    branch: String,
+
+    #[arg(long = "verbose", short = 'v', help = "Show tool install hints")]
+    verbose: bool,
+
+    #[arg(
+        long = "ci",
+        help = "GitHub Actions health-check profile; records all reachable failures before exiting"
+    )]
+    ci: bool,
+
+    #[arg(
+        long = "collect-all",
+        help = "Record failures, continue with independent checks, then fail once with a summary"
+    )]
+    collect_all: bool,
+}
+
+fn recorded_failures() -> MutexGuard<'static, Vec<String>> {
+    match RECORDED_FAILURES.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn record_failure(message: impl Into<String>) {
+    let message = message.into();
+    eprintln!("FAIL: {message}");
+    if COLLECT_FAILURES.load(Ordering::Relaxed) {
+        recorded_failures().push(message);
+    } else {
+        std::process::exit(1);
+    }
+}
+
+fn finish_recorded_failures() -> Result<()> {
+    let failures = recorded_failures();
+    if failures.is_empty() {
+        return Ok(());
+    }
+    eprintln!("\nCHECK SUMMARY: {} failure(s)", failures.len());
+    for (index, failure) in failures.iter().enumerate() {
+        eprintln!("  {}. {failure}", index + 1);
+    }
+    bail!(
+        "{} check(s) failed; complete diagnostics are available above",
+        failures.len()
+    )
+}
+
+fn default_branch() -> String {
+    std::env::var("CHECK_ALL_DEFAULT_BRANCH").unwrap_or_else(|_| "nightly".to_string())
+}
+
+fn command_exists(cmd: &str) -> bool {
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for path in std::env::split_paths(&path_var) {
+            if path.join(cmd).is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn bootstrap_macos_path_with(
+    platform_is_macos: bool,
+    current_path: &str,
+    existing_dirs: impl Fn(&str) -> bool,
+) -> Option<String> {
+    if !platform_is_macos {
+        return None;
+    }
+    let mut path_parts: Vec<String> = std::env::split_paths(std::ffi::OsStr::new(current_path))
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let mut changed = false;
+    for extra in [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+    ] {
+        if existing_dirs(extra) && !path_parts.iter().any(|part| part == extra) {
+            path_parts.insert(0, extra.to_string());
+            changed = true;
+        }
+    }
+    changed.then(|| path_parts.join(":"))
+}
+
+fn bootstrap_macos_path() {
+    let current = std::env::var("PATH").unwrap_or_default();
+    if let Some(updated) = bootstrap_macos_path_with(cfg!(target_os = "macos"), &current, |path| {
+        Path::new(path).is_dir()
+    }) {
+        unsafe {
+            std::env::set_var("PATH", updated);
+        }
+    }
+}
+
+fn cargo_subcommand_exists(sub: &str) -> bool {
+    match Command::new("cargo").args([sub, "--version"]).output() {
+        Ok(out) => out.status.success(),
+        Err(err) => {
+            eprintln!("[CHECK] cargo {sub} probe failed: {err}");
+            false
+        }
+    }
+}
+
+fn taplo_fmt_command_with_availability(
+    files: &[String],
+    args: &[&str],
+    has_cargo_taplo: bool,
+    has_taplo: bool,
+) -> Option<Vec<String>> {
+    if files.is_empty() {
+        return None;
+    }
+
+    let mut cmd = if has_cargo_taplo {
+        vec!["cargo".to_string(), "taplo".to_string(), "fmt".to_string()]
+    } else if has_taplo {
+        vec!["taplo".to_string(), "fmt".to_string()]
+    } else {
+        return None;
+    };
+    cmd.extend(args.iter().map(|arg| (*arg).to_string()));
+    cmd.extend(files.iter().cloned());
+    Some(cmd)
+}
+
+fn taplo_fmt_command(files: &[String], args: &[&str]) -> Option<Vec<String>> {
+    taplo_fmt_command_with_availability(
+        files,
+        args,
+        cargo_subcommand_exists("taplo"),
+        command_exists("taplo"),
+    )
+}
+
+fn get_project_root() -> Result<PathBuf> {
+    let exe_path = std::env::current_exe().context("get current exe path")?;
+    let mut dir = exe_path.parent();
+    while let Some(d) = dir {
+        if d.join("Cargo.toml").is_file() && d.join("crates").is_dir() {
+            return Ok(d.to_path_buf());
+        }
+        dir = d.parent();
+    }
+    let cwd = std::env::current_dir().context("get current dir")?;
+    Ok(cwd)
+}
+
+fn parse_rust_toolchain_channel_toml(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let rest = trimmed.strip_prefix("channel")?.trim_start();
+        let value = rest.strip_prefix('=')?.trim();
+        let quoted = value.strip_prefix('"')?;
+        let end = quoted.find('"')?;
+        Some(quoted[..end].to_string())
+    })
+}
+
+fn rust_toolchain_channel_for_probe(repo_root: &Path) -> String {
+    let toml_path = repo_root.join("rust-toolchain.toml");
+    if toml_path.is_file()
+        && let Some(content) = read_text_file(&toml_path)
+        && let Some(channel) = parse_rust_toolchain_channel_toml(&content)
+    {
+        return channel;
+    }
+    match Command::new("rustup")
+        .args(["show", "active-toolchain"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(first) = text
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().next())
+                && !first.is_empty()
+            {
+                return first.to_string();
+            }
+        }
+        Ok(out) => eprintln!(
+            "[CHECK] rustup show active-toolchain failed with status {:?}",
+            out.status.code()
+        ),
+        Err(err) => eprintln!("[CHECK] rustup probe failed: {err}"),
+    }
+    "nightly".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NightlyComponents {
+    toolchain: bool,
+    clippy: bool,
+    rustfmt: bool,
+    miri: bool,
+    rust_src: bool,
+    llvm_tools: bool,
+}
+
+impl NightlyComponents {
+    fn missing_components(&self) -> Vec<&'static str> {
+        [
+            ("clippy", self.clippy),
+            ("rustfmt", self.rustfmt),
+            ("miri", self.miri),
+            ("rust-src", self.rust_src),
+            ("llvm-tools", self.llvm_tools),
+        ]
+        .into_iter()
+        .filter_map(|(name, present)| (!present).then_some(name))
+        .collect()
+    }
+
+    fn status_line(&self) -> String {
+        format!(
+            "toolchain:{} clippy:{} rustfmt:{} miri:{} rust-src:{} llvm-tools:{}",
+            if self.toolchain { "OK" } else { "MISSING" },
+            if self.clippy { "+" } else { "-" },
+            if self.rustfmt { "+" } else { "-" },
+            if self.miri { "+" } else { "-" },
+            if self.rust_src { "+" } else { "-" },
+            if self.llvm_tools { "+" } else { "-" }
+        )
+    }
+
+    fn install_hint(&self) -> String {
+        let missing = self.missing_components();
+        if missing.is_empty() {
+            return String::new();
+        }
+        let components = missing
+            .iter()
+            .map(|component| format!("--component {component}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("rustup toolchain install nightly {components}")
+    }
+}
+
+fn parse_installed_rustup_components(stdout: &str) -> NightlyComponents {
+    let has_component = |needle: &str| {
+        stdout
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .any(|component| component == needle || component.starts_with(&format!("{needle}-")))
+    };
+    NightlyComponents {
+        toolchain: true,
+        clippy: has_component("clippy"),
+        rustfmt: has_component("rustfmt"),
+        miri: has_component("miri"),
+        rust_src: has_component("rust-src"),
+        llvm_tools: has_component("llvm-tools"),
+    }
+}
+
+fn probe_nightly(repo_root: &Path) -> NightlyComponents {
+    let mut nc = NightlyComponents {
+        toolchain: false,
+        clippy: false,
+        rustfmt: false,
+        miri: false,
+        rust_src: false,
+        llvm_tools: false,
+    };
+    if !command_exists("rustup") {
+        return nc;
+    }
+    let channel = rust_toolchain_channel_for_probe(repo_root);
+    let Ok(rustc) = Command::new("rustup")
+        .args(["run", channel.as_str(), "rustc", "--version"])
+        .output()
+    else {
+        return nc;
+    };
+    if !rustc.status.success() {
+        return nc;
+    }
+    nc.toolchain = true;
+    let Ok(components) = Command::new("rustup")
+        .args([
+            "component",
+            "list",
+            "--installed",
+            "--toolchain",
+            channel.as_str(),
+        ])
+        .output()
+    else {
+        return nc;
+    };
+    if !components.status.success() {
+        return nc;
+    }
+    parse_installed_rustup_components(&String::from_utf8_lossy(&components.stdout))
+}
+
+fn install_nightly_command(components: &[&str]) -> Vec<String> {
+    let mut cmd = vec![
+        "rustup".to_string(),
+        "toolchain".to_string(),
+        "install".to_string(),
+        "nightly".to_string(),
+    ];
+    for component in components {
+        cmd.push("--component".to_string());
+        cmd.push((*component).to_string());
+    }
+    cmd
+}
+
+fn install_nightly() -> Result<bool> {
+    if !command_exists("rustup") {
+        println!("  FAIL: rustup not found; cannot install nightly");
+        return Ok(false);
+    }
+    let cmd = install_nightly_command(&NIGHTLY_COMPONENTS);
+    println!("  Running: {}", cmd.join(" "));
+    let Some((program, args)) = cmd.split_first() else {
+        return Ok(false);
+    };
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .context("run rustup toolchain install nightly")?;
+    Ok(status.success())
+}
+
+#[allow(dead_code)]
+fn parse_plist_string_key(content: &str, key: &str) -> Option<String> {
+    let key_tag = format!("<key>{key}</key>");
+    let idx = content.find(&key_tag)?;
+    let after_key = content[idx + key_tag.len()..].split("<key>").next()?;
+    let string_start = after_key.find("<string>")?;
+    let string_end = after_key.find("</string>")?;
+    if string_end > string_start + 8 {
+        Some(after_key[string_start + 8..string_end].trim().to_string())
+    } else {
+        None
+    }
+}
+
+fn plist_version_errors(content: &str, expected: &str, label: &str) -> Vec<String> {
+    ["CFBundleShortVersionString", "CFBundleVersion"]
+        .into_iter()
+        .filter_map(|key| match parse_plist_string_key(content, key) {
+            Some(value) if value == expected => None,
+            Some(value) => Some(format!("{label} {key}: expected {expected}, got {value}")),
+            None => Some(format!("{label} {key}: missing string value")),
+        })
+        .collect()
+}
+
+fn verify_normalize_stale_embed_measurement_slots(repo_root: &std::path::Path) -> Result<()> {
+    let normalize_bin = repo_root
+        .join("crates")
+        .join("dev")
+        .join("src")
+        .join("bin")
+        .join("normalize_stale_embed_measurement_slots.rs");
+    if !normalize_bin.is_file() {
+        println!("  Skipped: normalize_stale_embed_measurement_slots.rs (missing DB backfill bin)");
+        return Ok(());
+    }
+
+    let text = fs::read_to_string(&normalize_bin)
+        .with_context(|| format!("read {}", normalize_bin.display()))?;
+    if text.contains("EMBED_SLOT_INDICES") && text.contains("PGVECTOR_MISSING_MEASUREMENT") {
+        println!("  OK: normalize_stale_embed_measurement_slots.rs DB sentinel markers present");
+    } else {
+        println!("  Skipped: normalize_stale_embed_measurement_slots.rs (incomplete SSOT markers)");
+    }
+    Ok(())
+}
+
+fn run_required_vec_env(
+    repo_root: &Path,
+    label: &str,
+    program: &str,
+    args: &[String],
+    env_vars: &[(&str, &str)],
+) -> Result<()> {
+    println!("{label}...");
+    let mut command = Command::new(program);
+    command.args(args).current_dir(repo_root);
+    for (key, value) in env_vars {
+        command.env(key, value);
+    }
+    let status = match diagnostics::status(label, &mut command) {
+        Ok(status) => status,
+        Err(error) => {
+            record_failure(format!(
+                "{label} could not start {program} {}: {error}",
+                args.join(" ")
+            ));
+            return Ok(());
+        }
+    };
+    if !status.success() {
+        record_failure(format!("{label} failed with status {status}"));
+        return Ok(());
+    }
+    println!("  OK: {label}");
+    Ok(())
+}
+
+fn run_required_vec(repo_root: &Path, label: &str, program: &str, args: &[String]) -> Result<()> {
+    run_required_vec_env(repo_root, label, program, args, &[])
+}
+
+fn run_required(repo_root: &Path, label: &str, program: &str, args: &[&str]) -> Result<()> {
+    let owned = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    run_required_vec(repo_root, label, program, &owned)
+}
+
+fn run_optional_vec_env(
+    repo_root: &Path,
+    label: &str,
+    program: &str,
+    args: &[String],
+    env_vars: &[(&str, &str)],
+    hard_fail: bool,
+) -> Result<()> {
+    println!("{label}...");
+    let mut command = Command::new(program);
+    command.args(args).current_dir(repo_root);
+    for (key, value) in env_vars {
+        command.env(key, value);
+    }
+    let status = match diagnostics::status(label, &mut command) {
+        Ok(status) => status,
+        Err(error) => {
+            if hard_fail {
+                record_failure(format!(
+                    "{label} could not start {program} {}: {error}",
+                    args.join(" ")
+                ));
+            } else {
+                println!(
+                    "  Warning: {label} could not start {program} {}: {error}",
+                    args.join(" ")
+                );
+            }
+            return Ok(());
+        }
+    };
+    if status.success() {
+        println!("  OK: {label}");
+        return Ok(());
+    }
+    if hard_fail {
+        record_failure(format!("{label} failed with status {status}"));
+        return Ok(());
+    }
+    println!("  Warning: {label} failed with status {status}");
+    Ok(())
+}
+
+fn run_optional_vec(
+    repo_root: &Path,
+    label: &str,
+    program: &str,
+    args: &[String],
+    hard_fail: bool,
+) -> Result<()> {
+    run_optional_vec_env(repo_root, label, program, args, &[], hard_fail)
+}
+
+fn run_optional(
+    repo_root: &Path,
+    label: &str,
+    program: &str,
+    args: &[&str],
+    hard_fail: bool,
+) -> Result<()> {
+    let owned = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    run_optional_vec(repo_root, label, program, &owned, hard_fail)
+}
+
+fn git_tracked_existing_files(repo_root: &Path) -> Vec<String> {
+    let Ok(output) = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(repo_root)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|file| !file.is_empty())
+        .filter(|file| repo_root.join(file).is_file())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn files_with_suffixes(files: &[String], suffixes: &[&str]) -> Vec<String> {
+    files
+        .iter()
+        .filter(|file| suffixes.iter().any(|suffix| file.ends_with(suffix)))
+        .cloned()
+        .collect()
+}
+
+fn run_python_syntax_check(repo_root: &Path, py_files: &[String]) -> Result<()> {
+    if py_files.is_empty() {
+        println!("  Skipped: python syntax (no scripts)");
+        return Ok(());
+    }
+    let python = if command_exists("python3") {
+        "python3"
+    } else {
+        "python"
+    };
+    let mut args = vec!["-m".to_string(), "py_compile".to_string()];
+    args.extend(py_files.iter().cloned());
+    run_required_vec(
+        repo_root,
+        &format!("python3 syntax ({} files)", py_files.len()),
+        python,
+        &args,
+    )
+}
+
+fn check_bundle_metadata(repo_root: &Path, version: &str, hard_fail: bool) -> Result<()> {
+    let source = fs::read_to_string(repo_root.join("crates/gui/src-macos/Info.plist"))
+        .context("read source Info.plist")?;
+    let helper_source =
+        fs::read_to_string(repo_root.join("crates/gui/src-macos/PhotosImportHelper-Info.plist"))
+            .context("read source PhotosImportHelper-Info.plist")?;
+    let mut source_errors = plist_version_errors(&source, "$(MFB_VERSION)", "source app plist");
+    source_errors.extend(plist_version_errors(
+        &helper_source,
+        "$(MFB_VERSION)",
+        "source Photos helper plist",
+    ));
+    if !source_errors.is_empty() {
+        bail!("Bundle version template: {}", source_errors.join("; "));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (repo_root, version, hard_fail);
+        println!("  Skipped: assembled macOS App bundle metadata (non-macOS platform)");
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        println!("Checking macOS App bundle metadata...");
+        let plist_path = repo_root
+            .join("Modern Format Boost.app")
+            .join("Contents")
+            .join("Info.plist");
+        if !plist_path.is_file() {
+            println!("  Skipped: assembled App bundle not found (source templates checked)");
+            return Ok(());
+        }
+        let plist_content = fs::read_to_string(&plist_path).context("read Info.plist")?;
+        let bundle_exec = parse_plist_string_key(&plist_content, "CFBundleExecutable");
+        let mut version_errors = plist_version_errors(&plist_content, version, "app bundle plist");
+        let helper_path = repo_root.join(
+            "Modern Format Boost.app/Contents/Helpers/MFB Photos Import.app/Contents/Info.plist",
+        );
+        if helper_path.is_file() {
+            let helper_content = fs::read_to_string(&helper_path)
+                .context("read bundled PhotosImportHelper-Info.plist")?;
+            version_errors.extend(plist_version_errors(
+                &helper_content,
+                version,
+                "Photos helper bundle plist",
+            ));
+        } else {
+            version_errors.push(format!(
+                "Photos helper bundle plist missing at {}",
+                helper_path.display()
+            ));
+        }
+        if !version_errors.is_empty() {
+            bail!("Bundle version mismatch: {}", version_errors.join("; "));
+        }
+        let mut errors = Vec::new();
+        if let Some(ref be) = bundle_exec
+            && be != "Modern Format Boost"
+        {
+            errors.push(format!(
+                "Executable name mismatch: expected 'Modern Format Boost', got '{be}'"
+            ));
+        }
+        for key in ["NSAppDataUsageDescription", "NSAppleEventsUsageDescription"] {
+            match parse_plist_string_key(&plist_content, key) {
+                Some(value) if !value.trim().is_empty() => {}
+                _ => errors.push(format!("Missing required macOS privacy key: {key}")),
+            }
+        }
+        let binary_path = repo_root
+            .join("Modern Format Boost.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("Modern Format Boost");
+        if !binary_path.exists() {
+            errors.push(format!(
+                "App binary wrapper missing at {}",
+                binary_path.display()
+            ));
+        }
+        if errors.is_empty() {
+            println!("  OK: Info.plist and app wrapper matching");
+            return Ok(());
+        }
+        if hard_fail {
+            record_failure(format!("macOS App bundle metadata: {}", errors.join("; ")));
+        } else {
+            for error in &errors {
+                println!("  Warning: {error}");
+            }
+        }
+        Ok(())
+    }
+}
+
+fn ensure_edge_test_media(repo_root: &Path) -> Result<()> {
+    let marker = repo_root.join("crates/dev/tests/edge/videos/test_h264_10s.mp4");
+    if marker.is_file() {
+        println!("  Skipped: generate edge test media (already present)");
+        return Ok(());
+    }
+    run_required(
+        repo_root,
+        "Generating edge test media",
+        "cargo",
+        &[
+            "run",
+            "--locked",
+            "-p",
+            "dev",
+            "--bin",
+            "generate_test_media",
+        ],
+    )
+}
+
+const fn ci_feature_args() -> [&'static str; 3] {
+    ["--all-features", "--features", "foundation/ci-static-build"]
+}
+
+fn cargo_check_args(ci: bool, package: PackageScope) -> Vec<String> {
+    let mut args = vec!["check".to_string()];
+    if let Some(package_name) = package.package_name() {
+        args.extend(["-p".to_string(), package_name.to_string()]);
+    } else {
+        args.push("--workspace".to_string());
+    }
+    args.extend(["--all-targets".to_string(), "--locked".to_string()]);
+    if ci {
+        args.extend([
+            "--all-features".to_string(),
+            "--features".to_string(),
+            "foundation/ci-static-build".to_string(),
+        ]);
+    } else if package == PackageScope::Workspace {
+        // The workspace profile deliberately exercises every feature. A
+        // focused package run stays on that package's default feature set so
+        // it remains a fast, reproducible local signal instead of pulling in
+        // unrelated optional toolchains (for example system GMP).
+        args.push("--all-features".to_string());
+    }
+    args
+}
+
+fn cargo_test_args(package: PackageScope) -> Vec<String> {
+    let mut args = vec!["test".to_string(), "--locked".to_string()];
+    if let Some(package_name) = package.package_name() {
+        args.extend(["-p".to_string(), package_name.to_string()]);
+    } else {
+        // --all-targets overrides fuzz bin test=false and starts unbounded
+        // libFuzzer loops. Execute them only through the budgeted fuzz smoke stage.
+        args.extend([
+            "--workspace".to_string(),
+            "--exclude".to_string(),
+            "modern-format-boost-fuzz".to_string(),
+        ]);
+    }
+    args.push("--all-targets".to_string());
+    if package == PackageScope::Workspace {
+        args.push("--all-features".to_string());
+    }
+    args.push("--no-fail-fast".to_string());
+    // Media tests invoke external codecs and several contract tests use
+    // process-wide environment guards.  Keep every check_all profile
+    // deterministic; parallel test binaries can otherwise race on PATH and
+    // MFB_* state and turn a healthy probe into a false failure.
+    args.extend(["--".to_string(), "--test-threads=1".to_string()]);
+    args
+}
+
+#[cfg(test)]
+fn workspace_members_block(manifest: &str) -> Option<&str> {
+    let members_start = manifest.find("members")?;
+    let after_members = &manifest[members_start..];
+    let list_start = after_members.find('[')?;
+    let after_list_start = &after_members[list_start + 1..];
+    let list_end = after_list_start.find(']')?;
+    Some(&after_list_start[..list_end])
+}
+
+fn apply_ci_runner_env() {
+    unsafe {
+        std::env::set_var(
+            "GITHUB_ACTIONS",
+            std::env::var("GITHUB_ACTIONS").unwrap_or_else(|_| "true".to_string()),
+        );
+        std::env::set_var(
+            "LIBHEIF_STATIC",
+            std::env::var("LIBHEIF_STATIC").unwrap_or_else(|_| "1".to_string()),
+        );
+        std::env::set_var(
+            "LIBHEIF_SYS_STATIC",
+            std::env::var("LIBHEIF_SYS_STATIC").unwrap_or_else(|_| "1".to_string()),
+        );
+        std::env::set_var("SYSTEM_DEPS_LIBHEIF_LINK", "static");
+        std::env::set_var(
+            "NODE_OPTIONS",
+            std::env::var("NODE_OPTIONS").unwrap_or_else(|_| "--no-deprecation".to_string()),
+        );
+        let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
+        if existing.split_whitespace().any(|part| part == "-D")
+            && existing.split_whitespace().any(|part| part == "warnings")
+        {
+            std::env::set_var("RUSTFLAGS", existing);
+        } else if existing.trim().is_empty() {
+            std::env::set_var("RUSTFLAGS", "-D warnings");
+        } else {
+            std::env::set_var("RUSTFLAGS", format!("{} -D warnings", existing.trim()));
+        }
+    }
+}
+
+fn run_ci_health_rust_tests(repo_root: &Path) -> Result<()> {
+    let ci_features = ci_feature_args();
+    run_required(
+        repo_root,
+        "cargo test -p foundation --lib (serial, ci-static-build)",
+        "cargo",
+        &[
+            "test",
+            "--locked",
+            "-p",
+            "foundation",
+            "--lib",
+            ci_features[0],
+            ci_features[1],
+            ci_features[2],
+            "--no-fail-fast",
+            "--",
+            "--test-threads=1",
+        ],
+    )?;
+    run_required(
+        repo_root,
+        "cargo test --workspace --lib (ci-static-build, exclude foundation)",
+        "cargo",
+        &[
+            "test",
+            "--locked",
+            "--workspace",
+            "--lib",
+            ci_features[0],
+            ci_features[1],
+            ci_features[2],
+            "--exclude",
+            "foundation",
+            "--no-fail-fast",
+        ],
+    )?;
+    run_required(
+        repo_root,
+        "cargo test -p dev test_real_silent_fallbacks (contract registry)",
+        "cargo",
+        &[
+            "test",
+            "--locked",
+            "-p",
+            "dev",
+            "--test",
+            "test_real_silent_fallbacks",
+            ci_features[0],
+            ci_features[1],
+            ci_features[2],
+            "--no-fail-fast",
+            "--",
+            "--test-threads=1",
+        ],
+    )?;
+    run_required(
+        repo_root,
+        "cargo test -p dev headless_gif_regression (ffmpeg/runtime probe regression)",
+        "cargo",
+        &[
+            "test",
+            "--locked",
+            "-p",
+            "dev",
+            "--test",
+            "headless_gif_regression",
+            ci_features[0],
+            ci_features[1],
+            ci_features[2],
+            "--no-fail-fast",
+            "--",
+            "--test-threads=1",
+        ],
+    )?;
+    run_required(
+        repo_root,
+        "cargo test -p dev runtime_probe_regression (WebP/APNG/HEIC/JXL/AVIF header preflight)",
+        "cargo",
+        &[
+            "test",
+            "--locked",
+            "-p",
+            "dev",
+            "--test",
+            "runtime_probe_regression",
+            ci_features[0],
+            ci_features[1],
+            ci_features[2],
+            "--no-fail-fast",
+            "--",
+            "--test-threads=1",
+        ],
+    )?;
+    run_required(
+        repo_root,
+        "cargo test -p dev comprehensive_weakness_audit (inventory + closure SSOT)",
+        "cargo",
+        &[
+            "test",
+            "--locked",
+            "-p",
+            "dev",
+            "--test",
+            "comprehensive_weakness_audit",
+            ci_features[0],
+            ci_features[1],
+            ci_features[2],
+            "--no-fail-fast",
+        ],
+    )
+}
+
+fn main() -> Result<()> {
+    bootstrap_macos_path();
+    let args = Args::parse();
+    if args.group == CheckGroup::Coverage && (!args.ci || args.no_expensive) {
+        bail!("--group coverage requires --ci and cannot use --no-expensive");
+    }
+    let hard_fail = args.ci || args.collect_all;
+    COLLECT_FAILURES.store(hard_fail, Ordering::Relaxed);
+    recorded_failures().clear();
+    if args.ci && args.package != PackageScope::Workspace {
+        bail!("--package is a local profile and cannot be combined with --ci");
+    }
+    if args.ci {
+        apply_ci_runner_env();
+    }
+    let repo_root = get_project_root()?;
+    std::env::set_current_dir(&repo_root).context("change directory to repo root")?;
+
+    let git_files = git_tracked_existing_files(&repo_root);
+    let py_files = files_with_suffixes(&git_files, &[".py"]);
+    let shell_files = files_with_suffixes(&git_files, &[".sh"]);
+    let md_files = files_with_suffixes(&git_files, &[".md"]);
+    let json_files = files_with_suffixes(&git_files, &[".json", ".jsonc"]);
+    let yaml_files = files_with_suffixes(&git_files, &[".yml", ".yaml"]);
+    let toml_files = files_with_suffixes(&git_files, &[".toml"]);
+    let sql_files = files_with_suffixes(&git_files, &[".sql"]);
+    let plist_files = files_with_suffixes(&git_files, &[".plist"]);
+    let web_files =
+        files_with_suffixes(&git_files, &[".vue", ".ts", ".js", ".cjs", ".css", ".html"]);
+
+    // 1. Local formatter-only mode. Keep this branch before every branch,
+    // toolchain, compile, test, audit, documentation, benchmark, and fuzz check.
+    if args.fix {
+        println!("Formatting tracked workspace files (no checks or audits)...");
+        // Rust
+        run_required(
+            &repo_root,
+            "cargo fmt --all (fix)",
+            "cargo",
+            &["fmt", "--all"],
+        )?;
+        // Python
+        if command_exists("ruff") && !py_files.is_empty() {
+            let mut ruff_args = vec!["format".to_string()];
+            ruff_args.extend(py_files.iter().cloned());
+            run_required_vec(&repo_root, "ruff format", "ruff", &ruff_args)?;
+        }
+        // Shell
+        if command_exists("shfmt") && !shell_files.is_empty() {
+            let mut shfmt_args = vec!["-w".to_string(), "-i".to_string(), "4".to_string()];
+            shfmt_args.extend(shell_files.iter().cloned());
+            run_required_vec(&repo_root, "shfmt", "shfmt", &shfmt_args)?;
+        }
+        // Prettier (Markdown, JSON, YAML, and any tracked web-format documents)
+        let mut prettier_targets = md_files.clone();
+        prettier_targets.extend(json_files.iter().cloned());
+        prettier_targets.extend(yaml_files.iter().cloned());
+        prettier_targets.extend(web_files.iter().cloned());
+        if command_exists("prettier") && !prettier_targets.is_empty() {
+            let mut prettier_args = vec!["--write".to_string()];
+            prettier_args.extend(prettier_targets);
+            run_required_vec(&repo_root, "prettier --write", "prettier", &prettier_args)?;
+        }
+        // TOML
+        if let Some(cmd) = taplo_fmt_command(&toml_files, &[])
+            && let Some((program, args)) = cmd.split_first()
+        {
+            run_required_vec(&repo_root, "taplo fmt", program, args)?;
+        }
+        // SQL (PostgreSQL dialect)
+        if command_exists("npx") && !sql_files.is_empty() {
+            for sql_file in &sql_files {
+                run_required(
+                    &repo_root,
+                    &format!("sql-formatter --fix {sql_file}"),
+                    "npx",
+                    &["-y", "sql-formatter", "-l", "postgresql", "--fix", sql_file],
+                )?;
+            }
+        }
+        // Plist (macOS)
+        if cfg!(target_os = "macos") && command_exists("plutil") && !plist_files.is_empty() {
+            let mut plutil_args = vec!["-convert".to_string(), "xml1".to_string()];
+            plutil_args.extend(plist_files.iter().cloned());
+            run_required_vec(&repo_root, "plutil -convert xml1", "plutil", &plutil_args)?;
+        }
+
+        println!("\nFORMAT FIX COMPLETED; no checks, tests, audits, or builds were run");
+        return Ok(());
+    }
+
+    if args.install_nightly {
+        println!("Installing nightly toolchain + components...");
+        if install_nightly()? {
+            println!("  OK: nightly toolchain installed/updated");
+        } else {
+            println!("  Warning: rustup install failed; continuing with available toolchain");
+        }
+    }
+
+    let nc = probe_nightly(&repo_root);
+
+    println!("--- Modern Quality Suite ---");
+    println!("Root: {}", repo_root.display());
+    println!("Rust scope: {:?}", args.package);
+    println!("Nightly: {}", nc.status_line());
+    if nc.toolchain && !nc.missing_components().is_empty() {
+        println!(
+            "  Missing nightly components: {}",
+            nc.missing_components().join(", ")
+        );
+        println!("  Fix: {}", nc.install_hint());
+    } else if !nc.toolchain {
+        println!(
+            "  Nightly toolchain not found. Install: rustup toolchain install nightly --component \
+             clippy --component rustfmt --component miri --component rust-src --component \
+             llvm-tools"
+        );
+    }
+
+    // 2. Branch Guard
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output();
+    match branch_output {
+        Ok(out) => {
+            let current_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !args.allow_non_nightly && current_branch != args.branch {
+                record_failure(format!(
+                    "required branch '{}', current is '{}'. Use --allow-non-nightly or --branch <n>",
+                    args.branch, current_branch
+                ));
+            }
+        }
+        Err(err) => {
+            println!("Warning: could not determine git branch: {err}");
+        }
+    }
+
+    // 3. cargo fmt --check
+    if args.group.includes(CheckGroup::Format) {
+        println!("Checking formatting (cargo fmt --check)...");
+        let fmt_status = diagnostics::status(
+            "cargo fmt",
+            Command::new("cargo").args(["fmt", "--all", "--check"]),
+        )?;
+        if !fmt_status.success() {
+            record_failure(
+                "cargo fmt check failed.\n\
+             Hint: To format all workspace languages (Rust, Python, Shell, JS/TS, SQL, TOML, JSON, YAML, Markdown, Plist), run:\n\
+             cargo run --locked -p dev --bin check_all -- --fix",
+            );
+        } else {
+            println!("  OK: formatting matches");
+        }
+
+        if !args.required_only {
+            if let Some(cmd) = taplo_fmt_command(&toml_files, &["--check"]) {
+                println!("Checking TOML formatting (taplo fmt --check)...");
+                if let Some((program, args)) = cmd.split_first() {
+                    let taplo_status =
+                        diagnostics::status("taplo fmt", Command::new(program).args(args))?;
+                    if !taplo_status.success() {
+                        record_failure(
+                            "taplo fmt check failed.\n\
+                         Hint: To format all workspace languages, run:\n\
+                         cargo run --locked -p dev --bin check_all -- --fix",
+                        );
+                    } else {
+                        println!("  OK: TOML formatting matches");
+                    }
+                }
+            } else if args.verbose {
+                println!("  Skipped: neither 'cargo taplo' nor 'taplo' found");
+            }
+        }
+    }
+
+    // 4. cargo check
+    if args.group.includes(CheckGroup::Compile) {
+        println!("Checking compilation (cargo check)...");
+        let check_args = cargo_check_args(args.ci, args.package);
+        let check_status =
+            diagnostics::status("cargo check", Command::new("cargo").args(&check_args))?;
+        if !check_status.success() {
+            record_failure("cargo check failed");
+        } else {
+            println!("  OK: compiles cleanly");
+        }
+    }
+
+    // 5. CHANGELOG version sync
+    println!("Checking CHANGELOG version synchronization...");
+    let cargo_toml_path = repo_root.join("Cargo.toml");
+    let changelog_path = repo_root.join("docs").join("CHANGELOG.md");
+    let cargo_content = fs::read_to_string(&cargo_toml_path).context("read Cargo.toml")?;
+    let version_line = cargo_content
+        .lines()
+        .find(|l| l.trim().starts_with("version =") || l.trim().starts_with("version="));
+    let version = match version_line {
+        Some(line) => {
+            let parts: Vec<&str> = line.split('=').collect();
+            if parts.len() >= 2 {
+                parts[1].trim().trim_matches('"').to_string()
+            } else {
+                String::new()
+            }
+        }
+        None => String::new(),
+    };
+    if args.group.includes(CheckGroup::Audit) {
+        if version.is_empty() {
+            println!("  Skipped: could not find workspace version in Cargo.toml");
+        } else if !changelog_path.is_file() {
+            record_failure("docs/CHANGELOG.md missing");
+        } else {
+            let changelog_content =
+                fs::read_to_string(&changelog_path).context("read CHANGELOG.md")?;
+            let expected_header = format!("[v{version}]");
+            let expected_header_alt = format!("[{version}]");
+            if changelog_content.contains(&expected_header)
+                || changelog_content.contains(&expected_header_alt)
+            {
+                println!("  OK: version {version} is documented in CHANGELOG");
+            } else {
+                record_failure(format!(
+                    "version '{version}' not found as a header in docs/CHANGELOG.md"
+                ));
+            }
+        }
+
+        run_python_syntax_check(&repo_root, &py_files)?;
+    }
+    if args.group.includes(CheckGroup::Clippy) {
+        if args.package == PackageScope::Workspace {
+            run_required(
+                &repo_root,
+                "Running ultra-strict clippy",
+                "cargo",
+                &["run", "--locked", "-p", "dev", "--bin", "clippy_strict"],
+            )?;
+        } else {
+            let package_name = args
+                .package
+                .package_name()
+                .context("package scope has no package name")?;
+            run_required(
+                &repo_root,
+                &format!("Running clippy for {package_name}"),
+                "cargo",
+                &[
+                    "clippy",
+                    "--locked",
+                    "-p",
+                    package_name,
+                    "--all-targets",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+            )?;
+        }
+    }
+
+    if args.group.includes(CheckGroup::Tests) && !args.ci && args.package == PackageScope::Workspace
+    {
+        ensure_edge_test_media(&repo_root)?;
+    }
+
+    // 8. Run workspace tests
+    if args.group.includes(CheckGroup::Tests) {
+        if args.ci {
+            run_ci_health_rust_tests(&repo_root)?;
+        } else {
+            let scope_name = args.package.package_name().unwrap_or("workspace");
+            println!("Running {scope_name} tests...");
+            let test_args = cargo_test_args(args.package);
+            let test_status =
+                diagnostics::status("cargo test", Command::new("cargo").args(&test_args))?;
+            if !test_status.success() {
+                record_failure("cargo test failed");
+            } else {
+                println!("  OK: all tests passed");
+            }
+        }
+    }
+
+    // 8b. DB sentinel backfill SSOT check retained from the Python auditor.
+    if args.group.includes(CheckGroup::Audit) {
+        if args.package == PackageScope::Workspace {
+            verify_normalize_stale_embed_measurement_slots(&repo_root)?;
+        } else {
+            println!("  Skipped: workspace DB sentinel check (package scope)");
+        }
+
+        if !args.required_only {
+            if !args.ci && !args.no_expensive && nc.llvm_tools {
+                if cargo_subcommand_exists("llvm-cov") {
+                    let mut coverage_args =
+                        vec!["llvm-cov".to_string(), "--summary-only".to_string()];
+                    if args.package == PackageScope::Workspace {
+                        coverage_args.insert(1, "--all-features".to_string());
+                    }
+                    if let Some(package_name) = args.package.package_name() {
+                        coverage_args.splice(1..1, ["-p".to_string(), package_name.to_string()]);
+                    } else {
+                        coverage_args.insert(1, "--workspace".to_string());
+                    }
+                    run_optional(
+                        &repo_root,
+                        "cargo llvm-cov --summary-only",
+                        "cargo",
+                        &coverage_args.iter().map(String::as_str).collect::<Vec<_>>(),
+                        false,
+                    )?;
+                } else if args.verbose {
+                    println!(
+                        "  Hint: cargo-llvm-cov not found. Install: cargo install cargo-llvm-cov"
+                    );
+                }
+            }
+
+            if !py_files.is_empty() && command_exists("ruff") {
+                let mut ruff_check = vec!["check".to_string()];
+                ruff_check.extend(py_files.iter().cloned());
+                run_optional_vec(&repo_root, "ruff linter", "ruff", &ruff_check, hard_fail)?;
+                let mut ruff_format = vec!["format".to_string(), "--check".to_string()];
+                ruff_format.extend(py_files.iter().cloned());
+                run_optional_vec(
+                    &repo_root,
+                    "ruff format check",
+                    "ruff",
+                    &ruff_format,
+                    hard_fail,
+                )?;
+            } else if py_files.is_empty() {
+                println!("  Skipped: python quality (no scripts)");
+            }
+
+            let shell_files = files_with_suffixes(&git_files, &[".sh"]);
+            if !shell_files.is_empty() {
+                if command_exists("shellcheck") {
+                    let mut shellcheck = vec!["--severity=error".to_string()];
+                    shellcheck.extend(shell_files.iter().cloned());
+                    run_optional_vec(
+                        &repo_root,
+                        "shellcheck",
+                        "shellcheck",
+                        &shellcheck,
+                        hard_fail,
+                    )?;
+                }
+                if command_exists("shfmt") {
+                    let mut shfmt = vec!["-d".to_string(), "-i".to_string(), "4".to_string()];
+                    shfmt.extend(shell_files.iter().cloned());
+                    run_optional_vec(&repo_root, "shfmt layout check", "shfmt", &shfmt, hard_fail)?;
+                }
+            }
+
+            check_bundle_metadata(&repo_root, &version, hard_fail)?;
+
+            if !md_files.is_empty() && command_exists("markdownlint-cli2") {
+                let config_path = repo_root
+                    .join("crates/dev/scripts/config/.markdownlint-cli2.jsonc")
+                    .to_string_lossy()
+                    .into_owned();
+                let mut markdownlint = vec!["--config".to_string(), config_path];
+                markdownlint.extend(md_files.iter().cloned());
+                run_optional_vec(
+                    &repo_root,
+                    "markdownlint",
+                    "markdownlint-cli2",
+                    &markdownlint,
+                    hard_fail,
+                )?;
+            }
+
+            let mut prettier_targets = md_files;
+            prettier_targets.extend(json_files.iter().cloned());
+            prettier_targets.extend(yaml_files.iter().cloned());
+            if !prettier_targets.is_empty() && command_exists("prettier") {
+                let mut prettier = vec!["--check".to_string()];
+                prettier.extend(prettier_targets);
+                run_optional_vec(
+                    &repo_root,
+                    "prettier check",
+                    "prettier",
+                    &prettier,
+                    hard_fail,
+                )?;
+            }
+
+            if !args.ci {
+                let mut doc_args = vec!["doc".to_string(), "--no-deps".to_string()];
+                if let Some(package_name) = args.package.package_name() {
+                    doc_args.splice(1..1, ["-p".to_string(), package_name.to_string()]);
+                } else {
+                    doc_args.splice(1..1, ["--workspace".to_string()]);
+                }
+                run_optional(
+                    &repo_root,
+                    "cargo doc",
+                    "cargo",
+                    &doc_args.iter().map(String::as_str).collect::<Vec<_>>(),
+                    false,
+                )?;
+                if nc.toolchain {
+                    let mut strict_doc_args = vec!["doc".to_string(), "--no-deps".to_string()];
+                    if let Some(package_name) = args.package.package_name() {
+                        strict_doc_args.splice(1..1, ["-p".to_string(), package_name.to_string()]);
+                    } else {
+                        strict_doc_args.splice(1..1, ["--workspace".to_string()]);
+                    }
+                    run_optional_vec_env(
+                        &repo_root,
+                        "cargo doc -D warnings (rustdoc lints)",
+                        "cargo",
+                        &strict_doc_args,
+                        &[("RUSTDOCFLAGS", "-D warnings")],
+                        false,
+                    )?;
+                } else {
+                    println!("  Skipped: nightly rustdoc -D warnings");
+                }
+            }
+
+            let mut cargo_insta_args = vec![
+                "insta".to_string(),
+                "test".to_string(),
+                "--unreferenced=reject".to_string(),
+            ];
+            if let Some(package_name) = args.package.package_name() {
+                cargo_insta_args.splice(2..2, ["-p".to_string(), package_name.to_string()]);
+            } else {
+                cargo_insta_args.splice(2..2, ["--workspace".to_string()]);
+            }
+            for (sub, label, args_list) in [
+                ("audit", "cargo audit", vec!["audit".to_string()]),
+                (
+                    "deny",
+                    "cargo deny check (licenses + advisories + bans)",
+                    vec!["deny".to_string(), "check".to_string()],
+                ),
+                (
+                    "insta",
+                    "cargo insta test (snapshot regression check)",
+                    cargo_insta_args.clone(),
+                ),
+            ] {
+                if cargo_subcommand_exists(sub) {
+                    run_optional_vec(&repo_root, label, "cargo", &args_list, hard_fail)?;
+                }
+            }
+
+            let bench_files = git_files
+                .iter()
+                .filter(|file| {
+                    file.contains("benches/")
+                        && file.ends_with(".rs")
+                        && args
+                            .package
+                            .package_name()
+                            .is_none_or(|package| file.starts_with(&format!("crates/{package}/")))
+                })
+                .count();
+            if bench_files > 0 {
+                let mut bench_args = vec!["bench".to_string(), "--no-run".to_string()];
+                if let Some(package_name) = args.package.package_name() {
+                    bench_args.splice(1..1, ["-p".to_string(), package_name.to_string()]);
+                } else {
+                    bench_args.splice(1..1, ["--workspace".to_string()]);
+                }
+                run_optional(
+                    &repo_root,
+                    &format!("cargo bench --no-run (compile check, {bench_files} bench file(s))"),
+                    "cargo",
+                    &bench_args.iter().map(String::as_str).collect::<Vec<_>>(),
+                    hard_fail,
+                )?;
+            } else {
+                println!("  Skipped: bench compile check (no bench targets found)");
+            }
+
+            if !args.no_expensive {
+                if cargo_subcommand_exists("bloat") {
+                    run_optional(
+                        &repo_root,
+                        "cargo bloat",
+                        "cargo",
+                        &["bloat", "--release", "--crates", "-n", "10"],
+                        hard_fail,
+                    )?;
+                }
+                if cargo_subcommand_exists("hack") {
+                    let mut hack_args = vec![
+                        "hack".to_string(),
+                        "check".to_string(),
+                        "--each-feature".to_string(),
+                        "--no-dev-deps".to_string(),
+                    ];
+                    if let Some(package_name) = args.package.package_name() {
+                        hack_args.splice(2..2, ["-p".to_string(), package_name.to_string()]);
+                    } else {
+                        hack_args.splice(2..2, ["--workspace".to_string()]);
+                    }
+                    run_optional(
+                        &repo_root,
+                        "cargo hack feature matrix",
+                        "cargo",
+                        &hack_args.iter().map(String::as_str).collect::<Vec<_>>(),
+                        hard_fail,
+                    )?;
+                }
+            }
+
+            if args.ai_smell {
+                println!("Checking AI smells...");
+                let agent = if command_exists("claude") {
+                    Some("claude")
+                } else if command_exists("gemini") {
+                    Some("gemini")
+                } else {
+                    None
+                };
+                if let Some(agent) = agent {
+                    run_optional(
+                        &repo_root,
+                        "AI smell detection",
+                        agent,
+                        &[
+                            "--print",
+                            "Check codebase for unneeded comments and AI smells.",
+                        ],
+                        hard_fail,
+                    )?;
+                } else {
+                    println!("  Skipped: neither 'claude' nor 'gemini' CLI found");
+                }
+            }
+        }
+
+        // 9. Run library tests under Miri
+        if !args.required_only && args.miri {
+            println!("Running tests under Miri...");
+            if !nc.miri || !nc.rust_src {
+                let missing = [
+                    (!nc.miri).then_some("miri"),
+                    (!nc.rust_src).then_some("rust-src"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+                println!(
+                    "  Skipped: miri (missing: {} — run --install-nightly)",
+                    missing.join(", ")
+                );
+            } else {
+                let channel = rust_toolchain_channel_for_probe(&repo_root);
+                let status = diagnostics::status(
+                    "cargo miri",
+                    Command::new("cargo")
+                        .args([
+                            format!("+{channel}"),
+                            "miri".to_string(),
+                            "test".to_string(),
+                            "--workspace".to_string(),
+                            "--lib".to_string(),
+                        ])
+                        .env("MIRIFLAGS", "-Zmiri-strict-provenance"),
+                )
+                .context("run cargo miri")?;
+                if !status.success() {
+                    record_failure("Miri tests failed");
+                } else {
+                    println!("  OK: Miri tests passed");
+                }
+            }
+        }
+
+        // 10. Sanitizers
+        if !args.required_only && args.sanitizers {
+            println!("Running AddressSanitizer...");
+            if !nc.toolchain || !nc.rust_src {
+                let missing = [
+                    (!nc.toolchain).then_some("nightly toolchain"),
+                    (!nc.rust_src).then_some("rust-src"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+                println!(
+                    "  Skipped: AddressSanitizer (missing: {} — run --install-nightly)",
+                    missing.join(", ")
+                );
+            } else {
+                let channel = rust_toolchain_channel_for_probe(&repo_root);
+                let build_target = match Command::new("rustc").arg("-vV").output() {
+                    Ok(out) => String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .find_map(|line| line.strip_prefix("host: ").map(ToOwned::to_owned))
+                        .unwrap_or_else(|| {
+                            eprintln!("[CHECK] rustc -vV missing host line; defaulting target");
+                            "aarch64-apple-darwin".to_string()
+                        }),
+                    Err(err) => {
+                        eprintln!("[CHECK] rustc -vV failed: {err}; defaulting target");
+                        "aarch64-apple-darwin".to_string()
+                    }
+                };
+                let status = diagnostics::status(
+                    "AddressSanitizer",
+                    Command::new("cargo")
+                        .args([
+                            format!("+{channel}"),
+                            "test".to_string(),
+                            "--workspace".to_string(),
+                            "--lib".to_string(),
+                            "--target".to_string(),
+                            build_target,
+                        ])
+                        .env("RUSTFLAGS", "-Z sanitizer=address")
+                        .env("ASAN_OPTIONS", "detect_leaks=0"),
+                )
+                .context("run AddressSanitizer")?;
+                if !status.success() {
+                    record_failure("AddressSanitizer tests failed");
+                } else {
+                    println!("  OK: AddressSanitizer passed");
+                }
+            }
+        }
+
+        // 11. cargo mutants
+        if !args.required_only && !args.no_expensive && args.mutants {
+            println!("Running cargo-mutants...");
+            if cargo_subcommand_exists("mutants") {
+                let status = diagnostics::status(
+                    "cargo mutants",
+                    Command::new("cargo").args([
+                        "mutants",
+                        "--workspace",
+                        "--timeout",
+                        "180",
+                        "--minimum-test-timeout",
+                        "180",
+                        "--jobs",
+                        "2",
+                    ]),
+                )
+                .context("run cargo mutants")?;
+                if !status.success() {
+                    record_failure("Mutants test failed");
+                } else {
+                    println!("  OK: cargo-mutants passed");
+                }
+            } else {
+                println!("  Skipped: cargo-mutants not installed");
+            }
+        }
+
+        // 12. Fuzzing
+        if !args.required_only && (args.fuzz_list || args.fuzz_smoke) {
+            let missing = [
+                (!nc.toolchain).then_some("nightly toolchain"),
+                (!cargo_subcommand_exists("fuzz"))
+                    .then_some("cargo-fuzz (cargo install cargo-fuzz)"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            if missing.is_empty() {
+                let channel = rust_toolchain_channel_for_probe(&repo_root);
+                println!("Listing fuzz targets...");
+                let out = Command::new("cargo")
+                    .args([
+                        format!("+{channel}"),
+                        "fuzz".to_string(),
+                        "list".to_string(),
+                        "--fuzz-dir".to_string(),
+                        "crates/dev/fuzz".to_string(),
+                    ])
+                    .output()?;
+                let fuzz_list_ok = out.status.success();
+                if !fuzz_list_ok {
+                    record_failure("cargo fuzz list failed");
+                }
+                print!("{}", String::from_utf8_lossy(&out.stdout));
+                if args.fuzz_smoke {
+                    println!("Running fuzz smoke tests...");
+                    let targets = String::from_utf8_lossy(&out.stdout);
+                    let mut fuzz_smoke_ok = fuzz_list_ok;
+                    for target in targets.lines() {
+                        let target = target.trim();
+                        if target.is_empty() {
+                            continue;
+                        }
+                        println!("  Smoke testing fuzz target: {target} (max 5s)");
+                        let mut command = Command::new("cargo");
+                        command
+                            .args([
+                                format!("+{channel}"),
+                                "fuzz".to_string(),
+                                "run".to_string(),
+                                target.to_string(),
+                                "--fuzz-dir".to_string(),
+                                "crates/dev/fuzz".to_string(),
+                                "--".to_string(),
+                            ])
+                            .args(FUZZ_SMOKE_ENGINE_ARGS);
+                        let st = diagnostics::status(&format!("fuzz {target}"), &mut command)?;
+                        if !st.success() {
+                            record_failure(format!("fuzz target {target} failed"));
+                            fuzz_smoke_ok = false;
+                        }
+                    }
+                    if fuzz_smoke_ok {
+                        println!("  OK: Fuzz smoke tests passed");
+                    }
+                } else if fuzz_list_ok {
+                    println!("  OK: fuzz target discovery passed");
+                }
+            } else {
+                if args.ci {
+                    record_failure(format!(
+                        "cargo fuzz availability missing: {}",
+                        missing.join(", ")
+                    ));
+                } else {
+                    println!("  Skipped: cargo fuzz (missing: {})", missing.join(", "));
+                }
+            }
+        }
+    }
+    // 13. CI Health Coverage
+    if args.group.includes(CheckGroup::Coverage) && args.ci && !args.no_expensive {
+        println!("Running CI Health Coverage (cargo llvm-cov)...");
+        let llvm_cov_available = cargo_subcommand_exists("llvm-cov");
+        if !llvm_cov_available {
+            record_failure("cargo-llvm-cov is required for --ci");
+        }
+        if !nc.llvm_tools {
+            let channel = rust_toolchain_channel_for_probe(&repo_root);
+            let status = Command::new("rustup")
+                .args([
+                    "component",
+                    "add",
+                    "llvm-tools",
+                    "--toolchain",
+                    channel.as_str(),
+                ])
+                .status()
+                .context("run rustup component add llvm-tools")?;
+            if !status.success() {
+                record_failure("rustup component add llvm-tools failed");
+            }
+        }
+        if llvm_cov_available {
+            let summary_status = diagnostics::status(
+                "coverage summary",
+                Command::new("cargo").args([
+                    "llvm-cov",
+                    "-p",
+                    "foundation",
+                    "--lib",
+                    "--all-features",
+                    "--features",
+                    "foundation/ci-static-build",
+                    "--no-fail-fast",
+                    "--summary-only",
+                ]),
+            )?;
+            if !summary_status.success() {
+                record_failure("cargo llvm-cov summary failed");
+            }
+            let lcov_status = diagnostics::status(
+                "coverage LCOV",
+                Command::new("cargo").args([
+                    "llvm-cov",
+                    "report",
+                    "--lcov",
+                    "--output-path",
+                    "lcov.info",
+                ]),
+            )?;
+            if !lcov_status.success() {
+                record_failure("cargo llvm-cov failed");
+            }
+            let lcov_exists = repo_root.join("lcov.info").is_file();
+            if !lcov_exists {
+                record_failure("lcov.info artifact missing after run");
+            }
+            if summary_status.success() && lcov_status.success() && lcov_exists {
+                println!("  OK: coverage passed and lcov.info generated");
+            }
+        }
+
+        println!("Running CI Rustdoc Health Check...");
+        let doc_status = diagnostics::status(
+            "rustdoc",
+            Command::new("cargo")
+                .args(["doc", "-p", "foundation", "--no-deps"])
+                .env("RUSTDOCFLAGS", "-D warnings"),
+        )?;
+        if !doc_status.success() {
+            record_failure("cargo doc check failed");
+        } else {
+            println!("  OK: rustdoc check passed");
+        }
+    }
+
+    finish_recorded_failures()?;
+    println!("\nSELECTED AUDITS PASSED: {:?}", args.group);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn independent_groups_partition_the_aggregate() {
+        let groups = [
+            CheckGroup::Format,
+            CheckGroup::Compile,
+            CheckGroup::Clippy,
+            CheckGroup::Tests,
+            CheckGroup::Audit,
+            CheckGroup::Coverage,
+        ];
+        for group in groups {
+            assert!(CheckGroup::All.includes(group));
+            assert_eq!(
+                groups
+                    .iter()
+                    .filter(|candidate| group.includes(**candidate))
+                    .count(),
+                1
+            );
+        }
+        assert!(Args::try_parse_from(["check_all", "--group", "unknown"]).is_err());
+    }
+
+    #[test]
+    fn collect_mode_records_every_failure_before_reporting() {
+        COLLECT_FAILURES.store(true, Ordering::Relaxed);
+        recorded_failures().clear();
+
+        record_failure("first independent check");
+        record_failure("second independent check");
+
+        let failures = recorded_failures();
+        assert_eq!(
+            failures.as_slice(),
+            ["first independent check", "second independent check"]
+        );
+        drop(failures);
+        let error = finish_recorded_failures().expect_err("collected failures must fail the gate");
+        assert!(error.to_string().contains("2 check(s) failed"));
+
+        recorded_failures().clear();
+        COLLECT_FAILURES.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_parse_plist_string_key() {
+        let content = r"
+        <dict>
+            <key>CFBundleShortVersionString</key>
+            <string>0.11.3</string>
+            <key>CFBundleExecutable</key>
+            <string>Modern Format Boost</string>
+        </dict>
+        ";
+        assert_eq!(
+            parse_plist_string_key(content, "CFBundleShortVersionString"),
+            Some("0.11.3".to_string())
+        );
+        assert_eq!(
+            parse_plist_string_key(content, "CFBundleExecutable"),
+            Some("Modern Format Boost".to_string())
+        );
+        assert_eq!(parse_plist_string_key(content, "NonExistentKey"), None);
+        assert_eq!(
+            parse_plist_string_key(
+                "<key>CFBundleVersion</key><key>Next</key><string>1</string>",
+                "CFBundleVersion"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn version_keys_reject_missing_or_different_values() {
+        let template = "<key>CFBundleShortVersionString</key><string>$(MFB_VERSION)</string><key>CFBundleVersion</key><string>$(MFB_VERSION)</string>";
+        assert!(plist_version_errors(template, "$(MFB_VERSION)", "source").is_empty());
+        assert_eq!(plist_version_errors(template, "0.12.0", "bundle").len(), 2);
+        assert_eq!(
+            plist_version_errors(
+                "<key>CFBundleVersion</key><string>0.12.0</string>",
+                "0.12.0",
+                "bundle"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn taplo_command_uses_direct_binary_when_cargo_subcommand_missing() {
+        let files = vec!["Cargo.toml".to_string()];
+        assert_eq!(
+            taplo_fmt_command_with_availability(&files, &["--check"], false, true),
+            Some(vec![
+                "taplo".to_string(),
+                "fmt".to_string(),
+                "--check".to_string(),
+                "Cargo.toml".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn taplo_command_uses_tracked_files_with_cargo_subcommand() {
+        let files = vec!["Cargo.toml".to_string()];
+        assert_eq!(
+            taplo_fmt_command_with_availability(&files, &["--check"], true, true),
+            Some(vec![
+                "cargo".to_string(),
+                "taplo".to_string(),
+                "fmt".to_string(),
+                "--check".to_string(),
+                "Cargo.toml".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn taplo_command_refuses_empty_file_list_to_avoid_tree_scan() {
+        let files: Vec<String> = Vec::new();
+        assert_eq!(
+            taplo_fmt_command_with_availability(&files, &["--check"], true, true),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_pinned_rust_toolchain_channel() {
+        let content = r#"
+            [toolchain]
+            channel = "nightly-2026-07-16"
+            components = ["clippy", "rustfmt"]
+        "#;
+        assert_eq!(
+            parse_rust_toolchain_channel_toml(content),
+            Some("nightly-2026-07-16".to_string())
+        );
+    }
+
+    #[test]
+    fn nightly_install_command_omits_invalid_yes_flag() {
+        assert_eq!(
+            install_nightly_command(&["clippy", "rustfmt"]),
+            vec![
+                "rustup".to_string(),
+                "toolchain".to_string(),
+                "install".to_string(),
+                "nightly".to_string(),
+                "--component".to_string(),
+                "clippy".to_string(),
+                "--component".to_string(),
+                "rustfmt".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn macos_path_bootstrap_prepends_existing_brew_paths_once() {
+        let path = "/bin:/opt/homebrew/bin";
+        let updated = bootstrap_macos_path_with(true, path, |dir| {
+            matches!(
+                dir,
+                "/opt/homebrew/bin" | "/opt/homebrew/sbin" | "/usr/local/bin"
+            )
+        })
+        .expect("path changed");
+        assert_eq!(
+            updated,
+            "/usr/local/bin:/opt/homebrew/sbin:/bin:/opt/homebrew/bin"
+        );
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn parses_installed_nightly_components_exactly() {
+        let components = parse_installed_rustup_components(
+            "clippy-x86_64-apple-darwin\nrustfmt-x86_64-apple-darwin\nrust-src\nllvm-tools-x86_64-apple-darwin\n",
+        );
+        assert!(components.toolchain);
+        assert!(components.clippy);
+        assert!(components.rustfmt);
+        assert!(!components.miri);
+        assert!(components.rust_src);
+        assert!(components.llvm_tools);
+        assert_eq!(components.missing_components(), vec!["miri"]);
+    }
+
+    #[test]
+    fn ci_cargo_check_targets_the_root_workspace() {
+        let args = cargo_check_args(true, PackageScope::Workspace);
+        let rendered = args.join(" ");
+        assert!(rendered.contains("--workspace"));
+        assert!(rendered.contains("--all-features"));
+    }
+
+    #[test]
+    fn package_scope_targets_only_selected_package_without_all_features() {
+        for (scope, name) in [(PackageScope::Img, "img"), (PackageScope::Vid, "vid")] {
+            let check = cargo_check_args(false, scope).join(" ");
+            let test = cargo_test_args(scope).join(" ");
+            assert!(check.contains(&format!("-p {name}")));
+            assert!(!check.contains("--workspace"));
+            assert!(!check.contains("--all-features"));
+            assert!(test.contains(&format!("-p {name}")));
+            assert!(!test.contains("--workspace"));
+            assert!(!test.contains("--all-features"));
+            assert!(test.contains("--no-fail-fast"));
+            assert!(test.contains("--test-threads=1"));
+        }
+    }
+
+    #[test]
+    fn workspace_tests_are_serialized_for_process_global_media_guards() {
+        let test = cargo_test_args(PackageScope::Workspace).join(" ");
+        assert!(test.contains("--workspace"));
+        assert!(test.contains("--exclude modern-format-boost-fuzz"));
+        assert!(test.contains("--all-features"));
+        assert!(test.contains("--no-fail-fast"));
+        assert!(test.contains("--test-threads=1"));
+    }
+
+    #[test]
+    fn fuzz_smoke_bounds_total_and_per_input_runtime() {
+        assert_eq!(
+            FUZZ_SMOKE_ENGINE_ARGS,
+            ["-runs=1", "-max_total_time=5", "-timeout=5"]
+        );
+    }
+
+    #[test]
+    fn root_workspace_members_do_not_include_macos_only_crates() {
+        let root_manifest = include_str!("../../../../Cargo.toml");
+        let members = workspace_members_block(root_manifest).expect("workspace members block");
+        assert!(
+            !members.contains("crates/dev/dispatch2"),
+            "macOS-only dispatch2 must stay in its dedicated workflow, not the root workspace"
+        );
+    }
+}

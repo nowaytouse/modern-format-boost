@@ -1,0 +1,18 @@
+---
+source: crates/dev/tests/snapshot_tests.rs
+expression: args
+---
+[
+    "-y",
+    "-threads",
+    "4",
+    "-i",
+    "input.mp4",
+    "-c:v",
+    "libx265",
+    "-crf",
+    "18",
+    "-preset",
+    "slower",
+    "output.mp4",
+]

@@ -1,3 +1,0 @@
-# common.sh contains zsh-specific parameter expansion syntax ((%):-%x)
-# that shfmt cannot parse even in -ln zsh mode. Exclude from formatting check.
-common.sh

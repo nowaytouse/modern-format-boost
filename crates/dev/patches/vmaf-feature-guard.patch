@@ -1,0 +1,51 @@
+diff --git a/libvmaf/src/predict.c b/libvmaf/src/predict.c
+--- a/libvmaf/src/predict.c
++++ b/libvmaf/src/predict.c
+@@ -290,6 +290,9 @@ static int post_process_feature_from_another(VmafModel *model,
+         }
+     }
+
++    if (!found_guiding_score || !found_guided_score)
++        return -EINVAL;
++
+     double corrected_guided_score =
+         (-correction_parameter * guiding_score) + correction_parameter;
+     err = normalize(model, model->feature[guided_idx].slope,
+diff --git a/libvmaf/test/test_predict.c b/libvmaf/test/test_predict.c
+--- a/libvmaf/test/test_predict.c
++++ b/libvmaf/test/test_predict.c
+@@ -309,8 +309,34 @@ static char *test_post_process_feature_from_another()
+     return NULL;
+ }
+
++static char *test_missing_correction_feature(void)
++{
++    VmafModelFeature features[] = {{ .name = "guide" }, { .name = "target" }};
++    VmafModel model = {
++        .feature = features, .n_features = 2,
++        .norm_type = VMAF_MODEL_NORMALIZATION_TYPE_NONE,
++    };
++    struct svm_node node[] = {{ .value = 0.5 }, { .value = 0.0 }};
++    int err = post_process_feature_from_another(&model, node, 120.0, 0.0,
++                                               "guide", "target");
++    mu_assert("valid correction failed", !err && node[1].value == 60.0);
++    node[1].value = 0.0;
++    err = post_process_feature_from_another(&model, node, 120.0, 0.0,
++                                           "missing", "target");
++    mu_assert("missing guide accepted", err == -EINVAL && node[1].value == 0.0);
++    err = post_process_feature_from_another(&model, node, 120.0, 0.0,
++                                           "guide", "missing");
++    mu_assert("missing target accepted", err == -EINVAL && node[0].value == 0.5);
++    model.n_features = 0;
++    err = post_process_feature_from_another(&model, node, 120.0, 0.0,
++                                           "guide", "target");
++    mu_assert("empty features accepted", err == -EINVAL);
++    return NULL;
++}
++
+ char *run_tests()
+ {
++    mu_run_test(test_missing_correction_feature);
+     mu_run_test(test_predict_score_at_index);
+     mu_run_test(test_find_linear_function_parameters);
+     mu_run_test(test_piecewise_linear_mapping);

@@ -1,243 +1,190 @@
-# 📖 简体中文
+# Modern Format Boost
 
-## Modern Format Boost 是什么？
+<img src="assets/mfb-logo.png" alt="Modern Format Boost" width="128" height="128">
 
-**Modern Format Boost** 是一个基于 Rust 开发的高性能媒体优化引擎。它将传统图片和视频格式（JPEG、PNG、H.264、VP9…）转换为最新一代编码（图片 → **JPEG XL**，视频 → **HEVC/AV1**），在**保持甚至完全匹配原始画质**的前提下，大幅减小文件体积。
+**以私人归档策略整理媒体：减少占用，保留重要信息，并核验处理结果。**
 
-你可以把它理解为一个"智能压缩器"，**永远不会降低你的媒体画质**：
+[English](../README.md) · [简体中文](README_ZH.md) · [更新日志](CHANGELOG.md)
 
-- 📸 **图片**：JPEG → JXL 无损重建（位一致，体积减少约 20%）；PNG/WebP/TIFF/HEIC → JXL
-- 🎬 **视频**：H.264/VP9/AV1 → HEVC，配合 GPU 加速质量搜索
-- 🍎 **苹果生态优先**：完整的 Apple 兼容模式、Live Photo 检测、AAE 编辑指令保留
-- 🔒 **元数据守护**：保留 EXIF、XMP、ICC 色彩配置文件、创建时间、macOS 扩展属性、Finder 标签
-- 🌅 **HDR 高动态范围合成**：针对 Apple/Samsung/ISO 规范的 HEIC Gainmap 进行 32 位线性光融合，直出真 HDR 容量的 JXL；对 UltraHDR JPEG 提供检测与损耗预警。
-- ⚡ **感官速度优化**："深层优先"排序策略——按目录深度从深到浅、同深度内按文件大小和格式排序，确保高效批处理并最大化吞吐量。
-- 🎞️ **HDR10+ 动态元数据**：通过侧信道提取与 x265 SEI 注入，完整保留 SMPTE 2094-40 动态元数据。
-- 🌅 **厂商元数据感应**：智能扫描 HEIC 文件中的三星/谷歌特定 XMP 命名空间工作流，确保上下文信息最大化保留。
+Modern Format Boost（MFB）根据个人长期归档需求，处理图片、视频和动图。
+它不是通用格式转换器，也不是媒体管理器。只有质量、元数据和交付检查满足要求时，
+缩小文件才有意义；无法证明安全时，保留受影响的原件并报告问题，而不是勉强算作成功。
 
-## ⚠️ 免责声明与重要提示
+macOS 界面使用原生 AppKit；Rust 命令行工具也支持 Linux 和 Windows。
+Apple 照片图库集成仅限 macOS。当前开发版本为 **0.12.0**，开发分支为 `nightly`。
 
-1. **数据安全第一**：为避免操作失误造成不可挽回的数据损失，强烈建议始终使用“输出到独立目标目录”功能（比如 `-o /path/to/output`），尽量避免覆盖式原地转换（In-place 按需开启）。
-2. **测试版软件**：如更新日志所示，本程序经过了大量的极端情况测试与调试，修复了大量可能导致输出质量受损或数据丢失的 BUG。但这依然不能作为“百分百无 BUG”的绝对担保。如在使用中遇到任何异常，请及时在 GitHub 提交 Issue 寻求修复。
-3. **计算任务建议**：程序已针对 Apple Silicon（如 M4 芯片）等现代架构进行了性能优化。尽管如此，在开启 `--ultimate`（极致模式）处理海量高分辨率媒体时，仍会占用一定的系统资源并持续较长时间。建议根据任务规模合理安排处理进度。
-4. **工具成熟度建议**：目前统一后的工具 (`img`, `vid`) 默认使用 HEVC 策略，其在功能细节和运行稳定性方面领先于 AV1 策略。对于追求极致稳定性的生产环境任务，建议优先选用默认的 HEVC 策略。
+## 先选合适的处理方式
 
-## 🔒 隐私安全
+| 处理方式 | 主要行为 | 适合什么情况 |
+| --- | --- | --- |
+| **普通图片** / `img run` | 按完整静图策略处理，通常输出 JXL；不适合再次编码的现代有损格式保留原格式。 | 一般图片归档。 |
+| **Fast IMG · JXL** / `img fast-img --strategy jxl` | 将真实 JPEG 可逆转码为 JXL；符合条件的现代有损静图另走经过核验的照片图库交付路径。 | 集中归档 JPEG，或交付到 Apple 照片图库。 |
+| **Fast IMG · AVIF** / `img fast-img --strategy avif` | 使用独立的 AVIF 体积与质量策略；已有 AVIF 不再重新编码。 | 允许清理元数据的表情包等图片集合。 |
+| **视频** / `vid run` | 处理视频和动图，默认 HEVC，也可选择 AV1。 | 有动态语义的媒体，而不是静图转换。 |
 
-**Modern Format Boost** 采用“本地优先”设计，从底层代码层面确保您的数字资产完全受控。
+MFB 根据实际内容识别格式，不只看扩展名。图片和视频各有职责：`img` 不会把不适合的
+文件悄悄交给 `vid`。Fast IMG 表示处理范围更集中，不保证每个文件都比普通模式更快。
 
-- **100% 离线脱机**：所有媒体处理逻辑均严格在本地执行，不含任何遥测统计或云端请求代码，彻底杜绝数据泄露。
-- **Rust 内存防御**：利用 Rust 语言特性，从编译器级别杜绝了缓冲区溢出和双重释放等常见的内存攻击风险。
-- **指令调用屏障**：所有外部调用（如 FFmpeg、cjxl）均采用类型安全的管道传参，绝不执行原始 Shell 字符串，从根本上封锁了命令注入漏洞。
-- **路径隔离技术**：内置路径规范化逻辑，有效防止目录穿越风险，坚壁清野，确保处理过程仅限于目标范围。
-- **系统路径屏蔽名单**：内置敏感系统目录防护，严防误操作修改 OS 核心文件。
-- **动态资源负载均衡**：自动监测内存与 CPU 压力并实时调整线程分配，极致任务下亦能确保系统运行不崩溃。
-- **全方位元数据守护**：不放过任何一个元数据单元，严格位对位还原 EXIF、XMP、ICC 配置文件及文件系统时间戳 (btime/mtime)。
-- **安全处理与会话隔离**：
-  - **零工作区污染**：集中式进度追踪（`~/.mfb_progress/`）实现了对媒体目录的“零足迹”访问。主目录下不再产生任何隐藏的进度文件。
-  - **防冲突随机命名**：转换中产生的中间文件（如 YUV 原始流、分析切片）均采用 **UUID 随机命名**。这确保了在多窗口并发任务下互不干扰，并为“外科手术式”的定向清理提供了唯一识别号。
-  - **自我净化机制**：无论是任务成功收尾，还是在任务中断后重启，系统都会先通过识别码“打扫战场”，彻底清除所有残留的临时数据。这确保了处理过程永远在净空状态下开始，硬盘空间不再被无主碎片占用。
-- **智能断点重置**：自动检测用户手动删除输出目录以“重新开始”的意图，即便是恢复模式也会触发状态重置，确保源文件与输出同步。
+### 理解默认归档策略
 
-<details>
-<summary><b>🛠️ 技术深探：工作原理与核心算法</b></summary>
+- JPEG 转 JXL 必须能够**逐字节恢复原始 JPEG**。默认比较 E1 至 E11 全部 11 个
+  编码档位，复用完整文件最小、且验证通过的候选；E 越高，不一定越小。
+- 真正的无损图片按私人 IMG 策略保持无损。其他符合条件的路径可以搜索同时满足质量和
+  体积要求的结果；设置参数不等于获准改变该类媒体的归档规则。
+- 普通 JXL 归档保留策略要求的元数据和关联关系。Fast AVIF 使用**另一套元数据清理
+  策略**，不能把两者的保留承诺混为一谈。
 
-### 图片处理管线细节
+[私人 IMG 策略](dev/config/IMG_PRIVATE_POLICY.md)解释具体处理路线和搜索算法。
+应用内的 **?** 按钮也会打开处理指南，用例子说明这些选择，不必先读源码。
 
-- **第一阶段 — 智能检测**：在二进制层面分析 JPEG DQT 量化表（识别 UltraHDR 增益图）、WebP VP8L 数据块及 AVIF `av1C` box。采用 **零技术债架构 (Zero-Debt)**，全面支持 `OpenEXR` 和 `JPEG 2000` 损耗判定。
-- **第二阶段 — 路由决策**：JPEG 使用 JXL VarDCT 模式（位一致重建）；无损源使用 Modular 模式（PNG, lossless WebP/AVIF/HEIC/EXR/JP2）。
-- **第三阶段 — "绕路"兼容性**：TIFF/WebP/BMP/HEIC 会根据位深自动转为 **16-bit PNG** 或 **32-bit OpenEXR**，确保护航 `cjxl` 的同时不发生精度降级。EXR 和 JP2 已原生接入编码管线。
-- **第四阶段 — HEIC 深度分析**：扫描辅助深度图、苹果/谷歌/三星增益图及厂商特定 XMP，并在转为 JXL 时针对可能丢失的高级视觉组件提供预警。
-- **第五阶段 — Meme Score v3**：多维度评估动图（清晰度 40%、分辨率 18%、时长 20%），聪明地决定是转为视频还是保留 GIF。
+**当前限制：**图片交付不把“统计上相似”当作精确证据。有损 JXL/AVIF 若改变了样本，
+在独立的有损验收合同验证完成前可能被拒绝，原件会保留。JPEG 的逐字节重建和独立显示
+方向仍是两项不同要求。使用有损路径前，请先阅读上述策略说明。
 
-### 视频处理：三阶段饱和搜索
+## 安全开始
 
-1. **第一阶段：GPU 粗搜索**：利用硬件编码器进行快速二分搜索，定位“画质拐点”。
-2. **第二阶段：CPU 精调**：将结果映射至 `x265` 刻度。使用 **Sprint & Backtrack（冲刺与回退）算法**：连续成功时步长翻倍，过冲时立即降至 0.1 步长。
-3. **第三阶段：极致 3D 质量门控**：必须同时通过 VMAF-Y ≥ 92.0（感知画质）、CAMBI ≤ 6.0（色带检测）及 PSNR-UV ≥ 34.0 dB。
-   - **融合得分系统**：结合 MS-SSIM + SSIM_All (0.6/0.4 权重)，提供超高精度的结构分析。
-   - **色度通道保护**：自动识别会导致 libvmaf MS-SSIM 崩溃的极小分辨率，并无缝回退至单通道 Y-only 评分，确保流程稳健。
-   - _注：在 `--ultimate` 极致模式下，搜索算法要求连续 **50 次采样** 均达到零画质增益方可停机，确保绝对画质饱和。_
+**保留独立备份，先用少量文件的副本试跑。** 某些流程会在验证通过后清理原件。
+尤其是 Fast IMG：验证后清理来源属于流程本身，不需要通过 `--delete-source` 才启用。
+仅仅编码完成，不足以允许删除原件。
 
-### 元数据与 HDR 保留
+### macOS 应用
 
-- **HDR 守护**：强制透传 bt2020 原色、PQ/HLG 传输特性及母带显示数据。
-- **杜比视界**：通过 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1 增强兼容性。
-- **macOS 特性**：利用 `copyfile` 和 `setattrlist` 完美保留 Finder 标签、添加日期及原始创建时间。
+1. 打开 `Modern Format Boost.app`，选择或拖入文件、文件夹。
+2. 选择对应的图片或视频处理方式，在**设置**中检查该模式自己的质量、搜索、工具和
+   照片图库选项。
+3. 第一次运行前先用**预览**确认范围。只有确实要交付到当前选中图库时，才勾选
+   **导入到照片**。
+4. 完成后先看摘要；通过**处理历史**查看当次的数量、路径、验证、清理和诊断记录，
+   无需手动翻找日志文件夹。
 
-</details>
+暂停和停止会等待后端到达安全边界，不会把正在编码的进程直接冻结。
+任务中断也不代表已经完成。
 
-### 🖥️ 运行演示 (Runtime)
+界面支持简体中文、英语和日语；外观可以跟随系统，也可选择浅色或深色。
+Linux 和 Windows 当前使用命令行。
 
-![Runtime](../assets/runtime.png)
+### 获取或构建
 
-<p align="center">Runtime</p>
+到 [Releases](https://github.com/nowaytouse/modern-format-boost/releases) 查看实际产物
+及对应版本。目前发布流程提供的是 **macOS Apple Silicon 命令行归档包**，不是通用
+安装器，也不代表每个平台都有打包好的 GUI。Nightly 是开发快照。
 
-### 四个二进制工具
+MFB 会调用外部媒体工具。常见依赖包括 FFmpeg/ffprobe、JPEG XL 工具
+（`cjxl`、`djxl`、`jxlinfo`）、ExifTool、ImageMagick、WebP 工具和 libheif。
+源码构建需要仓库指定的 Rust nightly，以及 **libheif 1.23.5 或更新版本**；特定格式
+或功能还可能要求其他工具。
 
-| 工具      | 用途     | 目标编码                         |
-| --------- | -------- | -------------------------------- |
-| **`img`** | 图片优化 | → JXL (静态) / HEVC / AV1 (动图) |
-| **`vid`** | 视频优化 | → HEVC / AV1                     |
-
-还有一个 **macOS 双击应用** (`Modern Format Boost.app`)，支持拖放批量处理。
-
-## 📉 实际压缩效果示例
-
-| 原图格式   | 原始大小 | 输出格式       | 输出大小 | 空间节省 | 压缩手段                       |
-| :--------- | :------- | :------------- | :------- | :------- | :----------------------------- |
-| 风景 JPEG  | 4.2 MB   | **JXL**        | 3.3 MB   | **~21%** | 无损二进制成分重建 (Bit-exact) |
-| 截图 PNG   | 2.5 MB   | **JXL**        | 1.1 MB   | **~56%** | Modular 模式 d=0.0 无损        |
-| H.264 视频 | 1.2 GB   | **HEVC**       | 480 MB   | **~60%** | 三阶段 GPU+CPU 深度视觉搜索    |
-| 动图 WebP  | 15 MB    | **AV1 / HEVC** | 1.8 MB   | **~88%** | 重制为高压缩比视频格式         |
-
-## 📊 处理矩阵
-
-### 图片格式决策矩阵
-
-| 输入格式     | 无损? | 动图? | 处理                | 输出          | 算法与方式                       |
-| :----------- | :---: | :---: | :------------------ | :------------ | :------------------------------- |
-| JPEG         |   —   |  否   | **无损成分重建**    | `.jxl`        | VarDCT (位一致)                  |
-| PNG          |  ✅   |  否   | **无损转换**        | `.jxl`        | Modular d=0.0                    |
-| PNG (索引色) |  ❌   |  否   | **画质匹配**        | `.jxl`        | d=0.001                          |
-| WebP         |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | dwebp → JXL d=0.0                |
-| WebP         |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
-| WebP         |   —   |  是   | **Meme Score 判定** | `.mov`/`.gif` | 转视频或保留 GIF                 |
-| AVIF         |  ✅   |  否   | **无损转换**        | `.jxl`        | d=0.0                            |
-| AVIF         |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
-| HEIC/HEIF    |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `sips`/`magick` → PNG → d=0.0    |
-| HEIC/HEIF    |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
-| TIFF         |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `magick -depth 16` → PNG → d=0.0 |
-| TIFF         |  ❌   |  否   | **画质匹配**        | `.jxl`        | magick → JXL d=0.001             |
-| BMP          |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `magick` → PNG → d=0.0           |
-| GIF          |   —   |  是   | **Meme Score 判定** | `.mov`/`.gif` | 转视频或保留 GIF                 |
-| GIF          |   —   |  否   | **单帧提取**        | `.jxl`        | ffmpeg → JXL                     |
-| JXL          |   —   |  否   | **跳过**            | (保留)        | 最优格式                         |
-
-### 视频编码决策矩阵
-
-| 输入编码     | 压缩方式  | 处理动作          | 输出格式        | 编码内核               |
-| :----------- | :-------: | :---------------- | :-------------- | :--------------------- |
-| H.264 (AVC)  |   有损    | **CRF 视觉搜索**  | `.mp4` HEVC/AV1 | GPU → CPU x265/SVT-AV1 |
-| H.264        |   无损    | **无损再编码**    | `.mkv` HEVC/AV1 | x265/SVT-AV1 无损模式  |
-| VP9          |   有损    | **CRF 视觉搜索**  | `.mp4` HEVC/AV1 | GPU → CPU x265/SVT-AV1 |
-| AV1          |   有损    | **CRF 视觉搜索**  | `.mp4` HEVC     | GPU → CPU x265/SVT-AV1 |
-| HEVC (H.265) |   任何    | **跳过**          | (保留)          | 已经是目标编码格式     |
-| ProRes       | 有损/无损 | **CRF 搜索/无损** | `.mp4`/`.mkv`   | x265                   |
-
-### HDR 格式处理策略
-
-| HDR 类型         | 检测依据              | 核心保留策略                                                                             |
-| :--------------- | :-------------------- | :--------------------------------------------------------------------------------------- |
-| **HDR10**        | 元数据 side_data 捕获 | 通过 FFmpeg 参数完整保留静态元数据并注入                                                 |
-| **HLG**          | 传输特性 TRC 识别     | 原色 (Primaries) 及 TRC 完整保留                                                         |
-| **Dolby Vision** | DOVI RPU 数据流       | 经 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1                               |
-| **HDR10+**       | ST2094-40 动态元数据  | 已通过 `hdr10plus_tool` 侧信道提取与 x265 注入实现完整支持 (完美保留 Profile A/B 元数据) |
-| **SDR**          | 无 HDR 标记           | 自动进入标准处理流 (yuv420p)                                                             |
-
-## ⬇️ Installation / 安装说明
-
-### 前置要求
-
-| 工具               | 必须? | 用途               | 安装命令                                                   |
-| ------------------ | :---: | ------------------ | ---------------------------------------------------------- | --- |
-| **Rust** (1.75+)   |  ✅   | 编译安装           | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
-| **FFmpeg** (5.0+)  |  ✅   | 视频处理与质量检测 | `brew install ffmpeg`                                      |
-| **libjxl**         |  ✅   | JXL 编码核心       | `brew install jpeg-xl`                                     |
-| **ExifTool**       |  ✅   | 元数据保留         | `brew install exiftool`                                    |
-| **ImageMagick**    |  ✅   | 图片格式中转       | `brew install imagemagick`                                 |
-| **libwebp**        |  ✅   | WebP 原生解码      | `brew install webp`                                        |
-| **dovi_tool**      |  ✅   | 杜比视界 RPU 提取  | `cargo install dovi_tool`                                  |
-| **libheif**        |  ✅   | HEIC/HEIF 解码     | `brew install libheif`                                     |
-| **hdr10plus_tool** |  ✅   | HDR10+ 元数据提取  | `cargo install hdr10plus_tool`                             |
-
-### macOS (Homebrew)
+例如，macOS 可用 Homebrew 安装常见依赖：
 
 ```bash
-brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif
-cargo install dovi_tool
+brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif pkgconf
 ```
 
-#### Linux (Ubuntu/Debian)
-
-```bash
-sudo apt update && sudo apt install ffmpeg libimage-exiftool-perl imagemagick webp libheif-dev
-# JPEG XL (libjxl) 可能需要通过 PPA 或源码构建
-```
-
-#### Windows
-
-推荐使用 **winget** 一键安装所有依赖：
-
-```powershell
-winget install ffmpeg.ffmpeg ImageMagick.ImageMagick OliverBetz.ExifTool
-# Note: dovi_tool must be installed via cargo or manual binary download
-```
-
-### 从源码构建
+从源码构建命令行工具：
 
 ```bash
 git clone https://github.com/nowaytouse/modern-format-boost.git
 cd modern-format-boost
-cargo build --release
+cargo build --locked --release -p img -p vid
 ```
 
-## 🚀 使用方法
-
-### 快速开始
+macOS 原生应用的构建入口：
 
 ```bash
-# 图片优化
-img run /图片/路径
-vid run /视频/路径
-
-# 使用 AV1 策略
-vid run --codec av1 /视频/路径
+cargo run --locked -p dev --bin smart_build -- --all
 ```
 
-### 详细参数
+它会构建应用所需的工具，在 `target/release/bundle/macos/` 生成应用，
+并替换仓库根目录的 `Modern Format Boost.app`。
+**该应用正在处理文件时，不要执行此构建命令。** 原生构建还需要 Apple 命令行开发工具。
 
-- `--ultimate`: 档案级 **0.01 精度**搜索（高质量，高耗时）。
-- `--apple-compat`: 开启苹果生态兼容 (Live Photos/AAE)。（默认：开启）
-- `--in-place`: 原地替换原始文件。**警告：不可逆。**
-- `-o /dir`: 指定安全输出目录。（建议使用）
-- `--verbose`: 显示详细处理日志。
-- `--no-recursive`: 不递归进入子目录。
-- `--force-video`: 强制将动图视为视频处理（忽略 Meme Score）。
+界面文案维护在[原生界面 JSON 字典](../crates/gui/src-macos/Locales)中，包含英语、简体中文
+和日语。Smart Build 会核对三种语言的键是否一致，再编译为应用包内的 Apple 字符串资源。
 
-### 进阶子命令
+Linux、Windows 的依赖配置可参考[媒体依赖安装器](../crates/dev/src/bin/install_media_dependencies.rs)
+和[构建工作流](../.github/workflows)。设置中的**检查处理工具**可查看实际使用的路径
+和版本输出，但版本命令成功不等于编解码能力或交付验证通过。
 
-- `cache-stats`: 查看 SQLite 开源缓存统计。
-- `strategy <path>`: 预览特定文件的处理管线策略。
-- `restore-timestamps`: 根据文件名模式批量修复创建日期（元数据恢复）。
+### 命令行示例
 
-### 💡 多开须知
+以下假设 `img`、`vid` 已加入 `PATH`；从源码构建后，也可将命令替换为
+`target/release/img` 或 `target/release/vid`。
 
-**Modern Format Boost** 原生支持多开运行。
+```bash
+# 普通静图：指定独立输出，不加删除原件的参数。
+img run /path/to/copied-images --output /path/to/image-output
 
-- **多开并发说明**：允许开启多个窗口独立处理不同路径。
-- **注意**：请根据硬件 I/O 性能量力而行，过度并发可能引发文件系统竞态冲突。
+# 只查看 Fast IMG 的处理计划，不转换、不删除媒体。
+img fast-img --strategy jxl --dry-run /path/to/copied-images
 
-## 🏗️ 系统架构
+# 视频和动图；需要 AV1 策略时再加 --codec av1。
+vid run /path/to/copied-videos
 
-- `crates/img/`: 图片 → JXL/HEVC/AV1 工具
-- `crates/vid/`: 视频 → HEVC/AV1 工具
-- `crates/shared_utils/`: 处理大脑 (GPU 混合引擎, HDR 映射, 元数据)
-- `Modern Format Boost.app/`: macOS 拖拽图形界面
+# 查看实际生效配置、校验配置或检查某个工具。
+img config show --effective
+img config validate
+img config tool cjxl
+vid config show --effective
+```
 
-## ❓ FAQ
+通过 `img --help`、`img run --help`、`img fast-img --help` 或 `vid run --help`
+查看对应模式的当前参数，不要直接把某种模式的参数套到另一种模式。
+普通 `vid run` 要求能连接到 PostgreSQL；数据库分析、训练还使用 pgvector。
+`vid config`、`vid fast-gif`、普通 IMG 的本地识别和 Fast IMG **不需要 PostgreSQL**。
 
-**1. JXL 格式目前的兼容性如何？**  
-虽然 macOS 14 (Sonoma) 及 iOS 17+ 已提供初步原生支持，但仍存在诸多已知缺陷（如动图暂无法播放）。此外 Chrome 91+ 及 Firefox 128+ 也已原生支持。建议将其作为位一致的无损档案格式进行战略存储。
+## 设置、失败与恢复
 
-**2. 为什么 HDR10+ 动态视频会失效？**  
-现已完美支持。我们通过 `hdr10plus_tool` 提取动态元数据并重新注入 `libx265` 的 `--dhdr10-info` 参数中。请确保已安装该工具。
+GUI 和 CLI 使用同一套配置规则。普通 IMG、Fast IMG 和 VID 分别保留适用于自身的
+选项。[运行配置说明](dev/config/RUNTIME_CONFIG.md)列出配置位置、覆盖顺序、实际生效值
+和完整参数，README 不重复维护另一份参数表。
 
-**3. 为什么程序会自动跳过我的 WebP / AVIF / HEIC 图像？**  
-因为这三种格式已经是现代有损编码。二次编码会导致画质代际损伤。
+默认**记录并继续**：记录可恢复的单文件失败，保留失败原件，让互不影响的文件继续。
+**遇错即停**会更早停止后续工作，不会把已验证成果作废；共享安全前提失效时，仍会阻止
+受影响的交付。失败不会为了让结果好看而被改成“跳过”。
 
----
+**部分完成**表示一部分文件已独立验证成功，另一些失败，不是全成功。
+缺少或相互矛盾的证据仍然标为无法确认。编码数量、照片图库验证数量和清理数量代表
+不同事实；总数相等不等于文件内容已经对应。
 
-<p align="center">
-  <sub>Built with ❤️ in Rust · <a href="https://github.com/nowaytouse/modern-format-boost">GitHub</a></sub>
-</p>
+Fast IMG 会先查找匹配的保存状态，再决定是否需要建立新输出目录；复用要求身份和
+检查点有效，重新开始是另一种选择。不要仅因编码结束，就手动删除 `_optimized`
+目录、检查点或残留文件，应先核对交付和清理记录。
+
+**照片图库验证证明的是本地交付，不代表 iCloud 已同步。** 未知或发生变化的输出会被
+保留，不会直接清理。运行状态和暂存文件放在来源目录外，但不能保证系统 ctime 或被
+外部程序改动过的目录日期完全不变。
+
+## 文档导航
+
+[目录结构与文档索引](README.md)
+
+| 想了解什么 | 对应文档 |
+| --- | --- |
+| 版本改动和开发记录 | [更新日志](CHANGELOG.md) |
+| 版本、阶段历史与完整原始提交归档 | [Git 历史说明](dev/HISTORY.md) |
+| 设置、配置文件、工具与失败处理 | [运行配置](dev/config/RUNTIME_CONFIG.md) |
+| 图片处理路线、JPEG 档位搜索和质量搜索 | [私人 IMG 策略](dev/config/IMG_PRIVATE_POLICY.md) |
+| 计数、部分完成和验证范围 | [计数约定](hardening/COUNTING_CONTRACT.md) |
+| 持久日志、历史和诊断文件位置 | [日志布局](hardening/LOGGING_LAYOUT.md) |
+| 精确恢复 JPEG 与 XMP 关联 | [JXL/XMP 归档约定](hardening/JXL_XMP_ARCHIVE_CONTRACT.md) |
+| 高级 FFmpeg 配置 | [FFmpeg 指南](FFMPEG_SETUP.md) |
+| 架构与扩展边界 | [策略准备](hardening/POLICY_READINESS.md) · [媒体转换约定](hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) |
+
+## 开发与许可
+
+主要模块是 `crates/img`、`crates/vid`、共享的 `crates/foundation`、Rust 开发工具
+`crates/dev`，以及原生 GUI `crates/gui/src-macos`。改动应保留相关行为约定，并补充
+有针对性的回归检查。[CI](../.github/workflows/desktop-quality.yml)覆盖的是某个代码版本，
+不是任意真实媒体批次或实时照片图库行为的完成证明。
+
+训练、分析开发使用 Rust 入口 `cargo run --locked -p dev --bin run_training --`；
+日常图片归档不需要运行训练。共享规则位于
+[`training_rules.json`](../crates/dev/src/config/training_rules.json)；本机路径和导入上限放在
+不提交到 Git 的同目录 `training_rules.local.json`。在上述命令后加 `--help` 查看当前选项，
+加 `--background` 可转入后台；日志遵循[统一布局](hardening/LOGGING_LAYOUT.md)。
+正式命令和保留的 Python 用途见 [Python/Rust 迁移说明](PYTHON_RUST_MIGRATION.md#canonical-commands)。
+贡献时不要提交私人媒体、图库、本机路径、数据库或凭据。
+
+MFB 源代码采用 [MIT 许可证](../LICENSE)。依赖和外部工具仍遵守各自的许可证，
+详见[许可证与分发](LICENSING.md)。本项目仍是持续开发中的私人工具，不能替代备份，
+也不承诺所有格式和环境都能处理。

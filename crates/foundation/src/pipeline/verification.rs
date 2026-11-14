@@ -1,0 +1,7082 @@
+//! Shared verification gate model for fast/full media pipelines.
+
+pub(crate) use super::gate1_resume::FinalInputObservation;
+use super::gate1_resume::Gate1ProofCache;
+pub use super::gate1_resume::{FinalVerificationInputs, Gate1WorkProofs, retained_source_blake3};
+use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
+use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
+use std::process::ExitStatus;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Blake3Entry {
+    #[serde(default)]
+    pub out_rel: Option<String>,
+    pub src: String,
+    pub out: String,
+    pub library_asset: Option<String>,
+}
+
+pub type Blake3Log = BTreeMap<String, Blake3Entry>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SkippedSourceEntry {
+    pub src: String,
+    pub reason: String,
+}
+
+pub type SkippedSourceLog = BTreeMap<String, SkippedSourceEntry>;
+pub type FailedSourceLog = BTreeMap<String, SkippedSourceEntry>;
+
+pub(crate) const FAST_IMG_MARKER_SCHEMA_VERSION: u8 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryAssetRecord {
+    pub rel_path: String,
+    pub blake3: String,
+    pub sync_status: String,
+    pub quarantined: bool,
+    /// Photos library UUID used for pre-delete custody re-verification (tier-2 imports).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photos_uuid: Option<String>,
+    /// Photos library BLAKE3 when import rewrote container bytes but pixel proof passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_blake3: Option<String>,
+    /// Adjacent XMP BLAKE3 proven inside the Photos-delivered original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmp_sidecar_blake3: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LibraryHandle {
+    pub imported_assets: Vec<LibraryAssetRecord>,
+    pub import_error_count: usize,
+    /// Canonical explicitly selected library shared by every proof in this batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photos_library_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PipelineCtx {
+    pub working_copy: PathBuf,
+    pub src_dir: PathBuf,
+    pub blake3_log: Blake3Log,
+    pub expected_count: usize,
+    pub library_handle: Option<LibraryHandle>,
+    /// Explicit private processing intent; container detection does not grant
+    /// permission to clear metadata.
+    pub metadata_policy: crate::metadata::MetadataOutputPolicy,
+    /// Output format for this pipeline run, used to select the extension for
+    /// output file collection. When `None`, falls back to filesystem detection.
+    pub output_format: Option<crate::image::format_detect::FormatKind>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CheckDetail {
+    pub name: &'static str,
+    pub passed: bool,
+    pub expected: String,
+    pub actual: String,
+    pub affected_files: Vec<PathBuf>,
+    pub failure_scope: CheckFailureScope,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckFailureScope {
+    #[default]
+    Shared,
+    Files,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GateResult {
+    pub passed: bool,
+    pub checks: Vec<CheckDetail>,
+}
+
+impl GateResult {
+    /// Reporting only; isolating sources still requires validated source/output proofs.
+    #[must_use]
+    pub fn has_completed_file_failures(&self, error_mode: crate::BatchErrorMode) -> bool {
+        error_mode == crate::BatchErrorMode::LogAndContinue
+            && !self.passed
+            && self.checks.len() == LOCAL_REQUIRED_CHECKS.len()
+            && LOCAL_REQUIRED_CHECKS.iter().all(|(name, _)| {
+                self.checks
+                    .iter()
+                    .filter(|check| check.name == *name)
+                    .count()
+                    == 1
+            })
+            && ["count", "size", "blake3"].iter().all(|name| {
+                self.checks
+                    .iter()
+                    .any(|check| check.name == *name && check.passed)
+            })
+            && self.checks.iter().any(|check| !check.passed)
+            && self.checks.iter().all(|check| {
+                check.passed
+                    || (check.failure_scope == CheckFailureScope::Files
+                        && !check.affected_files.is_empty())
+            })
+    }
+
+    /// Return exact source identities only after every local check completed and
+    /// every failed check explicitly established a file-local failure.
+    ///
+    /// # Errors
+    /// Rejects incomplete checks, shared failures, or ambiguous source/output proofs.
+    pub fn isolated_source_failures(
+        &self,
+        ctx: &PipelineCtx,
+    ) -> anyhow::Result<BTreeMap<String, String>> {
+        anyhow::ensure!(!self.passed, "a passing gate has no failures to isolate");
+        anyhow::ensure!(
+            self.checks.len() == LOCAL_REQUIRED_CHECKS.len()
+                && LOCAL_REQUIRED_CHECKS.iter().all(|(name, _)| {
+                    self.checks
+                        .iter()
+                        .filter(|check| check.name == *name)
+                        .count()
+                        == 1
+                }),
+            "local verification did not complete every required check"
+        );
+        anyhow::ensure!(
+            ctx.blake3_log.len() == ctx.expected_count && ctx.expected_count > 0,
+            "source/output proof inventory is incomplete"
+        );
+        for name in ["count", "size", "blake3"] {
+            anyhow::ensure!(
+                self.checks
+                    .iter()
+                    .any(|check| check.name == name && check.passed),
+                "structural check {name} did not pass"
+            );
+        }
+        let mut source_by_output = BTreeMap::new();
+        for (source_rel, entry) in &ctx.blake3_log {
+            validate_marker_relative_path("source path", source_rel).map_err(anyhow::Error::msg)?;
+            let output_rel = entry.out_rel.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("source {source_rel} has no explicit output mapping")
+            })?;
+            validate_marker_relative_path("output path", output_rel).map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(
+                !entry.src.is_empty() && !entry.out.is_empty(),
+                "source {source_rel} has incomplete hash proof"
+            );
+            anyhow::ensure!(
+                source_by_output
+                    .insert(ctx.working_copy.join(output_rel), source_rel)
+                    .is_none(),
+                "multiple sources map to output {output_rel}"
+            );
+        }
+        let mut failures = BTreeMap::<String, String>::new();
+        for check in self.checks.iter().filter(|check| !check.passed) {
+            anyhow::ensure!(
+                check.failure_scope == CheckFailureScope::Files && !check.affected_files.is_empty(),
+                "{} failure is not independently isolatable: {}",
+                check.name,
+                check.actual
+            );
+            for output in &check.affected_files {
+                let source = source_by_output.get(output).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{} failure has an unmapped output: {}",
+                        check.name,
+                        output.display()
+                    )
+                })?;
+                let reason = format!(
+                    "Gate 1 {} failed for {}; check summary: {}",
+                    check.name,
+                    output.display(),
+                    check.actual
+                );
+                failures
+                    .entry((*source).clone())
+                    .and_modify(|existing| {
+                        existing.push_str("; ");
+                        existing.push_str(&reason);
+                    })
+                    .or_insert(reason);
+            }
+        }
+        anyhow::ensure!(
+            !failures.is_empty(),
+            "gate failure has no identified sources"
+        );
+        Ok(failures)
+    }
+}
+
+pub trait VerificationGate {
+    fn name(&self) -> &'static str;
+    fn run(&self, ctx: &PipelineCtx) -> GateResult;
+}
+
+pub struct Gate1Local;
+pub struct Gate2Import;
+pub struct Gate3Deep;
+/// Final custody checks, evaluated only after the caller refreshes local and Photos evidence.
+pub struct Gate2Final;
+
+type LocalCheckProbe = fn(&PipelineCtx, &[PathBuf], &mut dyn FnMut(usize, usize)) -> CheckDetail;
+
+const LOCAL_REQUIRED_CHECKS: [(&str, LocalCheckProbe); 6] = [
+    ("count", |ctx, files, _| {
+        check_count(ctx.expected_count, files.len(), files)
+    }),
+    ("size", |ctx, files, _| {
+        check_nonzero_size(ctx.expected_count, files)
+    }),
+    ("blake3", |ctx, _, progress| {
+        check_blake3_logged_outputs(ctx, progress)
+    }),
+    ("metadata", |ctx, _, progress| {
+        check_metadata_policy(ctx, progress)
+    }),
+    ("orient", |ctx, files, progress| {
+        check_orientation_policy(ctx, files, progress)
+    }),
+    ("decode", |_, files, progress| {
+        check_decode_probe_observed(files, progress)
+    }),
+];
+
+impl VerificationGate for Gate1Local {
+    fn name(&self) -> &'static str {
+        "Gate 1 — Pre-import local verification"
+    }
+
+    fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        self.run_with_error_mode(ctx, crate::BatchErrorMode::current())
+    }
+}
+
+impl Gate1Local {
+    /// Resume only independently bound per-file work; aggregate gates stay fresh.
+    #[must_use]
+    pub fn run_with_error_mode_and_resume(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        marker: &WorkingCopyMarker,
+    ) -> GateResult {
+        Self::run_selected_cache(
+            ctx,
+            error_mode,
+            Gate1ProofCache::for_marker(ctx, marker),
+            GateActivityKind::Local,
+            false,
+        )
+    }
+
+    /// Share content-bound intermediate work across a filtered rerun in this process.
+    #[must_use]
+    pub fn run_with_error_mode_and_work(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        marker: &WorkingCopyMarker,
+        work: &Gate1WorkProofs,
+    ) -> GateResult {
+        Self::run_selected_cache(
+            ctx,
+            error_mode,
+            Gate1ProofCache::for_marker_with_work(ctx, marker, work),
+            GateActivityKind::Local,
+            true,
+        )
+    }
+
+    /// Final Gate 2 local evidence never reads or writes reusable proof receipts.
+    #[must_use]
+    pub fn run_fresh(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        marker: &WorkingCopyMarker,
+    ) -> GateResult {
+        Self::run_selected_cache(
+            ctx,
+            error_mode,
+            Gate1ProofCache::fresh_for_marker(ctx, marker),
+            GateActivityKind::PhotosCustody,
+            true,
+        )
+    }
+
+    fn run_fresh_scoped(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        marker: &WorkingCopyMarker,
+    ) -> GateResult {
+        Self::run_selected_cache(
+            ctx,
+            error_mode,
+            Gate1ProofCache::fresh_for_marker(ctx, marker),
+            GateActivityKind::PhotosCustody,
+            true,
+        )
+    }
+
+    fn run_selected_cache(
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        selected: std::io::Result<Option<Gate1ProofCache<'_>>>,
+        kind: GateActivityKind,
+        scoped_inventory: bool,
+    ) -> GateResult {
+        match selected {
+            Ok(Some(cache)) => {
+                Self::run_with_proof_cache_for_gate(ctx, error_mode, &cache, kind, scoped_inventory)
+            }
+            Ok(None) => {
+                let activity = GateActivity::new(kind);
+                run_local_checks(
+                    ctx,
+                    || local_output_inventory(ctx, scoped_inventory),
+                    |check, completed, total, state, files| {
+                        activity.emit(check, completed, total, state, files);
+                    },
+                    error_mode,
+                )
+            }
+            Err(error) => {
+                let activity = GateActivity::new(kind);
+                activity.emit(
+                    "inventory",
+                    0,
+                    LOCAL_REQUIRED_CHECKS.len(),
+                    GateActivityState::Failed,
+                    None,
+                );
+                gate_result(vec![detail(
+                    "metadata",
+                    false,
+                    "stable local verification authority".into(),
+                    error.to_string(),
+                    Vec::new(),
+                )])
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn run_with_proof_cache(
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        shared: &Gate1ProofCache<'_>,
+    ) -> GateResult {
+        Self::run_with_proof_cache_for_gate(ctx, error_mode, shared, GateActivityKind::Local, false)
+    }
+
+    fn run_with_proof_cache_for_gate(
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        shared: &Gate1ProofCache<'_>,
+        kind: GateActivityKind,
+        scoped_inventory: bool,
+    ) -> GateResult {
+        let activity = GateActivity::new(kind);
+        let probes = LOCAL_REQUIRED_CHECKS.map(|(name, probe)| {
+            (
+                name,
+                move |ctx: &PipelineCtx,
+                      files: &[PathBuf],
+                      progress: &mut dyn FnMut(usize, usize)| {
+                    match name {
+                        "metadata" => {
+                            check_metadata_policy_with_resume(ctx, progress, Some(shared))
+                        }
+                        "orient" => {
+                            check_orientation_policy_with_resume(ctx, files, progress, Some(shared))
+                        }
+                        "decode" => {
+                            let checked = check_decode_probe_with_resume(files, progress, shared);
+                            finish_local_proof_phase(checked, shared)
+                        }
+                        _ => probe(ctx, files, progress),
+                    }
+                },
+            )
+        });
+        crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
+        run_local_checks_with_probes(
+            &probes,
+            ctx,
+            || local_output_inventory(ctx, scoped_inventory),
+            |check, completed, total, state, files| {
+                activity.emit(check, completed, total, state, files);
+            },
+            error_mode,
+        )
+    }
+
+    #[must_use]
+    pub fn run_with_error_mode(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+    ) -> GateResult {
+        crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
+        let activity = GateActivity::new(GateActivityKind::Local);
+        run_local_checks(
+            ctx,
+            || collect_delivery_output_files(&ctx.working_copy, None),
+            |check, completed, total, state, files| {
+                activity.emit(check, completed, total, state, files);
+            },
+            error_mode,
+        )
+    }
+}
+
+fn local_output_inventory(ctx: &PipelineCtx, scoped: bool) -> anyhow::Result<Vec<PathBuf>> {
+    if !scoped || ctx.blake3_log.values().any(|entry| entry.out_rel.is_none()) {
+        return collect_delivery_output_files(&ctx.working_copy, ctx.output_format);
+    }
+    let mut files = BTreeSet::new();
+    for entry in ctx.blake3_log.values() {
+        let rel = entry
+            .out_rel
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("scoped final proof has no explicit output mapping"))?;
+        validate_marker_relative_path("verified output", rel).map_err(anyhow::Error::msg)?;
+        let relative = Path::new(rel);
+        validate_no_symlink_components(&ctx.working_copy, relative).map_err(anyhow::Error::msg)?;
+        let path = ctx.working_copy.join(relative);
+        let format = crate::image::format_detect::detect_regular_file_format(&path)?;
+        anyhow::ensure!(
+            ctx.output_format.map_or_else(
+                || matches!(
+                    format,
+                    crate::image::format_detect::FormatKind::Jxl
+                        | crate::image::format_detect::FormatKind::Avif
+                ),
+                |expected| format == expected,
+            ),
+            "recorded delivery output has a different format: {}",
+            path.display()
+        );
+        anyhow::ensure!(
+            files.insert(path),
+            "duplicate recorded delivery output path: {rel}"
+        );
+    }
+    Ok(files.into_iter().collect())
+}
+
+fn finish_local_proof_phase(checked: CheckDetail, resume: &Gate1ProofCache<'_>) -> CheckDetail {
+    if let Err(error) = resume.finish() {
+        return detail(
+            "decode",
+            false,
+            "decoded outputs and unchanged Gate 1 verification inputs/tools".into(),
+            format!("shared Gate 1 completion guard failed: {error}"),
+            Vec::new(),
+        );
+    }
+    checked
+}
+
+fn run_local_checks(
+    ctx: &PipelineCtx,
+    inventory: impl FnOnce() -> anyhow::Result<Vec<PathBuf>>,
+    emit: impl FnMut(
+        &'static str,
+        usize,
+        usize,
+        GateActivityState,
+        Option<crate::ui::progress::GateFileProgress>,
+    ),
+    error_mode: crate::BatchErrorMode,
+) -> GateResult {
+    run_local_checks_with_probes(&LOCAL_REQUIRED_CHECKS, ctx, inventory, emit, error_mode)
+}
+
+fn run_local_checks_with_probes<F>(
+    probes: &[(&'static str, F)],
+    ctx: &PipelineCtx,
+    inventory: impl FnOnce() -> anyhow::Result<Vec<PathBuf>>,
+    mut emit: impl FnMut(
+        &'static str,
+        usize,
+        usize,
+        GateActivityState,
+        Option<crate::ui::progress::GateFileProgress>,
+    ),
+    error_mode: crate::BatchErrorMode,
+) -> GateResult
+where
+    F: Fn(&PipelineCtx, &[PathBuf], &mut dyn FnMut(usize, usize)) -> CheckDetail,
+{
+    let total = probes.len();
+    emit("inventory", 0, total, GateActivityState::Running, None);
+    let jxl_files = match inventory() {
+        Ok(files) => files,
+        Err(err) => {
+            emit("inventory", 0, total, GateActivityState::Failed, None);
+            return gate_result(vec![detail(
+                "count",
+                false,
+                ctx.expected_count.to_string(),
+                format!("walkdir traversal failed: {err}"),
+                vec![ctx.working_copy.clone()],
+            )]);
+        }
+    };
+    // Reject cheap structural failures before launching metadata/decoder tools.
+    run_required_checks(probes, ctx, &jxl_files, emit, error_mode)
+}
+
+fn run_required_checks<F>(
+    probes: &[(&'static str, F)],
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    mut emit: impl FnMut(
+        &'static str,
+        usize,
+        usize,
+        GateActivityState,
+        Option<crate::ui::progress::GateFileProgress>,
+    ),
+    error_mode: crate::BatchErrorMode,
+) -> GateResult
+where
+    F: Fn(&PipelineCtx, &[PathBuf], &mut dyn FnMut(usize, usize)) -> CheckDetail,
+{
+    let mut checks = Vec::with_capacity(probes.len());
+    for (name, probe) in probes {
+        emit(
+            name,
+            checks.len(),
+            probes.len(),
+            GateActivityState::Running,
+            None,
+        );
+        let started = std::time::Instant::now();
+        let mut file_progress = None;
+        let mut last_emit = None;
+        let cancellation = crate::batch_control::is_cancelled();
+        let check = if matches!(cancellation, Ok(false)) {
+            probe(ctx, files, &mut |processed, total| {
+                file_progress = Some(crate::ui::progress::GateFileProgress { processed, total });
+                let now = std::time::Instant::now();
+                if processed == 0
+                    || processed == total
+                    || last_emit.is_none_or(|previous: std::time::Instant| {
+                        now.duration_since(previous) >= std::time::Duration::from_millis(250)
+                    })
+                {
+                    emit(
+                        name,
+                        checks.len(),
+                        probes.len(),
+                        GateActivityState::Running,
+                        file_progress,
+                    );
+                    last_emit = Some(now);
+                }
+            })
+        } else {
+            detail(
+                name,
+                false,
+                "verification may continue".into(),
+                cancellation.map_or_else(
+                    |err| format!("cancellation state unavailable: {err}"),
+                    |_| "verification cancelled".into(),
+                ),
+                Vec::new(),
+            )
+        };
+        tracing::info!(target: "verification_gate", gate = "local", check = check.name,
+            duration_ms = started.elapsed().as_secs_f64() * 1000.0, passed = check.passed,
+            "required check completed");
+        let passed = check.passed;
+        let can_continue = error_mode == crate::BatchErrorMode::LogAndContinue
+            && check.failure_scope == CheckFailureScope::Files
+            && !check.affected_files.is_empty();
+        checks.push(check);
+        if !passed {
+            emit(
+                name,
+                checks.len(),
+                probes.len(),
+                if can_continue {
+                    GateActivityState::FileFailures
+                } else {
+                    GateActivityState::Failed
+                },
+                file_progress,
+            );
+            if !can_continue {
+                tracing::info!(target: "verification_gate", deferred_checks = probes.len() - checks.len(),
+                    "remaining checks not run after shared or fail-fast failure; import and cleanup blocked");
+                break;
+            }
+        }
+        if passed && checks.len() == probes.len() {
+            emit(
+                name,
+                checks.len(),
+                probes.len(),
+                if checks.iter().all(|check| check.passed) {
+                    GateActivityState::Passed
+                } else if error_mode == crate::BatchErrorMode::LogAndContinue
+                    && checks.iter().all(|check| {
+                        check.passed
+                            || (check.failure_scope == CheckFailureScope::Files
+                                && !check.affected_files.is_empty())
+                    })
+                {
+                    GateActivityState::FileFailures
+                } else {
+                    GateActivityState::Failed
+                },
+                file_progress,
+            );
+        }
+    }
+    gate_result(checks)
+}
+
+impl VerificationGate for Gate2Import {
+    fn name(&self) -> &'static str {
+        "Gate 2 — Post-import verification"
+    }
+
+    fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
+        let Some(library) = &ctx.library_handle else {
+            return gate_result(vec![
+                detail(
+                    "count",
+                    false,
+                    ctx.expected_count.to_string(),
+                    "library handle absent".to_string(),
+                    Vec::new(),
+                ),
+                detail(
+                    "blake3_sample",
+                    false,
+                    sample_expected(ctx.expected_count),
+                    "library handle absent".to_string(),
+                    Vec::new(),
+                ),
+                detail(
+                    "no_error",
+                    false,
+                    "0 import errors".to_string(),
+                    "library handle absent".to_string(),
+                    Vec::new(),
+                ),
+            ]);
+        };
+        let imported_count = library.imported_assets.len();
+        let duplicate_library_paths = duplicate_library_rel_paths(&library.imported_assets);
+        let logged_outputs = out_rel_index(&ctx.blake3_log);
+        let sample = sample_size(ctx.expected_count);
+        let matched = library
+            .imported_assets
+            .iter()
+            .take(sample)
+            .filter(|asset| {
+                duplicate_library_paths.is_empty()
+                    && logged_outputs
+                        .get(&asset.rel_path)
+                        .is_some_and(|entry| entry.out == asset.blake3)
+            })
+            .count();
+        let sample_failures = library
+            .imported_assets
+            .iter()
+            .take(sample)
+            .filter(|asset| {
+                !duplicate_library_paths.is_empty()
+                    || logged_outputs
+                        .get(&asset.rel_path)
+                        .is_none_or(|entry| entry.out != asset.blake3)
+            })
+            .map(|asset| ctx.working_copy.join(&asset.rel_path))
+            .collect::<Vec<_>>();
+
+        gate_result(vec![
+            detail(
+                "count",
+                imported_count == ctx.expected_count,
+                ctx.expected_count.to_string(),
+                imported_count.to_string(),
+                Vec::new(),
+            ),
+            detail(
+                "blake3_sample",
+                matched == sample && duplicate_library_paths.is_empty(),
+                format!("{sample}/{sample} match"),
+                if duplicate_library_paths.is_empty() {
+                    format!("{matched}/{sample} match")
+                } else {
+                    format!(
+                        "{matched}/{sample} match; duplicate library paths: {}",
+                        duplicate_library_paths.join(", ")
+                    )
+                },
+                sample_failures,
+            ),
+            detail(
+                "no_error",
+                library.import_error_count == 0,
+                "0 import errors".to_string(),
+                library.import_error_count.to_string(),
+                Vec::new(),
+            ),
+        ])
+    }
+}
+
+impl VerificationGate for Gate3Deep {
+    fn name(&self) -> &'static str {
+        "Gate 3 — Pre-delete deep verification"
+    }
+
+    fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        self.run_inventory(
+            ctx,
+            || collect_delivery_output_files(&ctx.working_copy, ctx.output_format),
+            |_, _| {},
+        )
+    }
+}
+
+impl Gate3Deep {
+    fn run_inventory(
+        &self,
+        ctx: &PipelineCtx,
+        inventory: impl FnOnce() -> anyhow::Result<Vec<PathBuf>>,
+        mut on_check: impl FnMut(&'static str, Option<crate::ui::progress::GateFileProgress>),
+    ) -> GateResult {
+        crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
+        on_check("count_x3", None);
+        let jxl_files = match inventory() {
+            Ok(files) => files,
+            Err(err) => {
+                return gate_result(vec![detail(
+                    "count_x3",
+                    false,
+                    format!("{} wc, library, blake3 log", ctx.expected_count),
+                    format!("walkdir traversal failed: {err}"),
+                    vec![ctx.working_copy.clone()],
+                )]);
+            }
+        };
+        let Some(library) = &ctx.library_handle else {
+            return gate_result(vec![
+                detail(
+                    "count_x3",
+                    false,
+                    format!("{} wc, library, blake3 log", ctx.expected_count),
+                    format!(
+                        "{} wc, absent library, {} blake3 log",
+                        jxl_files.len(),
+                        ctx.blake3_log.len()
+                    ),
+                    Vec::new(),
+                ),
+                detail(
+                    "sync",
+                    false,
+                    "Photos local custody or uploaded".to_string(),
+                    "library handle absent".to_string(),
+                    Vec::new(),
+                ),
+                detail(
+                    "quarantine",
+                    false,
+                    "0 quarantined".to_string(),
+                    "library handle absent".to_string(),
+                    Vec::new(),
+                ),
+                detail(
+                    "chain",
+                    false,
+                    format!("{} intact chains", ctx.expected_count),
+                    "library handle absent".to_string(),
+                    Vec::new(),
+                ),
+            ]);
+        };
+        let duplicate_library_paths = duplicate_library_rel_paths(&library.imported_assets);
+        let logged_outputs = out_rel_index(&ctx.blake3_log);
+        let library_index = library_asset_index(&library.imported_assets);
+        let count_x3 = duplicate_library_paths.is_empty()
+            && jxl_files.len() == ctx.expected_count
+            && library.imported_assets.len() == ctx.expected_count
+            && ctx.blake3_log.len() == ctx.expected_count;
+        on_check("sync", None);
+        let sync_failures = library
+            .imported_assets
+            .iter()
+            .filter(|asset| !photos_library_sync_status_is_accepted(&asset.sync_status))
+            .map(|asset| ctx.working_copy.join(&asset.rel_path))
+            .collect::<Vec<_>>();
+        let local_custody_count = library
+            .imported_assets
+            .iter()
+            .filter(|asset| asset.sync_status == "photos_local")
+            .count();
+        let uploaded_count = library
+            .imported_assets
+            .iter()
+            .filter(|asset| asset.sync_status == "uploaded")
+            .count();
+        on_check("quarantine", None);
+        let quarantine_failures = library
+            .imported_assets
+            .iter()
+            .filter(|asset| asset.quarantined)
+            .map(|asset| ctx.working_copy.join(&asset.rel_path))
+            .collect::<Vec<_>>();
+        on_check("chain", None);
+        let total = logged_outputs.len();
+        let report_attempts = count_x3
+            && total == ctx.expected_count
+            && total > 0
+            && ctx.blake3_log.values().all(|entry| entry.out_rel.is_some());
+        let progress = |processed| crate::ui::progress::GateFileProgress { processed, total };
+        let mut last_report = std::time::Instant::now();
+        if report_attempts {
+            on_check("chain", Some(progress(0)));
+        }
+        let mut chain_failures = Vec::new();
+        for (index, (out_rel, entry)) in logged_outputs.iter().enumerate() {
+            if !library_index.get(out_rel).is_some_and(|asset| {
+                entry.out == asset.blake3
+                    && entry.library_asset.as_deref() == Some(asset.blake3.as_str())
+            }) {
+                chain_failures.push(ctx.working_copy.join(out_rel));
+            }
+            let processed = index + 1;
+            if report_attempts
+                && (processed == total
+                    || last_report.elapsed() >= std::time::Duration::from_millis(250))
+            {
+                on_check("chain", Some(progress(processed)));
+                last_report = std::time::Instant::now();
+            }
+        }
+        chain_failures.extend(
+            library_index
+                .keys()
+                .filter(|out_rel| !logged_outputs.contains_key(*out_rel))
+                .map(|out_rel| ctx.working_copy.join(out_rel)),
+        );
+        chain_failures.extend(
+            duplicate_library_paths
+                .iter()
+                .map(|out_rel| ctx.working_copy.join(out_rel)),
+        );
+        chain_failures.sort();
+        chain_failures.dedup();
+
+        gate_result(vec![
+            detail(
+                "count_x3",
+                count_x3,
+                format!("{} wc, library, blake3 log", ctx.expected_count),
+                format!(
+                    "{} wc, {} library, {} blake3 log",
+                    jxl_files.len(),
+                    library.imported_assets.len(),
+                    ctx.blake3_log.len()
+                ),
+                Vec::new(),
+            ),
+            detail(
+                "sync",
+                sync_failures.is_empty(),
+                "Photos local custody or uploaded".to_string(),
+                format!(
+                    "{local_custody_count} Photos-local, {uploaded_count} uploaded, {} without accepted custody proof",
+                    sync_failures.len()
+                ),
+                sync_failures,
+            ),
+            detail(
+                "quarantine",
+                quarantine_failures.is_empty(),
+                "0 quarantined".to_string(),
+                quarantine_failures.len().to_string(),
+                quarantine_failures,
+            ),
+            detail(
+                "chain",
+                chain_failures.is_empty(),
+                format!("{} intact chains", ctx.expected_count),
+                format!("{} broken chains", chain_failures.len()),
+                chain_failures,
+            ),
+        ])
+    }
+}
+
+impl Gate2Final {
+    fn run_relationship_checks(
+        ctx: &PipelineCtx,
+        mut emit: impl FnMut(
+            &'static str,
+            usize,
+            GateActivityState,
+            Option<crate::ui::progress::GateFileProgress>,
+        ),
+    ) -> GateResult {
+        // Report the five activities this stage actually performs. A failed check
+        // can still be followed by diagnostic checks, so report the blocker only
+        // once all available evidence has been collected.
+        emit("import_receipts", 0, GateActivityState::Running, None);
+        let mut checks = Gate2Import.run(ctx).checks;
+        let mut attempted = 1;
+        let mut chain_progress = None;
+        checks.extend(
+            Gate3Deep
+                .run_inventory(
+                    ctx,
+                    || local_output_inventory(ctx, true),
+                    |check, files| {
+                        if let Some(files) = files {
+                            chain_progress = Some(files);
+                            emit(
+                                check,
+                                attempted - 1,
+                                GateActivityState::Running,
+                                Some(files),
+                            );
+                        } else {
+                            emit(check, attempted, GateActivityState::Running, None);
+                            attempted += 1;
+                        }
+                    },
+                )
+                .checks,
+        );
+        let result = gate_result(checks);
+        if let Some(failed) = result.checks.iter().find(|check| !check.passed) {
+            let blocker = match failed.name {
+                "count" | "blake3_sample" | "no_error" => "import_receipts",
+                name => name,
+            };
+            emit(
+                blocker,
+                attempted,
+                GateActivityState::Failed,
+                if blocker == "chain" {
+                    chain_progress
+                } else {
+                    None
+                },
+            );
+        } else {
+            emit(
+                "chain",
+                attempted,
+                GateActivityState::Passed,
+                chain_progress,
+            );
+        }
+        result
+    }
+
+    /// Validate the whole inventory and decode each output once in this uncached attempt.
+    #[must_use]
+    pub fn run_fresh_cleanup_resume(
+        &self,
+        ctx: &PipelineCtx,
+        pending: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        pending_marker: &WorkingCopyMarker,
+    ) -> GateResult {
+        if !crate::common_utils::verification_cache_disabled() {
+            return final_cache_policy_failure();
+        }
+        let mut local = Gate1Local.run_fresh_scoped(pending, error_mode, pending_marker);
+        let decoded = if local.passed {
+            match local_output_inventory(pending, true) {
+                Ok(paths) => paths.into_iter().collect::<BTreeSet<_>>(),
+                Err(error) => {
+                    return gate_result(vec![detail(
+                        "decode",
+                        false,
+                        "complete pending output mapping".into(),
+                        error.to_string(),
+                        Vec::new(),
+                    )]);
+                }
+            }
+        } else {
+            BTreeSet::new()
+        };
+        let decoded = &decoded;
+        let probes = [
+            LOCAL_REQUIRED_CHECKS[0],
+            LOCAL_REQUIRED_CHECKS[1],
+            LOCAL_REQUIRED_CHECKS[5],
+        ]
+        .map(|(name, probe)| {
+            (
+                name,
+                move |ctx: &PipelineCtx,
+                      files: &[PathBuf],
+                      progress: &mut dyn FnMut(usize, usize)| {
+                    if name != "decode" || decoded.is_empty() {
+                        return probe(ctx, files, progress);
+                    }
+                    let remaining = files
+                        .iter()
+                        .filter(|path| !decoded.contains(*path))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if files.len() != decoded.len() + remaining.len() {
+                        return detail(
+                            "decode",
+                            false,
+                            "unchanged output inventory".into(),
+                            "a freshly decoded pending output left the inventory".into(),
+                            Vec::new(),
+                        );
+                    }
+                    probe(ctx, &remaining, progress)
+                },
+            )
+        });
+        let activity = GateActivity::new(GateActivityKind::PhotosCustody);
+        let outputs = run_local_checks_with_probes(
+            &probes,
+            ctx,
+            || local_output_inventory(ctx, true),
+            |check, completed, total, state, files| {
+                activity.emit(check, completed, total, state, files);
+            },
+            error_mode,
+        );
+        local.passed &= outputs.passed;
+        local.checks.extend(outputs.checks);
+        local
+    }
+}
+
+impl VerificationGate for Gate2Final {
+    fn name(&self) -> &'static str {
+        "Gate 2 — Final local and Photos verification"
+    }
+
+    fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        if !crate::common_utils::verification_cache_disabled() {
+            return final_cache_policy_failure();
+        }
+        let activity = GateActivity::new(GateActivityKind::PhotosRelationships);
+        Self::run_relationship_checks(ctx, |check, completed, state, files| {
+            activity.emit(check, completed, 5, state, files);
+        })
+    }
+}
+
+fn final_cache_policy_failure() -> GateResult {
+    gate_result(vec![detail(
+        "no_error",
+        false,
+        "explicit cache-disabled final verification scope".into(),
+        "final verification refused: cache-disabled scope is inactive".into(),
+        Vec::new(),
+    )])
+}
+
+fn gate_result(checks: Vec<CheckDetail>) -> GateResult {
+    let passed = !checks.is_empty() && checks.iter().all(|check| check.passed);
+    GateResult { passed, checks }
+}
+
+const fn detail(
+    name: &'static str,
+    passed: bool,
+    expected: String,
+    actual: String,
+    affected_files: Vec<PathBuf>,
+) -> CheckDetail {
+    CheckDetail {
+        name,
+        passed,
+        expected,
+        actual,
+        affected_files,
+        failure_scope: CheckFailureScope::Shared,
+    }
+}
+
+const fn file_failures(mut check: CheckDetail, file_local: bool) -> CheckDetail {
+    if file_local && !check.passed && !check.affected_files.is_empty() {
+        check.failure_scope = CheckFailureScope::Files;
+    }
+    check
+}
+
+fn check_count(expected: usize, actual: usize, files: &[PathBuf]) -> CheckDetail {
+    detail(
+        "count",
+        actual == expected,
+        expected.to_string(),
+        actual.to_string(),
+        if actual == expected {
+            Vec::new()
+        } else {
+            files.to_vec()
+        },
+    )
+}
+
+fn check_blake3_logged_outputs(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
+    let mut failures = Vec::new();
+    let mut hash_read_errors = 0usize;
+    let total = ctx.blake3_log.len();
+    let report_progress = total > 0 && total == ctx.expected_count;
+    if report_progress {
+        progress(0, total);
+    }
+    for (index, (rel_path, entry)) in ctx.blake3_log.iter().enumerate() {
+        let src = ctx.src_dir.join(rel_path);
+        let out_rel = entry.out_rel.as_deref().map_or_else(
+            || PathBuf::from(rel_path).with_extension("JXL"),
+            PathBuf::from,
+        );
+        let out = ctx.working_copy.join(out_rel);
+        let src_current = if entry.src.is_empty() {
+            false
+        } else {
+            match calculate_blake3_hash(&src) {
+                Ok(hash) => hash == entry.src,
+                Err(err) => {
+                    hash_read_errors += 1;
+                    crate::media_conversion_gate::delivery_pipeline_path_audit(
+                        "fast_img_gate1_blake3_src",
+                        &src,
+                        format!("source BLAKE3 read failed during Gate 1 proof: {err}"),
+                    );
+                    false
+                }
+            }
+        };
+        let out_current = if entry.out.is_empty() {
+            false
+        } else {
+            match calculate_blake3_hash(&out) {
+                Ok(hash) => hash == entry.out,
+                Err(err) => {
+                    hash_read_errors += 1;
+                    crate::media_conversion_gate::delivery_pipeline_path_audit(
+                        "fast_img_gate1_blake3_out",
+                        &out,
+                        format!("output BLAKE3 read failed during Gate 1 proof: {err}"),
+                    );
+                    false
+                }
+            }
+        };
+        let logged_hashes_current = src_current && out_current;
+        if !logged_hashes_current {
+            failures.push(out);
+        }
+        if report_progress {
+            progress(index + 1, total);
+        }
+    }
+    let verified = ctx.blake3_log.len().saturating_sub(failures.len());
+    let actual = if hash_read_errors == 0 {
+        format!("{} verified, {} failed", verified, failures.len())
+    } else {
+        format!(
+            "{} verified, {} failed, hash read errors: {}",
+            verified,
+            failures.len(),
+            hash_read_errors
+        )
+    };
+
+    detail(
+        "blake3",
+        failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count,
+        format!("{} final source/output hashes current", ctx.expected_count),
+        actual,
+        failures,
+    )
+}
+
+fn check_metadata_policy(ctx: &PipelineCtx, progress: &mut dyn FnMut(usize, usize)) -> CheckDetail {
+    check_metadata_policy_with_resume(ctx, progress, None)
+}
+
+fn check_metadata_policy_with_resume(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+    resume: Option<&Gate1ProofCache<'_>>,
+) -> CheckDetail {
+    match (ctx.metadata_policy, ctx.output_format) {
+        (crate::metadata::MetadataOutputPolicy::Preserve, _) => {
+            check_exact_metadata_copies_with_resume(ctx, progress, resume)
+        }
+        (
+            crate::metadata::MetadataOutputPolicy::Clear,
+            Some(crate::image::format_detect::FormatKind::Avif),
+        ) => check_meme_metadata_policy(ctx, progress),
+        _ => detail(
+            "metadata",
+            false,
+            "explicit supported private metadata policy for the selected pipeline".to_owned(),
+            format!(
+                "unsupported metadata policy {:?} for {:?}",
+                ctx.metadata_policy, ctx.output_format
+            ),
+            Vec::new(),
+        ),
+    }
+}
+
+fn check_meme_metadata_policy(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
+    let mut failures = Vec::new();
+    let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
+    let mut cleared = 0usize;
+    let mut first_mismatch = None;
+    let total = ctx.blake3_log.len();
+    let report_progress = total > 0 && total == ctx.expected_count;
+    if report_progress {
+        progress(0, total);
+    }
+    for (index, (rel_path, entry)) in ctx.blake3_log.iter().enumerate() {
+        let src = ctx.src_dir.join(rel_path);
+        let out_rel = entry.out_rel.as_deref().map_or_else(
+            || PathBuf::from(rel_path).with_extension("avif"),
+            PathBuf::from,
+        );
+        let out = ctx.working_copy.join(out_rel);
+        match crate::metadata::verify_output_embedded_metadata(
+            &src,
+            &out,
+            crate::metadata::MetadataOutputPolicy::Clear,
+        ) {
+            Ok(_) => cleared = cleared.saturating_add(1),
+            Err(err) => {
+                file_local &= err.kind() == std::io::ErrorKind::InvalidData;
+                if first_mismatch.is_none() {
+                    first_mismatch = Some(err.to_string());
+                }
+                crate::media_conversion_gate::delivery_pipeline_path_audit(
+                    "fast_img_gate1_meme_cleared_metadata",
+                    &out,
+                    format!("Meme Mode cleared-metadata verification failed during Gate 1: {err}"),
+                );
+                failures.push(out);
+            }
+        }
+        if report_progress {
+            progress(index + 1, total);
+        }
+    }
+    let passed = failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count;
+    let actual = first_mismatch.map_or_else(
+        || {
+            format!(
+                "{} checked, {cleared} cleared, {} failed",
+                ctx.blake3_log.len(),
+                failures.len()
+            )
+        },
+        |detail| {
+            format!(
+                "{} checked, {cleared} cleared, {} failed; first {detail}",
+                ctx.blake3_log.len(),
+                failures.len()
+            )
+        },
+    );
+    file_failures(
+        detail(
+            "metadata",
+            passed,
+            format!("{} Meme Mode cleared-metadata outputs", ctx.expected_count),
+            actual,
+            failures,
+        ),
+        file_local,
+    )
+}
+
+#[cfg(test)]
+fn check_exact_metadata_copies(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
+    check_exact_metadata_copies_with_resume(ctx, progress, None)
+}
+
+fn check_exact_metadata_copies_with_resume(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+    resume: Option<&Gate1ProofCache<'_>>,
+) -> CheckDetail {
+    let mut failures = Vec::new();
+    let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
+    let mut mismatch_count = 0usize;
+    let mut first_mismatch = None;
+    let total = ctx.blake3_log.len();
+    let report_progress = total > 0 && total == ctx.expected_count;
+    if report_progress {
+        progress(0, total);
+    }
+    for (index, (rel_path, entry)) in ctx.blake3_log.iter().enumerate() {
+        let src = ctx.src_dir.join(rel_path);
+        let out_rel = entry.out_rel.as_deref().map_or_else(
+            || PathBuf::from(rel_path).with_extension("JXL"),
+            PathBuf::from,
+        );
+        let out = ctx.working_copy.join(out_rel);
+        match crate::metadata::verify_exact_metadata_copy(&src, &out).and_then(|check| {
+            if !check.passed {
+                return Ok(check);
+            }
+            let embedded = || {
+                if let Some(resume) = resume {
+                    crate::metadata::verify_output_embedded_metadata_with_index(
+                        &src,
+                        &out,
+                        crate::metadata::MetadataOutputPolicy::Preserve,
+                        resume.sidecars(),
+                    )
+                    .map(|_| ())
+                } else {
+                    crate::metadata::verify_output_embedded_metadata(
+                        &src,
+                        &out,
+                        crate::metadata::MetadataOutputPolicy::Preserve,
+                    )
+                    .map(|_| ())
+                }
+            };
+            if let Some(resume) = resume {
+                resume.verify("embedded_metadata", &src, &out, embedded)?;
+            } else {
+                embedded()?;
+            }
+            Ok(check)
+        }) {
+            Ok(check) if check.passed => {}
+            Ok(check) => {
+                mismatch_count = mismatch_count.saturating_add(1);
+                if first_mismatch.is_none() {
+                    first_mismatch = Some(check.mismatches.join("; "));
+                }
+                failures.push(out);
+            }
+            Err(err) => {
+                file_local &= err.kind() == std::io::ErrorKind::InvalidData;
+                mismatch_count = mismatch_count.saturating_add(1);
+                if first_mismatch.is_none() {
+                    first_mismatch = Some(err.to_string());
+                }
+                crate::media_conversion_gate::delivery_pipeline_path_audit(
+                    "fast_img_gate1_metadata",
+                    &out,
+                    format!("metadata verification failed during Gate 1: {err}"),
+                );
+                failures.push(out);
+            }
+        }
+        if report_progress {
+            progress(index + 1, total);
+        }
+    }
+    let verified = ctx.blake3_log.len().saturating_sub(failures.len());
+    let actual = first_mismatch.map_or_else(
+        || format!("{verified} verified, {mismatch_count} failed"),
+        |detail| format!("{verified} verified, {mismatch_count} failed; first {detail}"),
+    );
+
+    file_failures(
+        detail(
+            "metadata",
+            failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count,
+            format!(
+                "{} exact filesystem and embedded source/output metadata copies",
+                ctx.expected_count
+            ),
+            actual,
+            failures,
+        ),
+        file_local,
+    )
+}
+
+fn out_rel_index(blake3_log: &Blake3Log) -> BTreeMap<String, &Blake3Entry> {
+    blake3_log
+        .iter()
+        .map(|(source_rel, entry)| {
+            (
+                entry.out_rel.clone().unwrap_or_else(|| {
+                    // Legacy entry without out_rel: the .JXL guess fails closed at hash
+                    // verify, but audit it so a wrong guess reads as "missing out_rel".
+                    crate::media_conversion_gate::delivery_pipeline_batch_audit(
+                        "verification_out_rel_guess",
+                        format!(
+                            "Blake3 entry for {source_rel} lacks out_rel; guessing .JXL sibling"
+                        ),
+                    );
+                    PathBuf::from(source_rel)
+                        .with_extension("JXL")
+                        .to_string_lossy()
+                        .to_string()
+                }),
+                entry,
+            )
+        })
+        .collect()
+}
+
+fn library_asset_index(assets: &[LibraryAssetRecord]) -> BTreeMap<String, &LibraryAssetRecord> {
+    assets
+        .iter()
+        .map(|asset| (asset.rel_path.clone(), asset))
+        .collect()
+}
+
+fn duplicate_library_rel_paths(assets: &[LibraryAssetRecord]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut duplicates = BTreeSet::new();
+    for asset in assets {
+        if !seen.insert(asset.rel_path.clone()) {
+            duplicates.insert(asset.rel_path.clone());
+        }
+    }
+    duplicates.into_iter().collect()
+}
+
+fn photos_library_sync_status_is_accepted(sync_status: &str) -> bool {
+    matches!(sync_status, "uploaded" | "photos_local")
+}
+
+fn check_nonzero_size(expected: usize, files: &[PathBuf]) -> CheckDetail {
+    let failures = files
+        .iter()
+        .filter(|path| match std::fs::metadata(path) {
+            Ok(metadata) => metadata.len() == 0,
+            Err(err) => {
+                crate::media_conversion_gate::delivery_pipeline_path_audit(
+                    "fast_img_gate1_size",
+                    path,
+                    format!("metadata read failed during Gate 1 size check: {err}"),
+                );
+                true
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    detail(
+        "size",
+        failures.is_empty() && files.len() == expected,
+        format!("{expected} non-empty JXL/AVIF files"),
+        format!(
+            "{} non-empty, {} empty/missing",
+            files.len().saturating_sub(failures.len()),
+            failures.len()
+        ),
+        failures,
+    )
+}
+
+fn check_orientation_policy(
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
+    check_orientation_policy_with_resume(ctx, files, progress, None)
+}
+
+fn check_orientation_policy_with_resume(
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    resume: Option<&Gate1ProofCache<'_>>,
+) -> CheckDetail {
+    if !is_command_available("exiftool") {
+        return detail(
+            "orient",
+            false,
+            "exiftool available and no unsafe Orientation tags".to_string(),
+            "exiftool unavailable".to_string(),
+            files.to_vec(),
+        );
+    }
+
+    let orientations = match orientation_tags_batch(files) {
+        Ok(tags) => tags,
+        Err(error) => {
+            return detail(
+                "orient",
+                false,
+                "complete orientation probe".into(),
+                error.to_string(),
+                files.to_vec(),
+            );
+        }
+    };
+    check_orientation_policy_with_probes_and_resume(
+        ctx,
+        files,
+        progress,
+        |path| {
+            orientations
+                .get(path)
+                .copied()
+                .ok_or_else(|| std::io::Error::other("orientation result missing"))
+        },
+        |source, output| {
+            if crate::image::format_detect::detect_true_format(output)
+                .map_err(|err| std::io::Error::other(err.to_string()))?
+                != crate::image::format_detect::FormatKind::Jxl
+            {
+                return Ok(false);
+            }
+            crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
+                .map(|result| {
+                    matches!(
+                        result,
+                        crate::image::fast_img::IntegrityResult::RoundtripMatch { .. }
+                    )
+                })
+                .map_err(|err| std::io::Error::other(err.to_string()))
+        },
+        resume,
+    )
+}
+
+#[cfg(test)]
+fn check_orientation_policy_with_probes<F, R>(
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    orientation_probe: F,
+    reconstruction_probe: R,
+) -> CheckDetail
+where
+    F: FnMut(&Path) -> std::io::Result<bool>,
+    R: FnMut(&Path, &Path) -> std::io::Result<bool>,
+{
+    check_orientation_policy_with_probes_and_resume(
+        ctx,
+        files,
+        progress,
+        orientation_probe,
+        reconstruction_probe,
+        None,
+    )
+}
+
+fn check_orientation_policy_with_probes_and_resume<F, R>(
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    mut orientation_probe: F,
+    mut reconstruction_probe: R,
+    resume: Option<&Gate1ProofCache<'_>>,
+) -> CheckDetail
+where
+    F: FnMut(&Path) -> std::io::Result<bool>,
+    R: FnMut(&Path, &Path) -> std::io::Result<bool>,
+{
+    let source_by_output = ctx
+        .blake3_log
+        .iter()
+        .map(|(rel_path, entry)| {
+            let out_rel = entry.out_rel.as_deref().map_or_else(
+                || PathBuf::from(rel_path).with_extension("JXL"),
+                PathBuf::from,
+            );
+            (ctx.working_copy.join(out_rel), ctx.src_dir.join(rel_path))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut failures = Vec::new();
+    let mut file_local = true;
+    let mut tagged_count = 0usize;
+    let mut reconstructible_count = 0usize;
+    let mut probe_errors = Vec::new();
+    let total = files.len();
+    let report_progress = total > 0 && total == ctx.expected_count;
+    if report_progress {
+        progress(0, total);
+    }
+    for (index, path) in files.iter().enumerate() {
+        match orientation_probe(path) {
+            Ok(true) => {
+                tagged_count += 1;
+                let Some(source) = source_by_output.get(path) else {
+                    file_local = false;
+                    failures.push(path.clone());
+                    probe_errors.push(format!("{}: source mapping absent", path.display()));
+                    if report_progress {
+                        progress(index + 1, total);
+                    }
+                    continue;
+                };
+                let reconstructed = if let Some(resume) = resume {
+                    resume
+                        .verify("orientation_reconstruction", source, path, || {
+                            if reconstruction_probe(source, path)? {
+                                Ok(())
+                            } else {
+                                Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "Orientation lacks exact JPEG reconstruction proof",
+                                ))
+                            }
+                        })
+                        .map(|()| true)
+                } else {
+                    reconstruction_probe(source, path)
+                };
+                match reconstructed {
+                    Ok(true) => reconstructible_count += 1,
+                    Ok(false) => failures.push(path.clone()),
+                    Err(err) => {
+                        file_local &= err.kind() == std::io::ErrorKind::InvalidData;
+                        crate::media_conversion_gate::delivery_pipeline_path_audit(
+                            "fast_img_gate1_orientation_reconstruction",
+                            path,
+                            format!("Orientation tag lacks exact JPEG reconstruction proof: {err}"),
+                        );
+                        probe_errors.push(format!("{}: {err}", path.display()));
+                        failures.push(path.clone());
+                    }
+                }
+            }
+            Ok(false) => {}
+            Err(err) => {
+                file_local = false;
+                crate::media_conversion_gate::delivery_pipeline_path_audit(
+                    "fast_img_gate1_orientation_probe",
+                    path,
+                    format!("orientation probe failed during Gate 1 orientation check: {err}"),
+                );
+                probe_errors.push(format!("{}: {err}", path.display()));
+                failures.push(path.clone());
+            }
+        }
+        if report_progress {
+            progress(index + 1, total);
+        }
+    }
+    let actual = if let Some(first_error) = probe_errors.first() {
+        format!(
+            "{tagged_count} tagged, {reconstructible_count} exact-reconstructible; {} orientation \
+             proof errors; first {first_error}",
+            probe_errors.len()
+        )
+    } else {
+        format!("{tagged_count} tagged, {reconstructible_count} exact-reconstructible")
+    };
+    file_failures(
+        detail(
+            "orient",
+            failures.is_empty(),
+            "Orientation absent unless required by exact JPEG reconstruction".to_string(),
+            actual,
+            failures,
+        ),
+        file_local,
+    )
+}
+
+#[cfg(test)]
+fn check_decode_probe(files: &[PathBuf]) -> CheckDetail {
+    check_decode_probe_observed(files, &mut |_, _| {})
+}
+
+fn check_decode_probe_observed(
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
+    check_decode_probe_with_probe(files, progress, decode_output_probe)
+}
+
+fn check_decode_probe_with_resume(
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    resume: &Gate1ProofCache<'_>,
+) -> CheckDetail {
+    check_decode_probe_with_probe(files, progress, |path, format| {
+        let source = resume.source_for_output(path)?;
+        resume.verify("decode", &source, path, || {
+            decode_output_probe(path, format)
+        })
+    })
+}
+
+fn decode_output_probe(
+    path: &Path,
+    format: crate::image::format_detect::FormatKind,
+) -> std::io::Result<()> {
+    match format {
+        crate::image::format_detect::FormatKind::Avif => avifdec_decode_probe(path),
+        crate::image::format_detect::FormatKind::Jxl => djxl_decode_probe(path),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("unsupported delivery output format: {format:?}"),
+        )),
+    }
+}
+
+fn check_decode_probe_with_probe(
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    mut probe: impl FnMut(&Path, crate::image::format_detect::FormatKind) -> std::io::Result<()>,
+) -> CheckDetail {
+    let mut detected = Vec::with_capacity(files.len());
+    for path in files {
+        match crate::image::format_detect::detect_true_format(path) {
+            Ok(format) => detected.push((path.clone(), format)),
+            Err(err) => {
+                return detail(
+                    "decode",
+                    false,
+                    "every output format is detected from content".to_string(),
+                    format!("format detection failed for {}: {err}", path.display()),
+                    vec![path.clone()],
+                );
+            }
+        }
+    }
+    let has_avif = detected
+        .iter()
+        .any(|(_, format)| *format == crate::image::format_detect::FormatKind::Avif);
+    let has_jxl = detected
+        .iter()
+        .any(|(_, format)| *format == crate::image::format_detect::FormatKind::Jxl);
+
+    if has_avif && !is_command_available("avifdec") {
+        return detail(
+            "decode",
+            false,
+            "avifdec available and every file decodes".to_string(),
+            "avifdec unavailable".to_string(),
+            files.to_vec(),
+        );
+    }
+    if has_jxl && !is_command_available("djxl") {
+        return detail(
+            "decode",
+            false,
+            "djxl available and every file decodes".to_string(),
+            "djxl unavailable".to_string(),
+            files.to_vec(),
+        );
+    }
+
+    progress(0, detected.len());
+    let failures = detected
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, (path, format))| {
+            let error = probe(&path, format);
+            progress(index + 1, files.len());
+            error.err().map(|err| (path, err))
+        })
+        .collect::<Vec<_>>();
+    let failure_paths = failures
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    let file_local = failures
+        .iter()
+        .all(|(_, error)| error.kind() == std::io::ErrorKind::InvalidData);
+    let actual = if let Some((path, err)) = failures.first() {
+        format!(
+            "{} decode failures; first {}: {err}",
+            failures.len(),
+            path.display()
+        )
+    } else {
+        "0 decode failures".to_string()
+    };
+    file_failures(
+        detail(
+            "decode",
+            failures.is_empty(),
+            format!("{} decode probes pass", files.len()),
+            actual,
+            failure_paths,
+        ),
+        file_local,
+    )
+}
+
+fn collect_delivery_output_files(
+    root: &Path,
+    expected_format: Option<crate::image::format_detect::FormatKind>,
+) -> anyhow::Result<Vec<PathBuf>> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(root) {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let format = crate::image::format_detect::detect_true_format(entry.path())?;
+        let is_delivery_output = match expected_format {
+            Some(expected) => format == expected,
+            None => matches!(
+                format,
+                crate::image::format_detect::FormatKind::Jxl
+                    | crate::image::format_detect::FormatKind::Avif
+            ),
+        };
+        if is_delivery_output {
+            files.push(entry.path().to_path_buf());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn orientation_tags_batch(files: &[PathBuf]) -> std::io::Result<BTreeMap<PathBuf, bool>> {
+    let exiftool = resolve_tool_path("exiftool").ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "exiftool was not found or failed its runtime health check",
+        )
+    })?;
+    let mut tags = BTreeMap::new();
+    for batch in files.chunks(128) {
+        let mut command = std::process::Command::new(&exiftool);
+        command.args(["-j", "-s", "-Orientation"]);
+        let paths: Vec<_> = batch
+            .iter()
+            .map(|path| PathBuf::from(crate::path_safety::exiftool_path_arg(path).as_ref()))
+            .collect();
+        command.args(&paths);
+        let output = crate::process_runner::run_command_with_liveness_timeout(
+            &mut command,
+            std::time::Duration::from_secs(120),
+            crate::process_runner::image_process_hard_timeout(),
+            "Gate 1 batch orientation probe",
+        )?;
+        ensure_exiftool_success(&batch[0], output.status, &output.stderr)?;
+        let parsed = parse_orientation_batch(&paths, &output.stdout)?;
+        for (original, queried) in batch.iter().zip(&paths) {
+            tags.insert(original.clone(), parsed[queried]);
+        }
+    }
+    Ok(tags)
+}
+
+fn parse_orientation_batch(
+    paths: &[PathBuf],
+    raw: &[u8],
+) -> std::io::Result<BTreeMap<PathBuf, bool>> {
+    let records: Vec<serde_json::Value> = serde_json::from_slice(raw)?;
+    let mut tags = BTreeMap::new();
+    for record in records {
+        let source = record
+            .get("SourceFile")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| std::io::Error::other("orientation response has no SourceFile"))?;
+        let path = PathBuf::from(source);
+        if !paths.contains(&path)
+            || record.get("Error").is_some()
+            || tags
+                .insert(path, record.get("Orientation").is_some())
+                .is_some()
+        {
+            return Err(std::io::Error::other(
+                "invalid, unexpected or duplicate orientation response",
+            ));
+        }
+    }
+    if tags.len() != paths.len() {
+        return Err(std::io::Error::other("incomplete orientation response"));
+    }
+    Ok(tags)
+}
+
+fn ensure_exiftool_success(path: &Path, status: ExitStatus, stderr: &[u8]) -> std::io::Result<()> {
+    if status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(stderr);
+    Err(std::io::Error::other(format!(
+        "exiftool orientation probe failed for {}: {stderr}",
+        path.display()
+    )))
+}
+
+fn decode_probe_command(
+    executable: &Path,
+    input: &Path,
+    output: &Path,
+    thread_argument: &str,
+    threads: usize,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(executable);
+    command
+        .arg(input)
+        .arg(output)
+        .arg(thread_argument)
+        .arg(threads.max(1).to_string());
+    command
+}
+
+fn avifdec_decode_probe(path: &Path) -> std::io::Result<()> {
+    let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "fast_img_gate1_decode_probe",
+        Some("mfb_gate1_decode"),
+        Some(".png"),
+    )
+    .map_err(|err| {
+        std::io::Error::other(format!(
+            "avifdec decode probe scratch tempfile failed: {err}"
+        ))
+    })?;
+    let avifdec = resolve_tool_path("avifdec").ok_or_else(|| {
+        std::io::Error::other("avifdec was not found or failed its runtime health check")
+    })?;
+    let mut command = decode_probe_command(
+        &avifdec,
+        path,
+        temp.path(),
+        "--jobs",
+        crate::thread_manager::calculate_optimal_threads(
+            &crate::thread_manager::ThreadConfig::conservative(),
+        ),
+    );
+    let output = crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(120),
+        crate::process_runner::image_process_hard_timeout(),
+        "fast-img AVIF decode probe",
+    )
+    .map_err(|err| std::io::Error::other(format!("avifdec decode probe spawn failed: {err}")))?;
+    if output.status.success() {
+        let output_len = temp
+            .as_file()
+            .metadata()
+            .map_err(|err| {
+                std::io::Error::other(format!(
+                    "avifdec decode output metadata probe failed: {err}"
+                ))
+            })?
+            .len();
+        if output_len > 0 {
+            return Ok(());
+        }
+        return Err(std::io::Error::other(
+            "avifdec decode probe returned success but produced an empty output",
+        ));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
+        stderr.lines().rev().find(|line| !line.trim().is_empty()),
+    );
+    Err(std::io::Error::other(format!(
+        "avifdec decode probe failed: avifdec {} -> exit {:?}; stderr tail: {stderr_tail}",
+        path.display(),
+        output.status.code()
+    )))
+}
+
+fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
+    // Scratch must be .png, not .ppm: PPM is RGB-only, so grayscale (or CMYK) JXL
+    // outputs make djxl fail with "SelectFormat failed" despite a valid bitstream.
+    let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "fast_img_gate1_decode_probe",
+        Some("mfb_gate1_decode"),
+        Some(".png"),
+    )
+    .map_err(|err| std::io::Error::other(format!("decode probe scratch tempfile failed: {err}")))?;
+    let djxl = resolve_tool_path("djxl").ok_or_else(|| {
+        std::io::Error::other("djxl was not found or failed its runtime health check")
+    })?;
+    let threads = crate::thread_manager::calculate_optimal_threads(
+        &crate::thread_manager::ThreadConfig::conservative(),
+    );
+    let mut command = decode_probe_command(&djxl, path, temp.path(), "--num_threads", threads);
+    let output = crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(120),
+        crate::process_runner::image_process_hard_timeout(),
+        "fast-img JXL decode probe",
+    )
+    .map_err(|err| std::io::Error::other(format!("djxl decode probe spawn failed: {err}")))?;
+    if output.status.success() {
+        let output_len = temp
+            .as_file()
+            .metadata()
+            .map_err(|err| {
+                std::io::Error::other(format!("djxl decode output metadata probe failed: {err}"))
+            })?
+            .len();
+        if output_len > 0 {
+            return Ok(());
+        }
+        return Err(std::io::Error::other(
+            "djxl decode probe returned success but produced an empty output",
+        ));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if crate::image::jxl_utils::is_jxl_png_icc_decode_error(&stderr) {
+        let jpeg_temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "fast_img_gate1_decode_probe",
+            Some("mfb_gate1_decode"),
+            Some(".jpg"),
+        )
+        .map_err(|err| {
+            std::io::Error::other(format!("decode probe JPEG scratch tempfile failed: {err}"))
+        })?;
+        let mut jpeg_command = decode_probe_command(
+            &djxl,
+            path,
+            jpeg_temp.path(),
+            "--num_threads",
+            crate::thread_manager::calculate_optimal_threads(
+                &crate::thread_manager::ThreadConfig::conservative(),
+            ),
+        );
+        let jpeg_output = crate::process_runner::run_command_with_liveness_timeout(
+            &mut jpeg_command,
+            std::time::Duration::from_secs(120),
+            crate::process_runner::image_process_hard_timeout(),
+            "fast-img JXL JPEG decode probe",
+        )
+        .map_err(|err| {
+            std::io::Error::other(format!("djxl JPEG decode probe spawn failed: {err}"))
+        })?;
+        if jpeg_output.status.success() {
+            let output_len = jpeg_temp
+                .as_file()
+                .metadata()
+                .map_err(|err| {
+                    std::io::Error::other(format!(
+                        "djxl JPEG decode output metadata probe failed: {err}"
+                    ))
+                })?
+                .len();
+            if output_len > 0 {
+                crate::log_detail!(format!(
+                    "djxl decode probe retried as JPEG reconstruction after PNG ICC failure: {}",
+                    path.display()
+                ));
+                return Ok(());
+            }
+            return Err(std::io::Error::other(
+                "djxl JPEG decode probe returned success but produced an empty output",
+            ));
+        }
+        let jpeg_stderr = String::from_utf8_lossy(&jpeg_output.stderr);
+        let jpeg_stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
+            jpeg_stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty()),
+        );
+        crate::log_detail!(format!(
+            "djxl JPEG decode probe failed: djxl {} {} -> exit {:?}; stderr tail: \
+             {jpeg_stderr_tail}",
+            path.display(),
+            jpeg_temp.path().display(),
+            jpeg_output.status.code()
+        ));
+        return Err(std::io::Error::other(format!(
+            "djxl JPEG decode probe exited {:?}; stderr tail: {jpeg_stderr_tail}",
+            jpeg_output.status.code()
+        )));
+    }
+    let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
+        stderr.lines().rev().find(|line| !line.trim().is_empty()),
+    );
+    crate::log_detail!(format!(
+        "djxl decode probe failed: djxl {} {} -> exit {:?}; stderr tail: {stderr_tail}",
+        path.display(),
+        temp.path().display(),
+        output.status.code()
+    ));
+    Err(std::io::Error::other(format!(
+        "djxl decode probe exited {:?}; stderr tail: {stderr_tail}",
+        output.status.code()
+    )))
+}
+
+fn sample_size(expected_count: usize) -> usize {
+    if expected_count == 0 {
+        return 0;
+    }
+    if expected_count <= 20 {
+        return expected_count;
+    }
+    std::cmp::max(1, expected_count.div_ceil(10))
+}
+
+fn sample_expected(expected_count: usize) -> String {
+    let sample = sample_size(expected_count);
+    format!("{sample}/{sample} match")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Blake3Entry, Blake3Log, Gate1Local, Gate2Import, Gate3Deep, GateResult, LibraryAssetRecord,
+        LibraryHandle, PipelineCtx, VerificationGate, collect_delivery_output_files,
+        ensure_exiftool_success,
+    };
+    use crate::builder_base::ToolBuilder;
+    use crate::common_utils::calculate_blake3_hash;
+    use std::collections::BTreeMap;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    use std::path::{Path, PathBuf};
+
+    fn ctx_with_library(
+        expected_count: usize,
+        imported_assets: Vec<LibraryAssetRecord>,
+    ) -> PipelineCtx {
+        PipelineCtx {
+            working_copy: PathBuf::from("wc"),
+            src_dir: PathBuf::from("src"),
+            blake3_log: Blake3Log::new(),
+            expected_count,
+            library_handle: Some(LibraryHandle {
+                imported_assets,
+                import_error_count: 0,
+                photos_library_path: None,
+            }),
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        }
+    }
+
+    #[test]
+    fn gate1_resume_orchestration_reuses_real_media_proofs_but_rechecks_filesystem_metadata() {
+        if !super::super::gate1_resume::isolate_final_verification_test(
+            "pipeline::verification::tests::gate1_resume_orchestration_reuses_real_media_proofs_but_rechecks_filesystem_metadata",
+        ).unwrap() { return; }
+        let root = tempfile::tempdir().unwrap();
+        let _store = crate::db::mfb_sqlite_store::set_test_store_path_for_tests(
+            root.path().join("store.sqlite"),
+        );
+        let src_dir = root.path().join("source");
+        let working_copy = root.path().join("output");
+        std::fs::create_dir(&src_dir).unwrap();
+        std::fs::create_dir(&working_copy).unwrap();
+        let source = src_dir.join("synthetic.jpg");
+        let output = working_copy.join("synthetic.JXL");
+        image::RgbImage::from_pixel(4, 3, image::Rgb([20, 40, 60]))
+            .save_with_format(&source, image::ImageFormat::Jpeg)
+            .unwrap();
+        let tags = crate::ExiftoolBuilder::new()
+            .arg("-overwrite_original")
+            .arg("-EXIF:Orientation#=6")
+            .arg(crate::path_safety::exiftool_path_arg(&source).as_ref())
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            tags.status.success(),
+            "{}",
+            String::from_utf8_lossy(&tags.stderr)
+        );
+        let encoder = crate::common_utils::resolve_tool_path("cjxl")
+            .expect("cjxl is required for the real Gate 1 resume regression");
+        let encoded = std::process::Command::new(encoder)
+            .args(["--lossless_jpeg=1", "--effort=1"])
+            .arg(&source)
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        crate::metadata::preserve_filesystem_for_delivery(&source, &output).unwrap();
+        let ctx = PipelineCtx {
+            src_dir,
+            working_copy,
+            expected_count: 1,
+            library_handle: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+            output_format: Some(crate::image::format_detect::FormatKind::Jxl),
+            blake3_log: BTreeMap::from([(
+                "synthetic.jpg".into(),
+                Blake3Entry {
+                    out_rel: Some("synthetic.JXL".into()),
+                    src: calculate_blake3_hash(&source).unwrap(),
+                    out: calculate_blake3_hash(&output).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+        };
+        let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
+        let first_started = std::time::Instant::now();
+        let first =
+            Gate1Local::run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+        let fresh_duration = first_started.elapsed();
+        assert!(first.passed, "{first:?}");
+        assert_eq!(
+            cache.counts(),
+            (0, 3, 0),
+            "metadata, tagged orientation reconstruction and decode must each commit"
+        );
+        drop(cache);
+        let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
+        let resumed_started = std::time::Instant::now();
+        let second =
+            Gate1Local::run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+        let resumed_duration = resumed_started.elapsed();
+        assert!(second.passed, "{second:?}");
+        assert_eq!(cache.counts(), (3, 0, 0));
+        assert_eq!(
+            first.checks, second.checks,
+            "cached and fresh Gate results must remain identical"
+        );
+        eprintln!(
+            "synthetic Gate 1: fresh={fresh_duration:?}, resumed={resumed_duration:?}, complete checks unchanged"
+        );
+        drop(cache);
+        let mut marker =
+            super::WorkingCopyMarker::new(ctx.src_dir.clone(), ctx.working_copy.clone(), 1);
+        marker.blake3_log = ctx.blake3_log.clone();
+        let fresh = super::Gate1ProofCache::fresh_for_marker(&ctx, &marker)
+            .unwrap()
+            .unwrap();
+        let final_result =
+            Gate1Local::run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &fresh);
+        assert!(final_result.passed, "{final_result:?}");
+        assert_eq!(
+            fresh.counts(),
+            (0, 3, 0),
+            "final metadata, orientation reconstruction and decoder must run again"
+        );
+        drop(fresh);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let rejecting_decoder = root.path().join("rejecting-djxl");
+            std::fs::write(&rejecting_decoder,
+                "#!/bin/sh\ncase \"$1\" in -version|--version) echo fixture-decoder; exit 0;; esac\nprintf x >> \"$0.calls\"\nexit 71\n").unwrap();
+            std::fs::set_permissions(&rejecting_decoder, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            let _decoder = crate::common_utils::EnvGuard::set(
+                "MFB_TOOL_DJXL",
+                &rejecting_decoder.to_string_lossy(),
+            );
+            let fresh = super::Gate1ProofCache::fresh_for_marker(&ctx, &marker)
+                .unwrap()
+                .unwrap();
+            let rejected = Gate1Local::run_with_proof_cache(
+                &ctx,
+                crate::BatchErrorMode::LogAndContinue,
+                &fresh,
+            );
+            assert!(
+                !rejected.passed,
+                "warm persisted success cannot hide the current decoder failure"
+            );
+            assert_eq!(fresh.counts().0, 0);
+            assert!(
+                !std::fs::read(root.path().join("rejecting-djxl.calls"))
+                    .unwrap()
+                    .is_empty(),
+                "the final gate must execute the current decoder"
+            );
+            assert_eq!(
+                calculate_blake3_hash(&source).unwrap(),
+                ctx.blake3_log["synthetic.jpg"].src
+            );
+            assert_eq!(
+                calculate_blake3_hash(&output).unwrap(),
+                ctx.blake3_log["synthetic.jpg"].out
+            );
+        }
+        filetime::set_file_mtime(
+            &output,
+            filetime::FileTime::from_unix_time(1_600_000_000, 0),
+        )
+        .unwrap();
+        let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
+        let changed =
+            Gate1Local::run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+        assert!(
+            !changed.passed,
+            "a prior embedded-metadata receipt must not mask changed filesystem metadata"
+        );
+        assert!(
+            changed
+                .checks
+                .iter()
+                .any(|check| check.name == "metadata" && !check.passed)
+        );
+    }
+
+    #[test]
+    fn gate1_resume_shared_completion_failure_overrides_isolatable_decode_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let _store = crate::db::mfb_sqlite_store::set_test_store_path_for_tests(
+            root.path().join("store.sqlite"),
+        );
+        let source_root = root.path().join("source");
+        let output_root = root.path().join("output");
+        std::fs::create_dir(&source_root).unwrap();
+        std::fs::create_dir(&output_root).unwrap();
+        let source = source_root.join("a.jpg");
+        let output = output_root.join("a.JXL");
+        std::fs::write(&source, b"synthetic source").unwrap();
+        std::fs::write(&output, b"synthetic output").unwrap();
+        let ctx = PipelineCtx {
+            src_dir: source_root,
+            working_copy: output_root,
+            expected_count: 1,
+            library_handle: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+            output_format: None,
+            blake3_log: BTreeMap::from([(
+                "a.jpg".into(),
+                Blake3Entry {
+                    out_rel: Some("a.JXL".into()),
+                    src: calculate_blake3_hash(&source).unwrap(),
+                    out: calculate_blake3_hash(&output).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+        };
+        let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic authority").unwrap();
+        let files_failed = super::file_failures(
+            super::detail(
+                "decode",
+                false,
+                "one decode".into(),
+                "invalid media".into(),
+                vec![output.clone()],
+            ),
+            true,
+        );
+        std::fs::write(
+            source.with_extension("xmp"),
+            b"new relationship during verification",
+        )
+        .unwrap();
+        let result = super::finish_local_proof_phase(files_failed, &cache);
+        assert!(!result.passed);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Shared);
+        assert!(
+            result
+                .actual
+                .contains("shared Gate 1 completion guard failed")
+        );
+        let mut states = Vec::new();
+        let probe =
+            |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| result.clone();
+        let gate = super::run_required_checks(
+            &[("decode", probe)],
+            &ctx,
+            &[output],
+            |_, _, _, state, _| states.push(state),
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!gate.passed);
+        assert!(matches!(
+            states.last(),
+            Some(crate::ui::progress::GateActivityState::Failed)
+        ));
+    }
+
+    #[test]
+    fn delivery_output_collection_uses_content_not_suffix() {
+        let root = tempfile::tempdir().expect("create working copy");
+        let jxl = root.path().join("actual.bin");
+        std::fs::write(&jxl, [0xFF, 0x0A, 0x00]).expect("write JXL signature");
+        let avif = root.path().join("actual.data");
+        std::fs::write(&avif, b"\0\0\0\x14ftypavif\0\0\0\0avif").expect("write AVIF signature");
+        std::fs::write(root.path().join("spoof.jxl"), [0xFF, 0xD8, 0xFF])
+            .expect("write spoofed JPEG");
+
+        let mut files = collect_delivery_output_files(root.path(), None)
+            .expect("collect delivery outputs by content");
+        files.sort();
+        let mut expected = vec![avif, jxl];
+        expected.sort();
+        assert_eq!(files, expected);
+    }
+
+    #[test]
+    fn gate_fail_has_per_check_detail() {
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("missing-wc"),
+            src_dir: PathBuf::from("missing-src"),
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        let result = Gate1Local.run(&ctx);
+
+        assert!(!result.passed);
+        assert_eq!(result.checks.len(), 1);
+        assert!(
+            result
+                .checks
+                .iter()
+                .all(|check| !check.expected.is_empty() && !check.actual.is_empty())
+        );
+    }
+
+    #[test]
+    fn required_checks_stop_on_failure_and_run_all_on_success() {
+        type TestProbe<'a> = (
+            &'static str,
+            &'a dyn Fn(
+                &PipelineCtx,
+                &[PathBuf],
+                &mut dyn FnMut(usize, usize),
+            ) -> super::CheckDetail,
+        );
+        let calls = std::cell::Cell::new(0);
+        let probe = |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| {
+            calls.set(calls.get() + 1);
+            super::detail("probe", true, "pass".into(), "pass".into(), vec![])
+        };
+        let fail = |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| {
+            super::detail("failed", false, "pass".into(), "failed".into(), vec![])
+        };
+        let probes: [TestProbe<'_>; 3] = [("count", &probe), ("size", &fail), ("blake3", &probe)];
+        let ctx = ctx_with_library(1, vec![]);
+        let mut events = vec![];
+        let result = super::run_required_checks(
+            &probes,
+            &ctx,
+            &[],
+            |name, n, total, state, _| {
+                events.push((name, n, total, state));
+            },
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!result.passed);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(result.checks.len(), 2);
+        assert_eq!(
+            events,
+            [
+                ("count", 0, 3, super::GateActivityState::Running),
+                ("size", 1, 3, super::GateActivityState::Running),
+                ("size", 2, 3, super::GateActivityState::Failed),
+            ]
+        );
+        events.clear();
+        assert!(
+            super::run_required_checks(
+                &[("count", &probe), ("size", &probe)],
+                &ctx,
+                &[],
+                |name, n, total, state, _| events.push((name, n, total, state)),
+                crate::BatchErrorMode::LogAndContinue,
+            )
+            .passed
+        );
+        assert_eq!(calls.get(), 3);
+        assert_eq!(
+            events,
+            [
+                ("count", 0, 2, super::GateActivityState::Running),
+                ("size", 1, 2, super::GateActivityState::Running),
+                ("size", 2, 2, super::GateActivityState::Passed),
+            ]
+        );
+        events.clear();
+        assert!(
+            !super::run_required_checks::<super::LocalCheckProbe>(
+                &[],
+                &ctx,
+                &[],
+                |name, n, total, state, _| events.push((name, n, total, state)),
+                crate::BatchErrorMode::LogAndContinue,
+            )
+            .passed
+        );
+        assert_eq!(events, Vec::new());
+    }
+
+    #[test]
+    fn record_mode_completes_checks_after_local_failure_but_never_claims_gate_pass() {
+        let ctx = ctx_with_library(1, vec![]);
+        let mut probes: [(&str, super::LocalCheckProbe); 6] = [
+            ("count", |_, _, _| {
+                super::detail("count", true, "pass".into(), "pass".into(), vec![])
+            }),
+            ("size", |_, _, _| {
+                super::detail("size", true, "pass".into(), "pass".into(), vec![])
+            }),
+            ("blake3", |_, _, _| {
+                super::detail("blake3", true, "pass".into(), "pass".into(), vec![])
+            }),
+            ("metadata", |ctx, _, _| {
+                super::file_failures(
+                    super::detail(
+                        "metadata",
+                        false,
+                        "matching metadata".into(),
+                        "one mismatch".into(),
+                        vec![ctx.working_copy.join("bad.jxl")],
+                    ),
+                    true,
+                )
+            }),
+            ("orient", |_, _, _| {
+                super::detail("orient", true, "pass".into(), "pass".into(), vec![])
+            }),
+            ("decode", |_, _, _| {
+                super::detail("decode", true, "pass".into(), "pass".into(), vec![])
+            }),
+        ];
+        for (mode, expected_checks) in [
+            (crate::BatchErrorMode::LogAndContinue, 6),
+            (crate::BatchErrorMode::FailFast, 4),
+        ] {
+            let mut events = Vec::new();
+            let result = super::run_required_checks(
+                &probes,
+                &ctx,
+                &[],
+                |name, _, _, state, _| events.push((name, state)),
+                mode,
+            );
+            assert!(!result.passed);
+            assert_eq!(result.checks.len(), expected_checks);
+            let expected_state = if mode == crate::BatchErrorMode::LogAndContinue {
+                super::GateActivityState::FileFailures
+            } else {
+                super::GateActivityState::Failed
+            };
+            assert_eq!(events.last().unwrap().1, expected_state);
+            assert_eq!(
+                result.has_completed_file_failures(mode),
+                mode == crate::BatchErrorMode::LogAndContinue
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|(_, state)| *state == super::GateActivityState::Passed)
+            );
+            if mode == crate::BatchErrorMode::LogAndContinue {
+                assert!(
+                    !events
+                        .iter()
+                        .any(|(_, state)| *state == super::GateActivityState::Failed)
+                );
+            }
+        }
+        probes[3].1 = |ctx, _, _| {
+            super::detail(
+                "metadata",
+                false,
+                "metadata tool available".into(),
+                "tool unavailable".into(),
+                vec![ctx.working_copy.join("bad.jxl")],
+            )
+        };
+        let mut events = Vec::new();
+        let result = super::run_required_checks(
+            &probes,
+            &ctx,
+            &[],
+            |_, _, _, state, _| events.push(state),
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!result.passed);
+        assert_eq!(events.last(), Some(&super::GateActivityState::Failed));
+        assert!(!result.has_completed_file_failures(crate::BatchErrorMode::LogAndContinue));
+        assert_eq!(
+            result.checks.len(),
+            4,
+            "shared failure still blocks later checks"
+        );
+        probes[3].1 = |_, _, _| {
+            let mut check = super::detail(
+                "metadata",
+                false,
+                "identified affected files".into(),
+                "missing failure identities".into(),
+                vec![],
+            );
+            check.failure_scope = super::CheckFailureScope::Files;
+            check
+        };
+        events.clear();
+        let result = super::run_required_checks(
+            &probes,
+            &ctx,
+            &[],
+            |_, _, _, state, _| events.push(state),
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!result.passed);
+        assert_eq!(result.checks.len(), 4);
+        assert_eq!(events.last(), Some(&super::GateActivityState::Failed));
+        assert!(!result.has_completed_file_failures(crate::BatchErrorMode::LogAndContinue));
+    }
+
+    #[test]
+    fn local_failure_isolation_rejects_incomplete_or_ambiguous_evidence() {
+        let mut ctx = ctx_with_library(2, vec![]);
+        for stem in ["bad", "good"] {
+            ctx.blake3_log.insert(
+                format!("{stem}.jpg"),
+                Blake3Entry {
+                    out_rel: Some(format!("{stem}.jxl")),
+                    src: format!("{stem}-source-hash"),
+                    out: format!("{stem}-output-hash"),
+                    library_asset: None,
+                },
+            );
+        }
+        let mut checks = super::LOCAL_REQUIRED_CHECKS
+            .iter()
+            .map(|(name, _)| super::detail(name, true, "pass".into(), "pass".into(), vec![]))
+            .collect::<Vec<_>>();
+        checks[3] = super::file_failures(
+            super::detail(
+                "metadata",
+                false,
+                "matching metadata".into(),
+                "one mismatch".into(),
+                vec![ctx.working_copy.join("bad.jxl")],
+            ),
+            true,
+        );
+        let result = super::gate_result(checks);
+        let failures = result.isolated_source_failures(&ctx).unwrap();
+        assert_eq!(failures.keys().collect::<Vec<_>>(), vec!["bad.jpg"]);
+        assert!(failures["bad.jpg"].contains("Gate 1 metadata"));
+        assert!(!result.passed);
+        for index in 0..result.checks.len() {
+            let mut incomplete = result.clone();
+            incomplete.checks.remove(index);
+            assert!(incomplete.isolated_source_failures(&ctx).is_err());
+        }
+        for structural in [0, 1, 2] {
+            let mut invalid = result.clone();
+            invalid.checks[structural].passed = false;
+            invalid.checks[structural].failure_scope = super::CheckFailureScope::Files;
+            assert!(invalid.isolated_source_failures(&ctx).is_err());
+        }
+        let mut shared = result.clone();
+        shared.checks[3].failure_scope = super::CheckFailureScope::Shared;
+        assert!(shared.isolated_source_failures(&ctx).is_err());
+        let mut unknown = result.clone();
+        unknown.checks[3].affected_files = vec![ctx.working_copy.join("unmapped.jxl")];
+        assert!(unknown.isolated_source_failures(&ctx).is_err());
+        unknown.checks[3].affected_files.clear();
+        assert!(unknown.isolated_source_failures(&ctx).is_err());
+        for output in [Some("bad.jxl"), Some("../bad.jxl"), None] {
+            let mut ambiguous = ctx.clone();
+            ambiguous.blake3_log.get_mut("good.jpg").unwrap().out_rel = output.map(str::to_owned);
+            assert!(result.isolated_source_failures(&ambiguous).is_err());
+        }
+        ctx.blake3_log.get_mut("bad.jpg").unwrap().src.clear();
+        assert!(result.isolated_source_failures(&ctx).is_err());
+    }
+
+    #[test]
+    fn gate_decode_commands_bound_threads_without_changing_decode_semantics() {
+        for flag in ["--num_threads", "--jobs"] {
+            for threads in [0, 1, 3] {
+                let command = super::decode_probe_command(
+                    Path::new("/synthetic/decoder"),
+                    Path::new("/synthetic/input"),
+                    Path::new("/synthetic/output.png"),
+                    flag,
+                    threads,
+                );
+                let expected = threads.max(1).to_string();
+                assert_eq!(
+                    command.get_args().collect::<Vec<_>>(),
+                    [
+                        std::ffi::OsStr::new("/synthetic/input"),
+                        std::ffi::OsStr::new("/synthetic/output.png"),
+                        std::ffi::OsStr::new(flag),
+                        std::ffi::OsStr::new(&expected),
+                    ],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decode_file_progress_is_bound_to_check_attempts_not_success() {
+        let ctx = ctx_with_library(2, vec![]);
+        let probe = |_: &PipelineCtx, _: &[PathBuf], progress: &mut dyn FnMut(usize, usize)| {
+            progress(0, 2);
+            progress(1, 2);
+            progress(2, 2);
+            super::detail(
+                "decode",
+                false,
+                "2 probes pass".into(),
+                "one failure".into(),
+                vec![],
+            )
+        };
+        let mut events = Vec::new();
+        let result = super::run_required_checks(
+            &[("decode", probe)],
+            &ctx,
+            &[],
+            |check, _, _, state, files| {
+                events.push((check, state, files));
+            },
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!result.passed);
+        let last = events.last().unwrap();
+        assert_eq!(last.0, "decode");
+        assert_eq!(last.1, super::GateActivityState::Failed);
+        assert_eq!(
+            last.2,
+            Some(crate::ui::progress::GateFileProgress {
+                processed: 2,
+                total: 2
+            })
+        );
+        assert_eq!(events[0].2, None);
+        let mut attempts = Vec::new();
+        let failed = super::check_decode_probe_observed(
+            &[PathBuf::from("/synthetic/missing-output")],
+            &mut |n, total| attempts.push((n, total)),
+        );
+        assert!(!failed.passed);
+        assert_eq!(attempts, Vec::<(usize, usize)>::new());
+    }
+
+    #[test]
+    fn local_gate_activity_reports_inventory_failure_before_required_checks() {
+        let root = tempfile::tempdir().expect("create isolated gate test root");
+        let mut ctx = ctx_with_library(1, vec![]);
+        ctx.working_copy = root.path().join("missing");
+        let mut events = vec![];
+        let result = super::run_local_checks(
+            &ctx,
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "synthetic inventory read failure",
+                )
+                .into())
+            },
+            |name, n, total, state, _| events.push((name, n, total, state)),
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!result.passed);
+        assert_eq!(result.checks.len(), 1);
+        assert_eq!(result.checks[0].name, "count");
+        assert!(
+            result.checks[0]
+                .actual
+                .contains("synthetic inventory read failure")
+        );
+        assert_eq!(
+            events,
+            [
+                ("inventory", 0, 6, super::GateActivityState::Running),
+                ("inventory", 0, 6, super::GateActivityState::Failed),
+            ]
+        );
+
+        for working_copy in [root.path().join("missing"), root.path().to_path_buf()] {
+            ctx.working_copy = working_copy;
+            events.clear();
+            let result = super::run_local_checks(
+                &ctx,
+                || super::collect_delivery_output_files(&ctx.working_copy, None),
+                |name, n, total, state, _| events.push((name, n, total, state)),
+                crate::BatchErrorMode::LogAndContinue,
+            );
+            assert!(!result.passed);
+            assert_eq!(result.checks.len(), 1);
+            assert_eq!(result.checks[0].name, "count");
+            assert_eq!(
+                events,
+                [
+                    ("inventory", 0, 6, super::GateActivityState::Running),
+                    ("count", 0, 6, super::GateActivityState::Running),
+                    ("count", 1, 6, super::GateActivityState::Failed),
+                ]
+            );
+        }
+        assert_eq!(
+            super::LOCAL_REQUIRED_CHECKS.map(|(name, _)| name),
+            ["count", "size", "blake3", "metadata", "orient", "decode"]
+        );
+    }
+
+    #[test]
+    fn batch_orientation_requires_every_requested_file_exactly_once() {
+        let paths = vec![PathBuf::from("a.jxl"), PathBuf::from("b.jxl")];
+        let tags = super::parse_orientation_batch(
+            &paths,
+            br#"[{"SourceFile":"b.jxl"},{"SourceFile":"a.jxl","Orientation":"Rotate 90 CW"}]"#,
+        )
+        .unwrap();
+        assert!(tags[&paths[0]]);
+        assert!(!tags[&paths[1]]);
+        for invalid in [
+            br#"[{"SourceFile":"a.jxl"}]"#.as_slice(),
+            br#"[{"SourceFile":"a.jxl"},{"SourceFile":"a.jxl"}]"#,
+            br#"[{"SourceFile":"a.jxl"},{"SourceFile":"c.jxl"}]"#,
+            br#"[{"SourceFile":"a.jxl"},{"SourceFile":"b.jxl","Error":"bad data"}]"#,
+        ] {
+            assert!(super::parse_orientation_batch(&paths, invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn batch_orientation_matches_real_single_file_probes() {
+        let root = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..32)
+            .map(|index| root.path().join(format!("image '{index}.jpg")))
+            .collect();
+        for path in &paths {
+            image::RgbImage::from_pixel(2, 2, image::Rgb([20, 40, 60]))
+                .save_with_format(path, image::ImageFormat::Jpeg)
+                .unwrap();
+        }
+        let output = crate::ExiftoolBuilder::new()
+            .arg("-Orientation#=6")
+            .arg(crate::path_safety::exiftool_path_arg(&paths[0]).as_ref())
+            .build()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let started = std::time::Instant::now();
+        let batch = super::orientation_tags_batch(&paths).unwrap();
+        let batch_elapsed = started.elapsed();
+        let started = std::time::Instant::now();
+        for path in &paths {
+            let output = crate::ExiftoolBuilder::new()
+                .arg("-s3")
+                .arg("-Orientation")
+                .arg(crate::path_safety::exiftool_path_arg(path).as_ref())
+                .build()
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(batch[path], !output.stdout.is_empty());
+        }
+        eprintln!(
+            "orientation probe comparison: files=32 batch_ms={} individual_ms={}",
+            batch_elapsed.as_millis(),
+            started.elapsed().as_millis()
+        );
+        assert!(batch[&paths[0]]);
+        assert!(!batch[&paths[1]]);
+        std::fs::remove_file(&paths[1]).unwrap();
+        assert!(super::orientation_tags_batch(&paths).is_err());
+    }
+
+    #[test]
+    fn gate2_requires_library_handle() {
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("wc"),
+            src_dir: PathBuf::from("src"),
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        let result = Gate2Import.run(&ctx);
+
+        assert!(!result.passed);
+        assert_eq!(result.checks.len(), 3);
+    }
+
+    #[test]
+    fn gate3_requires_library_handle() {
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("wc"),
+            src_dir: PathBuf::from("src"),
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        let result = Gate3Deep.run(&ctx);
+
+        assert!(!result.passed);
+        assert_eq!(result.checks.len(), 4);
+    }
+
+    #[test]
+    fn gate3_sync_detail_reports_accepted_custody_counts() {
+        let ctx = ctx_with_library(
+            2,
+            vec![
+                LibraryAssetRecord {
+                    rel_path: "a.AVIF".to_string(),
+                    blake3: "a".to_string(),
+                    sync_status: "photos_local".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                    xmp_sidecar_blake3: None,
+                },
+                LibraryAssetRecord {
+                    rel_path: "b.AVIF".to_string(),
+                    blake3: "b".to_string(),
+                    sync_status: "uploaded".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                    xmp_sidecar_blake3: None,
+                },
+            ],
+        );
+
+        let result = Gate3Deep.run(&ctx);
+        let sync = result
+            .checks
+            .iter()
+            .find(|check| check.name == "sync")
+            .expect("sync check");
+
+        assert!(sync.passed);
+        assert_eq!(
+            sync.actual,
+            "1 Photos-local, 1 uploaded, 0 without accepted custody proof"
+        );
+    }
+
+    #[test]
+    fn full_mode_can_instantiate_gate1local() {
+        fn accepts_gate<G: VerificationGate>(gate: &G) -> &'static str {
+            gate.name()
+        }
+
+        assert!(accepts_gate(&Gate1Local).contains("Gate 1"));
+    }
+
+    #[test]
+    fn gate_result_never_passes_empty_checks() {
+        let result = GateResult {
+            passed: false,
+            checks: Vec::new(),
+        };
+
+        assert!(!result.passed);
+    }
+
+    #[test]
+    fn failed_gate_summary_lists_only_failed_checks() {
+        let checks = vec![
+            super::detail(
+                "sync",
+                true,
+                "Photos local custody or uploaded".to_string(),
+                "0 without accepted custody proof".to_string(),
+                Vec::new(),
+            ),
+            super::detail(
+                "quarantine",
+                false,
+                "0 quarantined".to_string(),
+                "1".to_string(),
+                Vec::new(),
+            ),
+        ];
+
+        let summary = super::summarize_checks(&checks);
+
+        assert_eq!(summary, "quarantine expected=0 quarantined actual=1");
+    }
+
+    #[test]
+    fn orientation_check_preserves_probe_error_detail() {
+        let files = vec![PathBuf::from("/tmp/mfb-orientation-probe-error.JXL")];
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("/tmp"),
+            src_dir: PathBuf::from("/tmp"),
+            blake3_log: Blake3Log::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+
+        let mut attempts = Vec::new();
+        let check = super::check_orientation_policy_with_probes(
+            &ctx,
+            &files,
+            &mut |done, total| attempts.push((done, total)),
+            |_| Err(std::io::Error::other("synthetic exiftool failure")),
+            |_, _| Ok(false),
+        );
+
+        assert!(!check.passed);
+        assert_eq!(check.affected_files, files);
+        assert_eq!(check.failure_scope, super::CheckFailureScope::Shared);
+        assert!(
+            check.actual.contains("synthetic exiftool failure"),
+            "probe failure must be preserved in check detail: {}",
+            check.actual
+        );
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn orientation_check_accepts_tag_only_with_exact_reconstruction() {
+        let output = PathBuf::from("/tmp/oriented.JXL");
+        let source = PathBuf::from("/tmp/oriented.jpg");
+        let files = vec![output.clone()];
+        let mut log = Blake3Log::new();
+        log.insert(
+            "oriented.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("oriented.JXL".to_string()),
+                ..Blake3Entry::default()
+            },
+        );
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("/tmp"),
+            src_dir: PathBuf::from("/tmp"),
+            blake3_log: log,
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+
+        let check = super::check_orientation_policy_with_probes(
+            &ctx,
+            &files,
+            &mut |_, _| {},
+            |_| Ok(true),
+            |actual_source, actual_output| {
+                assert_eq!(actual_source, source);
+                assert_eq!(actual_output, output);
+                Ok(true)
+            },
+        );
+
+        assert!(check.passed);
+        assert_eq!(check.affected_files, [] as [std::path::PathBuf; 0]);
+        assert!(check.actual.contains("1 exact-reconstructible"));
+
+        let second_output = PathBuf::from("/tmp/unoriented.JXL");
+        let mut mixed_log = ctx.blake3_log.clone();
+        mixed_log.insert(
+            "unoriented.jpg".to_owned(),
+            Blake3Entry {
+                out_rel: Some("unoriented.JXL".to_owned()),
+                ..Blake3Entry::default()
+            },
+        );
+        let mixed_ctx = PipelineCtx {
+            working_copy: ctx.working_copy,
+            src_dir: ctx.src_dir,
+            blake3_log: mixed_log,
+            expected_count: 2,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        let mixed_files = vec![output.clone(), second_output];
+        let mut rejected_attempts = Vec::new();
+        let rejected = super::check_orientation_policy_with_probes(
+            &mixed_ctx,
+            &mixed_files,
+            &mut |done, total| rejected_attempts.push((done, total)),
+            |path| Ok(path == output),
+            |_, _| Ok(false),
+        );
+        assert!(!rejected.passed);
+        assert_eq!(rejected.affected_files, [output]);
+        assert_eq!(rejected.failure_scope, super::CheckFailureScope::Files);
+        assert_eq!(rejected_attempts, [(0, 2), (1, 2), (2, 2)]);
+    }
+
+    #[test]
+    fn empty_orientation_output_set_does_not_report_file_progress() {
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("/tmp"),
+            src_dir: PathBuf::from("/tmp"),
+            blake3_log: Blake3Log::new(),
+            expected_count: 0,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        let mut attempts = Vec::new();
+
+        let check = super::check_orientation_policy_with_probes(
+            &ctx,
+            &[],
+            &mut |done, total| attempts.push((done, total)),
+            |_| Ok(false),
+            |_, _| Ok(false),
+        );
+
+        assert!(check.passed);
+        assert_eq!(attempts, [] as [(usize, usize); 0]);
+    }
+
+    #[test]
+    fn gate1_blake3_accepts_current_final_output_hashes_without_jpeg_roundtrip() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.jpg");
+        let out = wc.join("a.JXL");
+        std::fs::write(&src, b"source-jpeg-bytes").unwrap();
+        std::fs::write(&out, b"final-jxl-container-after-metadata").unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: calculate_blake3_hash(&src).unwrap(),
+                out: calculate_blake3_hash(&out).unwrap(),
+                library_asset: None,
+            },
+        );
+
+        let mut attempts = Vec::new();
+        let result = super::check_blake3_logged_outputs(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
+
+        assert!(result.passed, "{result:?}");
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn gate1_blake3_rejects_final_output_hash_drift() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.jpg");
+        let out = wc.join("a.JXL");
+        std::fs::write(&src, b"source-jpeg-bytes").unwrap();
+        std::fs::write(&out, b"final-jxl-container-before-drift").unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: calculate_blake3_hash(&src).unwrap(),
+                out: calculate_blake3_hash(&out).unwrap(),
+                library_asset: None,
+            },
+        );
+        std::fs::write(&out, b"final-jxl-container-after-drift").unwrap();
+
+        let mut attempts = Vec::new();
+        let result = super::check_blake3_logged_outputs(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
+
+        assert!(!result.passed, "{result:?}");
+        assert_eq!(result.affected_files, vec![out]);
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn gate1_blake3_incomplete_mapping_keeps_shared_failure_without_progress_denominator() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let working_copy = root.path().join("working");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&working_copy).unwrap();
+        let source = src_dir.join("one.jpg");
+        let output = working_copy.join("one.JXL");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&output, b"output").unwrap();
+        let ctx = PipelineCtx {
+            working_copy,
+            src_dir,
+            blake3_log: BTreeMap::from([(
+                "one.jpg".to_owned(),
+                Blake3Entry {
+                    out_rel: Some("one.JXL".to_owned()),
+                    src: calculate_blake3_hash(&source).unwrap(),
+                    out: calculate_blake3_hash(&output).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+            expected_count: 2,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        let mut attempts = Vec::new();
+
+        let result = super::check_blake3_logged_outputs(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
+
+        assert!(!result.passed);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Shared);
+        assert_eq!(result.affected_files, [] as [PathBuf; 0]);
+        assert_eq!(attempts, [] as [(usize, usize); 0]);
+    }
+
+    #[test]
+    fn gate1_metadata_rejects_source_output_metadata_mismatch() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.jpg");
+        let out = wc.join("a.JXL");
+        std::fs::write(&src, b"source-jpeg-bytes").unwrap();
+        std::fs::write(&out, b"jxl-output-bytes").unwrap();
+        filetime::set_file_mtime(&src, filetime::FileTime::from_unix_time(1_700_000_000, 0))
+            .unwrap();
+        filetime::set_file_mtime(&out, filetime::FileTime::from_unix_time(1_700_000_123, 0))
+            .unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: calculate_blake3_hash(&src).unwrap(),
+                out: calculate_blake3_hash(&out).unwrap(),
+                library_asset: None,
+            },
+        );
+
+        let mut attempts = Vec::new();
+        let result = super::check_exact_metadata_copies(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
+
+        assert!(!result.passed);
+        assert_eq!(result.name, "metadata");
+        assert_eq!(result.affected_files, vec![out]);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
+        assert!(
+            result.actual.contains("Exact metadata copy mismatch"),
+            "metadata gate must expose exact-copy mismatch: {}",
+            result.actual
+        );
+
+        ctx.expected_count = 2;
+        let mut incomplete_attempts = Vec::new();
+        let incomplete = super::check_exact_metadata_copies(&ctx, &mut |done, total| {
+            incomplete_attempts.push((done, total));
+        });
+        assert!(!incomplete.passed);
+        assert_eq!(incomplete.failure_scope, super::CheckFailureScope::Shared);
+        assert_eq!(incomplete_attempts, [] as [(usize, usize); 0]);
+    }
+
+    #[test]
+    fn gate1_metadata_keeps_malformed_ifd1_file_local() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("bad.jpg");
+        let out = wc.join("bad.jpg");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
+            .save_with_format(&src, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = std::fs::read(&src).unwrap();
+        // The valid IFD0 points to an IFD1 outside this EXIF payload.
+        let mut malformed = b"\xff\xd8\xff\xe1\x00\x22Exif\x00\x00II\x2a\x00\x08\x00\x00\x00\x01\x00\x12\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x01\x00\x00".to_vec();
+        malformed.extend_from_slice(&jpeg[2..]);
+        std::fs::write(&src, &malformed).unwrap();
+        std::fs::write(&out, &malformed).unwrap();
+        let mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+        filetime::set_file_mtime(&src, mtime).unwrap();
+        filetime::set_file_mtime(&out, mtime).unwrap();
+        let ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::from([(
+                "bad.jpg".into(),
+                Blake3Entry {
+                    out_rel: Some("bad.jpg".into()),
+                    src: calculate_blake3_hash(&src).unwrap(),
+                    out: calculate_blake3_hash(&out).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
+        assert!(!result.passed);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
+        assert_eq!(result.affected_files, [out.clone()]);
+        assert!(
+            result.actual.contains("Bad IFD1 directory"),
+            "{}",
+            result.actual
+        );
+
+        // ExifTool corrects the trailing slash in this namespace when reading.
+        // That is a file-local metadata failure even when JPEG bytes match.
+        let xmp = b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:MicrosoftPhoto=\"http://ns.microsoft.com/photo/1.0/\"><MicrosoftPhoto:Rating>1</MicrosoftPhoto:Rating></rdf:Description></rdf:RDF></x:xmpmeta>";
+        let mut xmp_jpeg = b"\xff\xd8\xff\xe1".to_vec();
+        xmp_jpeg.extend_from_slice(&u16::try_from(xmp.len() + 2).unwrap().to_be_bytes());
+        xmp_jpeg.extend_from_slice(xmp);
+        xmp_jpeg.extend_from_slice(&jpeg[2..]);
+        for path in [&src, &out] {
+            std::fs::write(path, &xmp_jpeg).unwrap();
+            filetime::set_file_mtime(path, mtime).unwrap();
+        }
+        let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
+        assert!(!result.passed);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
+        assert_eq!(result.affected_files, [out]);
+        assert!(
+            result
+                .actual
+                .contains("Fixed incorrect URI for xmlns:MicrosoftPhoto"),
+            "{}",
+            result.actual
+        );
+        assert_eq!(std::fs::read(src).unwrap(), xmp_jpeg);
+    }
+
+    #[test]
+    fn gate1_metadata_rejects_wrong_source_embedded_metadata() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.jpg");
+        let out = wc.join("a.jpg");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
+            .save_with_format(&src, image::ImageFormat::Jpeg)
+            .unwrap();
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
+            .save_with_format(&out, image::ImageFormat::Jpeg)
+            .unwrap();
+        for (path, description) in [(&src, "source product"), (&out, "other product")] {
+            let result = crate::ExiftoolBuilder::new()
+                .arg(format!("-XMP-dc:Description={description}"))
+                .arg(crate::path_safety::exiftool_path_arg(path).as_ref())
+                .build()
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "write test metadata failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let shared_mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+        filetime::set_file_mtime(&src, shared_mtime).unwrap();
+        filetime::set_file_mtime(&out, shared_mtime).unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.jpg".to_string()),
+                src: calculate_blake3_hash(&src).unwrap(),
+                out: calculate_blake3_hash(&out).unwrap(),
+                library_asset: None,
+            },
+        );
+
+        let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
+
+        assert!(!result.passed);
+        assert_eq!(result.affected_files, vec![out]);
+        assert!(
+            result.actual.contains("Description"),
+            "Gate 1 must expose embedded wrong-source metadata: {}",
+            result.actual
+        );
+    }
+
+    #[test]
+    fn gate1_metadata_requires_explicit_supported_intent() {
+        use crate::image::format_detect::FormatKind;
+        use crate::metadata::MetadataOutputPolicy;
+
+        let mut ctx = ctx_with_library(1, Vec::new());
+        ctx.output_format = Some(FormatKind::Avif);
+        let preserve = super::check_metadata_policy(&ctx, &mut |_, _| {});
+        assert!(!preserve.passed);
+        assert!(preserve.expected.contains("exact filesystem and embedded"));
+
+        ctx.metadata_policy = MetadataOutputPolicy::Clear;
+        let clear = super::check_metadata_policy(&ctx, &mut |_, _| {});
+        assert!(!clear.passed);
+        assert!(clear.expected.contains("cleared-metadata"));
+
+        for format in [None, Some(FormatKind::Jxl)] {
+            ctx.output_format = format;
+            let mut attempts = Vec::new();
+            let rejected = super::check_metadata_policy(&ctx, &mut |done, total| {
+                attempts.push((done, total));
+            });
+            assert!(!rejected.passed);
+            assert_eq!(rejected.failure_scope, super::CheckFailureScope::Shared);
+            assert!(rejected.actual.contains("unsupported metadata policy"));
+            assert_eq!(attempts, [] as [(usize, usize); 0]);
+        }
+    }
+
+    #[test]
+    fn gate1_meme_metadata_requires_non_avif_outputs_cleared() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.png");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([1, 2, 3]))
+            .save(&src)
+            .unwrap();
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/metadata_clear_baseline.avif.fixture");
+        let out = wc.join("a.avif");
+        std::fs::copy(&fixture, &out).expect("copy cleared AVIF fixture");
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: Some(crate::image::format_detect::FormatKind::Avif),
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Clear,
+        };
+        ctx.blake3_log.insert(
+            "a.png".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.avif".to_string()),
+                src: "source-hash".to_string(),
+                out: "encoded-hash".to_string(),
+                library_asset: None,
+            },
+        );
+
+        let mut attempts = Vec::new();
+        let result = super::check_metadata_policy(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
+
+        assert!(result.passed, "{result:?}");
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
+        assert!(
+            result.expected.contains("cleared-metadata"),
+            "meme gate must require cleared metadata: {}",
+            result.expected
+        );
+    }
+
+    #[test]
+    fn gate1_meme_metadata_requires_adopted_avif_to_be_clean() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.avif");
+        let out = wc.join("a.avif");
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/metadata_clear_baseline.avif.fixture");
+        std::fs::copy(&fixture, &src).expect("copy AVIF fixture");
+        let metadata = crate::ExiftoolBuilder::new()
+            .arg("-XMP-dc:Description=private source metadata")
+            .arg(crate::path_safety::exiftool_path_arg(&src).as_ref())
+            .build()
+            .output()
+            .expect("write AVIF metadata");
+        assert!(metadata.status.success());
+        std::fs::copy(&src, &out).expect("adopt AVIF byte-identically");
+        let shared_hash = crate::common_utils::calculate_blake3_hash(&src).unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: Some(crate::image::format_detect::FormatKind::Avif),
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Clear,
+        };
+        ctx.blake3_log.insert(
+            "a.avif".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.avif".to_string()),
+                src: shared_hash.clone(),
+                out: shared_hash,
+                library_asset: None,
+            },
+        );
+
+        let mut attempts = Vec::new();
+        let result = super::check_metadata_policy(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
+
+        assert!(!result.passed);
+        assert_eq!(result.affected_files, vec![out]);
+        assert!(result.actual.contains("Description"), "{result:?}");
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn apply_gate1_records_metadata_check_result() {
+        let mut marker = super::WorkingCopyMarker::new(
+            PathBuf::from("/tmp/mfb-src"),
+            PathBuf::from("/tmp/mfb-wc"),
+            1,
+        );
+        let result = GateResult {
+            passed: false,
+            checks: vec![super::detail(
+                "metadata",
+                false,
+                "1 exact source/output metadata copies".to_string(),
+                "0 verified, 1 failed".to_string(),
+                Vec::new(),
+            )],
+        };
+
+        marker.apply_gate1(&result);
+
+        assert!(!marker.gate1_checks.metadata.0);
+        assert_eq!(marker.stage, super::FastImgStageName::Gate1Failed);
+    }
+
+    #[test]
+    fn gate1_blake3_reports_hash_read_errors_separately_from_drift() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("a.jpg");
+        let out = wc.join("a.JXL");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(&out, b"final-jxl-container").unwrap();
+        let mut ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::new(),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: "logged-source-hash".to_string(),
+                out: calculate_blake3_hash(&out).unwrap(),
+                library_asset: None,
+            },
+        );
+
+        let result = super::check_blake3_logged_outputs(&ctx, &mut |_, _| {});
+
+        assert!(!result.passed, "{result:?}");
+        assert!(
+            result.actual.contains("hash read errors: 1"),
+            "unexpected actual: {}",
+            result.actual
+        );
+        assert_eq!(result.affected_files, vec![out]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exiftool_nonzero_status_is_probe_failure() {
+        let status = std::process::ExitStatus::from_raw(1);
+
+        let err =
+            ensure_exiftool_success(std::path::Path::new("out.jxl"), status, b"corrupt metadata")
+                .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("exiftool orientation probe failed"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn gate2_sample_uses_logged_output_hash() {
+        let mut ctx = ctx_with_library(
+            1,
+            vec![LibraryAssetRecord {
+                rel_path: "a.JXL".to_string(),
+                blake3: "out".to_string(),
+                sync_status: "uploaded".to_string(),
+                quarantined: false,
+                photos_uuid: None,
+                library_blake3: None,
+                xmp_sidecar_blake3: None,
+            }],
+        );
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: "src".to_string(),
+                out: "out".to_string(),
+                library_asset: Some("out".to_string()),
+            },
+        );
+
+        let result = Gate2Import.run(&ctx);
+
+        assert!(
+            result
+                .checks
+                .iter()
+                .any(|check| check.name == "blake3_sample" && check.passed)
+        );
+    }
+
+    #[test]
+    fn final_gate2_preserves_both_custody_groups_and_legacy_failure_state() {
+        if !super::super::gate1_resume::isolate_final_verification_test(
+            "pipeline::verification::tests::final_gate2_preserves_both_custody_groups_and_legacy_failure_state",
+        ).unwrap() { return; }
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.JXL"), [0xff, 0x0a, 0]).unwrap();
+        std::fs::write(root.path().join("unowned.JXL"), [0xff, 0x0a, 1]).unwrap();
+        let mut ctx = ctx_with_library(
+            1,
+            vec![LibraryAssetRecord {
+                rel_path: "a.JXL".into(),
+                blake3: "out".into(),
+                sync_status: "photos_local".into(),
+                ..Default::default()
+            }],
+        );
+        ctx.working_copy = root.path().to_owned();
+        ctx.output_format = Some(crate::image::format_detect::FormatKind::Jxl);
+        ctx.blake3_log.insert(
+            "a.jpg".into(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".into()),
+                src: "source".into(),
+                out: "out".into(),
+                library_asset: Some("out".into()),
+            },
+        );
+        assert!(
+            !super::Gate2Final.run(&ctx).passed,
+            "an inactive final policy cannot authorize a pass"
+        );
+        let _uncached = crate::common_utils::UncachedVerificationScope::new().unwrap();
+        use crate::ui::progress::GateActivityState::{Failed, Passed, Running};
+        let trace = |ctx: &super::PipelineCtx| {
+            let mut events = Vec::new();
+            let result = super::Gate2Final::run_relationship_checks(
+                ctx,
+                |check, completed, state, files| {
+                    events.push((check, completed, state, files));
+                },
+            );
+            (result, events)
+        };
+        let (passed, events) = trace(&ctx);
+        let all_checks = [
+            ("import_receipts", 0, Running, None),
+            ("count_x3", 1, Running, None),
+            ("sync", 2, Running, None),
+            ("quarantine", 3, Running, None),
+            ("chain", 4, Running, None),
+        ];
+        let attempt = |processed| {
+            Some(crate::ui::progress::GateFileProgress {
+                processed,
+                total: 1,
+            })
+        };
+        let chain_attempts = [
+            ("chain", 4, Running, attempt(0)),
+            ("chain", 4, Running, attempt(1)),
+        ];
+        assert_eq!(&events[..5], &all_checks);
+        assert_eq!(&events[5..7], &chain_attempts);
+        assert_eq!(events[7..], [("chain", 5, Passed, attempt(1))]);
+        assert!(super::Gate2Final.run(&ctx).passed);
+        assert!(passed.passed);
+        assert!(root.path().join("unowned.JXL").is_file());
+        assert_eq!(passed.checks.len(), 7);
+        let mut marker =
+            super::WorkingCopyMarker::new(ctx.src_dir.clone(), ctx.working_copy.clone(), 1);
+        marker.apply_final_gate2(&passed);
+        assert_eq!(marker.stage, super::FastImgStageName::Gate3Passed);
+        for deep_failure in [false, true] {
+            let mut changed = ctx.clone();
+            let library = changed.library_handle.as_mut().unwrap();
+            if deep_failure {
+                library.imported_assets[0].quarantined = true;
+            } else {
+                library.import_error_count = 1;
+            }
+            let (failed, events) = trace(&changed);
+            let blocker = if deep_failure {
+                "quarantine"
+            } else {
+                "import_receipts"
+            };
+            assert_eq!(&events[..5], &all_checks);
+            assert_eq!(&events[5..7], &chain_attempts);
+            assert_eq!(events[7..], [(blocker, 5, Failed, None)]);
+            assert!(!failed.passed);
+            assert_eq!(failed.checks.len(), 7);
+            marker.apply_final_gate2(&failed);
+            assert_eq!(marker.stage, super::FastImgStageName::Gate3Failed);
+            assert!(marker.error.is_some());
+        }
+        let mut broken_chain = ctx.clone();
+        broken_chain
+            .blake3_log
+            .get_mut("a.jpg")
+            .unwrap()
+            .library_asset = None;
+        let (failed, events) = trace(&broken_chain);
+        assert!(!failed.passed);
+        assert_eq!(events[7..], [("chain", 5, Failed, attempt(1))]);
+
+        let mut legacy = ctx.clone();
+        legacy.blake3_log.get_mut("a.jpg").unwrap().out_rel = None;
+        let (_, events) = trace(&legacy);
+        assert!(events.iter().all(|event| event.3.is_none()));
+
+        std::fs::remove_file(root.path().join("a.JXL")).unwrap();
+        let (failed, events) = trace(&ctx);
+        assert!(!failed.passed);
+        assert_eq!(&events[..2], &all_checks[..2]);
+        assert_eq!(events[2..], [("count_x3", 2, Failed, None)]);
+    }
+
+    #[test]
+    fn gate2_rejects_duplicate_library_paths() {
+        let mut ctx = ctx_with_library(
+            2,
+            vec![
+                LibraryAssetRecord {
+                    rel_path: "a.JXL".to_string(),
+                    blake3: "out-a".to_string(),
+                    sync_status: "uploaded".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                    xmp_sidecar_blake3: None,
+                },
+                LibraryAssetRecord {
+                    rel_path: "a.JXL".to_string(),
+                    blake3: "out-a".to_string(),
+                    sync_status: "uploaded".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                    xmp_sidecar_blake3: None,
+                },
+            ],
+        );
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: "src-a".to_string(),
+                out: "out-a".to_string(),
+                library_asset: Some("out-a".to_string()),
+            },
+        );
+        ctx.blake3_log.insert(
+            "b.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("b.JXL".to_string()),
+                src: "src-b".to_string(),
+                out: "out-b".to_string(),
+                library_asset: Some("out-b".to_string()),
+            },
+        );
+
+        let result = Gate2Import.run(&ctx);
+
+        assert!(!result.passed);
+        assert!(
+            result
+                .checks
+                .iter()
+                .any(|check| check.name == "blake3_sample" && !check.passed)
+        );
+    }
+
+    #[test]
+    fn gate3_rejects_missing_distinct_library_asset() {
+        let mut ctx = ctx_with_library(
+            2,
+            vec![
+                LibraryAssetRecord {
+                    rel_path: "a.JXL".to_string(),
+                    blake3: "out-a".to_string(),
+                    sync_status: "uploaded".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                    xmp_sidecar_blake3: None,
+                },
+                LibraryAssetRecord {
+                    rel_path: "a.JXL".to_string(),
+                    blake3: "out-a".to_string(),
+                    sync_status: "uploaded".to_string(),
+                    quarantined: false,
+                    photos_uuid: None,
+                    library_blake3: None,
+                    xmp_sidecar_blake3: None,
+                },
+            ],
+        );
+        ctx.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: "src-a".to_string(),
+                out: "out-a".to_string(),
+                library_asset: Some("out-a".to_string()),
+            },
+        );
+        ctx.blake3_log.insert(
+            "b.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("b.JXL".to_string()),
+                src: "src-b".to_string(),
+                out: "out-b".to_string(),
+                library_asset: Some("out-b".to_string()),
+            },
+        );
+
+        let result = Gate3Deep.run(&ctx);
+
+        assert!(!result.passed);
+        assert!(
+            result
+                .checks
+                .iter()
+                .any(|check| check.name == "chain" && !check.passed)
+        );
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FastImgStageName {
+    ScanComplete,
+    #[serde(alias = "copy_complete")]
+    OutputPrepared,
+    TranscodeComplete,
+    Gate1Passed,
+    Importing,
+    ImportComplete,
+    Gate2Passed,
+    DeepScanComplete,
+    Gate3Passed,
+    CleanupComplete,
+    Gate1Failed,
+    Gate2Failed,
+    Gate3Failed,
+    Aborted,
+}
+
+impl FastImgStageName {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::ScanComplete => "scan_complete",
+            Self::OutputPrepared => "output_prepared",
+            Self::TranscodeComplete => "encode_complete",
+            Self::Gate1Passed => "gate1_passed",
+            Self::Importing => "importing",
+            Self::ImportComplete => "import_complete",
+            Self::Gate2Passed => "gate2_passed",
+            Self::DeepScanComplete => "deep_scan_complete",
+            Self::Gate3Passed => "gate3_passed",
+            Self::CleanupComplete => "cleanup_complete",
+            Self::Gate1Failed => "gate1_failed",
+            Self::Gate2Failed => "gate2_failed",
+            Self::Gate3Failed => "gate3_failed",
+            Self::Aborted => "aborted",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub enum FastImgStage {
+    Idle,
+    Scanning,
+    ConfirmScan {
+        jpeg_count: usize,
+        src_dir: PathBuf,
+    },
+    PreparingOutput {
+        output_dir: PathBuf,
+    },
+    Transcoding {
+        done: usize,
+        total: usize,
+        current_file: PathBuf,
+    },
+    StrippingOrientation {
+        done: usize,
+        total: usize,
+    },
+    VerifyingLocal,
+    Gate1Failed {
+        checks: Vec<CheckDetail>,
+    },
+    ConfirmImport {
+        jxl_count: usize,
+    },
+    Importing {
+        done: usize,
+        total: usize,
+    },
+    VerifyingImport,
+    Gate2Failed {
+        checks: Vec<CheckDetail>,
+    },
+    DeepScanning,
+    VerifyingFinal,
+    Gate3Failed {
+        checks: Vec<CheckDetail>,
+    },
+    Cleanup,
+    Done {
+        summary: FastImgSummary,
+    },
+    Aborted {
+        at_stage: &'static str,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FastImgSummary {
+    pub total_files: usize,
+    pub space_freed_bytes: u64,
+    pub duration_secs: f64,
+    pub gate1_passed: bool,
+    pub gate2_passed: bool,
+    pub gate3_passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct CheckPassed(pub bool);
+
+impl From<bool> for CheckPassed {
+    fn from(value: bool) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Gate1Checks {
+    pub count: CheckPassed,
+    pub blake3: CheckPassed,
+    #[serde(default)]
+    pub metadata: CheckPassed,
+    pub size: CheckPassed,
+    pub orient: CheckPassed,
+    pub decode: CheckPassed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Gate2Checks {
+    pub count: CheckPassed,
+    pub blake3_sample: CheckPassed,
+    pub no_error: CheckPassed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Gate3Checks {
+    pub count_x3: CheckPassed,
+    pub sync: CheckPassed,
+    pub quarantine: CheckPassed,
+    pub chain: CheckPassed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FastImgProcessingContract {
+    pub schema: u8,
+    pub tool_policy: crate::runtime_config::ToolPolicy,
+    pub fallback_policy: crate::runtime_config::FallbackPolicy,
+    pub encoding: FastImgEncodingParameters,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "strategy", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum FastImgEncodingParameters {
+    Jxl {
+        jpeg_effort: u8,
+        jpeg_effort_search: crate::runtime_config::JpegEffortSearch,
+        archive: bool,
+        allow_expert_options: bool,
+    },
+    Avif {
+        avif_quality: u8,
+        avif_speed: u8,
+        quality_search: crate::runtime_config::QualitySearch,
+        avif_metadata_policy: crate::runtime_config::AvifMetadataPolicy,
+        allow_expert_options: bool,
+    },
+}
+
+impl FastImgProcessingContract {
+    /// Validate persisted processing intent without assigning missing historical
+    /// evidence the settings of the current attempt.
+    ///
+    /// # Errors
+    /// Rejects unknown schemas, a conflicting strategy, or invalid encoder values.
+    pub fn validate(&self, strategy: &str) -> Result<(), String> {
+        if self.schema != 1 {
+            return Err(format!(
+                "unsupported fast-img processing contract schema {}; expected 1",
+                self.schema
+            ));
+        }
+        match &self.encoding {
+            FastImgEncodingParameters::Jxl { jpeg_effort, .. }
+                if strategy == "jxl" && (1..=11).contains(jpeg_effort) =>
+            {
+                Ok(())
+            }
+            FastImgEncodingParameters::Avif {
+                avif_quality,
+                avif_speed,
+                ..
+            } if strategy == "avif" && (10..=100).contains(avif_quality) && *avif_speed <= 10 => {
+                Ok(())
+            }
+            _ => Err(format!(
+                "invalid fast-img processing contract for strategy {strategy}: {:?}",
+                self.encoding
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PhotosSubmissionKind {
+    Encoded,
+    Original,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "backend", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PhotosSubmissionBackend {
+    Native {
+        journal_path: PathBuf,
+        request_blake3: String,
+    },
+    Applescript {
+        request_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PhotosSubmissionIntent {
+    pub kind: PhotosSubmissionKind,
+    pub source_rel: String,
+    pub source_blake3: String,
+    pub output_rel: String,
+    pub output_blake3: String,
+    pub album_name: String,
+    pub photos_library_path: Option<PathBuf>,
+    pub backend: PhotosSubmissionBackend,
+}
+
+/// Submission is evidence of a possible Photos side effect, not a delivery receipt.
+/// An incomplete history must never be interpreted as proof that an older asset
+/// was not submitted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PhotosSubmissionHistory {
+    pub schema: u8,
+    pub complete_from_creation: bool,
+    pub intents: Vec<PhotosSubmissionIntent>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PhotosSubmissionRequest<'a> {
+    Native(&'a Path),
+    Applescript(&'a str),
+}
+
+impl PhotosSubmissionIntent {
+    fn request_identity(&self) -> PhotosSubmissionRequest<'_> {
+        match &self.backend {
+            PhotosSubmissionBackend::Native { journal_path, .. } => {
+                PhotosSubmissionRequest::Native(journal_path)
+            }
+            PhotosSubmissionBackend::Applescript { request_id } => {
+                PhotosSubmissionRequest::Applescript(request_id)
+            }
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for (kind, rel) in [
+            ("Photos submission source", self.source_rel.as_str()),
+            ("Photos submission output", self.output_rel.as_str()),
+        ] {
+            validate_marker_relative_path(kind, rel)?;
+        }
+        validate_submission_blake3("source", &self.source_blake3)?;
+        validate_submission_blake3("output", &self.output_blake3)?;
+        if self.album_name.is_empty() || self.album_name.contains('\0') {
+            return Err("Photos submission album name must be non-empty and contain no NUL".into());
+        }
+        if let Some(path) = &self.photos_library_path {
+            validate_submission_absolute_path("Photos library", path)?;
+        }
+        match &self.backend {
+            PhotosSubmissionBackend::Native {
+                journal_path,
+                request_blake3,
+            } => {
+                validate_submission_absolute_path("native journal", journal_path)?;
+                validate_submission_blake3("native request", request_blake3)?;
+            }
+            PhotosSubmissionBackend::Applescript { request_id } => {
+                if request_id.is_empty() || request_id.chars().any(char::is_control) {
+                    return Err(
+                        "Photos submission request ID must be non-empty and contain no control characters"
+                            .into(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_submission_blake3(kind: &str, hash: &str) -> Result<(), String> {
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "Photos submission {kind} BLAKE3 must contain exactly 64 lowercase hexadecimal digits"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_submission_path_normalized(kind: &str, path: &Path) -> Result<(), String> {
+    let normalized: PathBuf = path.components().collect();
+    if path.as_os_str().as_encoded_bytes().contains(&0)
+        || normalized.as_os_str() != path.as_os_str()
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return Err(format!(
+            "Photos submission {kind} path must be normalized: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_submission_absolute_path(kind: &str, path: &Path) -> Result<(), String> {
+    if !path.is_absolute() || path.file_name().is_none() {
+        return Err(format!(
+            "Photos submission {kind} path must be an absolute non-root path: {}",
+            path.display()
+        ));
+    }
+    validate_submission_path_normalized(kind, path)
+}
+
+impl PhotosSubmissionHistory {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != 1 {
+            return Err(format!(
+                "unsupported Photos submission history schema {}; expected 1",
+                self.schema
+            ));
+        }
+        let mut requests = BTreeMap::new();
+        let mut entries = BTreeSet::new();
+        for intent in &self.intents {
+            intent.validate()?;
+            let request = intent.request_identity();
+            let scope = (&intent.backend, &intent.photos_library_path);
+            if let Some(previous) = requests.insert(request, scope)
+                && previous != scope
+            {
+                return Err(format!(
+                    "Photos submission request has conflicting request hash or library scope for {}",
+                    intent.output_rel
+                ));
+            }
+            if !entries.insert((request, intent.output_rel.as_str())) {
+                return Err(format!(
+                    "Photos submission history contains duplicate request entry {}",
+                    intent.output_rel
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FailedRetrySourceRootObservation {
+    NotFound,
+}
+
+/// Fresh finish-only observations bound to the exact pre-finalization state.
+/// Missing source data is observed, never attributed to an MFB deletion.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FailedRetryFinishEvidence {
+    pub schema: u8,
+    pub task_key: String,
+    pub request_key: String,
+    pub manifest_blake3: String,
+    pub verified_snapshot_blake3: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_primary_cleanup_blake3: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_tier2_cleanup_blake3: Option<String>,
+    pub verified_revision: i64,
+    pub verified_stage: FastImgStageName,
+    pub verified_tier2_in_progress: bool,
+    pub verified_error: Option<String>,
+    pub source_root_observation: FailedRetrySourceRootObservation,
+    pub verified_output_count: u64,
+    pub verified_primary_photos_count: u64,
+    pub verified_original_photos_count: u64,
+    pub observed_at: String,
+}
+
+impl FailedRetryFinishEvidence {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != 1 || self.verified_revision < 0 {
+            return Err("Unsupported failed-only finalization evidence schema/revision".into());
+        }
+        for (name, hash) in [
+            ("finish task", &self.task_key),
+            ("finish request", &self.request_key),
+            ("finish manifest", &self.manifest_blake3),
+            ("finish snapshot", &self.verified_snapshot_blake3),
+        ] {
+            validate_submission_blake3(name, hash)?;
+        }
+        if let Some(hash) = &self.verified_primary_cleanup_blake3 {
+            validate_submission_blake3("finish primary cleanup", hash)?;
+        }
+        if let Some(hash) = &self.verified_tier2_cleanup_blake3 {
+            validate_submission_blake3("finish Tier 2 cleanup", hash)?;
+        }
+        chrono::DateTime::parse_from_rfc3339(&self.observed_at).map_err(|error| {
+            format!("Invalid failed-only finalization observation time: {error}")
+        })?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkingCopyMarker {
+    pub schema: u8,
+    pub src_dir: PathBuf,
+    pub working_copy: PathBuf,
+    pub started_at: String,
+    pub stage: FastImgStageName,
+    pub src_jpeg_count: usize,
+    #[serde(default)]
+    pub encoded_count: usize,
+    pub gate1_checks: Gate1Checks,
+    pub gate2_checks: Gate2Checks,
+    pub gate3_checks: Gate3Checks,
+    #[serde(deserialize_with = "deserialize_unique_marker_map")]
+    pub blake3_log: Blake3Log,
+    /// Present once this task has committed to durable primary unlink evidence.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub primary_cleanup_journal: bool,
+    /// Present once this task has committed to durable original-format unlink evidence.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tier2_cleanup_journal: bool,
+    #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
+    pub skipped_sources: SkippedSourceLog,
+    #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
+    pub failed_sources: FailedSourceLog,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "deserialize_unique_marker_map"
+    )]
+    pub tier2_failed_sources: FailedSourceLog,
+    /// Tier-2 lossy modern static assets imported directly into Photos.
+    #[serde(default)]
+    pub tier2_imported_assets: Vec<LibraryAssetRecord>,
+    /// A tier-2 import/delete transaction was durably started but has not yet
+    /// completed its final Photos custody recheck and source cleanup.
+    #[serde(default)]
+    pub tier2_in_progress: bool,
+    /// Primary fast-img Photos assets, including UUIDs needed for fresh resume verification.
+    #[serde(default)]
+    pub photos_imported_assets: Vec<LibraryAssetRecord>,
+    /// Append-only evidence survives failure isolation, cleanup, and retry.
+    /// Missing historical coverage is retained rather than upgraded on read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    photos_submission_history: Option<PhotosSubmissionHistory>,
+    /// Canonical Photos library selected for this marker's import custody proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photos_library_path: Option<PathBuf>,
+    /// Naming policy bound before Photos import, so resume cannot change destinations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photos_import_naming_policy: Option<String>,
+    pub error: Option<String>,
+    /// Fast-img strategy: "jxl" (default) or "avif" (Meme Mode表情包模式).
+    #[serde(default = "default_strategy")]
+    pub strategy: String,
+    #[serde(default)]
+    pub metadata_policy_version: u32,
+    /// Route-specific effective encoding intent, distinct from tool identity and
+    /// Photos delivery evidence. Missing historical intent is never filled in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_contract: Option<FastImgProcessingContract>,
+    /// Digest of the immutable Core admission rows for a new full-discovery task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) admission_plan_blake3: Option<String>,
+    /// Binds a failed-only child to its immutable, normalized Core manifest.
+    /// A missing relation must not turn this child into an ordinary task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_retry_manifest_blake3: Option<String>,
+    /// The primary share of a routed retry's total admitted source count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_retry_primary_source_count: Option<usize>,
+    /// Only the compare-and-finalize operation can establish this observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failed_retry_finish_evidence: Option<FailedRetryFinishEvidence>,
+    /// Exact private runtime authority used by this task; it is recovery state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_snapshot_manifest: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_snapshot_identity: Option<String>,
+    /// Explicitly distinguishes an unpinned run from a legacy marker with missing authority.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tool_snapshot_disabled: bool,
+}
+
+fn deserialize_unique_marker_map<'de, D, V>(
+    deserializer: D,
+) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    struct UniqueMap<V>(std::marker::PhantomData<V>);
+    impl<'de, V: Deserialize<'de>> serde::de::Visitor<'de> for UniqueMap<V> {
+        type Value = BTreeMap<String, V>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a marker map with unique source paths")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
+            let mut values = BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, V>()? {
+                if values.insert(key.clone(), value).is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate marker source path {key}"
+                    )));
+                }
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_map(UniqueMap(std::marker::PhantomData))
+}
+
+fn default_strategy() -> String {
+    "jxl".to_string()
+}
+
+pub(crate) fn validate_marker_relative_path(kind: &str, rel: &str) -> Result<(), String> {
+    let path = Path::new(rel);
+    if rel.is_empty()
+        || rel.contains('\0')
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || path.components().collect::<PathBuf>().as_os_str() != path.as_os_str()
+    {
+        return Err(format!(
+            "fast-img marker {kind} must be a non-empty normalized relative path: {rel:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Derive an exact Fast IMG state key from a file path inside its inventory root.
+///
+/// # Errors
+/// Rejects paths outside the root and keys that cannot be represented exactly in state.
+pub fn fast_img_relative_key(path: &Path, root: &Path, kind: &str) -> Result<String, String> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        format!(
+            "fast-img {kind} path {} is outside its root {}",
+            path.display(),
+            root.display()
+        )
+    })?;
+    let key = relative
+        .to_str()
+        .ok_or_else(|| format!("fast-img {kind} path is not UTF-8: {path:?}"))?;
+    validate_marker_relative_path(kind, key)?;
+    Ok(key.to_owned())
+}
+
+/// Independently read a regular file and verify its complete recorded digest.
+/// # Errors
+/// Rejects linked, unreadable, changed or nonmatching files.
+pub fn verify_regular_file_blake3(path: &Path, expected: &str) -> std::io::Result<()> {
+    let observation = FinalInputObservation::capture(path)?;
+    if observation.blake3() != expected {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "File content differs from its recorded BLAKE3",
+        ));
+    }
+    Ok(())
+}
+
+/// Reject linked components in a Fast IMG output path, including a linked root.
+///
+/// # Errors
+/// Returns an error for an invalid relative path, symlink, or inspection failure.
+pub fn validate_no_symlink_components(root: &Path, rel: &Path) -> Result<(), String> {
+    let mut current = root.to_path_buf();
+    for component in std::iter::once(None).chain(rel.components().map(Some)) {
+        if let Some(Component::Normal(name)) = component {
+            current.push(name);
+        } else if component.is_some() {
+            return Err(format!(
+                "fast-img marker output path is not normalized: {}",
+                rel.display()
+            ));
+        }
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "fast-img marker output path contains a symlink: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!(
+                    "fast-img marker output path inspection failed for {}: {err}",
+                    current.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+impl WorkingCopyMarker {
+    #[must_use]
+    pub fn new(src_dir: PathBuf, working_copy: PathBuf, src_jpeg_count: usize) -> Self {
+        Self {
+            schema: FAST_IMG_MARKER_SCHEMA_VERSION,
+            src_dir,
+            working_copy,
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stage: FastImgStageName::ScanComplete,
+            src_jpeg_count,
+            encoded_count: 0,
+            gate1_checks: Gate1Checks::default(),
+            gate2_checks: Gate2Checks::default(),
+            gate3_checks: Gate3Checks::default(),
+            blake3_log: Blake3Log::new(),
+            primary_cleanup_journal: false,
+            tier2_cleanup_journal: false,
+            skipped_sources: SkippedSourceLog::new(),
+            failed_sources: FailedSourceLog::new(),
+            tier2_failed_sources: FailedSourceLog::new(),
+            tier2_imported_assets: Vec::new(),
+            tier2_in_progress: false,
+            photos_imported_assets: Vec::new(),
+            photos_submission_history: Some(PhotosSubmissionHistory {
+                schema: 1,
+                complete_from_creation: true,
+                intents: Vec::new(),
+            }),
+            photos_library_path: None,
+            photos_import_naming_policy: None,
+            error: None,
+            strategy: "jxl".to_string(),
+            metadata_policy_version: 0,
+            processing_contract: None,
+            admission_plan_blake3: None,
+            failed_retry_manifest_blake3: None,
+            failed_retry_primary_source_count: None,
+            failed_retry_finish_evidence: None,
+            tool_snapshot_manifest: crate::common_utils::active_tool_snapshot()
+                .map(|snapshot| snapshot.manifest_path.clone()),
+            tool_snapshot_identity: crate::common_utils::active_tool_snapshot()
+                .map(|snapshot| snapshot.identity.clone()),
+            tool_snapshot_disabled: crate::runtime_config::active()
+                .is_some_and(|config| !config.execution.external_tool_snapshot),
+        }
+    }
+
+    #[must_use]
+    pub fn with_strategy(mut self, strategy: String) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
+    /// Primary cleanup is not terminal while original-format delivery is pending.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self.stage, FastImgStageName::CleanupComplete) && !self.tier2_in_progress
+    }
+
+    #[must_use]
+    pub const fn failed_retry_finish_evidence(&self) -> Option<&FailedRetryFinishEvidence> {
+        self.failed_retry_finish_evidence.as_ref()
+    }
+
+    #[must_use]
+    pub const fn photos_submission_history(&self) -> Option<&PhotosSubmissionHistory> {
+        self.photos_submission_history.as_ref()
+    }
+
+    /// Record a batch before submitting it to Photos. Repeating an identical
+    /// request entry is idempotent; any changed identity or evidence is rejected.
+    /// This does not confer delivery or source-cleanup eligibility.
+    ///
+    /// # Errors
+    /// Rejects invalid or conflicting evidence without changing the marker.
+    pub fn record_photos_submissions(
+        &mut self,
+        intents: &[PhotosSubmissionIntent],
+    ) -> Result<(), String> {
+        if intents.is_empty() {
+            return self.validate_photos_submission_history();
+        }
+        let mut history =
+            self.photos_submission_history
+                .clone()
+                .unwrap_or_else(|| PhotosSubmissionHistory {
+                    schema: 1,
+                    complete_from_creation: false,
+                    intents: Vec::new(),
+                });
+        history.validate()?;
+        let mut entries = BTreeMap::new();
+        for intent in &history.intents {
+            entries.insert(
+                (intent.request_identity(), intent.output_rel.as_str()),
+                intent,
+            );
+        }
+        let mut additions = Vec::new();
+        for intent in intents {
+            let key = (intent.request_identity(), intent.output_rel.as_str());
+            if let Some(previous) = entries.get(&key) {
+                if *previous != intent {
+                    return Err(format!(
+                        "Photos submission request entry conflicts with existing evidence for {}",
+                        intent.output_rel
+                    ));
+                }
+            } else {
+                entries.insert(key, intent);
+                additions.push(intent.clone());
+            }
+        }
+        drop(entries);
+        history.intents.extend(additions);
+        history.validate()?;
+        self.photos_submission_history = Some(history);
+        Ok(())
+    }
+
+    fn validate_photos_submission_history(&self) -> Result<(), String> {
+        if let Some(history) = &self.photos_submission_history {
+            history.validate()?;
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn primary_source_count(&self) -> usize {
+        match self.failed_retry_primary_source_count {
+            Some(count) => count,
+            None => self.src_jpeg_count,
+        }
+    }
+
+    pub fn all_failed_sources(&self) -> impl Iterator<Item = (&String, &SkippedSourceEntry)> {
+        self.failed_sources.iter().chain(&self.tier2_failed_sources)
+    }
+
+    #[must_use]
+    pub fn failed_source_count(&self) -> usize {
+        self.failed_sources
+            .len()
+            .saturating_add(self.tier2_failed_sources.len())
+    }
+
+    #[must_use]
+    pub fn expected_output_count(&self) -> usize {
+        self.primary_source_count()
+            .saturating_sub(self.skipped_sources.len())
+            .saturating_sub(self.failed_sources.len())
+    }
+
+    #[must_use]
+    pub fn recorded_source_count(&self) -> usize {
+        self.blake3_log
+            .len()
+            .saturating_add(self.skipped_sources.len())
+            .saturating_add(self.failed_sources.len())
+    }
+
+    #[must_use]
+    pub fn source_disposition_is_complete(&self) -> bool {
+        self.recorded_source_count() == self.primary_source_count()
+    }
+
+    #[must_use]
+    pub fn source_disposition_over_recorded(&self) -> bool {
+        self.recorded_source_count() > self.primary_source_count()
+    }
+
+    pub fn validate_source_disposition_disjoint(&self) -> Result<(), String> {
+        for rel in self.blake3_log.keys() {
+            if self.skipped_sources.contains_key(rel) {
+                return Err(format!("{rel} recorded as both converted and skipped"));
+            }
+            if self.failed_sources.contains_key(rel) {
+                return Err(format!("{rel} recorded as both converted and failed"));
+            }
+        }
+        for rel in self.skipped_sources.keys() {
+            if self.failed_sources.contains_key(rel) {
+                return Err(format!("{rel} recorded as both skipped and failed"));
+            }
+        }
+        for (rel, failure) in &self.tier2_failed_sources {
+            if self.blake3_log.contains_key(rel)
+                || self.skipped_sources.contains_key(rel)
+                || self.failed_sources.contains_key(rel)
+            {
+                return Err(format!(
+                    "Original-format failure {rel} overlaps a primary outcome"
+                ));
+            }
+            validate_submission_blake3("original-format failure", &failure.src)?;
+            if failure.reason.trim().is_empty() {
+                return Err(format!("Original-format failure {rel} has no reason"));
+            }
+        }
+        for asset in &self.tier2_imported_assets {
+            if self.tier2_failed_sources.contains_key(&asset.rel_path) {
+                return Err(format!(
+                    "{} has both an original-format failure and a delivery receipt",
+                    asset.rel_path
+                ));
+            }
+        }
+        if let Some(history) = self.photos_submission_history() {
+            for intent in &history.intents {
+                if intent.kind == PhotosSubmissionKind::Original
+                    && self.tier2_failed_sources.contains_key(&intent.source_rel)
+                {
+                    return Err(format!(
+                        "{} has both a pre-submission failure and a Photos submission",
+                        intent.source_rel
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_library_asset_receipts_unique(&self) -> Result<(), String> {
+        let mut primary_paths = BTreeSet::new();
+        for asset in &self.photos_imported_assets {
+            if !primary_paths.insert(asset.rel_path.as_str()) {
+                return Err(format!(
+                    "fast-img marker has duplicate primary Photos receipt path {}",
+                    asset.rel_path
+                ));
+            }
+        }
+
+        let mut tier2_paths = BTreeSet::new();
+        for asset in &self.tier2_imported_assets {
+            if !tier2_paths.insert(asset.rel_path.as_str()) {
+                return Err(format!(
+                    "fast-img marker has duplicate tier-2 Photos receipt path {}",
+                    asset.rel_path
+                ));
+            }
+        }
+
+        let mut photos_uuids = BTreeSet::new();
+        for asset in self
+            .photos_imported_assets
+            .iter()
+            .chain(&self.tier2_imported_assets)
+        {
+            if let Some(uuid) = asset.photos_uuid.as_deref()
+                && !photos_uuids.insert(uuid)
+            {
+                return Err(format!(
+                    "fast-img marker has duplicate Photos UUID receipt {uuid}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_relative_path_contract(&self) -> Result<(), String> {
+        for rel in self
+            .blake3_log
+            .keys()
+            .chain(self.skipped_sources.keys())
+            .chain(self.failed_sources.keys())
+            .chain(self.tier2_failed_sources.keys())
+        {
+            validate_marker_relative_path("source path", rel)?;
+        }
+        for entry in self.blake3_log.values() {
+            if let Some(out_rel) = entry.out_rel.as_deref() {
+                validate_marker_relative_path("output path", out_rel)?;
+            }
+        }
+        for asset in self
+            .tier2_imported_assets
+            .iter()
+            .chain(&self.photos_imported_assets)
+        {
+            validate_marker_relative_path("library asset path", &asset.rel_path)?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_checkpoint_path_contract(
+        &self,
+        expected_working_copy: &Path,
+    ) -> Result<(), String> {
+        self.validate_relative_path_contract()?;
+        let expected = canonical_working_copy_path(expected_working_copy).map_err(|err| {
+            format!(
+                "canonicalize expected fast-img working copy {} failed: {err}",
+                expected_working_copy.display()
+            )
+        })?;
+        let recorded = canonical_working_copy_path(&self.working_copy).map_err(|err| {
+            format!(
+                "canonicalize recorded fast-img working copy {} failed: {err}",
+                self.working_copy.display()
+            )
+        })?;
+        if recorded != expected {
+            return Err(format!(
+                "fast-img marker working copy mismatch: expected={} recorded={}",
+                expected.display(),
+                recorded.display()
+            ));
+        }
+        for (source_rel, entry) in &self.blake3_log {
+            let out_rel = entry.out_rel.as_deref().map_or_else(
+                || PathBuf::from(source_rel).with_extension("JXL"),
+                PathBuf::from,
+            );
+            validate_no_symlink_components(&expected, &out_rel)?;
+        }
+        Ok(())
+    }
+
+    pub fn apply_gate1(&mut self, result: &GateResult) {
+        for check in &result.checks {
+            match check.name {
+                "count" => self.gate1_checks.count = check.passed.into(),
+                "blake3" => self.gate1_checks.blake3 = check.passed.into(),
+                "metadata" => self.gate1_checks.metadata = check.passed.into(),
+                "size" => self.gate1_checks.size = check.passed.into(),
+                "orient" => self.gate1_checks.orient = check.passed.into(),
+                "decode" => self.gate1_checks.decode = check.passed.into(),
+                _ => {}
+            }
+        }
+        self.stage = if result.passed {
+            FastImgStageName::Gate1Passed
+        } else {
+            FastImgStageName::Gate1Failed
+        };
+        self.error = (!result.passed).then(|| summarize_checks(&result.checks));
+    }
+
+    pub fn apply_gate2(&mut self, result: &GateResult) {
+        for check in &result.checks {
+            match check.name {
+                "count" => self.gate2_checks.count = check.passed.into(),
+                "blake3_sample" => self.gate2_checks.blake3_sample = check.passed.into(),
+                "no_error" => self.gate2_checks.no_error = check.passed.into(),
+                _ => {}
+            }
+        }
+        self.stage = if result.passed {
+            FastImgStageName::Gate2Passed
+        } else {
+            FastImgStageName::Gate2Failed
+        };
+        self.error = (!result.passed).then(|| summarize_checks(&result.checks));
+    }
+
+    /// Keep legacy marker fields/stages readable while committing one final Gate 2 result.
+    pub fn apply_final_gate2(&mut self, result: &GateResult) {
+        self.apply_gate2(result);
+        self.apply_gate3(result);
+    }
+
+    pub fn apply_gate3(&mut self, result: &GateResult) {
+        for check in &result.checks {
+            match check.name {
+                "count_x3" => self.gate3_checks.count_x3 = check.passed.into(),
+                "sync" => self.gate3_checks.sync = check.passed.into(),
+                "quarantine" => self.gate3_checks.quarantine = check.passed.into(),
+                "chain" => self.gate3_checks.chain = check.passed.into(),
+                _ => {}
+            }
+        }
+        self.stage = if result.passed {
+            FastImgStageName::Gate3Passed
+        } else {
+            FastImgStageName::Gate3Failed
+        };
+        self.error = (!result.passed).then(|| summarize_checks(&result.checks));
+    }
+}
+
+/// Resolve the Fast IMG directory identity even after its last component is gone.
+/// # Errors
+/// Rejects non-directories, linked leaves and unavailable parents.
+pub fn canonical_working_copy_path(path: &Path) -> std::io::Result<PathBuf> {
+    let private_parent = if let Some(parent) = path.parent()
+        && parent
+            .file_name()
+            .is_some_and(|name| name == PHOTOS_WORKING_COPY_DIRECTORY)
+        && parent == photos_working_copy_directory()?
+    {
+        inspect_photos_working_copy_directory(parent)?;
+        Some(parent)
+    } else {
+        None
+    };
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => path.canonicalize(),
+        Ok(_) => Err(std::io::Error::other(format!(
+            "fast-img output is not a real directory: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("fast-img output has no parent"))?;
+            let name = path
+                .file_name()
+                .ok_or_else(|| std::io::Error::other("fast-img output has no file name"))?;
+            Ok(match private_parent {
+                Some(parent) => parent.join(name),
+                None => parent.canonicalize()?.join(name),
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[must_use]
+pub fn working_copy_dir(src: &Path) -> PathBuf {
+    let name = if let Some(name) = src.file_name() {
+        name.to_string_lossy()
+    } else {
+        crate::media_conversion_gate::delivery_pipeline_path_audit(
+            "fast_img_working_copy",
+            src,
+            "source path has no file name; using mfb_working_copy fallback",
+        );
+        std::borrow::Cow::Borrowed("mfb_working_copy")
+    };
+    src.with_file_name(format!("{name}_optimized"))
+}
+
+const PHOTOS_WORKING_COPY_DIRECTORY: &str = "fast-img-photos";
+
+fn photos_working_copy_directory() -> std::io::Result<PathBuf> {
+    let configured = crate::process_lock::inspect_mfb_root_path().map_err(std::io::Error::other)?;
+    Ok(canonical_prospective_directory(&configured)?.join(PHOTOS_WORKING_COPY_DIRECTORY))
+}
+
+fn canonical_prospective_directory(configured: &Path) -> std::io::Result<PathBuf> {
+    if configured
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(std::io::Error::other(
+            "Photos task state path contains a parent traversal",
+        ));
+    }
+    for ancestor in configured.ancestors() {
+        match ancestor.canonicalize() {
+            Ok(canonical) => {
+                let suffix = configured
+                    .strip_prefix(ancestor)
+                    .map_err(std::io::Error::other)?;
+                return Ok(canonical.join(suffix));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "missing MFB state ancestor",
+    ))
+}
+
+#[derive(Debug)]
+struct PhotosWorkingCopyUnavailable {
+    directory: PathBuf,
+    reason: &'static str,
+}
+
+impl std::fmt::Display for PhotosWorkingCopyUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Photos working-copy storage unavailable at {}: {}",
+            self.directory.display(),
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for PhotosWorkingCopyUnavailable {}
+
+/// Distinguish a blocked private output from an unreadable state authority.
+pub fn is_photos_working_copy_unavailable(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|cause| cause.is::<PhotosWorkingCopyUnavailable>())
+}
+
+fn inspect_photos_working_copy_directory(directory: &Path) -> std::io::Result<()> {
+    let unavailable = |reason| {
+        std::io::Error::other(PhotosWorkingCopyUnavailable {
+            directory: directory.to_owned(),
+            reason,
+        })
+    };
+    let metadata = match std::fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(unavailable("permission denied"));
+        }
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() {
+        return Err(unavailable("expected a real directory"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid takes no arguments and only reads the process identity.
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+            || metadata.mode() & 0o700 != 0o700
+        {
+            return Err(unavailable(
+                "expected a directory accessible only to its owner",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Select a stable Photos working-copy base without writing to state or source.
+pub fn photos_working_copy_base(src: &Path) -> std::io::Result<PathBuf> {
+    let directory = photos_working_copy_directory()?;
+    validate_photos_state_location(src)?;
+    inspect_photos_working_copy_directory(&directory)?;
+    let key = blake3::hash(src.as_os_str().as_encoded_bytes()).to_hex();
+    Ok(directory.join(format!("{key}_optimized")))
+}
+
+/// Refuse state initialization that would write inside a Photos task's source or its parent.
+pub fn validate_photos_state_location(src: &Path) -> std::io::Result<()> {
+    let directory = photos_working_copy_directory()?;
+    let root = directory
+        .parent()
+        .ok_or_else(|| std::io::Error::other("missing MFB state root"))?;
+    if src.starts_with(&directory) {
+        return Err(std::io::Error::other(
+            "Photos working-copy storage overlaps the source or its parent",
+        ));
+    }
+    verify_photos_state_path(src, root)?;
+    for child in [
+        "tmp",
+        "logs",
+        "locks",
+        "cache",
+        "state",
+        "runtime",
+        "runtime/toolchains",
+        "runtime/toolchains/sources",
+        "photos-native",
+    ] {
+        let path = root.join(child);
+        if src.starts_with(&path) {
+            return Err(std::io::Error::other(
+                "Photos working-copy storage overlaps the source or its parent",
+            ));
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(std::io::Error::other(format!(
+                    "Photos task state must be a real directory: {}",
+                    path.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        verify_photos_state_path(src, &path)?;
+    }
+    if let Ok(logs) = std::env::var(crate::constants::ENV_MFB_LOG_DIR)
+        && !logs.trim().is_empty()
+    {
+        let path = std::path::absolute(logs.trim())?;
+        verify_photos_state_path(src, &canonical_prospective_directory(&path)?)?;
+    }
+    if let Some(control) = crate::batch_control::control_path()?
+        && let Some(parent) = control.parent()
+    {
+        verify_photos_state_path(src, &parent.canonicalize()?)?;
+    }
+    Ok(())
+}
+
+fn verify_photos_state_path(src: &Path, root: &Path) -> std::io::Result<()> {
+    let overlaps =
+        || std::io::Error::other("Photos working-copy storage overlaps the source or its parent");
+    if root.starts_with(src) || Some(root) == src.parent() {
+        return Err(overlaps());
+    }
+    // Creating any absent state ancestor can add an entry to the source parent.
+    for path in root.ancestors() {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) if Some(path) == src.parent() => return Err(overlaps()),
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Validate a fresh Photos destination before initializing app state.
+pub fn validate_new_photos_working_copy_location(src: &Path) -> std::io::Result<()> {
+    photos_working_copy_base(src).map(|_| ())
+}
+
+/// Create private Photos working-copy storage only during execution.
+pub fn prepare_photos_working_copy_parent(src: &Path, output: &Path) -> std::io::Result<()> {
+    let directory = photos_working_copy_directory()?;
+    if output.parent() != Some(directory.as_path()) {
+        return Ok(());
+    }
+    photos_working_copy_base(src)?;
+    crate::process_lock::get_mfb_root().map_err(std::io::Error::other)?;
+    #[cfg(unix)]
+    let result = {
+        use std::os::fd::AsRawFd;
+        let root = directory
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing MFB state root"))?;
+        let root = crate::io_utils::open_directory_nofollow(root)?;
+        let name = std::ffi::CString::new(PHOTOS_WORKING_COPY_DIRECTORY)?;
+        // SAFETY: the directory descriptor and the component C string are live.
+        let status = unsafe { libc::mkdirat(root.as_raw_fd(), name.as_ptr(), 0o700) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    };
+    #[cfg(not(unix))]
+    let result = std::fs::create_dir(&directory);
+    match result {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    if photos_working_copy_directory()? != directory {
+        return Err(std::io::Error::other(
+            "Photos working-copy storage changed during creation",
+        ));
+    }
+    inspect_photos_working_copy_directory(&directory)
+}
+
+pub fn matching_working_copy_markers(
+    src: &Path,
+    strategy: &str,
+) -> std::io::Result<Vec<WorkingCopyMarker>> {
+    crate::db::fast_img_store::matching_markers(src, strategy)
+}
+
+pub fn resolve_working_copy_dir(src: &Path, strategy: &str) -> std::io::Result<PathBuf> {
+    resolve_working_copy_dir_for_delivery(src, strategy, false)
+}
+
+/// Keep the saved output on resume and select a delivery-specific output for new work.
+pub fn resolve_working_copy_dir_for_delivery(
+    src: &Path,
+    strategy: &str,
+    photos: bool,
+) -> std::io::Result<PathBuf> {
+    let markers = matching_working_copy_markers(src, strategy)?;
+    match latest_working_copy_marker(&markers)? {
+        Some(marker) => Ok(marker.working_copy.clone()),
+        None => resolve_fresh_working_copy_dir_for_delivery(src, photos),
+    }
+}
+
+pub fn latest_working_copy_marker(
+    markers: &[WorkingCopyMarker],
+) -> std::io::Result<Option<&WorkingCopyMarker>> {
+    let mut newest: Option<(_, &WorkingCopyMarker)> = None;
+    let mut ambiguous = false;
+    for marker in markers {
+        let started = chrono::DateTime::parse_from_rfc3339(&marker.started_at)
+            .map_err(std::io::Error::other)?;
+        match &newest {
+            Some((previous, previous_marker))
+                if *previous == started && previous_marker.working_copy != marker.working_copy =>
+            {
+                ambiguous = true;
+            }
+            Some((previous, _)) if *previous > started => {}
+            _ => {
+                newest = Some((started, marker));
+                ambiguous = false;
+            }
+        }
+    }
+    if ambiguous {
+        return Err(std::io::Error::other(
+            "fast-img newest matching checkpoints have ambiguous start times",
+        ));
+    }
+    Ok(newest.map(|(_, marker)| marker))
+}
+
+/// Select a new adjacent working copy without consuming any prior marker.
+pub fn resolve_fresh_working_copy_dir(src: &Path) -> std::io::Result<PathBuf> {
+    resolve_fresh_working_copy_dir_for_delivery(src, false)
+}
+
+/// Select a fresh output without allocating it or consuming a prior checkpoint.
+pub fn resolve_fresh_working_copy_dir_for_delivery(
+    src: &Path,
+    photos: bool,
+) -> std::io::Result<PathBuf> {
+    resolve_working_copy_dir_inner(src, photos, |_, _| Ok(()))
+}
+
+/// Read the first fresh path and the exact occupied candidates preceding it.
+/// The bool records saved-task ownership, including reservations for absent paths.
+pub fn inspect_fresh_working_copy_dir(
+    src: &Path,
+    occupied_limit: usize,
+) -> std::io::Result<(PathBuf, Vec<(PathBuf, bool)>)> {
+    inspect_fresh_working_copy_dir_for_delivery(src, false, occupied_limit)
+}
+
+/// Observe fresh-path conflicts using the same placement as the executor.
+pub fn inspect_fresh_working_copy_dir_for_delivery(
+    src: &Path,
+    photos: bool,
+    occupied_limit: usize,
+) -> std::io::Result<(PathBuf, Vec<(PathBuf, bool)>)> {
+    let mut occupied = Vec::new();
+    let fresh = resolve_working_copy_dir_inner(src, photos, |candidate, reserved| {
+        if occupied.len() == occupied_limit {
+            return Err(std::io::Error::other(
+                "Fast IMG conflict preview has too many occupied outputs",
+            ));
+        }
+        let saved = reserved || crate::db::fast_img_store::has_saved_reservation(candidate)?;
+        occupied.push((candidate.to_owned(), saved));
+        Ok(())
+    })?;
+    Ok((fresh, occupied))
+}
+
+fn resolve_working_copy_dir_inner(
+    src: &Path,
+    photos: bool,
+    mut observe_occupied: impl FnMut(&Path, bool) -> std::io::Result<()>,
+) -> std::io::Result<PathBuf> {
+    let base = if photos {
+        photos_working_copy_base(src)?
+    } else {
+        working_copy_dir(src)
+    };
+    let mut suffix = 0usize;
+    loop {
+        let candidate = if suffix == 0 {
+            base.clone()
+        } else {
+            let name = if let Some(name) = base.file_name() {
+                name.to_string_lossy()
+            } else {
+                crate::media_conversion_gate::delivery_pipeline_path_audit(
+                    "fast_img_working_copy_collision",
+                    &base,
+                    "optimized-output candidate has no file name; using mfb_working_copy fallback",
+                );
+                std::borrow::Cow::Borrowed("mfb_working_copy_optimized")
+            };
+            base.with_file_name(format!("{name}_{}", suffix + 1))
+        };
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => observe_occupied(&candidate, false)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !crate::db::fast_img_store::is_reserved(&candidate)? {
+                    return Ok(candidate);
+                }
+                observe_occupied(&candidate, true)?;
+            }
+            Err(error) => return Err(error),
+        }
+        suffix += 1;
+    }
+}
+
+pub(crate) fn validate_marker_structure(marker: &WorkingCopyMarker) -> std::io::Result<()> {
+    if marker.schema != FAST_IMG_MARKER_SCHEMA_VERSION {
+        return Err(std::io::Error::other(format!(
+            "unsupported fast-img marker schema {}; expected {}",
+            marker.schema, FAST_IMG_MARKER_SCHEMA_VERSION
+        )));
+    }
+    marker
+        .validate_photos_submission_history()
+        .map_err(std::io::Error::other)?;
+    if let Some(contract) = &marker.processing_contract {
+        contract
+            .validate(&marker.strategy)
+            .map_err(std::io::Error::other)?;
+    }
+    if let Some(hash) = &marker.failed_retry_manifest_blake3 {
+        validate_submission_blake3("failed-only manifest", hash).map_err(std::io::Error::other)?;
+    }
+    if let Some(hash) = &marker.admission_plan_blake3 {
+        validate_submission_blake3("admission plan", hash).map_err(std::io::Error::other)?;
+        if marker.failed_retry_manifest_blake3.is_some() {
+            return Err(std::io::Error::other(
+                "Fast IMG full-discovery plan cannot bind a failed-only task",
+            ));
+        }
+    }
+    if marker
+        .failed_retry_primary_source_count
+        .is_some_and(|count| {
+            marker.failed_retry_manifest_blake3.is_none() || count > marker.src_jpeg_count
+        })
+    {
+        return Err(std::io::Error::other(
+            "Invalid routed failed-only source count",
+        ));
+    }
+    if let Some(evidence) = &marker.failed_retry_finish_evidence {
+        evidence.validate().map_err(std::io::Error::other)?;
+        if !marker.is_terminal() || marker.failed_retry_manifest_blake3.is_none() {
+            return Err(std::io::Error::other(
+                "Failed-only finalization evidence requires a terminal manifest-bound child",
+            ));
+        }
+    }
+    marker
+        .validate_relative_path_contract()
+        .map_err(std::io::Error::other)?;
+    marker
+        .validate_library_asset_receipts_unique()
+        .map_err(std::io::Error::other)?;
+    marker
+        .validate_source_disposition_disjoint()
+        .map_err(std::io::Error::other)?;
+    if marker.working_copy == marker.src_dir || marker.working_copy.starts_with(&marker.src_dir) {
+        return Err(std::io::Error::other(format!(
+            "fast-img marker output must not be inside source tree: source={} output={}",
+            marker.src_dir.display(),
+            marker.working_copy.display()
+        )));
+    }
+    Ok(())
+}
+
+pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
+    crate::db::fast_img_store::write_marker(marker)
+}
+
+pub(crate) fn parse_marker_for_working_copy(
+    data: &[u8],
+    working_copy: &Path,
+) -> std::io::Result<WorkingCopyMarker> {
+    let marker: WorkingCopyMarker = serde_json::from_slice(data).map_err(std::io::Error::other)?;
+    validate_marker_structure(&marker)?;
+    marker
+        .validate_checkpoint_path_contract(working_copy)
+        .map_err(std::io::Error::other)?;
+    Ok(marker)
+}
+
+pub fn read_marker(working_copy: &Path) -> std::io::Result<WorkingCopyMarker> {
+    crate::db::fast_img_store::read_marker(working_copy)
+}
+
+#[must_use]
+pub const fn stage_requires_retry(stage: &FastImgStageName) -> bool {
+    matches!(
+        stage,
+        FastImgStageName::Gate1Failed
+            | FastImgStageName::Gate2Failed
+            | FastImgStageName::Gate3Failed
+    )
+}
+
+#[must_use]
+pub fn retry_resume_stage(stage: &FastImgStageName, retry: bool) -> FastImgStageName {
+    match (stage, retry) {
+        (FastImgStageName::Gate1Failed, true) => FastImgStageName::OutputPrepared,
+        (FastImgStageName::Gate2Failed, true) => FastImgStageName::ImportComplete,
+        (FastImgStageName::Gate3Failed, true) => FastImgStageName::Gate2Passed,
+        (FastImgStageName::Aborted, _) => FastImgStageName::ScanComplete,
+        _ => stage.clone(),
+    }
+}
+
+#[must_use]
+pub const fn output_prepared_or_later(stage: &FastImgStageName) -> bool {
+    matches!(
+        stage,
+        FastImgStageName::OutputPrepared
+            | FastImgStageName::TranscodeComplete
+            | FastImgStageName::Gate1Passed
+            | FastImgStageName::Importing
+            | FastImgStageName::ImportComplete
+            | FastImgStageName::Gate2Passed
+            | FastImgStageName::DeepScanComplete
+            | FastImgStageName::Gate3Passed
+            | FastImgStageName::CleanupComplete
+    )
+}
+
+#[must_use]
+pub const fn encode_complete_or_later(stage: &FastImgStageName) -> bool {
+    matches!(
+        stage,
+        FastImgStageName::TranscodeComplete
+            | FastImgStageName::Gate1Passed
+            | FastImgStageName::Importing
+            | FastImgStageName::ImportComplete
+            | FastImgStageName::Gate2Passed
+            | FastImgStageName::DeepScanComplete
+            | FastImgStageName::Gate3Passed
+            | FastImgStageName::CleanupComplete
+    )
+}
+
+#[must_use]
+pub const fn gate1_complete_or_later(stage: &FastImgStageName) -> bool {
+    matches!(
+        stage,
+        FastImgStageName::Gate1Passed
+            | FastImgStageName::Importing
+            | FastImgStageName::ImportComplete
+            | FastImgStageName::Gate2Passed
+            | FastImgStageName::DeepScanComplete
+            | FastImgStageName::Gate3Passed
+            | FastImgStageName::CleanupComplete
+    )
+}
+
+#[must_use]
+pub const fn import_complete_or_later(stage: &FastImgStageName) -> bool {
+    matches!(
+        stage,
+        FastImgStageName::ImportComplete
+            | FastImgStageName::Gate2Passed
+            | FastImgStageName::DeepScanComplete
+            | FastImgStageName::Gate3Passed
+            | FastImgStageName::CleanupComplete
+    )
+}
+
+#[must_use]
+pub const fn gate2_complete_or_later(stage: &FastImgStageName) -> bool {
+    matches!(
+        stage,
+        FastImgStageName::Gate2Passed
+            | FastImgStageName::DeepScanComplete
+            | FastImgStageName::Gate3Passed
+            | FastImgStageName::CleanupComplete
+    )
+}
+
+#[must_use]
+pub const fn deep_scan_complete_or_later(stage: &FastImgStageName) -> bool {
+    matches!(
+        stage,
+        FastImgStageName::DeepScanComplete
+            | FastImgStageName::Gate3Passed
+            | FastImgStageName::CleanupComplete
+    )
+}
+
+#[must_use]
+pub const fn gate3_complete_or_later(stage: &FastImgStageName) -> bool {
+    matches!(
+        stage,
+        FastImgStageName::Gate3Passed | FastImgStageName::CleanupComplete
+    )
+}
+
+#[must_use]
+pub const fn resume_action(stage: &FastImgStageName) -> &'static str {
+    match stage {
+        FastImgStageName::ScanComplete => "prepare_output_then_encode",
+        FastImgStageName::OutputPrepared => "skip_prepare_then_encode",
+        FastImgStageName::TranscodeComplete => "skip_encode_then_gate1",
+        FastImgStageName::Gate1Passed => "skip_to_import",
+        FastImgStageName::Importing => "reconcile_photos_then_resume_import",
+        FastImgStageName::ImportComplete => "skip_to_gate2",
+        FastImgStageName::Gate2Passed => "skip_to_deep_scan",
+        FastImgStageName::DeepScanComplete => "skip_to_gate3",
+        FastImgStageName::Gate3Passed => "skip_to_cleanup",
+        FastImgStageName::CleanupComplete => "no_op_exit_zero",
+        FastImgStageName::Gate1Failed
+        | FastImgStageName::Gate2Failed
+        | FastImgStageName::Gate3Failed => "require_retry",
+        FastImgStageName::Aborted => "fresh_or_manual_resume",
+    }
+}
+
+pub fn prepare_jxl_output_dir(output_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(output_dir)
+}
+
+pub fn dir_checksum(root: &Path) -> std::io::Result<Vec<(PathBuf, u64, std::time::SystemTime)>> {
+    let mut entries = Vec::new();
+    for entry in walkdir::WalkDir::new(root) {
+        let entry = entry.map_err(|err| {
+            std::io::Error::other(format!(
+                "failed to walk checksum root {}: {err}",
+                root.display()
+            ))
+        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .map_or_else(|_| entry.path().to_path_buf(), Path::to_path_buf);
+        let metadata = std::fs::metadata(entry.path())?;
+        entries.push((rel, metadata.len(), metadata.modified()?));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(entries)
+}
+
+#[must_use]
+pub fn summarize_checks(checks: &[CheckDetail]) -> String {
+    let failed = checks
+        .iter()
+        .filter(|check| !check.passed)
+        .collect::<Vec<_>>();
+    let summary_checks = if failed.is_empty() {
+        checks.iter().collect::<Vec<_>>()
+    } else {
+        failed
+    };
+    summary_checks
+        .into_iter()
+        .map(|check| {
+            format!(
+                "{} expected={} actual={}",
+                check.name, check.expected, check.actual
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[must_use]
+pub fn marker_checks_from_result(result: &GateResult) -> String {
+    summarize_checks(&result.checks)
+}
+
+#[cfg(test)]
+mod photos_submission_tests {
+    use super::{
+        FastImgStageName, PhotosSubmissionBackend, PhotosSubmissionIntent, PhotosSubmissionKind,
+        WorkingCopyMarker, parse_marker_for_working_copy, read_marker, write_marker_atomic,
+    };
+    use std::path::Path;
+
+    fn intent(root: &Path) -> PhotosSubmissionIntent {
+        PhotosSubmissionIntent {
+            kind: PhotosSubmissionKind::Encoded,
+            source_rel: "旅行/photo.jpeg".into(),
+            source_blake3: "a".repeat(64),
+            output_rel: "旅行/photo.JXL".into(),
+            output_blake3: "b".repeat(64),
+            album_name: "归档/旅行".into(),
+            photos_library_path: Some(root.join("Archive.photoslibrary")),
+            backend: PhotosSubmissionBackend::Native {
+                journal_path: root.join("native/batch.json"),
+                request_blake3: "c".repeat(64),
+            },
+        }
+    }
+
+    fn marker(root: &Path) -> WorkingCopyMarker {
+        WorkingCopyMarker::new(root.join("Photos"), root.join("Photos_optimized"), 1)
+    }
+
+    #[test]
+    fn cleanup_complete_with_original_delivery_pending_is_not_terminal() {
+        let root = tempfile::tempdir().unwrap();
+        let mut current = marker(root.path());
+        current.stage = FastImgStageName::CleanupComplete;
+        current.tier2_in_progress = true;
+        assert!(!current.is_terminal());
+        current.tier2_in_progress = false;
+        assert!(current.is_terminal());
+        current.stage = FastImgStageName::Gate3Passed;
+        assert!(!current.is_terminal());
+        let encoded = serde_json::to_value(&current).unwrap();
+        assert!(encoded.get("failed_retry_finish_evidence").is_none());
+        let older: WorkingCopyMarker = serde_json::from_value(encoded).unwrap();
+        assert!(older.failed_retry_finish_evidence().is_none());
+    }
+
+    #[test]
+    fn photos_submission_history_preserves_unknown_legacy_coverage() {
+        let root = tempfile::tempdir().unwrap();
+        let current = marker(root.path());
+        let history = current.photos_submission_history().unwrap();
+        assert!(history.complete_from_creation);
+        assert_eq!(history.intents, []);
+
+        let mut legacy = serde_json::to_value(&current).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("photos_submission_history");
+        let mut legacy = parse_marker_for_working_copy(
+            &serde_json::to_vec(&legacy).unwrap(),
+            &current.working_copy,
+        )
+        .unwrap();
+        assert!(legacy.photos_submission_history().is_none());
+        legacy.record_photos_submissions(&[]).unwrap();
+        assert!(legacy.photos_submission_history().is_none());
+        legacy
+            .record_photos_submissions(&[intent(root.path())])
+            .unwrap();
+        let history = legacy.photos_submission_history().unwrap();
+        assert!(!history.complete_from_creation);
+        assert_eq!(history.intents.len(), 1);
+        let parsed = parse_marker_for_working_copy(
+            &serde_json::to_vec(&legacy).unwrap(),
+            &current.working_copy,
+        )
+        .unwrap();
+        assert_eq!(parsed, legacy);
+    }
+
+    #[test]
+    fn photos_submission_history_appends_idempotently_without_delivery_credit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = marker(root.path());
+        let native = intent(root.path());
+        let mut original = native.clone();
+        original.kind = PhotosSubmissionKind::Original;
+        original.output_rel = original.source_rel.clone();
+        original.output_blake3.clone_from(&original.source_blake3);
+        original.backend = PhotosSubmissionBackend::Applescript {
+            request_id: "d".repeat(64),
+        };
+        let batch = [native.clone(), native, original.clone()];
+        marker.record_photos_submissions(&batch).unwrap();
+        marker.record_photos_submissions(&batch).unwrap();
+        marker.record_photos_submissions(&[]).unwrap();
+        let history = marker.photos_submission_history().unwrap();
+        assert!(history.complete_from_creation);
+        assert_eq!(history.intents.len(), 2);
+        assert_eq!(history.intents[1], original);
+        assert_eq!(marker.stage, FastImgStageName::ScanComplete);
+        assert_eq!(marker.encoded_count, 0);
+        assert_eq!(marker.recorded_source_count(), 0);
+        assert_eq!(marker.photos_imported_assets, []);
+        assert_eq!(marker.tier2_imported_assets, []);
+        assert!(!marker.gate1_checks.blake3.0);
+        assert!(!marker.gate2_checks.blake3_sample.0);
+        assert!(!marker.gate3_checks.chain.0);
+    }
+
+    #[test]
+    fn photos_submission_history_rejects_conflicts_without_partial_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let original = intent(root.path());
+        let mut marker = marker(root.path());
+        marker
+            .record_photos_submissions(std::slice::from_ref(&original))
+            .unwrap();
+        let before = marker.clone();
+        let valid = serde_json::to_value(&original).unwrap();
+        for (pointer, value) in [
+            ("/kind", serde_json::json!("original")),
+            ("/source_rel", serde_json::json!("other.jpeg")),
+            ("/source_blake3", serde_json::json!("d".repeat(64))),
+            ("/output_blake3", serde_json::json!("e".repeat(64))),
+            ("/album_name", serde_json::json!("Different album")),
+            (
+                "/photos_library_path",
+                serde_json::json!(root.path().join("Other.photoslibrary")),
+            ),
+            ("/backend/request_blake3", serde_json::json!("f".repeat(64))),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            let conflict = serde_json::from_value(changed).unwrap();
+            let mut preceding = original.clone();
+            preceding.output_rel = "new.JXL".into();
+            assert!(
+                marker
+                    .record_photos_submissions(&[preceding, conflict])
+                    .is_err(),
+                "conflict at {pointer} must not mutate the marker"
+            );
+            assert_eq!(marker, before);
+        }
+
+        let mut conflicting_request = original.clone();
+        conflicting_request.output_rel = "new.JXL".into();
+        let PhotosSubmissionBackend::Native { request_blake3, .. } =
+            &mut conflicting_request.backend
+        else {
+            unreachable!()
+        };
+        *request_blake3 = "f".repeat(64);
+        assert!(
+            marker
+                .record_photos_submissions(&[conflicting_request])
+                .is_err()
+        );
+        assert_eq!(marker, before);
+    }
+
+    #[test]
+    fn photos_submission_history_rejects_malformed_persisted_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = marker(root.path());
+        marker
+            .record_photos_submissions(&[intent(root.path())])
+            .unwrap();
+        let valid = serde_json::to_value(&marker).unwrap();
+        for (pointer, value) in [
+            ("/photos_submission_history/schema", serde_json::json!(2)),
+            (
+                "/photos_submission_history/intents/0/kind",
+                serde_json::json!("unknown"),
+            ),
+            (
+                "/photos_submission_history/intents/0/source_rel",
+                serde_json::json!("../escape.jpeg"),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_rel",
+                serde_json::json!("a/./photo.JXL"),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_rel",
+                serde_json::json!("a//photo.JXL"),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_rel",
+                serde_json::json!("photo.JXL/"),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_rel",
+                serde_json::json!("photo\0.JXL"),
+            ),
+            (
+                "/photos_submission_history/intents/0/source_blake3",
+                serde_json::json!("a".repeat(63)),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_blake3",
+                serde_json::json!("B".repeat(64)),
+            ),
+            (
+                "/photos_submission_history/intents/0/album_name",
+                serde_json::json!(""),
+            ),
+            (
+                "/photos_submission_history/intents/0/photos_library_path",
+                serde_json::json!("relative.photoslibrary"),
+            ),
+            (
+                "/photos_submission_history/intents/0/backend/backend",
+                serde_json::json!("unknown"),
+            ),
+            (
+                "/photos_submission_history/intents/0/backend/journal_path",
+                serde_json::json!("relative-journal.json"),
+            ),
+            (
+                "/photos_submission_history/intents/0/backend/journal_path",
+                serde_json::json!(root.path().join("native/../batch.json")),
+            ),
+            (
+                "/photos_submission_history/intents/0/backend/request_blake3",
+                serde_json::json!("g".repeat(64)),
+            ),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                parse_marker_for_working_copy(
+                    &serde_json::to_vec(&changed).unwrap(),
+                    &marker.working_copy,
+                )
+                .is_err(),
+                "invalid {pointer} must reject on read"
+            );
+            let changed = serde_json::from_value::<WorkingCopyMarker>(changed);
+            if matches!(
+                pointer,
+                "/photos_submission_history/intents/0/kind"
+                    | "/photos_submission_history/intents/0/backend/backend"
+            ) {
+                assert!(changed.is_err(), "unknown enum at {pointer} must reject");
+            } else {
+                assert!(write_marker_atomic(&changed.unwrap()).is_err(), "{pointer}");
+            }
+        }
+        for pointer in [
+            "/photos_submission_history",
+            "/photos_submission_history/intents/0",
+            "/photos_submission_history/intents/0/backend",
+        ] {
+            let mut changed = valid.clone();
+            changed.pointer_mut(pointer).unwrap()["unknown_field"] = serde_json::json!(true);
+            assert!(
+                parse_marker_for_working_copy(
+                    &serde_json::to_vec(&changed).unwrap(),
+                    &marker.working_copy,
+                )
+                .is_err()
+            );
+        }
+        let mut duplicate = valid;
+        let intents = duplicate["photos_submission_history"]["intents"]
+            .as_array_mut()
+            .unwrap();
+        intents.push(intents[0].clone());
+        assert!(
+            parse_marker_for_working_copy(
+                &serde_json::to_vec(&duplicate).unwrap(),
+                &marker.working_copy,
+            )
+            .is_err()
+        );
+        assert!(!marker.working_copy.exists());
+    }
+
+    #[test]
+    fn photos_submission_history_rejects_invalid_applescript_identity_and_scope() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = marker(root.path());
+        let mut original = intent(root.path());
+        original.backend = PhotosSubmissionBackend::Applescript {
+            request_id: "d".repeat(64),
+        };
+        marker
+            .record_photos_submissions(std::slice::from_ref(&original))
+            .unwrap();
+        let before = marker.clone();
+        let mut second = original.clone();
+        second.output_rel = "second.JXL".into();
+        second.photos_library_path = None;
+        assert!(marker.record_photos_submissions(&[second]).is_err());
+        assert_eq!(marker, before);
+        for id in ["", "bad\0id", "bad\nid"] {
+            let mut bad = original.clone();
+            bad.backend = PhotosSubmissionBackend::Applescript {
+                request_id: id.into(),
+            };
+            assert!(marker.record_photos_submissions(&[bad]).is_err());
+            assert_eq!(marker, before);
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn photos_submission_history_survives_marker_roundtrip_and_outcome_reset() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let _home_guard = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().unwrap(),
+        );
+        let mut marker = marker(root.path());
+        marker
+            .record_photos_submissions(&[intent(root.path())])
+            .unwrap();
+        write_marker_atomic(&marker).unwrap();
+        let mut resumed = read_marker(&marker.working_copy).unwrap();
+        assert_eq!(resumed, marker);
+        resumed.blake3_log.clear();
+        resumed.failed_sources.clear();
+        resumed.skipped_sources.clear();
+        resumed.photos_imported_assets.clear();
+        resumed.tier2_imported_assets.clear();
+        resumed.gate1_checks = super::Gate1Checks::default();
+        resumed.gate2_checks = super::Gate2Checks::default();
+        resumed.gate3_checks = super::Gate3Checks::default();
+        resumed.stage = FastImgStageName::CleanupComplete;
+        write_marker_atomic(&resumed).unwrap();
+        let after_cleanup = read_marker(&marker.working_copy).unwrap();
+        assert_eq!(
+            after_cleanup.photos_submission_history(),
+            marker.photos_submission_history()
+        );
+        assert!(!marker.working_copy.exists());
+        assert!(!marker.src_dir.exists());
+    }
+}
+
+#[cfg(test)]
+mod working_copy_tests {
+    use super::{
+        Blake3Entry, FAST_IMG_MARKER_SCHEMA_VERSION, FastImgStageName, LibraryAssetRecord,
+        SkippedSourceEntry, WorkingCopyMarker, canonical_working_copy_path,
+        inspect_fresh_working_copy_dir_for_delivery, parse_marker_for_working_copy,
+        photos_working_copy_base, photos_working_copy_directory, prepare_jxl_output_dir,
+        prepare_photos_working_copy_parent, read_marker, resolve_fresh_working_copy_dir,
+        resolve_working_copy_dir, resolve_working_copy_dir_for_delivery, working_copy_dir,
+        write_marker_atomic,
+    };
+    use crate::common_utils::EnvGuard;
+    use serial_test::serial;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn processing_contract() -> super::FastImgProcessingContract {
+        super::FastImgProcessingContract {
+            schema: 1,
+            tool_policy: crate::runtime_config::ToolPolicy::Fallback,
+            fallback_policy: crate::runtime_config::FallbackPolicy::Strict,
+            encoding: super::FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: crate::runtime_config::JpegEffortSearch::Full,
+                archive: false,
+                allow_expert_options: false,
+            },
+        }
+    }
+
+    #[test]
+    fn marker_processing_contract_rejects_unknown_or_invalid_evidence() {
+        let root = TempDir::new().unwrap();
+        let wc = root.path().join("Photos_optimized");
+        let mut marker = WorkingCopyMarker::new(root.path().join("Photos"), wc.clone(), 0);
+        marker.processing_contract = Some(processing_contract());
+        let valid = serde_json::to_value(&marker).unwrap();
+        let parsed =
+            parse_marker_for_working_copy(&serde_json::to_vec(&valid).unwrap(), &wc).unwrap();
+        assert_eq!(parsed.processing_contract, marker.processing_contract);
+
+        let mut legacy = valid.clone();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("processing_contract");
+        let parsed =
+            parse_marker_for_working_copy(&serde_json::to_vec(&legacy).unwrap(), &wc).unwrap();
+        assert!(parsed.processing_contract.is_none());
+
+        for (pointer, invalid) in [
+            ("/processing_contract/schema", serde_json::json!(2)),
+            (
+                "/processing_contract/encoding/jpeg_effort",
+                serde_json::json!(0),
+            ),
+            (
+                "/processing_contract/encoding/jpeg_effort",
+                serde_json::json!(12),
+            ),
+            ("/strategy", serde_json::json!("avif")),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).unwrap() = invalid;
+            assert!(
+                parse_marker_for_working_copy(&serde_json::to_vec(&changed).unwrap(), &wc).is_err()
+            );
+        }
+        let mut unknown = valid;
+        unknown["processing_contract"]["encoding"]["unknown_policy"] = serde_json::json!(true);
+        assert!(
+            parse_marker_for_working_copy(&serde_json::to_vec(&unknown).unwrap(), &wc).is_err()
+        );
+        marker.processing_contract.as_mut().unwrap().schema = 2;
+        assert!(write_marker_atomic(&marker).is_err());
+        assert!(!wc.exists());
+    }
+
+    #[test]
+    fn source_disposition_disjoint_rejects_overlap() {
+        let mut marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 2);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: "hash-a".to_string(),
+                out: "out-a".to_string(),
+                library_asset: None,
+            },
+        );
+        marker.skipped_sources.insert(
+            "a.jpg".to_string(),
+            SkippedSourceEntry {
+                src: "hash-a".to_string(),
+                reason: "duplicate".to_string(),
+            },
+        );
+
+        assert!(marker.source_disposition_is_complete());
+        assert!(!marker.source_disposition_over_recorded());
+        assert_eq!(
+            marker.validate_source_disposition_disjoint(),
+            Err("a.jpg recorded as both converted and skipped".to_string())
+        );
+    }
+
+    #[test]
+    fn source_disposition_complete_when_all_sources_accounted() {
+        let mut marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 2);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".to_string()),
+                src: "hash-a".to_string(),
+                out: "out-a".to_string(),
+                library_asset: None,
+            },
+        );
+        marker.skipped_sources.insert(
+            "b.jpg".to_string(),
+            SkippedSourceEntry {
+                src: "hash-b".to_string(),
+                reason: "lossless JPEG encode failed after strict cascade".to_string(),
+            },
+        );
+
+        assert!(marker.source_disposition_is_complete());
+        assert!(!marker.source_disposition_over_recorded());
+        assert!(marker.validate_source_disposition_disjoint().is_ok());
+    }
+
+    #[test]
+    fn library_asset_receipts_reject_duplicates_without_conflating_tier_paths() {
+        let mut marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 1);
+        let receipt = |rel_path: &str, uuid: &str| LibraryAssetRecord {
+            rel_path: rel_path.to_string(),
+            photos_uuid: Some(uuid.to_string()),
+            ..LibraryAssetRecord::default()
+        };
+
+        marker.photos_imported_assets = vec![receipt("same.jxl", "primary-1")];
+        marker.tier2_imported_assets = vec![receipt("same.jxl", "tier2-1")];
+        assert!(marker.validate_library_asset_receipts_unique().is_ok());
+
+        marker
+            .photos_imported_assets
+            .push(receipt("same.jxl", "primary-2"));
+        assert!(marker.validate_library_asset_receipts_unique().is_err());
+
+        marker.photos_imported_assets.clear();
+        marker.tier2_imported_assets = vec![
+            receipt("same.jxl", "tier2-1"),
+            receipt("same.jxl", "tier2-2"),
+        ];
+        assert!(marker.validate_library_asset_receipts_unique().is_err());
+
+        marker.photos_imported_assets = vec![receipt("primary.jxl", "shared-uuid")];
+        marker.tier2_imported_assets = vec![receipt("original.jxl", "shared-uuid")];
+        assert!(marker.validate_library_asset_receipts_unique().is_err());
+
+        marker.photos_imported_assets = vec![receipt("a.jxl", "shared-uuid")];
+        marker
+            .photos_imported_assets
+            .push(receipt("b.jxl", "shared-uuid"));
+        marker.tier2_imported_assets.clear();
+        assert!(marker.validate_library_asset_receipts_unique().is_err());
+    }
+
+    #[test]
+    fn marker_boundaries_reject_duplicate_library_receipts() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 0);
+        marker.photos_imported_assets = vec![
+            LibraryAssetRecord {
+                rel_path: "a.jxl".to_string(),
+                photos_uuid: Some("duplicate".to_string()),
+                ..LibraryAssetRecord::default()
+            },
+            LibraryAssetRecord {
+                rel_path: "b.jxl".to_string(),
+                photos_uuid: Some("duplicate".to_string()),
+                ..LibraryAssetRecord::default()
+            },
+        ];
+
+        assert!(write_marker_atomic(&marker).is_err());
+        let data = serde_json::to_vec(&marker).unwrap();
+        assert!(parse_marker_for_working_copy(&data, &wc).is_err());
+    }
+
+    #[test]
+    fn working_copy_suffix_uses_adjacent_optimized_dir() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("Photos");
+
+        assert_eq!(working_copy_dir(&src), root.path().join("Photos_optimized"));
+    }
+
+    #[test]
+    #[serial]
+    fn photos_working_copy_selection_is_read_only_and_keeps_exact_reservations()
+    -> anyhow::Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let state = temp.path().join("state");
+        let _home = EnvGuard::set(crate::constants::ENV_MFB_HOME_ROOT, state.to_str().unwrap());
+        let source = temp.path().join("input").join("Album");
+        std::fs::create_dir_all(&source)?;
+        let source = source.canonicalize()?;
+        let sibling = working_copy_dir(&source);
+        std::fs::write(&sibling, b"unowned sibling")?;
+        let (private, conflicts) = inspect_fresh_working_copy_dir_for_delivery(&source, true, 10)?;
+        assert!(conflicts.is_empty());
+        assert_eq!(
+            private,
+            resolve_working_copy_dir_for_delivery(&source, "jxl", true)?
+        );
+        assert_eq!(private, canonical_working_copy_path(&private)?);
+        assert!(!state.exists());
+
+        let lease = crate::process_lock::acquire_output_dir_lock(&private)?;
+        assert!(!private.parent().unwrap().exists());
+        prepare_photos_working_copy_parent(&source, &private)?;
+        assert!(!private.exists());
+        std::fs::create_dir(&private)?;
+        assert!(crate::process_lock::acquire_output_dir_lock(&private).is_err());
+        drop(lease);
+
+        write_marker_atomic(&WorkingCopyMarker::new(source.clone(), private.clone(), 0))?;
+        std::fs::remove_dir(&private)?;
+        let (next, conflicts) = inspect_fresh_working_copy_dir_for_delivery(&source, true, 10)?;
+        assert_eq!(conflicts, [(private.clone(), true)]);
+        assert_ne!(private, next);
+        assert_eq!(
+            private,
+            resolve_working_copy_dir_for_delivery(&source, "jxl", true)?
+        );
+        assert_eq!(std::fs::read(&sibling)?, b"unowned sibling");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial]
+    fn photos_working_copy_storage_rejects_links_and_shared_permissions() -> anyhow::Result<()> {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let state = temp.path().join("state");
+        let _home = EnvGuard::set(crate::constants::ENV_MFB_HOME_ROOT, state.to_str().unwrap());
+        let source = temp.path().join("input").join("Album");
+        std::fs::create_dir_all(&source)?;
+        std::fs::create_dir(&state)?;
+        let source = source.canonicalize()?;
+        let storage = photos_working_copy_directory()?;
+        symlink(&source, &storage)?;
+        let blocked = || photos_working_copy_base(&source).unwrap_err();
+        assert!(super::is_photos_working_copy_unavailable(&blocked()));
+        assert!(canonical_working_copy_path(&storage.join("unallocated")).is_err());
+        std::fs::remove_file(&storage)?;
+        std::fs::create_dir(&storage)?;
+        for mode in [0o750, 0o500] {
+            std::fs::set_permissions(&storage, std::fs::Permissions::from_mode(mode))?;
+            assert!(super::is_photos_working_copy_unavailable(&blocked()));
+        }
+        symlink(&source, state.join("tmp"))?;
+        assert!(!super::is_photos_working_copy_unavailable(&blocked()));
+        std::fs::remove_file(state.join("tmp"))?;
+        std::fs::create_dir(state.join("runtime"))?;
+        for child in ["state", "runtime/toolchains", "runtime/toolchains/sources"] {
+            let path = state.join(child);
+            symlink(&source, &path)?;
+            let error = super::validate_photos_state_location(&source).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Photos task state must be a real directory")
+            );
+            std::fs::remove_file(&path)?;
+            std::fs::create_dir(path)?;
+        }
+        assert_eq!(std::fs::read_dir(&source)?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn photos_working_copy_rejects_state_creation_in_source_parent() -> anyhow::Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let parent = temp.path().canonicalize()?;
+        let source = parent.join("Album");
+        std::fs::create_dir(&source)?;
+        let state = parent.join("absent").join("state");
+        let _home = EnvGuard::set(crate::constants::ENV_MFB_HOME_ROOT, state.to_str().unwrap());
+        assert!(super::validate_new_photos_working_copy_location(&source).is_err());
+        assert_eq!(std::fs::read_dir(&parent)?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn photos_working_copy_rejects_source_overlap_with_runtime_writes() -> anyhow::Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let state = temp.path().join("state");
+        let _home = EnvGuard::set(crate::constants::ENV_MFB_HOME_ROOT, state.to_str().unwrap());
+        for child in [
+            "tmp",
+            "logs",
+            "locks",
+            "cache",
+            "state",
+            "runtime/toolchains",
+            "photos-native",
+        ] {
+            let source = state.join(child).join("Album");
+            std::fs::create_dir_all(&source)?;
+            let error = super::validate_photos_state_location(&source.canonicalize()?).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("overlaps the source or its parent")
+            );
+        }
+        let source = temp.path().join("Album");
+        std::fs::create_dir(&source)?;
+        let control = tempfile::tempdir_in(&source)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(control.path(), std::fs::Permissions::from_mode(0o700))?;
+        }
+        let path = control.path().join("control");
+        let _control = EnvGuard::set("MFB_BATCH_CONTROL_FILE", path.to_str().unwrap());
+        let error = super::validate_photos_state_location(&source.canonicalize()?).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("overlaps the source or its parent")
+        );
+        assert_eq!(std::fs::read_dir(control.path())?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn working_copy_collision_uses_numbered_optimized_dir_without_marker() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let _home = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            root.path().to_str().unwrap(),
+        );
+        let src = root.path().join("Photos");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::create_dir_all(root.path().join("Photos_optimized")).unwrap();
+
+        assert_eq!(
+            resolve_working_copy_dir(&src, "jxl").unwrap(),
+            root.path().join("Photos_optimized_2")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn working_copy_collision_keeps_non_owned_paths_and_missing_reservations() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().unwrap(),
+        );
+        let src = root.path().join("Photos");
+        std::fs::create_dir(&src).unwrap();
+        let src = src.canonicalize().unwrap();
+        let base = working_copy_dir(&src);
+        std::fs::write(&base, b"keep this file").unwrap();
+        let directory = base.with_file_name("Photos_optimized_2");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("unrelated"), b"keep this directory").unwrap();
+        let third = base.with_file_name("Photos_optimized_3");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.path().join("missing"), &third).unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(&third, b"keep this numbered file").unwrap();
+        let reservation = base.with_file_name("Photos_optimized_4");
+        let marker = WorkingCopyMarker::new(src.clone(), reservation.clone(), 1)
+            .with_strategy("avif".into());
+        write_marker_atomic(&marker).unwrap();
+        let unrelated = base.with_file_name("Photos_optimized_notes");
+        std::fs::create_dir(&unrelated).unwrap();
+        std::fs::write(unrelated.join(".mfb_wc"), b"unrelated marker name").unwrap();
+
+        let next = base.with_file_name("Photos_optimized_5");
+        assert_eq!(resolve_fresh_working_copy_dir(&src).unwrap(), next);
+        assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), next);
+        assert_eq!(resolve_working_copy_dir(&src, "avif").unwrap(), reservation);
+        assert!(!reservation.exists());
+        assert!(!next.exists());
+        assert_eq!(std::fs::read(&base).unwrap(), b"keep this file");
+        assert_eq!(
+            std::fs::read(directory.join("unrelated")).unwrap(),
+            b"keep this directory"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::read_link(&third).unwrap(),
+            root.path().join("missing")
+        );
+        #[cfg(not(unix))]
+        assert_eq!(std::fs::read(&third).unwrap(), b"keep this numbered file");
+        assert_eq!(
+            std::fs::read(unrelated.join(".mfb_wc")).unwrap(),
+            b"unrelated marker name"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn working_copy_collision_resumes_with_marker_in_optimized_dir() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        std::fs::create_dir(&src).unwrap();
+        let wc = root.path().join("Photos_optimized");
+        let marker = WorkingCopyMarker::new(src.clone(), wc.clone(), 1);
+        std::fs::create_dir_all(&wc).unwrap();
+        write_marker_atomic(&marker).unwrap();
+
+        assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), wc);
+    }
+
+    #[test]
+    #[serial]
+    fn working_copy_resume_uses_newest_matching_checkpoint_before_free_path() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().unwrap(),
+        );
+        let src = root.path().join("Photos");
+        std::fs::create_dir(&src).unwrap();
+        let src = src.canonicalize().unwrap();
+        let base = working_copy_dir(&src);
+        let newer = base.with_file_name("Photos_optimized_2");
+        for (path, started) in [
+            (&base, "2026-10-10T10:00:00+00:00"),
+            (&newer, "2026-10-15T10:00:00+00:00"),
+        ] {
+            let mut marker = WorkingCopyMarker::new(src.clone(), path.clone(), 1);
+            marker.started_at = started.to_owned();
+            write_marker_atomic(&marker).unwrap();
+        }
+        assert!(!base.exists());
+        assert!(!newer.exists());
+        assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), newer);
+        assert_eq!(read_marker(&newer).unwrap().working_copy, newer);
+        assert_eq!(
+            resolve_working_copy_dir(&src, "avif").unwrap(),
+            newer.with_file_name("Photos_optimized_3")
+        );
+        let mut older_tie = read_marker(&base).unwrap();
+        older_tie.working_copy = base.with_file_name("Photos_optimized_3");
+        write_marker_atomic(&older_tie).unwrap();
+        assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), newer);
+
+        let mut ambiguous = read_marker(&base).unwrap();
+        ambiguous.working_copy = base.with_file_name("Photos_optimized_4");
+        ambiguous.started_at = "2026-10-15T10:00:00+00:00".to_owned();
+        write_marker_atomic(&ambiguous).unwrap();
+        assert!(resolve_working_copy_dir(&src, "jxl").is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn fresh_working_copy_never_reuses_a_marked_directory() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        write_marker_atomic(&WorkingCopyMarker::new(src.clone(), wc, 1)).unwrap();
+
+        assert_eq!(
+            resolve_fresh_working_copy_dir(&src).unwrap(),
+            root.path().join("Photos_optimized_2")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn marker_write_is_readable_after_atomic_sql_transaction() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc, 2);
+        marker.stage = FastImgStageName::OutputPrepared;
+
+        write_marker_atomic(&marker).unwrap();
+        let read = read_marker(&marker.working_copy).unwrap();
+
+        assert_eq!(read.stage, FastImgStageName::OutputPrepared);
+        assert_eq!(read, marker);
+        assert!(!marker.working_copy.join(".mfb_wc").exists());
+        assert!(
+            crate::db::fast_img_store::database_path()
+                .unwrap()
+                .is_file()
+        );
+        assert!(!state.path().join("fast_img/markers").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial]
+    fn marker_write_preserves_stale_temporary_link_and_publishes_complete_updates() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc, 1);
+        let marker_dir = state.path().join("unrelated-old-artifacts");
+        std::fs::create_dir_all(&marker_dir).unwrap();
+        let unrelated = root.path().join("unrelated-file");
+        std::fs::write(&unrelated, b"retain these bytes").unwrap();
+        let old_temp = marker_dir.join("old-marker.json.tmp");
+        std::os::unix::fs::symlink(&unrelated, &old_temp).unwrap();
+
+        write_marker_atomic(&marker).unwrap();
+        assert_eq!(read_marker(&marker.working_copy).unwrap(), marker);
+        marker.stage = FastImgStageName::OutputPrepared;
+        write_marker_atomic(&marker).unwrap();
+        assert_eq!(read_marker(&marker.working_copy).unwrap(), marker);
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"retain these bytes");
+        assert_eq!(std::fs::read_link(&old_temp).unwrap(), unrelated);
+        assert_eq!(std::fs::read_dir(marker_dir).unwrap().count(), 1);
+        assert!(
+            std::fs::read_dir(&marker.working_copy)
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn marker_reader_rejects_unknown_schema() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        marker.schema = FAST_IMG_MARKER_SCHEMA_VERSION + 1;
+        let data = serde_json::to_vec(&marker).unwrap();
+
+        let err = parse_marker_for_working_copy(&data, &wc)
+            .expect_err("future marker schema must fail closed");
+        assert!(
+            err.to_string()
+                .contains("unsupported fast-img marker schema")
+        );
+    }
+
+    #[test]
+    fn migration_marker_rejects_unknown_fields_and_duplicate_source_entries() {
+        let root = TempDir::new().unwrap();
+        let wc = root.path().join("Photos_optimized");
+        let marker = WorkingCopyMarker::new(root.path().join("Photos"), wc.clone(), 1);
+        let encoded = serde_json::to_string(&marker).unwrap();
+        for field in ["blake3_log", "skipped_sources", "failed_sources"] {
+            let value = if field == "blake3_log" {
+                serde_json::to_string(&Blake3Entry::default()).unwrap()
+            } else {
+                serde_json::to_string(&SkippedSourceEntry {
+                    src: "hash".into(),
+                    reason: "test".into(),
+                })
+                .unwrap()
+            };
+            let duplicated = encoded.replace(
+                &format!("\"{field}\":{{}}"),
+                &format!("\"{field}\":{{\"same.jpg\":{value},\"same.jpg\":{value}}}"),
+            );
+            let error = parse_marker_for_working_copy(duplicated.as_bytes(), &wc).unwrap_err();
+            assert!(
+                error.to_string().contains("duplicate marker source path"),
+                "{field}: {error}"
+            );
+        }
+        let mut unknown = serde_json::to_value(marker).unwrap();
+        unknown["unknown_future_intent"] = serde_json::json!(true);
+        assert!(
+            parse_marker_for_working_copy(&serde_json::to_vec(&unknown).unwrap(), &wc)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn marker_rejects_relative_path_aliases_without_rewriting_saved_keys() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().canonicalize().unwrap().join("source");
+        let wc = src.with_file_name("source_optimized");
+        let source_rel = PathBuf::from("nested").join("合成.jpg");
+        let output_rel = source_rel.with_extension("JXL");
+        let source_rel = source_rel.to_str().unwrap();
+        let output_rel = output_rel.to_str().unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        marker.blake3_log.insert(
+            source_rel.into(),
+            Blake3Entry {
+                out_rel: Some(output_rel.into()),
+                src: "source-hash".into(),
+                out: "output-hash".into(),
+                library_asset: None,
+            },
+        );
+        write_marker_atomic(&marker).unwrap();
+
+        let sep = std::path::MAIN_SEPARATOR;
+        for alias in [
+            format!("nested{sep}{sep}合成.jpg"),
+            format!("nested{sep}.{sep}合成.jpg"),
+            format!("{source_rel}{sep}"),
+            format!("{source_rel}\0"),
+        ] {
+            let mut changed = marker.clone();
+            changed.skipped_sources.insert(
+                alias,
+                SkippedSourceEntry {
+                    src: "source-hash".into(),
+                    reason: "synthetic skip".into(),
+                },
+            );
+            assert!(
+                write_marker_atomic(&changed)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("normalized relative path")
+            );
+            assert!(
+                parse_marker_for_working_copy(&serde_json::to_vec(&changed).unwrap(), &wc)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("normalized relative path")
+            );
+        }
+        let saved = read_marker(&wc).unwrap();
+        assert_eq!(saved.blake3_log, marker.blake3_log);
+        assert!(saved.skipped_sources.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial]
+    fn marker_io_rejects_tampered_paths() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&wc).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        marker.blake3_log.insert(
+            "a.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("../escape.JXL".to_string()),
+                src: "src-hash".to_string(),
+                out: "out-hash".to_string(),
+                library_asset: None,
+            },
+        );
+
+        let err = write_marker_atomic(&marker).unwrap_err();
+        assert!(err.to_string().contains("normalized relative path"));
+
+        let outside_file = outside.join("outside.JXL");
+        std::fs::write(&outside_file, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside_file, wc.join("link.JXL")).unwrap();
+        marker.blake3_log.get_mut("a.jpg").unwrap().out_rel = Some("link.JXL".to_string());
+        let err = write_marker_atomic(&marker).unwrap_err();
+        assert!(err.to_string().contains("contains a symlink"));
+
+        marker.working_copy = outside;
+        let err =
+            parse_marker_for_working_copy(&serde_json::to_vec(&marker).unwrap(), &wc).unwrap_err();
+        assert!(err.to_string().contains("working copy mismatch"));
+    }
+
+    #[test]
+    fn prepare_output_dir_does_not_copy_source_contents() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("Photos");
+        let output = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("a.jpg"), b"jpeg").unwrap();
+        let before = std::fs::read(src.join("a.jpg")).unwrap();
+
+        prepare_jxl_output_dir(&output).unwrap();
+        let after = std::fs::read(src.join("a.jpg")).unwrap();
+
+        assert_eq!(before, after);
+        assert!(output.exists());
+        assert!(!output.join("a.jpg").exists());
+    }
+
+    #[test]
+    #[serial]
+    fn marker_write_does_not_create_metadata_inside_source_tree() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        std::fs::create_dir_all(&src).unwrap();
+        let wc = resolve_working_copy_dir(&src, "jxl").unwrap();
+        let mut marker = WorkingCopyMarker::new(src.clone(), wc.clone(), 1);
+        marker.stage = FastImgStageName::OutputPrepared;
+
+        write_marker_atomic(&marker).unwrap();
+
+        assert!(!src.join(".mfb_wc").exists());
+        assert!(!wc.join(".mfb_wc").exists());
+        assert!(!wc.join(".mfb_wc.tmp").exists());
+        let database = crate::db::fast_img_store::database_path().unwrap();
+        assert!(database.starts_with(state.path()));
+        assert!(database.is_file());
+        assert_eq!(wc, root.path().join("Photos_optimized"));
+    }
+
+    #[test]
+    #[serial]
+    fn legacy_output_marker_is_migrated_out_of_media_tree() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        let mut marker = WorkingCopyMarker::new(src.clone(), wc.clone(), 1);
+        marker.stage = FastImgStageName::OutputPrepared;
+        std::fs::write(
+            wc.join(".mfb_wc"),
+            serde_json::to_vec_pretty(&marker).unwrap(),
+        )
+        .unwrap();
+
+        let error = read_marker(&wc).unwrap_err();
+        assert!(error.to_string().contains("MFB_STATE_MIGRATION_REQUIRED"));
+        assert!(wc.join(".mfb_wc").exists());
+        let report = crate::db::fast_img_store::migrate_legacy_for_source(&src, Some(&wc)).unwrap();
+        assert_eq!(report.migrated, 1);
+        let read = read_marker(&wc).unwrap();
+        assert_eq!(read.stage, FastImgStageName::OutputPrepared);
+        assert!(
+            read.processing_contract.is_none(),
+            "migration must not invent old processing intent"
+        );
+        assert!(!wc.join(".mfb_wc").exists());
+        assert!(
+            crate::db::fast_img_store::database_path()
+                .unwrap()
+                .is_file()
+        );
+    }
+}
+
+#[cfg(test)]
+mod fast_gate_policy_tests {
+    use super::{CheckDetail, GateResult};
+
+    fn failed_result(name: &'static str) -> GateResult {
+        GateResult {
+            passed: false,
+            checks: vec![CheckDetail {
+                name,
+                passed: false,
+                expected: "expected detail".to_string(),
+                actual: "actual detail".to_string(),
+                affected_files: Vec::new(),
+                failure_scope: super::CheckFailureScope::Shared,
+            }],
+        }
+    }
+
+    #[test]
+    fn gate1_failure_blocks_import_callback() {
+        let gate1 = failed_result("blake3");
+        let import_called = gate1.passed;
+
+        assert!(!import_called, "import must not run after Gate 1 failure");
+    }
+
+    #[test]
+    fn gate3_failure_blocks_cleanup_callback() {
+        let gate3 = failed_result("chain");
+        let cleanup_called = gate3.passed;
+
+        assert!(
+            !cleanup_called,
+            "source cleanup must not run after Gate 3 failure"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rev2_policy_tests {
+    use super::{
+        FastImgStageName, deep_scan_complete_or_later, dir_checksum, encode_complete_or_later,
+        gate1_complete_or_later, gate2_complete_or_later, gate3_complete_or_later,
+        import_complete_or_later, output_prepared_or_later, prepare_jxl_output_dir, resume_action,
+        retry_resume_stage, stage_requires_retry,
+    };
+    use tempfile::TempDir;
+
+    #[test]
+    fn resume_actions_cover_rev2_stages() {
+        let cases = [
+            (FastImgStageName::OutputPrepared, "skip_prepare_then_encode"),
+            (FastImgStageName::Gate1Passed, "skip_to_import"),
+            (FastImgStageName::Gate2Passed, "skip_to_deep_scan"),
+            (FastImgStageName::Gate3Passed, "skip_to_cleanup"),
+            (FastImgStageName::CleanupComplete, "no_op_exit_zero"),
+        ];
+
+        for (stage, expected) in cases {
+            assert_eq!(resume_action(&stage), expected);
+        }
+    }
+
+    #[test]
+    fn failed_stages_require_retry_flag() {
+        for stage in [
+            FastImgStageName::Gate1Failed,
+            FastImgStageName::Gate2Failed,
+            FastImgStageName::Gate3Failed,
+        ] {
+            assert!(stage_requires_retry(&stage));
+            assert_eq!(resume_action(&stage), "require_retry");
+        }
+    }
+
+    #[test]
+    fn cleanup_complete_is_noop_policy() {
+        assert_eq!(
+            resume_action(&FastImgStageName::CleanupComplete),
+            "no_op_exit_zero"
+        );
+        assert!(!stage_requires_retry(&FastImgStageName::CleanupComplete));
+    }
+
+    #[test]
+    fn retry_maps_failed_stage_to_safe_durable_checkpoint() {
+        assert_eq!(
+            retry_resume_stage(&FastImgStageName::Gate1Failed, true),
+            FastImgStageName::OutputPrepared
+        );
+        assert_eq!(
+            retry_resume_stage(&FastImgStageName::Gate2Failed, true),
+            FastImgStageName::ImportComplete
+        );
+        assert_eq!(
+            retry_resume_stage(&FastImgStageName::Gate3Failed, true),
+            FastImgStageName::Gate2Passed
+        );
+        assert_eq!(
+            retry_resume_stage(&FastImgStageName::Gate1Failed, false),
+            FastImgStageName::Gate1Failed
+        );
+    }
+
+    #[test]
+    fn stage_predicates_preserve_resume_progress() {
+        assert!(output_prepared_or_later(&FastImgStageName::OutputPrepared));
+        assert!(encode_complete_or_later(
+            &FastImgStageName::TranscodeComplete
+        ));
+        assert!(gate1_complete_or_later(&FastImgStageName::Gate1Passed));
+        assert!(gate1_complete_or_later(&FastImgStageName::Importing));
+        assert!(!import_complete_or_later(&FastImgStageName::Importing));
+        assert!(import_complete_or_later(&FastImgStageName::ImportComplete));
+        assert!(gate2_complete_or_later(&FastImgStageName::Gate2Passed));
+        assert!(deep_scan_complete_or_later(
+            &FastImgStageName::DeepScanComplete
+        ));
+        assert!(gate3_complete_or_later(&FastImgStageName::Gate3Passed));
+    }
+
+    #[test]
+    fn output_prepare_does_not_copy_source_at_abort_points() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("Photos");
+        let output = root.path().join("Photos_");
+        std::fs::create_dir_all(src.join("nested")).unwrap();
+        std::fs::write(src.join("top.jpg"), b"jpeg-top").unwrap();
+        std::fs::write(src.join("nested/img.jpg"), b"jpeg-nested").unwrap();
+        let pre = dir_checksum(&src).unwrap_or_else(|err| panic!("pre checksum failed: {err}"));
+
+        prepare_jxl_output_dir(&output).unwrap();
+        for _stage in [
+            FastImgStageName::ScanComplete,
+            FastImgStageName::OutputPrepared,
+            FastImgStageName::TranscodeComplete,
+            FastImgStageName::Gate1Failed,
+            FastImgStageName::Gate1Passed,
+            FastImgStageName::Gate2Failed,
+            FastImgStageName::Gate2Passed,
+            FastImgStageName::Gate3Failed,
+        ] {
+            assert_eq!(
+                pre,
+                dir_checksum(&src).unwrap_or_else(|err| panic!("post checksum failed: {err}"))
+            );
+        }
+        assert!(!output.join("top.jpg").exists());
+        assert!(!output.join("nested/img.jpg").exists());
+    }
+}
+
+#[cfg(test)]
+mod meme_mode_tests {
+    use super::{WorkingCopyMarker, check_decode_probe, default_strategy};
+    use std::path::PathBuf;
+
+    #[test]
+    fn default_strategy_is_jxl() {
+        assert_eq!(default_strategy(), "jxl");
+    }
+
+    #[test]
+    fn marker_defaults_to_jxl_strategy() {
+        let marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 10);
+        assert_eq!(marker.strategy, "jxl");
+    }
+
+    #[test]
+    fn marker_with_strategy_sets_avif_for_meme_mode() {
+        let marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 10)
+                .with_strategy("avif".to_string());
+        assert_eq!(marker.strategy, "avif");
+    }
+
+    #[test]
+    fn marker_with_strategy_preserves_other_fields() {
+        let marker = WorkingCopyMarker::new(
+            PathBuf::from("/test/photos"),
+            PathBuf::from("/test/photos_optimized"),
+            42,
+        )
+        .with_strategy("avif".to_string());
+
+        assert_eq!(marker.src_jpeg_count, 42);
+        assert_eq!(marker.src_dir, PathBuf::from("/test/photos"));
+        assert_eq!(marker.working_copy, PathBuf::from("/test/photos_optimized"));
+        assert_eq!(marker.strategy, "avif");
+    }
+
+    #[test]
+    fn marker_strategy_is_serializable() {
+        let marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 5)
+                .with_strategy("avif".to_string());
+
+        let json = serde_json::to_string(&marker).expect("serialization failed");
+        assert!(json.contains("\"strategy\":\"avif\""));
+    }
+
+    #[test]
+    fn marker_strategy_defaults_on_deserialize_missing_field() {
+        // Simulate old marker JSON without strategy field
+        let json = r#"{
+            "schema": 1,
+            "src_dir": "src",
+            "working_copy": "src_optimized",
+            "started_at": "2026-07-17T10:00:00Z",
+            "stage": "scan_complete",
+            "src_jpeg_count": 10,
+            "encoded_count": 0,
+            "gate1_checks": {"count": false, "blake3": false, "metadata": false, "size": false, "orient": false, "decode": false},
+            "gate2_checks": {"count": false, "blake3_sample": false, "no_error": false},
+            "gate3_checks": {"count_x3": false, "sync": false, "quarantine": false, "chain": false},
+            "blake3_log": {},
+            "error": null
+        }"#;
+
+        let marker: WorkingCopyMarker = serde_json::from_str(json).expect("deserialization failed");
+        assert_eq!(
+            marker.strategy, "jxl",
+            "strategy should default to jxl for backward compatibility"
+        );
+    }
+
+    #[test]
+    fn marker_deserialize_without_encoded_count_defaults_to_zero() {
+        // Regression test for: "missing field `encoded_count`" crash on old markers.
+        // Old marker files written before encoded_count was added must still parse.
+        let json = r#"{
+            "schema": 1,
+            "src_dir": "src",
+            "working_copy": "src_optimized",
+            "started_at": "2026-07-17T10:00:00Z",
+            "stage": "scan_complete",
+            "src_jpeg_count": 42,
+            "gate1_checks": {"count": false, "blake3": false, "metadata": false, "size": false, "orient": false, "decode": false},
+            "gate2_checks": {"count": false, "blake3_sample": false, "no_error": false},
+            "gate3_checks": {"count_x3": false, "sync": false, "quarantine": false, "chain": false},
+            "blake3_log": {},
+            "error": null
+        }"#;
+
+        let marker: WorkingCopyMarker =
+            serde_json::from_str(json).expect("old marker without encoded_count must parse");
+        assert_eq!(marker.encoded_count, 0, "encoded_count must default to 0");
+        assert_eq!(marker.src_jpeg_count, 42);
+        assert_eq!(marker.strategy, "jxl");
+    }
+
+    #[test]
+    fn check_decode_probe_fails_fast_on_invalid_file() {
+        let nonexistent = PathBuf::from("/nonexistent/file/path/that/does/not/exist.jpg");
+        let detail = check_decode_probe(&[nonexistent]);
+        assert_eq!(detail.name, "decode");
+        assert!(!detail.passed);
+        assert!(detail.actual.contains("format detection failed"));
+    }
+}

@@ -1,2 +1,2 @@
-//! Format-specific utilities - Re-exports from `shared_utils`
-pub use shared_utils::image_formats::*;
+//! Format-specific utilities - Re-exports from `foundation`
+pub use foundation::image_formats::*;
