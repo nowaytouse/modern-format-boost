@@ -17,7 +17,6 @@ doctest = false
 postgres = { workspace = true }
 foundation = { workspace = true }
 img = { workspace = true }
-vid = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true, features = ["fallible_uint"] }
 libc = { workspace = true }
@@ -31,11 +30,14 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 blake3 = { workspace = true }
 walkdir = { workspace = true }
-proptest = { workspace = true }
-insta = { workspace = true }
 serial_test = ">= 3.0"
 rayon = { workspace = true }
 jxl-oxide = { git = "https://github.com/tirr-c/jxl-oxide.git", version = ">= 0.12" }
+
+[dev-dependencies]
+vid = { workspace = true }
+proptest = { workspace = true }
+insta = { workspace = true }
 
 # Integration tests live in subdirs (folder layout only); paths registered here.
 [[test]]
