@@ -24,10 +24,7 @@
 use crate::Rational;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// --- Nightly Specialization Layer ---
 /// Unified trait for audited numeric conversions.
-///
-/// Leveraging nightly specialization for zero-cost optimized paths.
 pub trait AuditedCast<T> {
     /// Performs a saturating cast with audited safety.
     fn cast_sat(self) -> T;
@@ -2155,8 +2152,7 @@ mod tests {
         assert!(unix_secs_i64_result().is_ok());
     }
     #[test]
-    fn test_audited_cast_specialization() {
-        // Test f64 -> u64 (specialized)
+    fn test_audited_cast_saturates() {
         let val: f64 = 42.7;
         let casted: u64 = val.cast_sat();
         assert_eq!(casted, 42);
@@ -2165,7 +2161,6 @@ mod tests {
         let nan_casted: u64 = nan.cast_sat();
         assert_eq!(nan_casted, 0);
 
-        // Test f64 -> usize (specialized)
         let u_val: f64 = 1234.0;
         let u_casted: usize = u_val.cast_sat();
         assert_eq!(u_casted, 1234);
