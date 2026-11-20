@@ -15,22 +15,28 @@ fn run(root: &Path, arguments: &[&str]) -> Output {
         .unwrap()
 }
 
-#[test]
-fn cli_inspection_and_confirmed_cleanup_share_exact_state_safe_json_contract() {
-    let root = tempfile::tempdir().unwrap();
-    let cache = root.path().join("cache");
-    fs::create_dir(&cache).unwrap();
-    let store = cache.join("mfb_store.sqlite");
-    let conn = Connection::open(&store).unwrap();
+fn legacy_store_fixture(root: &Path) -> Connection {
+    fs::create_dir(root.join("cache")).unwrap();
+    let conn = Connection::open(root.join("cache/mfb_store.sqlite")).unwrap();
     conn.execute_batch(
         "CREATE TABLE store_metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
          INSERT INTO store_metadata VALUES ('schema_version', 2);
          CREATE TABLE blob_store (namespace TEXT NOT NULL, cache_key TEXT NOT NULL,
              schema_version INTEGER NOT NULL, root_path TEXT, payload BLOB NOT NULL,
              payload_blake3 BLOB NOT NULL, updated_at INTEGER NOT NULL,
-             PRIMARY KEY(namespace, cache_key));",
+             PRIMARY KEY(namespace, cache_key));
+         CREATE INDEX idx_blob_ns_root ON blob_store(namespace, root_path);
+         CREATE INDEX idx_blob_ns_updated ON blob_store(namespace, updated_at);",
     )
     .unwrap();
+    conn
+}
+
+#[test]
+fn cli_inspection_and_confirmed_cleanup_share_exact_state_safe_json_contract() {
+    let root = tempfile::tempdir().unwrap();
+    let store = root.path().join("cache/mfb_store.sqlite");
+    let conn = legacy_store_fixture(root.path());
     for namespace in ["path_tree", "checkpoint", "processed"] {
         conn.execute(
             "INSERT INTO blob_store VALUES (?1, 'key', 2, '/synthetic', ?2, ?3, 123)",
@@ -107,17 +113,7 @@ fn cache_root_preserves_the_shared_runtime_path_including_trailing_spaces() {
 }
 
 fn health_fixture(root: &Path) -> Connection {
-    fs::create_dir(root.join("cache")).unwrap();
-    let conn = Connection::open(root.join("cache/mfb_store.sqlite")).unwrap();
-    conn.execute_batch(
-        "CREATE TABLE store_metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-         INSERT INTO store_metadata VALUES ('schema_version', 2);
-         CREATE TABLE blob_store (namespace TEXT NOT NULL, cache_key TEXT NOT NULL,
-             schema_version INTEGER NOT NULL, root_path TEXT, payload BLOB NOT NULL,
-             payload_blake3 BLOB NOT NULL, updated_at INTEGER NOT NULL,
-             PRIMARY KEY(namespace, cache_key));",
-    )
-    .unwrap();
+    let conn = legacy_store_fixture(root);
     for namespace in ["path_tree", "checkpoint", "processed", "future_state"] {
         conn.execute(
             "INSERT INTO blob_store VALUES (?1, 'key', 2, '/synthetic', ?2, ?3, 123)",
@@ -135,7 +131,42 @@ fn health_fixture(root: &Path) -> Connection {
 #[test]
 fn cli_pruning_obeys_layered_policy_keeps_state_and_does_not_clear_useful_cache() {
     let root = tempfile::tempdir().unwrap();
-    let conn = health_fixture(root.path());
+    drop(health_fixture(root.path()));
+    let state = root.path().join("cache/mfb_store.sqlite");
+    let state_before = fs::read(&state).unwrap();
+    let cache = root
+        .path()
+        .join("cache")
+        .join(foundation::mfb_sqlite_store::CACHE_STORE_FILE_NAME);
+    let conn = Connection::open(&cache).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE cache_metadata (
+    role TEXT PRIMARY KEY NOT NULL CHECK(role='rebuildable_cache'),
+    schema_version INTEGER NOT NULL
+) STRICT;
+CREATE TABLE blob_store (
+    namespace TEXT NOT NULL CHECK(namespace IN ('path_tree','gate1_verified_file')),
+    cache_key TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    root_path TEXT,
+    payload BLOB NOT NULL,
+    payload_blake3 BLOB NOT NULL CHECK(length(payload_blake3)=32),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(namespace, cache_key)
+) STRICT;
+CREATE INDEX idx_blob_ns_root ON blob_store(namespace, root_path);
+CREATE INDEX idx_blob_ns_updated ON blob_store(namespace, updated_at);
+INSERT INTO cache_metadata VALUES ('rebuildable_cache', 1);",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO blob_store VALUES ('path_tree', 'expired', 2, '/synthetic', ?1, ?2, 123)",
+        params![
+            b"private test payload",
+            blake3::hash(b"private test payload").as_bytes()
+        ],
+    )
+    .unwrap();
     let config = root.path().join("policy.json");
     fs::write(
         &config,
@@ -163,7 +194,7 @@ fn cli_pruning_obeys_layered_policy_keeps_state_and_does_not_clear_useful_cache(
         conn.query_row("SELECT COUNT(*) FROM blob_store", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        6
+        3
     );
     let output = run(root.path(), &[args.as_slice(), &["--yes"]].concat());
     assert!(
@@ -178,15 +209,7 @@ fn cli_pruning_obeys_layered_policy_keeps_state_and_does_not_clear_useful_cache(
     assert_eq!(result["pruning"]["evicted_rows"], 1);
     assert_eq!(result["removed_rows"], 2);
     assert_eq!(result["removed_files"], 0);
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM blob_store WHERE namespace != 'path_tree' AND updated_at = 123",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        3
-    );
+    assert_eq!(fs::read(&state).unwrap(), state_before);
     assert_eq!(
         conn.query_row(
             "SELECT cache_key FROM blob_store WHERE namespace = 'path_tree'",

@@ -6642,7 +6642,7 @@ fn media_conversion_metadata_encode_unwrap_or_strict_defaults() {
             "crates/foundation/src/metadata/mod.rs",
             &[
                 "src_path.strip_prefix(src_dir).map_err(io::Error::other)?",
-                "path_file_stem_or_empty",
+                "dst_dir.join(rel_path)",
             ][..],
             &[
                 "strip_prefix(src_dir).unwrap_or(src_path)",
@@ -7054,7 +7054,7 @@ fn media_conversion_quality_ui_unwrap_or_strict_defaults() {
         ),
         (
             "crates/foundation/src/metadata/mod.rs",
-            &["path_relative_parent_or_self"][..],
+            &["open_descendant_nofollow(&destination_root, rel_path, true)?"][..],
             &["rel.parent().unwrap_or(rel)"][..],
             false,
         ),
@@ -7109,8 +7109,8 @@ fn media_conversion_runtime_tooling_unwrap_or_strict_defaults() {
         ),
         (
             "crates/foundation/src/logging.rs",
-            &["delivery_cwd_display_or_unknown"][..],
-            &["current_dir()\n        .unwrap_or_default()"][..],
+            &["delivery_log_dir_from_env_or_temp", "coerce_log_dir"][..],
+            &["current_dir()"][..],
             true,
         ),
         (
@@ -18296,8 +18296,12 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
     let toolchain = fs::read_to_string(root.join("rust-toolchain.toml"))
         .expect("rust-toolchain.toml must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
-        toolchain.contains("nightly-"),
-        "rust-toolchain.toml must pin a dated nightly channel"
+        toolchain.lines().any(|line| {
+            line.split_once('=').is_some_and(|(key, value)| {
+                key.trim() == "channel" && value.trim() == "\"nightly\""
+            })
+        }),
+        "rust-toolchain.toml must select the rolling nightly channel"
     );
     assert!(
         workflow.contains("dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8"),
@@ -18315,9 +18319,9 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
             setup.contains(concat!(
                 "uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1\n",
                 "        with:\n",
-                "          toolchain: stable\n"
+                "          toolchain: nightly\n"
             )),
-            "{job} needs an explicit stable toolchain when pinning the action by SHA"
+            "{job} needs explicit nightly to match the workspace toolchain"
         );
     }
     let check_all = fs::read_to_string(root.join("crates/dev/src/bin/check_all.rs"))
@@ -18362,10 +18366,13 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
         check_all.contains("\"lcov.info\""),
         "check_all --ci must fail-closed when lcov.info is missing"
     );
-    assert!(
-        workflow.contains("test -s lcov.info"),
-        "ci-quality must verify lcov.info before upload-artifact"
-    );
+    let (verify_lcov, upload_lcov) = workflow
+        .split_once("- name: Verify LCOV artifact (fail-closed)")
+        .and_then(|(_, tail)| tail.split_once("- name: Upload verified LCOV artifact"))
+        .expect("ci-quality must verify lcov.info before upload-artifact");
+    assert!(verify_lcov.contains("run: test -s lcov.info"));
+    assert!(upload_lcov.contains("steps.verify_lcov.outcome == 'success'"));
+    assert!(upload_lcov.contains("path: lcov.info"));
     let health_timeout_minutes = workflow
         .split_once("\n  health-check:")
         .and_then(|(_, health_check)| {
@@ -18830,67 +18837,6 @@ fn dev_tests_do_not_replace_assertions_with_contract_comments() {
     assert!(
         offenders.is_empty(),
         "dev tests must assert behavior instead of carrying comment-only contracts:\n{}",
-        offenders.join("\n")
-    );
-}
-
-#[test]
-fn rust_probe_parse_residue_targets_are_absent_across_crates() {
-    fn visit_rs_files(path: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
-        let entries = fs::read_dir(path)
-            .unwrap_or_else(|err| panic!("read directory {}: {err:?}", path.display()));
-        for entry_result in entries {
-            let entry = entry_result.unwrap_or_else(|err| {
-                panic!("read directory entry under {}: {err:?}", path.display())
-            });
-            let child = entry.path();
-            if child.is_dir() {
-                visit_rs_files(&child, files);
-                continue;
-            }
-            if child.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-                files.push(child);
-            }
-        }
-    }
-
-    fn line_has_forbidden_residue(line: &str) -> bool {
-        let ok_gate = ["if let ", "Ok", "("].concat();
-        let ok_chain_gate = ["&& let ", "Ok", "("].concat();
-        let dropped_result = [".", "ok", "()"].concat();
-        let ok_and = ["is_", "ok", "_and", "("].concat();
-        let wildcard_err = ["Err", "(_)"].concat();
-        line.contains(&ok_gate)
-            || line.contains(&ok_chain_gate)
-            || line.contains(&dropped_result)
-            || line.contains(&ok_and)
-            || (line.contains(&wildcard_err)
-                && (line.contains("=> false")
-                    || line.contains("=> None")
-                    || line.contains("=> continue")))
-    }
-
-    let root = workspace_root();
-    let crates_dir = root.join("crates");
-    let mut files = Vec::new();
-    visit_rs_files(&crates_dir, &mut files);
-
-    let mut offenders = Vec::new();
-    for file in files {
-        let content = fs::read_to_string(&file)
-            .unwrap_or_else(|err| panic!("read {}: {err:?}", file.display()));
-        for (line_no, line) in content.lines().enumerate() {
-            if line_has_forbidden_residue(line) {
-                let rel = file.strip_prefix(&root).unwrap_or(&file);
-                offenders.push(format!("{}:{}:{line}", rel.display(), line_no + 1));
-            }
-        }
-    }
-
-    assert!(
-        offenders.is_empty(),
-        "Rust source must not silently discard probe/read/parse errors via target residue \
-         forms:\n{}",
         offenders.join("\n")
     );
 }

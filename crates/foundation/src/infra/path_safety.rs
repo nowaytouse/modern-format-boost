@@ -1,6 +1,30 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
+/// Compare a requested name with the entry resolved by the caller's output policy.
+/// Resolve only parents so a linked final component cannot stand in for another entry.
+/// The caller must still use the resolved path for I/O.
+#[must_use]
+pub fn same_output_location(requested: &Path, resolved: &Path) -> bool {
+    if requested == resolved {
+        return true;
+    }
+    let Some(name) = resolved.file_name() else {
+        return false;
+    };
+    if requested.file_name() != Some(name) {
+        return false;
+    }
+    let Some((requested_parent, resolved_parent)) = requested.parent().zip(resolved.parent())
+    else {
+        return false;
+    };
+    matches!(
+        (requested_parent.canonicalize(), resolved_parent.canonicalize()),
+        (Ok(requested_parent), Ok(resolved_parent)) if requested_parent == resolved_parent
+    )
+}
+
 #[inline]
 #[must_use]
 pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {

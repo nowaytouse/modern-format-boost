@@ -87,12 +87,10 @@ impl XmpSidecarIndex {
         let stem = super::aae_source_stem(src)?;
         let parent = crate::media_conversion_gate::path_parent_or_dot(src);
         let view = self.checked_directory(parent, false)?;
-        match view
-            .aae_candidates
-            .get(&stem)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-        {
+        let Some(candidates) = view.aae_candidates.get(&stem) else {
+            return Ok(None);
+        };
+        match candidates.as_slice() {
             [] => Ok(None),
             [path] => super::require_regular_sidecar(path.clone(), "AAE").map(Some),
             _ => Err(io::Error::new(

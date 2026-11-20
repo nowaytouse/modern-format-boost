@@ -226,12 +226,11 @@ impl Report {
             "succeeded",
         )?;
         // Count only explicit file failures; unresolved originals stay unprocessed.
-        let anonymous_original_failures = if routed.is_some() {
-            0
-        } else {
-            recorded_failures
-                .map_or(0, |failures| failures.originals)
-                .saturating_sub(marker.tier2_failed_sources.len())
+        let anonymous_original_failures = match (routed, recorded_failures) {
+            (None, Some(failures)) => failures
+                .originals
+                .saturating_sub(marker.tier2_failed_sources.len()),
+            _ => 0,
         };
         let unbound_failures = if routed.is_some() { 0 } else { probe_failures };
         let failed = checked_add(

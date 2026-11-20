@@ -37,6 +37,34 @@ fn runtime_probe_regression_suite() {
     animated_jxl_probe();
 }
 
+#[test]
+fn invalid_media_probes_preserve_failure_evidence() {
+    use foundation::image::{
+        format_detect::detect_regular_file_format,
+        live_photo::{LivePhotoIdentifierEvidence, inspect_identifier_pair},
+    };
+    use std::time::{Duration, Instant};
+
+    for rate in ["", "N/A", "30/0", "inf", "inf/1", "30/inf", "1e308/0.1"] {
+        assert!(
+            foundation::parse_frame_rate(rate).is_err(),
+            "invalid frame rate {rate:?} must not produce a measurement"
+        );
+    }
+
+    let fixture = tempfile::tempdir().expect("temporary probe fixture");
+    let image = fixture.path().join("missing.jpg");
+    let video = fixture.path().join("missing.mov");
+    assert!(
+        detect_regular_file_format(&image).is_err(),
+        "the file extension cannot establish a format when the read fails"
+    );
+    assert!(matches!(
+        inspect_identifier_pair(&image, &video, Instant::now() + Duration::from_secs(1)),
+        LivePhotoIdentifierEvidence::Unavailable
+    ));
+}
+
 fn animated_webp_header_preflight_detect_video() {
     let bytes = build_synthetic_two_frame_animated_webp();
     let mut temp = tempfile::NamedTempFile::with_suffix(".webp").expect("temp webp");

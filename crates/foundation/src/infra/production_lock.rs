@@ -538,6 +538,9 @@ mod tests {
 
     #[test]
     fn inherited_subprocess_keeps_lease_after_parent_drop_and_releases_on_exit() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let lock_path = temp.path().join("production.lock");
         let ready = temp.path().join("ready");

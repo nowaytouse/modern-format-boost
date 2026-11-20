@@ -1676,6 +1676,11 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
                 .parse::<f64>()
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
 
+            if !num.is_finite() || !den.is_finite() {
+                return Err(FFprobeError::ParseError(format!(
+                    "Frame rate operands must be finite: '{s}'"
+                )));
+            }
             if crate::numeric_cast::is_effectively_zero(
                 den,
                 crate::numeric_cast::FloatContext::FfmpegMeasurement,
@@ -1686,13 +1691,13 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
             }
 
             let rate = num / den;
-            if rate >= 0.0_f64 {
+            if rate.is_finite() && rate >= 0.0_f64 {
                 return Ok(rate);
             }
         }
     }
     match s.parse::<f64>() {
-        Ok(v) if v > 0.0 => Ok(v),
+        Ok(v) if v.is_finite() && v > 0.0 => Ok(v),
         _ => Err(FFprobeError::ParseError(format!(
             "Could not parse frame rate: '{s}'"
         ))),
@@ -1886,6 +1891,7 @@ mod tests {
     #[test]
     fn test_parse_frame_rate() {
         let cases: &[(&str, f64, f64)] = &[
+            ("0/1", 0.0, f64::EPSILON),
             ("30/1", 30.0, 0.001),
             ("24/1", 24.0, 0.001),
             ("60/1", 60.0, 0.001),
@@ -1916,6 +1922,9 @@ mod tests {
         assert!(parse_frame_rate("invalid").is_err());
         assert!(parse_frame_rate("").is_err());
         assert!(parse_frame_rate("30/1/extra").is_err());
+        for invalid in ["inf", "30/inf", "inf/1", "1e308/0.1"] {
+            assert!(parse_frame_rate(invalid).is_err(), "accepted {invalid:?}");
+        }
     }
 
     #[test]

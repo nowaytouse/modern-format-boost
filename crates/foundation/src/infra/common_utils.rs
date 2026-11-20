@@ -1836,11 +1836,21 @@ pub(crate) fn isolated_test_process() -> bool {
     if std::env::var_os(CHILD_TEST).as_deref() == Some(std::ffi::OsStr::new(name)) {
         return false;
     }
-    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test executable"));
+    command
         .args([name, "--exact", "--nocapture", "--test-threads=1"])
-        .env(CHILD_TEST, name)
-        .output()
-        .expect("spawn isolated environment test");
+        .env(CHILD_TEST, name);
+    #[cfg(target_os = "macos")]
+    let child_temp = tempfile::tempdir().expect("create isolated test temporary directory");
+    #[cfg(target_os = "macos")]
+    command.env(
+        "TMPDIR",
+        child_temp
+            .path()
+            .canonicalize()
+            .expect("resolve macOS temporary directory aliases"),
+    );
+    let output = command.output().expect("spawn isolated environment test");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success() && stdout.contains("running 1 test"),

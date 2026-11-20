@@ -4493,11 +4493,13 @@ pub fn probe_fast_avif_with_reuse(
 )> {
     let mut invocation = None;
     let mut decision = None;
-    let path = tempfile::Builder::new()
-        .prefix("probe-")
-        .suffix(".avif")
-        .tempfile_in(context.scratch.path())?
-        .into_temp_path();
+    let path = foundation::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+        "Fast IMG AVIF effort probe",
+        context.scratch.path(),
+        "probe-",
+        ".avif",
+    )?
+    .into_temp_path();
     let (temp_output, output_size) = avif_quality_probe(
         source,
         encoder_input,

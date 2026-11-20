@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#ec93e71255c0b833a34f50662a3fdb22f53f6ded"
+source = "git+https://github.com/clap-rs/clap#54605ceeee4d932f169546a708444062f2b7cf4b"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#ec93e71255c0b833a34f50662a3fdb22f53f6ded"
+source = "git+https://github.com/clap-rs/clap#54605ceeee4d932f169546a708444062f2b7cf4b"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#ec93e71255c0b833a34f50662a3fdb22f53f6ded"
+source = "git+https://github.com/clap-rs/clap#54605ceeee4d932f169546a708444062f2b7cf4b"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.1"
-source = "git+https://github.com/clap-rs/clap#ec93e71255c0b833a34f50662a3fdb22f53f6ded"
+source = "git+https://github.com/clap-rs/clap#54605ceeee4d932f169546a708444062f2b7cf4b"
 
 [[package]]
 name = "cmake"
@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "crc32fast"
 version = "1.5.5"
-source = "git+https://github.com/srijs/rust-crc32fast#f3dbcd668f525f6c6014072df21e2396063640d9"
+source = "git+https://github.com/srijs/rust-crc32fast#bf120c3ac0c28e5d999de2df8139f47f4486f622"
 dependencies = [
  "cfg-if",
 ]

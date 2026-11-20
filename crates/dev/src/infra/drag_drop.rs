@@ -2953,6 +2953,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial(production_lease)]
     fn timestamp_restore_inherits_production_lease() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
@@ -3018,6 +3019,7 @@ exec "$MFB_TEST_TIMESTAMP_TEST_EXE" "$MFB_TEST_TIMESTAMP_TEST_NAME" --exact --no
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial(production_lease)]
     fn verification_lease_is_inherited_only_by_authorized_verifier() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
 

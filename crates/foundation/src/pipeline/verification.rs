@@ -1551,13 +1551,35 @@ fn check_orientation_policy_with_resume(
                 .ok_or_else(|| std::io::Error::other("orientation result missing"))
         },
         |source, output| {
-            if crate::image::format_detect::detect_true_format(output)
-                .map_err(|err| std::io::Error::other(err.to_string()))?
-                != crate::image::format_detect::FormatKind::Jxl
-            {
+            use crate::image::format_detect::{FormatKind, detect_true_format};
+
+            if detect_true_format(output).map_err(std::io::Error::other)? != FormatKind::Jxl {
                 return Ok(false);
             }
-            crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
+            let reconstructed = if detect_true_format(source).map_err(std::io::Error::other)?
+                == FormatKind::Jxl
+            {
+                let jpeg = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+                    "fast_img_gate1_reconstruct_source",
+                    Some("mfb_gate1_source"),
+                    Some(".jpg"),
+                )?;
+                crate::image::jxl_utils::run_exact_jpeg_reconstruction(
+                    source,
+                    jpeg.path(),
+                    "Fast IMG Gate 1 source JPEG reconstruction",
+                )
+                .map_err(std::io::Error::other)?;
+                crate::image::jxl_utils::verify_reconstructed_jpeg_bytes(source, jpeg.path())
+                    .map_err(std::io::Error::other)?;
+                Some(jpeg)
+            } else {
+                None
+            };
+            let source_jpeg = reconstructed
+                .as_ref()
+                .map_or(source, tempfile::NamedTempFile::path);
+            crate::image::fast_img::verify_jxl_roundtrip_integrity(source_jpeg, output)
                 .map(|result| {
                     matches!(
                         result,
@@ -3709,7 +3731,7 @@ mod tests {
         if !super::super::gate1_resume::isolate_final_verification_test(
             "pipeline::verification::tests::final_gate2_preserves_both_custody_groups_and_legacy_failure_state",
         ).unwrap() { return; }
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         std::fs::write(root.path().join("a.JXL"), [0xff, 0x0a, 0]).unwrap();
         std::fs::write(root.path().join("unowned.JXL"), [0xff, 0x0a, 1]).unwrap();
         let mut ctx = ctx_with_library(

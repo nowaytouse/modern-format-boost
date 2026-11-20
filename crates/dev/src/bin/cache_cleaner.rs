@@ -827,9 +827,12 @@ fn managed_database_bytes(path: &Path) -> Result<u64> {
         .try_fold(0u64, |total, suffix| {
             let mut sidecar = path.as_os_str().to_os_string();
             sidecar.push(suffix);
-            total
-                .checked_add(regular_file_size(Path::new(&sidecar))?.unwrap_or(0))
-                .context("managed SQLite size overflow")
+            match regular_file_size(Path::new(&sidecar))? {
+                Some(bytes) => total
+                    .checked_add(bytes)
+                    .context("managed SQLite size overflow"),
+                None => Ok(total),
+            }
         })
 }
 

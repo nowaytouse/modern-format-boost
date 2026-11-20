@@ -274,6 +274,15 @@ fn isolate_conversion_tools(command: &mut Command, root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn run_production_cli(command: &mut Command) -> Result<std::process::Output> {
+    // The subprocesses contend for the real per-user production lease.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = SERIAL
+        .lock()
+        .map_err(|_| anyhow!("production matrix launch lock poisoned"))?;
+    Ok(command.output()?)
+}
+
 fn verify_original_archive_cli(source: &Path, root: &Path) -> Result<()> {
     let destination = root.join("native-archive");
     let before = fs::read(source)?;
@@ -284,15 +293,15 @@ fn verify_original_archive_cli(source: &Path, root: &Path) -> Result<()> {
     // executable prevents host tool installations from hiding a codec preflight.
     #[cfg(unix)]
     isolate_conversion_tools(&mut command, root)?;
-    let output = command
+    command
         .arg("run")
         .arg(source)
         .arg("--output")
         .arg(&destination)
         .arg("--force")
         .env("MFB_HOME_ROOT", root.join("isolated-home"))
-        .env("MFB_INVOKER", "test-harness")
-        .output()?;
+        .env("MFB_INVOKER", "test-harness");
+    let output = run_production_cli(&mut command)?;
     ensure!(
         output.status.success(),
         "native archive CLI failed for {} ({}):\nstdout: {}\nstderr: {}",
@@ -328,15 +337,15 @@ fn conversion_preflight_failure_is_visible_and_preserves_source() -> Result<()> 
     let before = fs::read(&source)?;
     let mut command = Command::new(env!("CARGO_BIN_EXE_img"));
     isolate_conversion_tools(&mut command, root.path())?;
-    let output = command
+    command
         .arg("run")
         .arg(&source)
         .arg("--output")
         .arg(&destination)
         .arg("--force")
         .env("MFB_HOME_ROOT", root.path().join("isolated-home"))
-        .env("MFB_INVOKER", "test-harness")
-        .output()?;
+        .env("MFB_INVOKER", "test-harness");
+    let output = run_production_cli(&mut command)?;
     let diagnostic = String::from_utf8_lossy(&output.stderr);
     ensure!(
         !output.status.success()

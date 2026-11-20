@@ -4441,6 +4441,7 @@ mod tests {
                 .arg(&temp),
             "copy source metadata to JXL",
         );
+        let codestream_orientation = exiftool_tag_value(&temp, "-JXL:Orientation");
         replace_jxl_exif_brob_with_corrupt_payload(&temp);
         let before = exiftool_validate_text(&temp);
         assert!(
@@ -4462,10 +4463,17 @@ mod tests {
             !after.contains("Corrupted Brotli 'Exif' data"),
             "delivery repair must remove corrupt JXL EXIF box: {after}"
         );
-        let orientation = exiftool_tag_value(&output, "-Orientation");
+        for tag in ["-EXIF:Orientation", "-XMP:Orientation"] {
+            assert_eq!(
+                exiftool_tag_value(&output, tag),
+                "",
+                "JXL corrupt EXIF repair must not rehydrate {tag}"
+            );
+        }
         assert_eq!(
-            orientation, "",
-            "JXL corrupt EXIF repair must not rehydrate Orientation"
+            exiftool_tag_value(&output, "-JXL:Orientation"),
+            codestream_orientation,
+            "JXL corrupt EXIF repair must preserve codestream Orientation"
         );
         assert_eq!(exiftool_tag_value(&output, "-Make"), "MFBTestMake");
         assert_eq!(exiftool_tag_value(&output, "-Model"), "MFBTestModel");

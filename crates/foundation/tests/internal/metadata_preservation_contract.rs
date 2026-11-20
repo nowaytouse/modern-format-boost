@@ -1372,8 +1372,14 @@ fn contract_meme_finalize_requires_cleared_embedded_metadata() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = fs::read_to_string(manifest_dir.join("../img/src/lossless_converter.rs"))
         .expect("lossless_converter source must be readable");
-    let finalize = source
+    let wrapper = source
         .split("pub fn finalize_meme_avif_probe(")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn ").next())
+        .expect("finalize_meme_avif_probe body");
+    assert!(wrapper.contains("finalize_meme_avif_probe_at("));
+    let finalize = source
+        .split("pub fn finalize_meme_avif_probe_at(")
         .nth(1)
         .and_then(|rest| rest.split("pub fn ").next())
         .expect("finalize_meme_avif_probe body");
@@ -1382,14 +1388,23 @@ fn contract_meme_finalize_requires_cleared_embedded_metadata() {
             && finalize.contains("metadata_policy.output_policy()"),
         "CONTRACT: meme finalize must enforce the resolved typed AVIF metadata policy"
     );
+    let checked_commit = finalize
+        .split_once("commit_temp_to_output_with_metadata_checked(")
+        .expect("meme finalize must publish with a checked commit")
+        .1;
     assert!(
-        finalize.contains("verify_output_embedded_metadata("),
-        "CONTRACT: meme finalize must run per-file cleared metadata verification"
+        checked_commit.contains("verify_output_embedded_metadata(")
+            && checked_commit.contains("metadata_policy.output_policy()"),
+        "CONTRACT: checked commit must verify the candidate against the resolved metadata policy"
     );
     let policy = crate::infra::runtime_config::AvifMetadataPolicy::Clear;
-    assert_eq!(policy.output_policy(), crate::metadata::MetadataOutputPolicy::Clear);
     assert_eq!(
-        policy.version(), 4,
+        policy.output_policy(),
+        crate::metadata::MetadataOutputPolicy::Clear
+    );
+    assert_eq!(
+        policy.version(),
+        4,
         "CONTRACT: existing AVIF output reuse requires the progressive Clear contract"
     );
 }

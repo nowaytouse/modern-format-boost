@@ -1126,13 +1126,21 @@ mod tests {
             "write stale destination thumbnail orientation",
         );
 
+        let codestream_orientation = exiftool_tag_value(&dst_path, "-JXL:Orientation");
         preserve_internal(&src_path, &dst_path)
             .unwrap_or_else(|err| panic!("preserve JXL metadata: {err}"));
 
+        for tag in ["-EXIF:Orientation", "-XMP:Orientation"] {
+            assert_eq!(
+                exiftool_tag_value(&dst_path, tag),
+                "",
+                "JXL delivery metadata copy must not import {tag}"
+            );
+        }
         assert_eq!(
-            exiftool_tag_value(&dst_path, "-Orientation"),
-            "",
-            "JXL delivery metadata copy must not import Orientation"
+            exiftool_tag_value(&dst_path, "-JXL:Orientation"),
+            codestream_orientation,
+            "JXL delivery metadata copy must preserve codestream Orientation"
         );
         assert_eq!(exiftool_tag_value(&dst_path, "-Make"), "MFBTestMake");
         assert_eq!(exiftool_tag_value(&dst_path, "-Model"), "MFBTestModel");

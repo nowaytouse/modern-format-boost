@@ -1969,7 +1969,7 @@ fn resolve_fast_img_output_for_run(args: &Args, target: &Path) -> Result<PathBuf
         )?
     };
     if let Some(configured) = &args.output
-        && configured != &live_output
+        && !foundation::path_safety::same_output_location(configured, &live_output)
     {
         bail!(
             "fast-img output no longer matches live working-copy state: requested={} live={}; retry so the launcher can resolve current markers",

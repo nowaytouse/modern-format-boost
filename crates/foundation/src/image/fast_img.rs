@@ -15623,7 +15623,8 @@ end mfbResolveAlbumComponent
 
     #[test]
     fn tier2_delete_gate_removes_source_when_all_pass() {
-        let mut src = NamedTempFile::new().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut src = NamedTempFile::new_in(directory.path()).unwrap();
         src.write_all(b"lossy-webp-bytes").unwrap();
         let source_hash = crate::common_utils::calculate_blake3_hash(src.path()).unwrap();
         let src_path = src.path().to_path_buf();

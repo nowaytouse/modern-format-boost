@@ -2638,9 +2638,10 @@ mod conversion_result_adapter_tests {
             .lock()
             .expect("shared CLI test environment lock");
         let temporary = tempfile::tempdir()?;
-        let source = temporary.path().join("synthetic.jpg");
+        let root = temporary.path().canonicalize()?;
+        let source = root.join("synthetic.jpg");
         let fixture_rel = "nested/example.test/fixture.JXL";
-        let input = temporary.path().join(fixture_rel);
+        let input = root.join(fixture_rel);
         std::fs::create_dir_all(input.parent().unwrap())?;
         let magick = foundation::common_utils::resolve_tool_path("magick")
             .ok_or_else(|| anyhow::anyhow!("magick fixture unavailable"))?;
@@ -2670,13 +2671,13 @@ mod conversion_result_adapter_tests {
             "synthetic E1 JXL encoding failed"
         );
         let original = std::fs::read(&input)?;
-        let output_dir = temporary.path().join("delivery");
+        let output_dir = root.join("delivery");
         let occupied = output_dir.join(fixture_rel);
         std::fs::create_dir_all(occupied.parent().unwrap())?;
         std::fs::write(&occupied, b"existing output must be retained")?;
         let config = AutoConvertConfig {
             output_dir: Some(output_dir),
-            base_dir: Some(temporary.path().to_path_buf()),
+            base_dir: Some(root.clone()),
             flags: ConfigFlags::FORCE | ConfigFlags::DELETE_ORIGINAL,
             size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             child_threads: 1,
@@ -2697,10 +2698,10 @@ mod conversion_result_adapter_tests {
             b"existing output must be retained"
         );
 
-        let inventory = super::scan_fast_img_sources(vec![input.clone()], temporary.path(), "jxl")?;
+        let inventory = super::scan_fast_img_sources(vec![input.clone()], root.as_path(), "jxl")?;
         assert_eq!(inventory.source_files, [input.clone()]);
         assert!(inventory.modern_lossy_candidates.is_empty());
-        let working_copy = temporary.path().join("fast-output");
+        let working_copy = root.join("fast-output");
         std::fs::create_dir(&working_copy)?;
         let replacement_output = working_copy.join(fixture_rel);
         assert!(!replacement_output.parent().unwrap().exists());
@@ -2713,7 +2714,7 @@ mod conversion_result_adapter_tests {
         };
         let result = super::fast_img_run_encode_job_inner(
             &job,
-            temporary.path(),
+            root.as_path(),
             &working_copy,
             1,
             false,
@@ -2745,8 +2746,8 @@ mod conversion_result_adapter_tests {
             .map_err(anyhow::Error::msg)?;
         assert_eq!(std::fs::read(&input)?, original);
 
-        let kept_inputs = temporary.path().join("kept-inputs");
-        let kept_outputs = temporary.path().join("kept-outputs");
+        let kept_inputs = root.join("kept-inputs");
+        let kept_outputs = root.join("kept-outputs");
         std::fs::create_dir(&kept_outputs)?;
         let kept_rel = "nested/example.test/kept.JXL";
         let kept = kept_inputs.join(kept_rel);
@@ -2836,7 +2837,7 @@ mod conversion_result_adapter_tests {
             kept.is_file(),
             "an unverified Photos asset cannot authorize source deletion"
         );
-        let photos_original = temporary.path().join("synthetic-photos-original.JXL");
+        let photos_original = root.join("synthetic-photos-original.JXL");
         std::fs::copy(&kept_output, &photos_original)?;
         let library = library_handle_from_probes(
             &marker,
@@ -2874,7 +2875,7 @@ mod conversion_result_adapter_tests {
         assert!(!kept.exists());
         assert_eq!(std::fs::read(&photos_original)?, kept_bytes);
 
-        let with_auxiliary_box = temporary.path().join("auxiliary.JXL");
+        let with_auxiliary_box = root.join("auxiliary.JXL");
         let mut ancillary = original.clone();
         ancillary.extend_from_slice(b"\0\0\0\x09mfbtx");
         std::fs::write(&with_auxiliary_box, ancillary)?;
@@ -6451,11 +6452,13 @@ fn run_fast_img_with_format_resolver(
             false
         };
 
+        let new_originals = match existing_marker.as_ref() {
+            Some(marker) => fast_img_new_original_count(marker, &modern_lossy_candidates),
+            None => 0,
+        };
         fast_img_confirm_resume_if_needed(
             existing_marker.as_ref(),
-            existing_marker.as_ref().map_or(0, |marker| {
-                fast_img_new_original_count(marker, &modern_lossy_candidates)
-            }),
+            new_originals,
             dry_run,
             shortest_path,
             &mut retry_requested,
@@ -9928,7 +9931,7 @@ fn fast_img_resolve_requested_working_copy(
         resolve_working_copy_dir_for_delivery(src_dir, strategy, shortest_path.0)?
     };
     if let Some(requested) = requested
-        && requested != live
+        && !foundation::path_safety::same_output_location(requested, &live)
     {
         anyhow::bail!(
             "fast-img output no longer matches live working-copy state: requested={} live={}; resolve the current marker state and retry",
@@ -18074,10 +18077,11 @@ mod fast_img_hardening_tests {
             return Ok(());
         }
 
-        let root = TempDir::new()?;
-        let _env = fast_img_marker_state_test_env(root.path());
-        let src_root = root.path().join("Photos");
-        let wc = root.path().join("Photos_optimized");
+        let temp = TempDir::new()?;
+        let root = temp.path().canonicalize()?;
+        let _env = fast_img_marker_state_test_env(&root);
+        let src_root = root.join("Photos");
+        let wc = root.join("Photos_optimized");
         let src = src_root.join("a.jpg");
         let out = wc.join("a.JXL");
         std::fs::create_dir_all(&src_root)?;
@@ -18440,6 +18444,33 @@ mod fast_img_hardening_tests {
         .unwrap_err();
         assert!(error.to_string().contains("requested="));
         assert!(error.to_string().contains("live="));
+        #[cfg(unix)]
+        {
+            let alias = root.path().join("parent-alias");
+            std::os::unix::fs::symlink(root.path(), &alias)?;
+            assert_eq!(
+                fast_img_resolve_requested_working_copy(
+                    &source_dir,
+                    Some(&alias.join("Photos_optimized")),
+                    FreshFlag(false),
+                    "jxl",
+                    ShortestPathFlag(false),
+                )?,
+                live
+            );
+            let leaf_alias = root.path().join("other-output");
+            std::os::unix::fs::symlink(&live, &leaf_alias)?;
+            assert!(
+                fast_img_resolve_requested_working_copy(
+                    &source_dir,
+                    Some(&leaf_alias),
+                    FreshFlag(false),
+                    "jxl",
+                    ShortestPathFlag(false),
+                )
+                .is_err()
+            );
+        }
         Ok(())
     }
 
