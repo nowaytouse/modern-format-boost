@@ -140,11 +140,16 @@ impl BoundFile {
     }
 }
 
+enum SidecarObservation {
+    Unobserved,
+    Observed(Option<Box<BoundFile>>),
+}
+
 pub(super) struct JxlProbeIdentity {
     source: BoundFile,
     actual: Option<BoundFile>,
     icc: Option<BoundFile>,
-    sidecar: Option<Option<BoundFile>>,
+    sidecar: SidecarObservation,
     encoder: BoundFile,
     environment: Environment,
     cwd: PathBuf,
@@ -193,9 +198,11 @@ impl JxlProbeIdentity {
         let icc = icc
             .map(|path| BoundFile::read(&absolute(path, &cwd)))
             .transpose()?;
-        let sidecar = bind_sidecar
-            .then(|| selected_sidecar(&source.path))
-            .transpose()?;
+        let sidecar = if bind_sidecar {
+            SidecarObservation::Observed(selected_sidecar(&source.path)?.map(Box::new))
+        } else {
+            SidecarObservation::Unobserved
+        };
         let effective = effective_environment(&environment, command);
         let command_cwd = effective_cwd(&cwd, command)?;
         let encoder = BoundFile::read(&resolve_program(command, &effective, &command_cwd)?)?;
@@ -242,7 +249,10 @@ impl JxlProbeIdentity {
         for file in [
             self.actual.as_ref(),
             self.icc.as_ref(),
-            self.sidecar.as_ref().and_then(Option::as_ref),
+            match &self.sidecar {
+                SidecarObservation::Unobserved => None,
+                SidecarObservation::Observed(file) => file.as_deref(),
+            },
         ] {
             field(&mut key, &[u8::from(file.is_some())]);
             if let Some(file) = file {
@@ -296,7 +306,7 @@ impl JxlProbeIdentity {
         if let Some(icc) = &self.icc {
             icc.validate()?;
         }
-        if let Some(Some(sidecar)) = &self.sidecar {
+        if let SidecarObservation::Observed(Some(sidecar)) = &self.sidecar {
             sidecar.validate()?;
         }
         Ok(())
@@ -309,8 +319,8 @@ impl JxlProbeIdentity {
     }
 
     pub(super) fn validate_sidecar_association(&self) -> io::Result<()> {
-        if let Some(expected) = &self.sidecar
-            && selected_sidecar(&self.source.path)?.as_ref() != expected.as_ref()
+        if let SidecarObservation::Observed(expected) = &self.sidecar
+            && selected_sidecar(&self.source.path)?.as_ref() != expected.as_deref()
         {
             return Err(invalid(
                 "JXL probe source XMP association or contents changed",

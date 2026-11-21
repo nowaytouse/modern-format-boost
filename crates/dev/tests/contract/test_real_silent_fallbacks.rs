@@ -5807,14 +5807,16 @@ fn media_conversion_layer_strict_defaults() {
             && !conversion.contains("ConvertFlags::USE_GPU | ConvertFlags::ALLOW_SIZE_TOLERANCE"),
         "ConvertOptions default must not enable size tolerance"
     );
-    for rel in ["crates/img/src/main.rs", "crates/vid/src/main.rs"] {
-        let content = fs::read_to_string(join_legacy_aware(&root, rel))
-            .unwrap_or_else(|e| panic!("{rel}: {e}")); // audited: contract test assertion path; panic/expect is test-only failure signal
-        assert!(
-            content.contains("default_value_t = false") && content.contains("allow_size_tolerance"),
-            "{rel} must default allow_size_tolerance to false (strict size)"
-        );
-    }
+    assert!(
+        !foundation::runtime_config::ImgPolicy::default().allow_size_tolerance,
+        "IMG must default to strict size"
+    );
+    let vid = fs::read_to_string(root.join("crates/vid/src/main.rs"))
+        .expect("VID entry point must be readable");
+    assert!(
+        vid.contains("default_value_t = false") && vid.contains("allow_size_tolerance"),
+        "VID must default to strict size"
+    );
     let explorer = fs::read_to_string(join_legacy_aware(
         &root,
         "crates/foundation/src/video_explorer.rs",
@@ -9160,8 +9162,8 @@ fn media_conversion_path_tree_cache_sqlite_m213() {
 
     let cargo = fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
-        cargo.contains("rusqlite = { version = \"0.42\", features = [\"bundled\"] }"),
-        "workspace rusqlite must use the approved 0.42.x release with bundled SQLite (M214)"
+        cargo.contains("rusqlite = { version = \"0.43\", features = [\"bundled\"] }"),
+        "workspace rusqlite must use the approved 0.43.x release with bundled SQLite (M214)"
     );
 }
 

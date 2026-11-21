@@ -2075,18 +2075,29 @@ mod tests {
         write_test_image(&source, 8, 8, ImageFormat::Png);
         let admitted = admitted_image_files(scan_image_tree_snapshot(root.path(), &["png"], true)?);
         let metadata = fs::metadata(&source)?;
-        let modified = FileTime::from_last_modification_time(&metadata);
+        let modified =
+            FileTime::from_system_time(metadata.modified().expect("read modified timestamp"));
         let mut bytes = fs::read(&source)?;
         bytes[0] ^= 1;
         fs::write(&source, &bytes)?;
-        filetime::set_file_mtime(&source, modified)?;
+        std::fs::set_times(
+            &source,
+            std::fs::FileTimes::new().set_modified(modified.into()),
+        )?;
         assert!(admitted[0].verify_unchanged().is_err());
         write_test_image(&source, 8, 8, ImageFormat::Png);
         let admitted = admitted_image_files(scan_image_tree_snapshot(root.path(), &["png"], true)?);
-        let modified = FileTime::from_last_modification_time(&fs::metadata(&source)?);
+        let modified = FileTime::from_system_time(
+            fs::metadata(&source)?
+                .modified()
+                .expect("read modified timestamp"),
+        );
         let replacement = root.path().join("replacement");
         fs::copy(&source, &replacement)?;
-        filetime::set_file_mtime(&replacement, modified)?;
+        std::fs::set_times(
+            &replacement,
+            std::fs::FileTimes::new().set_modified(modified.into()),
+        )?;
         fs::rename(&replacement, &source)?;
         assert!(admitted[0].verify_unchanged().is_err());
         Ok(())
@@ -2156,11 +2167,18 @@ mod tests {
 
         let refreshed = scan_image_tree_snapshot(&root, &["png"], true)?;
         assert_eq!(file_freshness_for_both(&refreshed), (true, true));
-        let original_mtime = FileTime::from_last_modification_time(&fs::metadata(&image)?);
+        let original_mtime = FileTime::from_system_time(
+            fs::metadata(&image)?
+                .modified()
+                .expect("read modified timestamp"),
+        );
         let mut bytes = fs::read(&image)?;
         bytes.push(0);
         fs::write(&image, bytes)?;
-        filetime::set_file_mtime(&image, original_mtime)?;
+        std::fs::set_times(
+            &image,
+            std::fs::FileTimes::new().set_modified(original_mtime.into()),
+        )?;
         assert!(cached_directories_are_current(
             &refreshed.directories,
             &root
@@ -2208,7 +2226,13 @@ mod tests {
         let metadata = fs::metadata(&path)?;
         let mut source = DiscoveredSource::from_metadata(&path, &metadata)?;
         fs::write(&path, b"after!")?;
-        filetime::set_file_mtime(&path, FileTime::from_last_modification_time(&metadata))?;
+        std::fs::set_times(
+            &path,
+            std::fs::FileTimes::new().set_modified(
+                FileTime::from_system_time(metadata.modified().expect("read modified timestamp"))
+                    .into(),
+            ),
+        )?;
         // Model a filesystem whose metadata cannot distinguish these two observations.
         source.identity = CachedFileIdentity::from_metadata(&fs::metadata(&path)?)?;
         source.verify_discovery_metadata()?;
@@ -2240,8 +2264,8 @@ mod tests {
         fs::write(&path, b"same bytes")?;
         fs::write(&other, b"same bytes")?;
         let mtime = FileTime::from_unix_time(1_700_000_000, 123_456_789);
-        filetime::set_file_mtime(&path, mtime)?;
-        filetime::set_file_mtime(&other, mtime)?;
+        std::fs::set_times(&path, std::fs::FileTimes::new().set_modified(mtime.into()))?;
+        std::fs::set_times(&other, std::fs::FileTimes::new().set_modified(mtime.into()))?;
         symlink(&path, &link)?;
         let source = DiscoveredSource::from_metadata(&link, &fs::metadata(&link)?)?;
         source.verify_unchanged()?;
@@ -2253,7 +2277,7 @@ mod tests {
         assert!(direct.verify_unchanged().is_err());
         let rewritten = DiscoveredSource::from_metadata(&path, &fs::metadata(&path)?)?;
         fs::write(&path, b"new! bytes")?;
-        filetime::set_file_mtime(&path, mtime)?;
+        std::fs::set_times(&path, std::fs::FileTimes::new().set_modified(mtime.into()))?;
         assert!(rewritten.verify_unchanged().is_err());
         let stale_metadata = fs::metadata(&path)?;
         fs::remove_file(&path)?;
@@ -2274,14 +2298,20 @@ mod tests {
         write_test_image(&image, 8, 8, ImageFormat::Png);
         let bytes = fs::read(&image)?;
         let original_mtime = FileTime::from_unix_time(1_700_000_000, 123_456_789);
-        filetime::set_file_mtime(&image, original_mtime)?;
+        std::fs::set_times(
+            &image,
+            std::fs::FileTimes::new().set_modified(original_mtime.into()),
+        )?;
         let original = scan_image_tree_snapshot(&root, &["png"], true)?;
         assert_eq!(file_freshness_for_both(&original), (true, true));
 
         let mut changed = bytes.clone();
         *changed.last_mut().unwrap() ^= 1;
         fs::write(&image, changed)?;
-        filetime::set_file_mtime(&image, original_mtime)?;
+        std::fs::set_times(
+            &image,
+            std::fs::FileTimes::new().set_modified(original_mtime.into()),
+        )?;
         let after = CachedFileIdentity::from_metadata(&fs::metadata(&image)?)?;
         assert_eq!(after.size, original.files[0].identity.size);
         assert_eq!(
@@ -2293,14 +2323,27 @@ mod tests {
         assert_eq!(file_freshness_for_both(&original), (false, false));
 
         fs::write(&image, &bytes)?;
-        filetime::set_file_mtime(&image, original_mtime)?;
+        std::fs::set_times(
+            &image,
+            std::fs::FileTimes::new().set_modified(original_mtime.into()),
+        )?;
         let refreshed = scan_image_tree_snapshot(&root, &["png"], true)?;
-        let directory_mtime = FileTime::from_last_modification_time(&fs::metadata(&root)?);
+        let directory_mtime = FileTime::from_system_time(
+            fs::metadata(&root)?
+                .modified()
+                .expect("read modified timestamp"),
+        );
         let replacement = replacement_root.path().join("replacement.png");
         fs::write(&replacement, &bytes)?;
-        filetime::set_file_mtime(&replacement, original_mtime)?;
+        std::fs::set_times(
+            &replacement,
+            std::fs::FileTimes::new().set_modified(original_mtime.into()),
+        )?;
         fs::rename(&replacement, &image)?;
-        filetime::set_file_mtime(&root, directory_mtime)?;
+        std::fs::set_times(
+            &root,
+            std::fs::FileTimes::new().set_modified(directory_mtime.into()),
+        )?;
         let replaced = CachedFileIdentity::from_metadata(&fs::metadata(&image)?)?;
         assert_eq!(replaced.size, refreshed.files[0].identity.size);
         assert_eq!(
@@ -2309,7 +2352,11 @@ mod tests {
         );
         assert_ne!(replaced.inode, refreshed.files[0].identity.inode);
         assert_eq!(
-            FileTime::from_last_modification_time(&fs::metadata(&root)?),
+            FileTime::from_system_time(
+                fs::metadata(&root)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             directory_mtime
         );
         assert!(!cached_files_are_current(
@@ -2340,11 +2387,22 @@ mod tests {
             .remove("modified_time");
         assert!(serde_json::from_value::<CachedImageTreeSnapshot>(serialized).is_err());
 
-        let directory_mtime = FileTime::from_last_modification_time(&fs::metadata(&root)?);
+        let directory_mtime = FileTime::from_system_time(
+            fs::metadata(&root)?
+                .modified()
+                .expect("read modified timestamp"),
+        );
         fs::remove_file(&image)?;
-        filetime::set_file_mtime(&root, directory_mtime)?;
+        std::fs::set_times(
+            &root,
+            std::fs::FileTimes::new().set_modified(directory_mtime.into()),
+        )?;
         assert_eq!(
-            FileTime::from_last_modification_time(&fs::metadata(&root)?),
+            FileTime::from_system_time(
+                fs::metadata(&root)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             directory_mtime
         );
         assert!(!cached_files_are_current(
@@ -2369,11 +2427,22 @@ mod tests {
         assert!(empty.files.is_empty());
         assert_eq!(file_freshness_for_both(&empty), (true, true));
 
-        let directory_mtime = FileTime::from_last_modification_time(&fs::metadata(&root)?);
+        let directory_mtime = FileTime::from_system_time(
+            fs::metadata(&root)?
+                .modified()
+                .expect("read modified timestamp"),
+        );
         write_test_image(&root.join("first.png"), 8, 8, ImageFormat::Png);
-        filetime::set_file_mtime(&root, directory_mtime)?;
+        std::fs::set_times(
+            &root,
+            std::fs::FileTimes::new().set_modified(directory_mtime.into()),
+        )?;
         assert_eq!(
-            FileTime::from_last_modification_time(&fs::metadata(&root)?),
+            FileTime::from_system_time(
+                fs::metadata(&root)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             directory_mtime
         );
         assert_eq!(file_freshness_for_both(&empty), (false, false));
@@ -2382,7 +2451,10 @@ mod tests {
         assert_eq!(populated.files.len(), 1);
         assert_eq!(file_freshness_for_both(&populated), (true, true));
         write_test_image(&root.join("second.png"), 8, 8, ImageFormat::Png);
-        filetime::set_file_mtime(&root, directory_mtime)?;
+        std::fs::set_times(
+            &root,
+            std::fs::FileTimes::new().set_modified(directory_mtime.into()),
+        )?;
         assert!(cached_files_are_current(
             &populated.observed_files,
             populated
@@ -2401,7 +2473,11 @@ mod tests {
         write_test_image(&path, 8, 8, ImageFormat::Png);
         let metadata = fs::metadata(&path)?;
         let identity = CachedFileIdentity::from_metadata(&metadata)?;
-        filetime::set_file_mtime(&path, FileTime::from_unix_time(1_600_000_000, 9))?;
+        std::fs::set_times(
+            &path,
+            std::fs::FileTimes::new()
+                .set_modified(FileTime::from_unix_time(1_600_000_000, 9).into()),
+        )?;
         assert!(ensure_cache_file_unchanged(&path, &identity).is_err());
         assert!(build_cached_image_entry(temporary.path(), &path, &metadata).is_err());
         fs::remove_file(&path)?;
@@ -2843,9 +2919,17 @@ mod tests {
         let snapshot = scan_image_tree_snapshot(root, &["jpg"], true)?;
         assert!(validate_cached_image_tree(&snapshot, root, &["jpg"], true));
 
-        let current = FileTime::from_last_modification_time(&fs::metadata(&nested)?);
+        let current = FileTime::from_system_time(
+            fs::metadata(&nested)?
+                .modified()
+                .expect("read modified timestamp"),
+        );
         let bumped = FileTime::from_unix_time(current.unix_seconds() + 10, 0);
-        filetime::set_file_mtime(&nested, bumped).map_err(|e| anyhow::anyhow!("set mtime: {e}"))?;
+        std::fs::set_times(
+            &nested,
+            std::fs::FileTimes::new().set_modified(bumped.into()),
+        )
+        .map_err(|e| anyhow::anyhow!("set mtime: {e}"))?;
 
         assert!(
             !validate_cached_image_tree(&snapshot, root, &["jpg"], true),
@@ -2863,7 +2947,10 @@ mod tests {
         fs::create_dir(&nested)?;
         let original_time = FileTime::from_unix_time(1_700_000_000, 100_000_000);
         write_test_image(&nested.join("sample.jpg"), 8, 8, ImageFormat::Jpeg);
-        filetime::set_file_mtime(&nested, original_time)?;
+        std::fs::set_times(
+            &nested,
+            std::fs::FileTimes::new().set_modified(original_time.into()),
+        )?;
         let original = scan_image_tree_snapshot(&root, &["jpg"], true)?;
         let valid = |image: &CachedImageTreeSnapshot| {
             let video = CachedVideoTreeSnapshot {
@@ -2881,16 +2968,20 @@ mod tests {
             )
         };
         assert_eq!(valid(&original), (true, true));
-        filetime::set_file_mtime(
+        std::fs::set_times(
             &nested,
-            FileTime::from_unix_time(1_700_000_000, 200_000_000),
+            std::fs::FileTimes::new()
+                .set_modified(FileTime::from_unix_time(1_700_000_000, 200_000_000).into()),
         )?;
         assert_eq!(
             valid(&original),
             (false, false),
             "same-second directory changes must invalidate both caches"
         );
-        filetime::set_file_mtime(&nested, original_time)?;
+        std::fs::set_times(
+            &nested,
+            std::fs::FileTimes::new().set_modified(original_time.into()),
+        )?;
         #[cfg(unix)]
         assert_eq!(valid(&original), (false, false));
         #[cfg(not(unix))]
@@ -2939,17 +3030,30 @@ mod tests {
             "old path-tree schemas cannot be reused"
         );
 
-        let root_time = FileTime::from_last_modification_time(&fs::metadata(&root)?);
+        let root_time = FileTime::from_system_time(
+            fs::metadata(&root)?
+                .modified()
+                .expect("read modified timestamp"),
+        );
         fs::remove_dir_all(&nested)?;
-        filetime::set_file_mtime(&root, root_time)?;
+        std::fs::set_times(
+            &root,
+            std::fs::FileTimes::new().set_modified(root_time.into()),
+        )?;
         assert_eq!(
             valid(&original),
             (false, false),
             "missing directories invalidate snapshots"
         );
         fs::write(&nested, b"not a directory")?;
-        filetime::set_file_mtime(&nested, original_time)?;
-        filetime::set_file_mtime(&root, root_time)?;
+        std::fs::set_times(
+            &nested,
+            std::fs::FileTimes::new().set_modified(original_time.into()),
+        )?;
+        std::fs::set_times(
+            &root,
+            std::fs::FileTimes::new().set_modified(root_time.into()),
+        )?;
         assert_eq!(
             valid(&original),
             (false, false),

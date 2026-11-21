@@ -167,7 +167,7 @@ pub enum LivePhotoIdentifierEvidence {
     Unavailable,
 }
 
-/// Verify identifier evidence only for actual JPEG/HEIF and QuickTime contents.
+/// Verify identifier evidence only for actual JPEG/HEIF and `QuickTime` contents.
 /// A missing identifier, probe error or timeout leaves the relationship unknown.
 #[must_use]
 pub fn inspect_identifier_pair(

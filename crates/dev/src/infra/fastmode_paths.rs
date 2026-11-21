@@ -306,7 +306,7 @@ mod tests {
             None,
             false,
         );
-        assert!(command.contains(&"--retry".to_string()));
+        assert!(command.iter().any(|i| i == "--retry"));
     }
 
     #[test]
@@ -322,8 +322,8 @@ mod tests {
             None,
             false,
         );
-        assert!(command.contains(&"--no-resume".to_string()));
-        assert!(!command.contains(&"--retry".to_string()));
+        assert!(command.iter().any(|i| i == "--no-resume"));
+        assert!(!command.iter().any(|i| i == "--retry"));
     }
 
     #[test]
@@ -339,9 +339,9 @@ mod tests {
             Some("avif"),
             true,
         );
-        assert!(command.contains(&"--extreme-precision".to_string()));
-        assert!(command.contains(&"--strategy".to_string()));
-        assert!(command.contains(&"avif".to_string()));
+        assert!(command.iter().any(|i| i == "--extreme-precision"));
+        assert!(command.iter().any(|i| i == "--strategy"));
+        assert!(command.iter().any(|i| i == "avif"));
     }
 
     #[test]
@@ -428,9 +428,9 @@ mod tests {
             true,
             Some("avif"),
         );
-        assert!(command.contains(&"fast-gif".to_string()));
-        assert!(command.contains(&"--shortest-path".to_string()));
-        assert!(!command.contains(&"--auto-import".to_string()));
+        assert!(command.iter().any(|i| i == "fast-gif"));
+        assert!(command.iter().any(|i| i == "--shortest-path"));
+        assert!(!command.iter().any(|i| i == "--auto-import"));
         assert_eq!(
             command
                 .windows(2)

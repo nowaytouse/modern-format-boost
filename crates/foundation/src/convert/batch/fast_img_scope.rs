@@ -298,7 +298,10 @@ mod tests {
         fs::rename(parked.join("nested"), &nested)?;
         assert!(verify_directory_stamp(&root, &root_stamp).is_err());
         let replaced_root = FastImgInputScope::observe(&root, true)?;
-        assert!(original.candidates[0].identity == replaced_root.candidates[0].identity);
+        assert_eq!(
+            original.candidates[0].identity,
+            replaced_root.candidates[0].identity
+        );
         assert_ne!(original.token(), replaced_root.token());
         fs::remove_dir(&parked)?;
 
@@ -309,7 +312,10 @@ mod tests {
         fs::rename(parked.join("media"), nested.join("media"))?;
         assert!(verify_directory_stamp(&nested, &nested_stamp).is_err());
         let replaced_nested = FastImgInputScope::observe(&root, true)?;
-        assert!(original.candidates[0].identity == replaced_nested.candidates[0].identity);
+        assert_eq!(
+            original.candidates[0].identity,
+            replaced_nested.candidates[0].identity
+        );
         assert_ne!(replaced_root.token(), replaced_nested.token());
         assert_eq!(
             shallow.token(),

@@ -110,7 +110,7 @@ pub(super) fn batch_sizes(import: usize, verify: usize) {
 }
 
 /// Resource diagnostics spawn system tools. Bound their frequency across the
-/// whole import profile, including singleton AppleScript submissions.
+/// whole import profile, including singleton `AppleScript` submissions.
 pub(super) fn resource_sample_due(now: Instant) -> bool {
     CURRENT.with_borrow_mut(|current| {
         let Some(data) = current else { return false };

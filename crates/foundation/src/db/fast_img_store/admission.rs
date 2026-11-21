@@ -1,6 +1,11 @@
 //! Immutable admission evidence for new, full-discovery Fast IMG tasks.
 
-use super::*;
+use super::{
+    BTreeMap, Connection, Context, Path, PathBuf, Result, Serialize, TransactionBehavior,
+    WorkingCopyMarker, as_io, bail, canonical_bytes, canonical_text, checked_marker, cleanup,
+    ensure, in_snapshot, inspect_store_schema_version, io, key_for_canonical, migration,
+    open_readonly, open_store_connection, params, write_snapshot_at_with_finish,
+};
 use crate::mfb_sqlite_store::{
     FAST_IMG_ADMISSION_AAE_SCHEMA_VERSION, FAST_IMG_ADMISSION_SCHEMA_VERSION,
     FAST_IMG_ADMISSION_XMP_SCHEMA_VERSION,
@@ -393,6 +398,7 @@ pub fn read_admission_plan(marker: &WorkingCopyMarker) -> io::Result<Option<Fast
 
 #[cfg(test)]
 mod tests {
+    use super::super::{inspect_integrity, read_marker, row_count, write_marker};
     use super::*;
     use std::fs;
 

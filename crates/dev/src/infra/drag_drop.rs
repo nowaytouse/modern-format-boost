@@ -1406,14 +1406,26 @@ pub fn fast_img_retained_file_names(log_text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Count true JXL outputs under fast-img directory (mirrors Python
-/// `count_fast_img_jxl_outputs`).
-pub fn count_fast_img_jxl_outputs(output_dir: &Path) -> Result<(usize, u64)> {
-    let mut count = 0usize;
-    let mut total_size = 0u64;
-    if !output_dir.is_dir() {
-        return Ok((count, total_size));
+/// Optional display total. A worker's measured byte count avoids opening the output tree again.
+pub fn fast_img_reported_output_bytes(
+    measured: Option<u64>,
+    output_dir: &Path,
+    strategy: &str,
+) -> Result<u64> {
+    use foundation::image::format_detect::{FormatKind, detect_regular_file_format};
+
+    if let Some(measured) = measured {
+        return Ok(measured);
     }
+    let expected = match strategy {
+        "jxl" => FormatKind::Jxl,
+        "avif" => FormatKind::Avif,
+        _ => bail!("unsupported Fast IMG output format for byte measurement"),
+    };
+    let metadata = fs::symlink_metadata(output_dir)
+        .context("inspect the Fast IMG directory for optional byte measurement")?;
+    anyhow::ensure!(metadata.is_dir(), "Fast IMG output is not a real directory");
+    let mut total = 0_u64;
     let mut entries = WalkDir::new(output_dir)
         .follow_root_links(false)
         .into_iter();
@@ -1426,24 +1438,13 @@ pub fn count_fast_img_jxl_outputs(output_dir: &Path) -> Result<(usize, u64)> {
         {
             entries.skip_current_dir();
         }
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let true_format = foundation::image::format_detect::detect_regular_file_format(path)
-            .with_context(|| format!("fast-img output probe failed for {}", path.display()))?;
-        if true_format == foundation::image::format_detect::FormatKind::Jxl {
-            count += 1;
-            total_size += fs::symlink_metadata(path)
-                .with_context(|| {
-                    format!(
-                        "fast-img output stat failed for true JXL {}",
-                        path.display()
-                    )
-                })?
-                .len();
+        if entry.file_type().is_file() && detect_regular_file_format(path)? == expected {
+            total = total
+                .checked_add(fs::symlink_metadata(path)?.len())
+                .context("Fast IMG output byte measurement overflow")?;
         }
     }
-    Ok((count, total_size))
+    Ok(total)
 }
 
 /// A partial exit only authorizes independent verification, never cleanup by itself.
@@ -3184,6 +3185,34 @@ printf '%s\n' "$MFB_TEST_VERIFY_SUMMARY"
         let (display, receipt) = parse_machine_integrity_summary(&result.stdout)?;
         assert!(display.is_empty());
         assert_eq!(receipt.count_status.as_deref(), Some("MATCH"));
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_output_bytes_use_current_report_or_detect_the_requested_fallback_format()
+    -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let missing = root.path().join("missing");
+        assert_eq!(fast_img_reported_output_bytes(Some(0), &missing, "jxl")?, 0);
+        assert_eq!(
+            fast_img_reported_output_bytes(Some(370), &missing, "avif")?,
+            370
+        );
+        assert!(fast_img_reported_output_bytes(None, &missing, "jxl").is_err());
+
+        let jxl = foundation::constants::JXL_CONTAINER_MAGIC;
+        let avif = b"\x00\x00\x00\x10ftypavif\x00\x00\x00\x00";
+        fs::write(root.path().join("mislabelled.avif"), jxl)?;
+        fs::write(root.path().join("mislabelled.jxl"), avif)?;
+        fs::write(root.path().join("sidecar.xmp"), b"unrelated text")?;
+        assert_eq!(
+            fast_img_reported_output_bytes(None, root.path(), "jxl")?,
+            jxl.len() as u64
+        );
+        assert_eq!(
+            fast_img_reported_output_bytes(None, root.path(), "avif")?,
+            avif.len() as u64
+        );
         Ok(())
     }
 

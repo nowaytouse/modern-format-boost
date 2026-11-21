@@ -343,6 +343,9 @@ fn apply_file_timestamps_inner(
             ),
         )
     })?;
+    let times = std::fs::FileTimes::new()
+        .set_accessed(m.accessed()?)
+        .set_modified(m.modified()?);
     let mut failures = Vec::new();
 
     #[cfg(target_os = "macos")]
@@ -393,9 +396,7 @@ fn apply_file_timestamps_inner(
         )
     };
 
-    // Platform-specific creation time preservation FIRST (before atime/mtime)
-    // This is critical because filetime::set_file_times may reset creation time on
-    // some systems
+    // Apply creation time before atime/mtime for platform-specific timestamp ordering.
     #[cfg(target_os = "macos")]
     {
         match m.created() {
@@ -453,13 +454,14 @@ fn apply_file_timestamps_inner(
 
     #[cfg(target_os = "windows")]
     {
-        // Windows: Use filetime crate's set_file_times which preserves creation time
+        use std::os::windows::fs::FileTimesExt;
         match m.created() {
             Ok(created) => {
-                let ctime = filetime::FileTime::from_system_time(created);
-                let atime = filetime::FileTime::from_last_access_time(&m);
-                // On Windows, filetime::set_file_times also sets creation time
-                if let Err(e) = filetime::set_file_times(dst, atime, ctime) {
+                let creation_time = std::fs::FileTimes::new().set_created(created);
+                if let Err(e) = handles.map_or_else(
+                    || std::fs::set_times(dst, creation_time),
+                    |(_, target)| target.set_times(creation_time),
+                ) {
                     crate::media_conversion_gate::delivery_metadata_batch_audit(
                         "delivery_metadata_platform",
                         &crate::infra::static_logs::messages::MSG_METADATA_WINDOWS_CREATION_FAIL
@@ -501,11 +503,9 @@ fn apply_file_timestamps_inner(
     }
 
     // Set atime/mtime AFTER creation time
-    let atime = filetime::FileTime::from_last_access_time(&m);
-    let mtime = filetime::FileTime::from_last_modification_time(&m);
     if let Err(e) = handles.map_or_else(
-        || filetime::set_file_times(dst, atime, mtime),
-        |(_, target)| filetime::set_file_handle_times(target, Some(atime), Some(mtime)),
+        || std::fs::set_times(dst, times),
+        |(_, target)| target.set_times(times),
     ) {
         crate::media_conversion_gate::delivery_metadata_batch_audit(
             "delivery_metadata",
@@ -523,8 +523,7 @@ fn apply_file_timestamps_inner(
         );
     }
 
-    // RE-APPLY creation time on macOS after setting atime/mtime
-    // This is necessary because filetime::set_file_times may reset creation time
+    // macOS may adjust creation time when access and modification times change.
     #[cfg(target_os = "macos")]
     {
         match m.created() {
@@ -1692,13 +1691,12 @@ fn validate_xmp_preview_event(
             }
         }
         Event::CData(_) if depth == 0 => return Err("CDATA outside the XML root"),
-        Event::GeneralRef(reference) => {
-            if depth == 0
+        Event::GeneralRef(reference)
+            if (depth == 0
                 || !(matches!(reference.resolve_char_ref(), Ok(Some(_)))
-                    || quick_xml::escape::resolve_xml_entity(reference.as_ref()).is_some())
-            {
-                return Err("invalid or undefined XML entity reference");
-            }
+                    || quick_xml::escape::resolve_xml_entity(reference.as_ref()).is_some())) =>
+        {
+            return Err("invalid or undefined XML entity reference");
         }
         _ => {}
     }
@@ -2598,9 +2596,14 @@ fn apply_existing_directory_metadata(
             }
         }
 
-        let atime = filetime::FileTime::from_last_access_time(metadata);
-        let mtime = filetime::FileTime::from_last_modification_time(metadata);
-        if let Err(e) = filetime::set_file_times(&dst_path, atime, mtime) {
+        let atime = metadata.accessed()?;
+        let mtime = metadata.modified()?;
+        if let Err(e) = std::fs::set_times(
+            &dst_path,
+            std::fs::FileTimes::new()
+                .set_accessed(atime)
+                .set_modified(mtime),
+        ) {
             crate::media_conversion_gate::delivery_metadata_path_audit(
                 "delivery_metadata_timestamp",
                 &dst_path,
@@ -2712,9 +2715,7 @@ fn apply_existing_directory_metadata(
             let actual = require_existing_directory(&dst_path, "verified destination mirror")?;
             #[cfg(unix)]
             crate::io_utils::check_open_file_identity(&observed, &actual)?;
-            if filetime::FileTime::from_last_access_time(&actual) != atime
-                || filetime::FileTime::from_last_modification_time(&actual) != mtime
-            {
+            if actual.accessed()? != atime || actual.modified()? != mtime {
                 failures.push(format!(
                     "directory timestamps differ after preservation: {}",
                     dst_path.display()
@@ -2804,8 +2805,8 @@ pub fn save_directory_timestamps(dir: &Path) -> io::Result<DirectoryTimestampsMa
     use std::collections::HashMap;
     let mut saved = HashMap::new();
     let meta = require_existing_directory(dir, "source timestamp root")?;
-    let atime = filetime::FileTime::from_last_access_time(&meta);
-    let mtime = filetime::FileTime::from_last_modification_time(&meta);
+    let atime = filetime::FileTime::from_system_time(meta.accessed()?);
+    let mtime = filetime::FileTime::from_system_time(meta.modified()?);
     saved.insert(dir.to_path_buf(), (atime, mtime));
     collect_dir_timestamps(dir, &mut saved)?;
     Ok(saved)
@@ -2833,7 +2834,12 @@ where
     for (path, (atime, mtime)) in saved {
         if path.exists() && path.is_dir() {
             total_count += 1_i32;
-            if let Err(e) = filetime::set_file_times(path, *atime, *mtime) {
+            if let Err(e) = std::fs::set_times(
+                path,
+                std::fs::FileTimes::new()
+                    .set_accessed((*atime).into())
+                    .set_modified((*mtime).into()),
+            ) {
                 failed_count += 1_i32;
                 if first_error.is_none() {
                     first_error = Some(io::Error::new(e.kind(), e.to_string()));
@@ -2948,7 +2954,11 @@ where
         #[cfg(unix)]
         let update = (|| {
             let before = target.metadata()?;
-            filetime::set_file_handle_times(&target, Some(*atime), Some(*mtime))?;
+            target.set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed((*atime).into())
+                    .set_modified((*mtime).into()),
+            )?;
             let current =
                 crate::io_utils::open_descendant_nofollow(&destination_root, rel_path, true)?;
             crate::io_utils::check_open_file_identity(&before, &current.metadata()?)
@@ -2956,7 +2966,12 @@ where
         #[cfg(not(unix))]
         let update = {
             let () = target;
-            filetime::set_file_times(&dst_path, *atime, *mtime)
+            std::fs::set_times(
+                &dst_path,
+                std::fs::FileTimes::new()
+                    .set_accessed((*atime).into())
+                    .set_modified((*mtime).into()),
+            )
         };
         if let Err(e) = update {
             failed_count += 1_i32;
@@ -3300,8 +3315,8 @@ where
             ));
         }
         if meta.is_dir() {
-            let atime = filetime::FileTime::from_last_access_time(&meta);
-            let mtime = filetime::FileTime::from_last_modification_time(&meta);
+            let atime = filetime::FileTime::from_system_time(meta.accessed()?);
+            let mtime = filetime::FileTime::from_system_time(meta.modified()?);
             map.insert(path.clone(), (atime, mtime));
             collect_dir_timestamps(&path, map)?;
         }

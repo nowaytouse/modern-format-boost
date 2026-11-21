@@ -655,7 +655,7 @@ fn test_exiftool_nuclear_strip_hardening() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
 
-    assert!(args.contains(&"-all=".to_string()));
+    assert!(args.iter().any(|i| i == "-all="));
 }
 
 fn test_ffmpeg_global_flag_priority_parity() {
@@ -721,10 +721,10 @@ fn test_vmaf_comprehensive_hardening() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
 
-    assert!(args.contains(&"--thread".to_string()));
-    assert!(args.contains(&"8".to_string()));
-    assert!(args.contains(&"--model".to_string()));
-    assert!(args.contains(&"vmaf_v0.6.1.json".to_string()));
+    assert!(args.iter().any(|i| i == "--thread"));
+    assert!(args.iter().any(|i| i == "8"));
+    assert!(args.iter().any(|i| i == "--model"));
+    assert!(args.iter().any(|i| i == "vmaf_v0.6.1.json"));
 }
 
 fn test_identify_verbose_hardening() {
@@ -738,9 +738,9 @@ fn test_identify_verbose_hardening() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
 
-    assert!(args.contains(&"-verbose".to_string()));
-    assert!(args.contains(&"-format".to_string()));
-    assert!(args.contains(&"%w %h".to_string()));
+    assert!(args.iter().any(|i| i == "-verbose"));
+    assert!(args.iter().any(|i| i == "-format"));
+    assert!(args.iter().any(|i| i == "%w %h"));
 }
 
 fn test_gifski_performance_controls() {
@@ -752,7 +752,7 @@ fn test_gifski_performance_controls() {
         .get_args()
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
-    assert!(args.contains(&"--fast".to_string()));
-    assert!(args.contains(&"--quality".to_string()));
-    assert!(args.contains(&"85".to_string()));
+    assert!(args.iter().any(|i| i == "--fast"));
+    assert!(args.iter().any(|i| i == "--quality"));
+    assert!(args.iter().any(|i| i == "85"));
 }

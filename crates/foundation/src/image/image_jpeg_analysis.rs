@@ -508,30 +508,26 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
 
     let confidence = calculate_confidence(&luma_estimate, chroma_estimate.as_ref());
 
-    let final_quality = chroma_estimate.as_ref().map_or_else(
-        || luma_estimate.quality,
-        |chroma| {
-            if luma_estimate.is_exact_match && chroma.is_exact_match {
-                luma_estimate.quality
-            } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs()
-                <= i16::from(crate::constants::JPEG_QUALITY_MISMATCH_TOLERANCE)
-            {
-                let weighted = luma_estimate.interpolated_quality.mul_add(
-                    crate::constants::JPEG_LUMA_WEIGHT,
-                    chroma.interpolated_quality * crate::constants::JPEG_CHROMA_WEIGHT,
-                );
-                crate::media_conversion_gate::jpeg_weighted_quality_or_luma(
-                    crate::numeric_cast::f64_to_u8_strict(
-                        weighted.round(),
-                        "jpeg_weighted_quality",
-                    ),
-                    luma_estimate.quality,
-                )
-            } else {
-                luma_estimate.quality
-            }
-        },
-    );
+    let final_quality = if let Some(chroma) = chroma_estimate.as_ref() {
+        if luma_estimate.is_exact_match && chroma.is_exact_match {
+            luma_estimate.quality
+        } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs()
+            <= i16::from(crate::constants::JPEG_QUALITY_MISMATCH_TOLERANCE)
+        {
+            let weighted = luma_estimate.interpolated_quality.mul_add(
+                crate::constants::JPEG_LUMA_WEIGHT,
+                chroma.interpolated_quality * crate::constants::JPEG_CHROMA_WEIGHT,
+            );
+            crate::media_conversion_gate::jpeg_weighted_quality_or_luma(
+                crate::numeric_cast::f64_to_u8_strict(weighted.round(), "jpeg_weighted_quality"),
+                luma_estimate.quality,
+            )
+        } else {
+            luma_estimate.quality
+        }
+    } else {
+        luma_estimate.quality
+    };
 
     let is_standard_table =
         luma_estimate.is_exact_match && chroma_estimate.as_ref().is_none_or(|c| c.is_exact_match);
@@ -788,8 +784,9 @@ pub(crate) fn extract_xmp_from_jpeg_markers(
 }
 
 /// Detect an 8-bit three-component JFIF image with no additional APP segments
-/// or trailing data. This is only admission to a color-matrix retry; it does
-/// not certify colorimetry or replace the subsequent decoded sample proof.
+/// or trailing data.
+///
+/// The color-matrix retry still requires decoded sample proof.
 #[must_use]
 pub fn is_unprofiled_color_jfif(data: &[u8]) -> bool {
     let mut saw_jfif = false;

@@ -1286,10 +1286,10 @@ fn app_binary_needs_sync(source: &Path, destination: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
         // Signing changes bytes but preserves the Mach-O image UUID.
-        return match (macho_image_ids(source), macho_image_ids(destination)) {
+        match (macho_image_ids(source), macho_image_ids(destination)) {
             (Some(source), Some(destination)) => source != destination,
             _ => true,
-        };
+        }
     }
     #[cfg(not(target_os = "macos"))]
     false
@@ -1740,7 +1740,7 @@ fn sign_app_bundle(
     if entitlements.is_file() {
         command.arg("--entitlements").arg(&entitlements);
     }
-    let status = command.arg(&app_bundle).status()?;
+    let status = command.arg(app_bundle).status()?;
 
     if !status.success() {
         anyhow::bail!("codesign failed for {}", app_bundle.display());

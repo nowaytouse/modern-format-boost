@@ -1396,10 +1396,20 @@ pub fn probe_palette_color_diversity_ratio(palette_size: usize) -> f64 {
 #[must_use]
 pub fn delivery_directory_modified_time_optional(path: &Path) -> Option<(i64, u32)> {
     match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_dir() => {
-            let time = filetime::FileTime::from_last_modification_time(&metadata);
-            Some((time.unix_seconds(), time.nanoseconds()))
-        }
+        Ok(metadata) if metadata.is_dir() => match metadata.modified() {
+            Ok(time) => {
+                let time = filetime::FileTime::from_system_time(time);
+                Some((time.unix_seconds(), time.nanoseconds()))
+            }
+            Err(error) => {
+                delivery_pipeline_path_audit(
+                    "delivery_pipeline_batch",
+                    path,
+                    format!("directory modification time unavailable: {error}"),
+                );
+                None
+            }
+        },
         result => {
             let reason = match result {
                 Ok(_) => "path is no longer a directory".to_string(),

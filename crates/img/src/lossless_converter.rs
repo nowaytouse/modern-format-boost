@@ -1052,17 +1052,20 @@ fn resolved_jxl_distance_for_source(
     if !jxl_distance_exploration_allowed(source) {
         return Ok(0.0);
     }
-    let distance = runtime_config::active()
-        .filter(|config| config.img.quality_search != runtime_config::QualitySearch::Adaptive)
-        .and_then(|config| config.img.jxl_distance)
-        .unwrap_or_else(|| {
-            if requested_distance <= 0.0 {
-                0.0
-            } else {
-                foundation::constants::jxl_distance_for_mode(requested_distance, ultimate)
-            }
-        });
+    let distance = if requested_distance <= 0.0 {
+        0.0
+    } else {
+        foundation::constants::jxl_distance_for_mode(requested_distance, ultimate)
+    };
     validate_jxl_distance_for_source(distance, source)
+        .map(|distance| distance.min(jxl_lossy_distance_limit()))
+}
+
+/// Upper bound for lossy JXL only. It cannot widen the source or probe policy.
+pub(crate) fn jxl_lossy_distance_limit() -> f32 {
+    runtime_config::active()
+        .and_then(|config| config.img.jxl_distance)
+        .unwrap_or(25.0)
 }
 
 fn validate_jxl_distance_for_source(distance: f32, source: JxlSourceSemantics) -> Result<f32> {
@@ -1185,6 +1188,7 @@ pub fn convert_to_jxl(
     let exploration_requested = !is_genuine_png
         && input_size_allows_jxl_distance_exploration(input_size)
         && !options.archive()
+        && jxl_lossy_distance_limit() > 0.0
         && foundation::jxl_effort_policy::quality_search_enabled(
             options.ultimate() && options.explore(),
         );
@@ -1447,9 +1451,8 @@ pub fn convert_to_jxl(
             }
 
             let explored_optimized = explore_result.is_some();
-            let (final_output_size, extra_info) = explore_result.map_or_else(
-                || (output_size, None),
-                |result| {
+            let (final_output_size, extra_info) =
+                explore_result.map_or((output_size, None), |result| {
                     (
                         result.output_size,
                         Some(format!(
@@ -1459,8 +1462,7 @@ pub fn convert_to_jxl(
                             )
                         )),
                     )
-                },
-            );
+                });
 
             let task = if matches!(source_semantics, JxlSourceSemantics::SingleFrameVideo) {
                 finalize_single_frame_video_with_size_check(
@@ -3043,7 +3045,7 @@ pub fn convert_jpeg_to_jxl_at_observed(
     input: &Path,
     options: &ConvertOptions,
     reserved_output: Option<&Path>,
-    mut invocation: Option<&mut Option<JpegEncoderInvocation>>,
+    invocation: Option<&mut Option<JpegEncoderInvocation>>,
 ) -> Result<TaskResult> {
     resolved_jxl_distance_for_source(
         0.0,
@@ -3175,7 +3177,7 @@ pub fn convert_jpeg_to_jxl_at_observed(
         )?;
         if result.success
             && !result.skipped
-            && let Some(invocation) = invocation.as_deref_mut()
+            && let Some(invocation) = invocation
         {
             *invocation = output_cmd.invocation;
         }
@@ -4133,6 +4135,7 @@ pub struct AvifProbeReuseProof {
 
 impl AvifProbeReuseContext {
     /// Keep successful search output alive through publication.
+    #[must_use]
     pub fn into_scratch(self) -> tempfile::TempDir {
         self.scratch
     }
@@ -4172,6 +4175,7 @@ impl AvifProbeReuseContext {
 
     /// Revalidation may reuse the exact temporary candidate only while this
     /// per-source context is live. The caller must still verify final delivery.
+    #[must_use]
     pub fn matches(
         &self,
         proof: &AvifProbeReuseProof,
@@ -5098,6 +5102,9 @@ fn try_jxl_pre_avif_fallback(
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
 ) -> Result<Option<u64>> {
+    if jxl_pre_avif_distance() > jxl_lossy_distance_limit() {
+        return Ok(None);
+    }
     foundation::infra::static_logs::log_stage(
         foundation::modern_ui::symbols::SEARCH,
         "JXL",
@@ -6085,10 +6092,11 @@ fn try_explore_jxl_distance_in_domain(
     // Active policy: must be consistent with d0 check and SizeToleranceCheck.
     // Resolves the same way as jxl_d0_misses_active_size_policy.
     let active_policy = options.effective_size_policy();
-    let screening = foundation::jxl_explorer::screen_jxl_candidates(
+    let screening = foundation::jxl_explorer::screen_jxl_candidates_with_limit(
         input_size,
         (0.0, initial_output_size),
         active_policy,
+        jxl_lossy_distance_limit(),
         |distance| {
             let candidate_output =
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
@@ -8741,16 +8749,18 @@ exit 1
             config.img.quality_search = match mode.as_str() {
                 "fixed" => runtime_config::QualitySearch::Fixed,
                 "adaptive" => runtime_config::QualitySearch::Adaptive,
+                "exact_only" => {
+                    config.img.jxl_distance = Some(0.0);
+                    runtime_config::QualitySearch::Adaptive
+                }
                 "mode_default" => runtime_config::QualitySearch::ModeDefault,
                 _ => anyhow::bail!("unexpected distance mode: {mode}"),
             };
             runtime_config::install(config)?;
             for ultimate in [false, true] {
-                let expected = if mode == "adaptive" {
-                    foundation::constants::jxl_distance_for_mode(1.0, ultimate)
-                } else {
-                    0.25
-                };
+                let ceiling = if mode == "exact_only" { 0.0 } else { 0.25 };
+                let expected =
+                    foundation::constants::jxl_distance_for_mode(1.0, ultimate).min(ceiling);
                 assert_eq!(
                     resolved_jxl_distance_for_source(
                         1.0,
@@ -8772,12 +8782,12 @@ exit 1
                 }
             }
             assert_eq!(
-                runtime_config::active().unwrap().img.jxl_distance,
-                Some(0.25)
+                runtime_config::active().unwrap().img.quality_search,
+                runtime_config::QualitySearch::Adaptive
             );
             return Ok(());
         }
-        for mode in ["fixed", "adaptive", "mode_default"] {
+        for mode in ["fixed", "adaptive", "mode_default", "exact_only"] {
             let status = Command::new(std::env::current_exe()?)
                 .args(["--exact", "lossless_converter::tests::saved_distance_applies_only_in_the_active_private_policy_mode"])
                 .env(CHILD, mode)

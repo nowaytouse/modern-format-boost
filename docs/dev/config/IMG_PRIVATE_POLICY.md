@@ -11,14 +11,10 @@ Policy chooses the archival route and its fidelity obligations. Settings adjust
 only parameters that route permits. A global preference is not a per-file proof
 and cannot authorize lossy conversion, container flattening or source deletion.
 
-Nullable pixel D/E preferences retain source/mode decisions when unset. CLI,
-configuration and GUI use the same typed preferences. Existing mode flags remain
-interfaces to their existing behavior, not an additional source of quality rules.
-Normal direct encoding has an E7 policy ceiling; Ultimate/archive uses E10. The native launcher
-retains its historical Ultimate mode. PNG's dedicated default is E10, while
-ordinary reversible JPEG transcode defaults to full E1..E11 comparison. E11 is
-the initial manual value if fixed is explicitly chosen. Eligible pixel E and D
-searches default to adaptive. Persisted explicit choices are not overwritten.
+Pixel JXL settings bound adaptive E and policy-eligible D exploration.
+Reversible JPEG defaults to full E1–E11 comparison and also supports a
+bounded adaptive comparison. Both modes preserve exact JPEG reconstruction.
+Fast AVIF explores quality separately within its locator and final speed domains.
 
 ## Source Routes
 
@@ -26,7 +22,7 @@ searches default to adaptive. Persisted explicit choices are not overwritten.
 | --- | --- | --- |
 | Ordinary JPEG | Reversible JPEG-to-JXL transcode, independent JPEG E | Exact source-byte reconstruction, not pixel D selection |
 | Genuine PNG and confirmed-lossless stills | Lossless JXL pixels, D0 | D0 is a private archival contract, not merely a GUI default |
-| Eligible legacy-lossy stills | Existing near-lossless/fixed D or guarded D search | Content-based compression admission, size and verification remain required |
+| Eligible legacy-lossy stills | Guarded distance search | Content-based compression admission, size and verification remain required |
 | Modern lossy static containers or existing JXL | Preserve native encoding | Selecting D/search does not override retention |
 | Unknown or structurally protected containers | Existing retain/ignore/error decisions | Missing evidence does not unlock lossy encoding |
 | Strictly verified one-frame video container | Existing static IMG route | Frame count, streams, timing and metadata admission remain required; not a VID handoff |
@@ -321,11 +317,8 @@ focus changes.
 
 ## Search Semantics
 
-Fixed E passes one effort to the encoder. Optional E exploration compares
-verified pure-media payload sizes at one quality in a bounded candidate range;
-equal sizes prefer lower E. Search is the default, subject to the policy ceiling:
-Normal E7 may admit E7 alone. A selected E is not evidence
-that an exhaustive optimum was found, and E exploration is not a speed optimizer.
+Pixel E exploration compares verified pure-media payloads at a common quality.
+It uses the configured effort ceiling and prefers lower E when payloads tie.
 JPEG `adaptive` E comparison independently proves exact reconstruction for every
 bounded candidate. Default `full` comparison covers all eleven E values using
 complete JXL bytes after the same metadata enrichment, with lower E breaking
@@ -333,7 +326,7 @@ ties. E9 establishes the first size reference, followed by E1..E8, E10 and E11;
 this changes execution order, not coverage or the winner's priority. It verifies
 the first candidate and every contender with a better `(complete size, E)` pair, retains only
 the winner and challenger, and reuses the winning physical file. It neither
-changes JPEG quality nor uses pixel D. Fixed is an explicit manual alternative.
+changes JPEG quality nor uses pixel D.
 Full comparison does not use compatibility/repair retries or unproven equivalent
 Effort groups: a failed/unsupported candidate makes the search incomplete and
 preserves the source. Input, associated XMP and encoder executable content must
@@ -398,15 +391,9 @@ individual probes recheck the bound sidecar's content without rescanning the
 source directory. A changed association rejects the whole exploration before
 final metadata processing, including a search that otherwise found no winner.
 
-`mode-default` retains the historical mode trigger and the manual D where that
-route does not explore. Explicit adaptive D search leaves the saved manual D
-inactive without replacing it. The native checkbox distinguishes inherited
-policy from an explicit choice; resetting the tab restores inheritance.
-
-Both explorations enabled means sequential E selection followed by D exploration
-in that domain. It does not mean exhaustive joint search. Low-E assistance for
-high-E distance search is a separate research proposal, not this implementation.
-It must not replace the historical explorer without comparative evidence.
+An explicit maximum D bounds screening, finalist verification and refinement.
+The explorer uses the lowest verified candidate that meets the size policy.
+Effort selection precedes distance exploration in that single effort domain.
 
 All screening, finalist and refinement probes obey the same alternative-encoder
 permission: `tools.policy=single` blocks switching to ImageMagick even when
@@ -420,14 +407,11 @@ Fast JXL retains its independent JPEG reconstruction and native-media delivery
 workflow. Its settings expose JPEG E and applicable verified E comparison, not
 the pixel encoder's D. Normal IMG and Fast JXL use the same full-search engine,
 while GUI profiles keep their own selected settings. Same-semantics compatibility
-retries in fixed/adaptive modes remain subject to the configured fallback policy
+retries in adaptive comparison remain subject to the configured fallback policy
 and exact reconstruction checks; full mode requires exact independent efforts.
 
-Fast AVIF retains the existing bounded Q search, locator Speed and final Speed
-domains. `img.avif_quality` (10..100, default 100) supplies the one requested
-quality only when search is fixed; automatic search retains but does not use it.
-The existing progressive-output policy requires the fixed quality to be at least
-10; general encoder support for non-progressive Q0 does not relax that policy.
+Fast AVIF retains its bounded quality search and its locator and final speed
+domains. The existing progressive-output policy limits the search to Q10–Q100.
 `img.avif_speed` (0..10, default 0) selects the final domain for lossless and
 quality probes. The locator remains Speed6. A different final Speed requires
 fresh probes. At final Speed6, a repeated coordinate can reuse same-run
@@ -438,12 +422,10 @@ existing true-lossless route first. A verified progressive AVIF can be adopted
 with its encoded media intact. A non-progressive AVIF with a proven, compatible
 8-bit RGB layout can be normalized in the selected final speed domain if its
 full decoded samples, color features, cleared metadata, and payload budget
-all pass. Automatic quality uses Q100 for that exact normalization, and fixed
-quality uses the configured Q. Other non-progressive layouts are retained.
+all pass. Exact normalization starts at Q100. Other non-progressive layouts are retained.
 Final verification uses the actual delivery domain. Its Meme Mode
 metadata cleanup policy is distinct from ordinary JXL archival metadata
-preservation; these settings do not silently unify them. Fixed Q is not lowered
-to manufacture success if its candidate fails verification or the size policy.
+preservation.
 
 ## Photos Query Recovery
 

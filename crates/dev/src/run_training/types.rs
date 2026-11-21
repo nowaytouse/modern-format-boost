@@ -193,31 +193,6 @@ impl Args {
     }
 }
 
-#[cfg(test)]
-mod args_tests {
-    use super::Args;
-    use clap::Parser;
-
-    #[test]
-    fn fill_runtime_defaults_on_without_flags() {
-        let args = Args::try_parse_from(["run_training"]).expect("parse");
-        assert!(args.effective_fill_runtime_assets()); // Should default to true
-    }
-
-    #[test]
-    fn fill_runtime_off_with_no_fill_flag() {
-        let args =
-            Args::try_parse_from(["run_training", "--no-fill-runtime-assets"]).expect("parse");
-        assert!(!args.effective_fill_runtime_assets());
-    }
-
-    #[test]
-    fn fill_runtime_on_with_explicit_flag() {
-        let args = Args::try_parse_from(["run_training", "--fill-runtime-assets"]).expect("parse");
-        assert!(args.effective_fill_runtime_assets());
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum TrainingMode {
     All,
@@ -242,4 +217,29 @@ pub struct FillAssetsConfig {
     pub state: AssetsState,
     pub actions: AssetsActions,
     pub training_mode: TrainingMode,
+}
+
+#[cfg(test)]
+mod args_tests {
+    use super::Args;
+    use clap::Parser;
+
+    #[test]
+    fn fill_runtime_defaults_on_without_flags() {
+        let args = Args::try_parse_from(["run_training"]).expect("parse");
+        assert!(args.effective_fill_runtime_assets()); // Should default to true
+    }
+
+    #[test]
+    fn fill_runtime_off_with_no_fill_flag() {
+        let args =
+            Args::try_parse_from(["run_training", "--no-fill-runtime-assets"]).expect("parse");
+        assert!(!args.effective_fill_runtime_assets());
+    }
+
+    #[test]
+    fn fill_runtime_on_with_explicit_flag() {
+        let args = Args::try_parse_from(["run_training", "--fill-runtime-assets"]).expect("parse");
+        assert!(args.effective_fill_runtime_assets());
+    }
 }

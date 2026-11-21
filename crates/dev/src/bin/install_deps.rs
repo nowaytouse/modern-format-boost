@@ -425,6 +425,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
+    #[serial_test::serial]
     fn test_command_exists() {
         // "sh" is standard on all macOS/Linux systems and should exist.
         assert!(command_exists("sh") || command_exists("bash"));
@@ -434,6 +435,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_command_status_success_preserves_nonzero_status() -> Result<()> {
         assert!(command_status_success("exit 0")?);
         assert!(!command_status_success("exit 7")?);

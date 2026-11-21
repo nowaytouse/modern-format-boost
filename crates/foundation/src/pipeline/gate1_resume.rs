@@ -355,7 +355,7 @@ impl FinalVerificationInputs {
             let selected = sidecars.find(&path)?;
             if let Some(sidecar) = &selected {
                 if !files.contains_key(sidecar) {
-                    files.insert(sidecar.clone(), FinalInputObservation::capture(&sidecar)?);
+                    files.insert(sidecar.clone(), FinalInputObservation::capture(sidecar)?);
                 }
             }
             sidecar_by_media.insert(path, selected);
@@ -423,6 +423,7 @@ struct CachedPass {
 }
 
 /// Advisory successes shared only by work-phase passes in one running task.
+///
 /// These are not validator authority or deletion receipts: the final delivery
 /// phase must run fresh, even when all current input hashes match this memo.
 #[derive(Debug, Default)]
@@ -1168,9 +1169,11 @@ mod tests {
                         "source" => std::fs::write(&source, b"changed source"),
                         "output" => std::fs::write(&output, b"changed output"),
                         "xmp" => std::fs::write(&xmp, b"changed XMP content"),
-                        _ => filetime::set_file_mtime(
+                        _ => std::fs::set_times(
                             &output,
-                            filetime::FileTime::from_unix_time(1_600_000_000, 0)
+                            std::fs::FileTimes::new().set_modified(
+                                filetime::FileTime::from_unix_time(1_600_000_000, 0).into()
+                            )
                         ),
                     })
                     .is_err(),
@@ -1328,7 +1331,7 @@ mod tests {
         drop(cache);
         let modified = std::fs::metadata(&output)?.modified()?;
         std::fs::write(&output, b"synthetic broken")?;
-        filetime::set_file_mtime(&output, filetime::FileTime::from_system_time(modified))?;
+        std::fs::set_times(&output, std::fs::FileTimes::new().set_modified(modified))?;
         let cache = Gate1ProofCache::new(&ctx, Some("authority".into()))?;
         assert!(
             cache

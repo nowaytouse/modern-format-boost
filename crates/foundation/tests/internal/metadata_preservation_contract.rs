@@ -377,7 +377,7 @@ fn contract_handle_aae_copy_reports_action_and_preserves_source() {
     fs::write(&src, b"heic").expect("write src");
     fs::write(&sidecar, b"aae-payload").expect("write sidecar");
     let source_mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
-    filetime::set_file_mtime(&sidecar, source_mtime).expect("set source AAE mtime");
+    std::fs::set_times(&sidecar, std::fs::FileTimes::new().set_modified(source_mtime.into())).expect("set source AAE mtime");
 
     let action = handle_aae_sidecar(&src, &dst).expect("copy AAE");
     assert_eq!(
@@ -393,9 +393,7 @@ fn contract_handle_aae_copy_reports_action_and_preserves_source() {
     );
     assert!(sidecar.is_file(), "copy mode must not remove source AAE");
     assert_eq!(
-        filetime::FileTime::from_last_modification_time(
-            &fs::metadata(dst.with_extension("AAE")).expect("copied AAE metadata")
-        ),
+        filetime::FileTime::from_system_time(fs::metadata(dst.with_extension("AAE")).expect("copied AAE metadata").modified().expect("read modified timestamp")),
         source_mtime,
         "staged publication must retain AAE timestamp preservation"
     );
@@ -662,8 +660,8 @@ fn contract_exact_metadata_copy_verifier_accepts_matching_metadata() {
     fs::write(&src, b"source").expect("write src");
     fs::write(&dst, b"different output bytes").expect("write dst");
     let mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
-    filetime::set_file_mtime(&src, mtime).expect("set src mtime");
-    filetime::set_file_mtime(&dst, mtime).expect("set dst mtime");
+    std::fs::set_times(&src, std::fs::FileTimes::new().set_modified(mtime.into())).expect("set src mtime");
+    std::fs::set_times(&dst, std::fs::FileTimes::new().set_modified(mtime.into())).expect("set dst mtime");
     let src_permissions = fs::metadata(&src).expect("src metadata").permissions();
     fs::set_permissions(&dst, src_permissions).expect("copy permissions");
 
@@ -682,8 +680,8 @@ fn contract_exact_metadata_copy_verifier_ignores_macos_runtime_xattr_noise() {
     fs::write(&src, b"source").expect("write src");
     fs::write(&dst, b"different output bytes").expect("write dst");
     let mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
-    filetime::set_file_mtime(&src, mtime).expect("set src mtime");
-    filetime::set_file_mtime(&dst, mtime).expect("set dst mtime");
+    std::fs::set_times(&src, std::fs::FileTimes::new().set_modified(mtime.into())).expect("set src mtime");
+    std::fs::set_times(&dst, std::fs::FileTimes::new().set_modified(mtime.into())).expect("set dst mtime");
     let src_permissions = fs::metadata(&src).expect("src metadata").permissions();
     fs::set_permissions(&dst, src_permissions).expect("copy permissions");
 
@@ -736,8 +734,8 @@ fn contract_exact_metadata_copy_verifier_ignores_lastuseddate_app_variants() {
     fs::write(&src, b"source").expect("write src");
     fs::write(&dst, b"output").expect("write dst");
     let mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
-    filetime::set_file_mtime(&src, mtime).expect("set src mtime");
-    filetime::set_file_mtime(&dst, mtime).expect("set dst mtime");
+    std::fs::set_times(&src, std::fs::FileTimes::new().set_modified(mtime.into())).expect("set src mtime");
+    std::fs::set_times(&dst, std::fs::FileTimes::new().set_modified(mtime.into())).expect("set dst mtime");
     let src_permissions = fs::metadata(&src).expect("src metadata").permissions();
     fs::set_permissions(&dst, src_permissions).expect("copy permissions");
 
@@ -854,8 +852,8 @@ fn contract_exact_metadata_copy_verifier_rejects_source_owned_xattr_mismatch() {
     fs::write(&src, b"source").expect("write src");
     fs::write(&dst, b"different output bytes").expect("write dst");
     let mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
-    filetime::set_file_mtime(&src, mtime).expect("set src mtime");
-    filetime::set_file_mtime(&dst, mtime).expect("set dst mtime");
+    std::fs::set_times(&src, std::fs::FileTimes::new().set_modified(mtime.into())).expect("set src mtime");
+    std::fs::set_times(&dst, std::fs::FileTimes::new().set_modified(mtime.into())).expect("set dst mtime");
     let src_permissions = fs::metadata(&src).expect("src metadata").permissions();
     fs::set_permissions(&dst, src_permissions).expect("copy permissions");
 
@@ -878,9 +876,9 @@ fn contract_exact_metadata_copy_verifier_rejects_mismatched_metadata() {
     let dst = temp.path().join("dst.jxl");
     fs::write(&src, b"source").expect("write src");
     fs::write(&dst, b"output").expect("write dst");
-    filetime::set_file_mtime(&src, filetime::FileTime::from_unix_time(1_700_000_000, 0))
+    std::fs::set_times(&src, std::fs::FileTimes::new().set_modified(filetime::FileTime::from_unix_time(1_700_000_000, 0).into()))
         .expect("set src mtime");
-    filetime::set_file_mtime(&dst, filetime::FileTime::from_unix_time(1_700_000_123, 0))
+    std::fs::set_times(&dst, std::fs::FileTimes::new().set_modified(filetime::FileTime::from_unix_time(1_700_000_123, 0).into()))
         .expect("set dst mtime");
 
     let err =
@@ -954,10 +952,10 @@ fn contract_adjacent_timestamp_sync_preserves_source_and_skips_output_links() ->
     let source_time = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
     let output_time = filetime::FileTime::from_unix_time(1_700_000_000, 0);
     for path in [&source, &source_child, &original, &root_original] {
-        filetime::set_file_times(path, source_time, source_time)?;
+        std::fs::set_times(path, std::fs::FileTimes::new().set_accessed(source_time.into()).set_modified(source_time.into()))?;
     }
     for path in [&output, &output_child, &converted, &root_converted, &link_target] {
-        filetime::set_file_times(path, output_time, output_time)?;
+        std::fs::set_times(path, std::fs::FileTimes::new().set_accessed(output_time.into()).set_modified(output_time.into()))?;
     }
     let observation = |path: &std::path::Path| -> std::io::Result<_> {
         let meta = fs::symlink_metadata(path)?;
@@ -966,7 +964,7 @@ fn contract_adjacent_timestamp_sync_preserves_source_and_skips_output_links() ->
             meta.ino(),
             meta.ctime(),
             meta.ctime_nsec(),
-            filetime::FileTime::from_last_modification_time(&meta),
+            filetime::FileTime::from_system_time(meta.modified().expect("read modified timestamp")),
         ))
     };
     let unchanged = [&source, &source_child, &original, &root_original, &link_target];
@@ -982,7 +980,7 @@ fn contract_adjacent_timestamp_sync_preserves_source_and_skips_output_links() ->
     }
     for path in [&output, &output_child, &converted, &root_converted] {
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(path)?),
+            filetime::FileTime::from_system_time(fs::metadata(path)?.modified().expect("read modified timestamp")),
             source_time,
         );
     }
@@ -1017,7 +1015,7 @@ fn contract_directory_mirror_finishes_parent_timestamps_after_children() {
     }
     let timestamp = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
     for directory in &directories {
-        filetime::set_file_times(directory, timestamp, timestamp).expect("source timestamps");
+        std::fs::set_times(directory, std::fs::FileTimes::new().set_accessed(timestamp.into()).set_modified(timestamp.into())).expect("source timestamps");
     }
     super::preserve_directory(&src, &dst).expect("directory metadata mirror");
     super::preserve_directory(&src, &src)
@@ -1026,11 +1024,11 @@ fn contract_directory_mirror_finishes_parent_timestamps_after_children() {
         let target = dst.join(directory.strip_prefix(&src).expect("source-relative path"));
         let actual = fs::metadata(target).expect("mirrored metadata");
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&actual),
+            filetime::FileTime::from_system_time(actual.modified().expect("read modified timestamp")),
             timestamp
         );
         assert_eq!(
-            filetime::FileTime::from_last_access_time(&actual),
+            filetime::FileTime::from_system_time(actual.accessed().expect("read accessed timestamp")),
             timestamp
         );
     }
@@ -1057,20 +1055,20 @@ fn contract_scoped_delivery_metadata_touches_only_recorded_ancestors() -> anyhow
     }
     let saved_time = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
     let other_time = filetime::FileTime::from_unix_time(1_700_000_000, 0);
-    filetime::set_file_times(&source_delivery, saved_time, saved_time)?;
-    filetime::set_file_times(&unrelated, other_time, other_time)?;
+    std::fs::set_times(&source_delivery, std::fs::FileTimes::new().set_accessed(saved_time.into()).set_modified(saved_time.into()))?;
+    std::fs::set_times(&unrelated, std::fs::FileTimes::new().set_accessed(other_time.into()).set_modified(other_time.into()))?;
     xattr::set(&source_delivery, "user.mfb_contract", b"recorded metadata")?;
-    xattr::set(&source.join("unrelated"), "user.mfb_contract", b"unrelated source metadata")?;
+    xattr::set(source.join("unrelated"), "user.mfb_contract", b"unrelated source metadata")?;
     let saved = super::save_directory_timestamps(&source)?;
     let ancestors = BTreeSet::from([PathBuf::new(), "recorded".into(), "recorded/nested".into()]);
 
     let strict = super::ScopedDeliveryDirectoryMetadata::default();
     super::apply_scoped_delivery_directory_metadata(&saved, &source, &output, &ancestors, strict)?;
 
-    assert_eq!(filetime::FileTime::from_last_modification_time(&fs::metadata(&output_delivery)?), saved_time);
+    assert_eq!(filetime::FileTime::from_system_time(fs::metadata(&output_delivery)?.modified().expect("read modified timestamp")), saved_time);
     assert_eq!(xattr::get(&output_delivery, "user.mfb_contract")?.as_deref(), Some(&b"recorded metadata"[..]));
     assert!(!output.join("ignored").exists());
-    assert_eq!(filetime::FileTime::from_last_modification_time(&fs::metadata(&unrelated)?), other_time);
+    assert_eq!(filetime::FileTime::from_system_time(fs::metadata(&unrelated)?.modified().expect("read modified timestamp")), other_time);
     assert_eq!(xattr::get(&unrelated, "user.mfb_contract")?, None);
 
     fs::remove_dir(&output_delivery)?;
@@ -1084,14 +1082,14 @@ fn contract_scoped_delivery_metadata_touches_only_recorded_ancestors() -> anyhow
 
     fs::remove_file(&output_delivery)?;
     fs::create_dir(&output_delivery)?;
-    filetime::set_file_times(&output_delivery, other_time, other_time)?;
+    std::fs::set_times(&output_delivery, std::fs::FileTimes::new().set_accessed(other_time.into()).set_modified(other_time.into()))?;
     fs::remove_dir(&source_delivery)?;
     let cleanup_resume = super::ScopedDeliveryDirectoryMetadata { allow_removed_source: true, ..strict };
     assert!(super::apply_scoped_delivery_directory_metadata(&saved, &source, &output, &ancestors, cleanup_resume).is_err());
     let resume_snapshot = super::save_directory_timestamps(&source)?;
     assert!(super::apply_scoped_delivery_directory_metadata(&resume_snapshot, &source, &output, &ancestors, strict).is_err());
     super::apply_scoped_delivery_directory_metadata(&resume_snapshot, &source, &output, &ancestors, cleanup_resume)?;
-    assert_eq!(filetime::FileTime::from_last_modification_time(&fs::metadata(&output_delivery)?), other_time);
+    assert_eq!(filetime::FileTime::from_system_time(fs::metadata(&output_delivery)?.modified().expect("read modified timestamp")), other_time);
     Ok(())
 }
 
@@ -1164,10 +1162,10 @@ fn contract_directory_mirror_rejects_links_without_touching_target_metadata() {
     fs::create_dir(&dst).expect("destination root");
     symlink(&outside, dst.join("child")).expect("destination link");
     let timestamp = filetime::FileTime::from_unix_time(1_600_000_100, 0);
-    filetime::set_file_times(&outside, timestamp, timestamp).expect("outside timestamps");
+    std::fs::set_times(&outside, std::fs::FileTimes::new().set_accessed(timestamp.into()).set_modified(timestamp.into())).expect("outside timestamps");
     super::preserve_directory(&src, &dst).expect_err("destination link must be rejected");
     assert_eq!(
-        filetime::FileTime::from_last_modification_time(&fs::metadata(&outside).expect("outside")),
+        filetime::FileTime::from_system_time(fs::metadata(&outside).expect("outside").modified().expect("read modified timestamp")),
         timestamp
     );
     fs::remove_file(dst.join("child")).expect("remove destination link");
@@ -1297,7 +1295,7 @@ fn contract_macos_timestamp_update_remains_bound_to_open_file() -> anyhow::Resul
     let added = UNIX_EPOCH + Duration::new(1_650_000_000, 34_567_890);
     let modified = UNIX_EPOCH + Duration::new(1_700_000_000, 56_789_012);
     let modified = filetime::FileTime::from_system_time(modified);
-    filetime::set_file_times(&source, modified, modified)?;
+    std::fs::set_times(&source, std::fs::FileTimes::new().set_accessed(modified.into()).set_modified(modified.into()))?;
     super::macos::set_creation_time(&source, created)?;
     super::macos::set_added_time(&source, added)?;
     let source_file = fs::File::open(&source)?;
@@ -1311,7 +1309,7 @@ fn contract_macos_timestamp_update_remains_bound_to_open_file() -> anyhow::Resul
     let bound = fs::metadata(&moved)?;
     assert_eq!(bound.created()?, created);
     assert_eq!(super::macos::get_added_time(&moved)?, added);
-    assert_eq!(filetime::FileTime::from_last_modification_time(&bound), modified);
+    assert_eq!(filetime::FileTime::from_system_time(bound.modified().expect("read modified timestamp")), modified);
     let current = fs::metadata(&target)?;
     assert_eq!(current.created()?, replacement.created()?);
     assert_eq!(current.modified()?, replacement.modified()?);

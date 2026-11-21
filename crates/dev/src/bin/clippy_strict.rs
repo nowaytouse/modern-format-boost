@@ -245,11 +245,11 @@ mod tests {
     #[test]
     fn test_clippy_args_include_locked_workspace_and_denies() {
         let args = clippy_args(false, true);
-        assert!(args.contains(&"--locked".to_string()));
-        assert!(args.contains(&"--workspace".to_string()));
-        assert!(args.contains(&"-D".to_string()));
-        assert!(args.contains(&"warnings".to_string()));
-        assert!(args.contains(&"foundation/ci-static-build".to_string()));
+        assert!(args.iter().any(|i| i == "--locked"));
+        assert!(args.iter().any(|i| i == "--workspace"));
+        assert!(args.iter().any(|i| i == "-D"));
+        assert!(args.iter().any(|i| i == "warnings"));
+        assert!(args.iter().any(|i| i == "foundation/ci-static-build"));
     }
 
     #[test]

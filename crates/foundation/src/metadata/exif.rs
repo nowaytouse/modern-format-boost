@@ -480,15 +480,12 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     // source). Fallback: if JXL has no ICC (source had no container ICC, only
     // EXIF ColorSpace tag), allow exiftool to inject it as a safety net so the
     // output is never ICC-less.
-    let jxl_already_has_icc = if is_jxl_output {
-        crate::jxl_utils::verify_jxl_has_icc(dst).map_err(|err| {
+    let jxl_already_has_icc = is_jxl_output
+        && crate::jxl_utils::verify_jxl_has_icc(dst).map_err(|err| {
             io::Error::other(format!(
                 "JXL ICC probe failed before metadata preservation: {err}"
             ))
-        })?
-    } else {
-        false
-    };
+        })?;
     if jxl_already_has_icc {
         log_detail!(&format!(
             "{} JXL already has authoritative embedded ICC — skipping ExifTool injection (path={})",

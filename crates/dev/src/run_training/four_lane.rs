@@ -357,7 +357,7 @@ pub fn run_four_lane_launcher(args: &Args) -> Result<()> {
 
     // Record stale lane deaths before launching
     for &lane in TRAINING_LOG_LANES {
-        if !args.lane.is_empty() && !args.lane.contains(&lane.to_string()) {
+        if !args.lane.is_empty() && !args.lane.iter().any(|i| i == lane) {
             continue;
         }
         let lane_dir = log_root.join(lane);

@@ -6,12 +6,12 @@
 //!
 //! ## Encoder tiers
 //! Direct pixel encoding uses bounded search by default with these mode ceilings;
-//! explicit runtime targets can select 1 through 11 (e11 needs the expert switch).
+//! explicit search ceilings can select 2 through 11 (e11 needs the expert switch).
 //!   - Normal   → e7  (`ultimate = false`)
 //!   - Ultimate → e10 (`ultimate = true`)
 //!
 //! JPEG bitstream transcode is separate: full search compares e1 through e11.
-//! Manual fixed/bounded modes retain their verified compatibility fallback;
+//! Bounded search retains its verified compatibility fallback;
 //! full search never substitutes a different effort for an unavailable candidate.
 //! Pixel e11 is explicit only, because it can be disproportionately slow.
 //!
@@ -43,23 +43,14 @@ pub fn quality_search_enabled(default: bool) -> bool {
 /// Compare bounded efforts at a fixed quality before entering one distance-search domain.
 #[must_use]
 pub fn effort_candidates(kind: JxlEffortContext, selected: u8) -> Vec<u8> {
-    use crate::runtime_config::{EffortSearch, JpegEffortSearch};
+    use crate::runtime_config::JpegEffortSearch;
     let config = crate::runtime_config::active();
     let jpeg_search = config.map_or_else(JpegEffortSearch::default, |config| {
         config.img.jpeg_effort_search
     });
-    let adaptive = match kind {
-        JxlEffortContext::DirectEncode => {
-            config.map_or_else(EffortSearch::default, |config| config.img.jxl_effort_search)
-                == EffortSearch::Adaptive
-        }
-        JxlEffortContext::JpegLosslessTranscode => jpeg_search == JpegEffortSearch::Adaptive,
-    };
-    if kind == JxlEffortContext::JpegLosslessTranscode && jpeg_search == JpegEffortSearch::Full {
+    if kind == JxlEffortContext::JpegLosslessTranscode && jpeg_search != JpegEffortSearch::Adaptive
+    {
         return (1..=11).collect();
-    }
-    if !adaptive {
-        return vec![selected];
     }
     let domain: &[u8] = match kind {
         JxlEffortContext::DirectEncode => &[7, 8, 10],
@@ -70,6 +61,11 @@ pub fn effort_candidates(kind: JxlEffortContext, selected: u8) -> Vec<u8> {
         .copied()
         .filter(|effort| *effort < selected)
         .collect();
+    // A low ceiling should still compare two candidates. The source policy
+    // supplies the default ceiling while the adaptive domain stays sparse.
+    if efforts.is_empty() && selected > 1 {
+        efforts.push(selected - 1);
+    }
     efforts.push(selected);
     efforts
 }
@@ -1048,11 +1044,14 @@ mod tests {
             crate::infra::runtime_config::install(config)?;
             assert_eq!(
                 effort_candidates(JxlEffortContext::DirectEncode, effort),
-                [7, 8, 10]
-                    .into_iter()
-                    .filter(|candidate| *candidate < effort)
-                    .chain(std::iter::once(effort))
-                    .collect::<Vec<_>>()
+                match effort {
+                    2..=7 => vec![effort - 1, effort],
+                    8 => vec![7, 8],
+                    9 => vec![7, 8, 9],
+                    10 => vec![7, 8, 10],
+                    11 => vec![7, 8, 10, 11],
+                    _ => unreachable!(),
+                }
             );
             assert_eq!(
                 effort_candidates(JxlEffortContext::JpegLosslessTranscode, 9),
@@ -1108,7 +1107,7 @@ mod tests {
         );
         let (_, name) = name.split_once("::").context("test module path")?;
         let root = tempfile::tempdir()?;
-        for effort in ["1", "7", "8", "9", "10", "11"] {
+        for effort in ["2", "7", "8", "9", "10", "11"] {
             let status = std::process::Command::new(std::env::current_exe()?)
                 .args(["--exact", name])
                 .env(CHILD, effort)

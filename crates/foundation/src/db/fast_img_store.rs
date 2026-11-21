@@ -105,10 +105,12 @@ impl std::fmt::Display for StateMigrationRequired {
 
 impl std::error::Error for StateMigrationRequired {}
 
+#[must_use]
 pub fn is_state_migration_required(error: &io::Error) -> bool {
     error
         .get_ref()
-        .is_some_and(|error| error.is::<StateMigrationRequired>())
+        .and_then(|error| error.downcast_ref::<StateMigrationRequired>())
+        .is_some()
 }
 
 fn as_io(error: anyhow::Error) -> io::Error {
@@ -606,7 +608,7 @@ fn photos_uncertainty_evidence(
     Ok(observed)
 }
 
-/// Read AppleScript requests armed before launch or previously observed
+/// Read `AppleScript` requests armed before launch or previously observed
 /// returning zero IDs. Group reservations alone do not arm a request.
 pub(crate) fn uncertain_photos_intents(
     marker: &WorkingCopyMarker,
@@ -648,7 +650,7 @@ pub(crate) fn uncertain_photos_intents(
     .map_err(as_io)
 }
 
-/// Arm the one exact saved permit before launching AppleScript.
+/// Arm the one exact saved permit before launching `AppleScript`.
 pub(crate) fn arm_photos_submission(
     marker: &WorkingCopyMarker,
     intent: &PhotosSubmissionIntent,
@@ -709,7 +711,7 @@ pub(crate) fn arm_photos_submission(
     })().map_err(as_io)
 }
 
-/// Release an armed permit after a typed result establishes that AppleScript
+/// Release an armed permit after a typed result establishes that `AppleScript`
 /// could not submit any media. The original reservation remains in history.
 pub(crate) fn release_unsent_photos_submission(
     marker: &WorkingCopyMarker,

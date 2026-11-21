@@ -754,7 +754,7 @@ fn build_adaptive_ladder(
             continue;
         }
 
-        let candidate = canonicalize_generated_distance(anchor)?;
+        let candidate = canonicalize_generated_distance(anchor)?.min(target_distance);
         if candidate > JXL_EXPLORE_FLOOR + f32::EPSILON && seen.insert(distance_key(candidate)) {
             ladder.push(candidate);
         }
@@ -771,7 +771,8 @@ fn build_adaptive_ladder(
             interpolate_plateau_distance(interpolation_start, target_distance_f64, progress)?
         } else {
             interpolate_perceptual_distance(interpolation_start, target_distance_f64, progress)?
-        };
+        }
+        .min(target_distance);
         if candidate > JXL_EXPLORE_FLOOR + f32::EPSILON && seen.insert(distance_key(candidate)) {
             ladder.push(candidate);
         }
@@ -784,10 +785,11 @@ fn build_adaptive_ladder(
 fn build_exploration_plan(
     input_size: u64,
     initial_size: u64,
+    distance_limit: f32,
 ) -> Result<JxlExplorationPlan, String> {
     let initial_ratio = size_ratio(initial_size, input_size);
     let profile = exploration_profile(initial_ratio);
-    let target_distance = target_distance_for_ratio(initial_ratio, profile)?;
+    let target_distance = target_distance_for_ratio(initial_ratio, profile)?.min(distance_limit);
     let distance_span = (f64::from(target_distance) / f64::from(JXL_EXPLORE_FLOOR))
         .max(1.0)
         .log2();
@@ -1371,11 +1373,39 @@ pub fn screen_jxl_candidates<F>(
     input_size: u64,
     initial_measurement: (f32, u64),
     size_policy: crate::exploration_policy::SizePolicy,
+    try_candidate: F,
+) -> Result<JxlScreeningReport, String>
+where
+    F: FnMut(f32) -> Result<u64, String>,
+{
+    screen_jxl_candidates_with_limit(
+        input_size,
+        initial_measurement,
+        size_policy,
+        JXL_EXPLORE_CEILING,
+        try_candidate,
+    )
+}
+
+/// Screen and shortlist within the caller's configured maximum lossy distance.
+/// The perceptual search's own ceiling still applies.
+///
+/// # Errors
+/// Rejects invalid limits and propagates failed measurements.
+pub fn screen_jxl_candidates_with_limit<F>(
+    input_size: u64,
+    initial_measurement: (f32, u64),
+    size_policy: crate::exploration_policy::SizePolicy,
+    distance_limit: f32,
     mut try_candidate: F,
 ) -> Result<JxlScreeningReport, String>
 where
     F: FnMut(f32) -> Result<u64, String>,
 {
+    if !distance_limit.is_finite() || !(JXL_EXPLORE_FLOOR..=25.0).contains(&distance_limit) {
+        return Err("JXL screening requires a finite distance limit within 0.001..25".into());
+    }
+    let ceiling = distance_limit.min(JXL_EXPLORE_CEILING);
     if input_size == 0 {
         return Err("JXL screening requires a nonzero source payload size".to_string());
     }
@@ -1455,7 +1485,7 @@ where
         ));
     }
 
-    let plan = build_exploration_plan(input_size, initial_size)?;
+    let plan = build_exploration_plan(input_size, initial_size, ceiling)?;
     let pressure_stops = oversize_pressure_stops(ratio);
     let (band_min, band_max) = profile_distance_range(plan.profile);
     session.log.push(format!(
@@ -1557,13 +1587,14 @@ where
         ));
 
         while session.iterations < JXL_EXPLORE_MAX_ITERATIONS {
-            let next = canonicalize_generated_distance(f64::from(probe) + f64::from(step))?;
+            let next =
+                canonicalize_generated_distance(f64::from(probe) + f64::from(step))?.min(ceiling);
             if next >= JXL_EXPLORE_CEILING || next <= probe + f32::EPSILON {
                 break;
             }
             if session.tested.contains(&distance_key(next)) {
                 probe = next;
-                step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
+                step = (step * 2.0).min(ceiling - next);
                 continue;
             }
             session.tested.insert(distance_key(next));
@@ -1589,7 +1620,7 @@ where
                 break; // hand off to binary search
             }
             probe = next;
-            step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
+            step = (step * 2.0).min(ceiling - next);
         }
     }
 
@@ -2105,9 +2136,9 @@ mod tests {
 
     #[test]
     fn test_ceiling_sweep_uses_denser_phase_one_ladder() {
-        let micro_plan = build_exploration_plan(100, 102)
+        let micro_plan = build_exploration_plan(100, 102, JXL_EXPLORE_CEILING)
             .unwrap_or_else(|e| panic!("failed to build plan: {e:?}"));
-        let ceiling_plan = build_exploration_plan(100, 600)
+        let ceiling_plan = build_exploration_plan(100, 600, JXL_EXPLORE_CEILING)
             .unwrap_or_else(|e| panic!("failed to build plan: {e:?}"));
 
         assert!(ceiling_plan.ladder.len() > micro_plan.ladder.len());
@@ -2300,6 +2331,34 @@ mod tests {
             0.04_f64 + precision
         );
         assert!(result.best_output_size < 1000);
+    }
+
+    #[test]
+    fn configured_distance_limit_bounds_every_probe_and_finalist() {
+        let cap = 0.053;
+        let mut observed = Vec::new();
+        let report = screen_jxl_candidates_with_limit(
+            1000,
+            (0.0, 1500),
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            cap,
+            |distance| {
+                observed.push(distance);
+                Ok(if distance >= 0.05 { 990 } else { 1500 })
+            },
+        )
+        .unwrap();
+        assert_eq!(observed.first(), Some(&JXL_EXPLORE_FLOOR));
+        assert!(observed.contains(&cap));
+        assert!(observed.iter().all(|distance| *distance <= cap));
+        let screening = report.screening.unwrap();
+        assert!(screening.best_distance <= cap);
+        assert!(
+            screening
+                .finalists
+                .iter()
+                .all(|candidate| candidate.distance <= cap)
+        );
     }
 
     #[test]

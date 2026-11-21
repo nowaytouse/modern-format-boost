@@ -1,9 +1,12 @@
 use anyhow::Context;
+pub mod commands;
 pub mod fast_img_ignored;
 mod fast_img_result;
 mod resume_admission;
 mod runtime_cli;
-use clap::{Parser, Subcommand};
+
+use clap::Parser;
+use commands::Commands;
 use img::Rational;
 use img::lossless_converter::{
     AvifProbeReuseContext, AvifProbeReuseProof, ConvertFlags as LosslessConvertFlags,
@@ -78,255 +81,6 @@ struct Cli {
     policy: runtime_cli::RuntimeArgs,
     #[command(subcommand)]
     command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Inspect persistent runtime preferences without accessing media or databases.
-    Config {
-        #[command(subcommand)]
-        command: runtime_cli::ConfigCommand,
-    },
-    #[command(name = "run")]
-    Run {
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        #[arg(long)]
-        base_dir: Option<PathBuf>,
-
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-
-        #[arg(short, long)]
-        force: bool,
-
-        #[arg(short, long, default_value_t = true)]
-        recursive: bool,
-
-        #[arg(long)]
-        delete_original: bool,
-
-        #[arg(long)]
-        in_place: bool,
-
-        #[arg(long, default_value_t = true)]
-        explore: bool,
-
-        #[arg(long, default_value_t = true)]
-        match_quality: bool,
-
-        #[arg(long, default_value_t = true)]
-        compress: bool,
-
-        #[arg(long, default_value_t = true)]
-        apple_compat: bool,
-
-        #[arg(long)]
-        no_apple_compat: bool,
-
-        #[arg(long, default_value_t = false)]
-        ultimate: bool,
-
-        /// Archive mode: hard-overrides encoder effort/presets for maximum compression.
-        #[arg(long, default_value_t = false)]
-        archive: bool,
-
-        /// Enable explicitly gated lab-only encoder/decoder fallbacks. Final verification is unchanged.
-        #[arg(long = "allow_expert_options", default_value_t = false)]
-        allow_expert_options: bool,
-
-        /// Frozen advanced opt-in: disable JXL progressive/responsive transforms and generated noise.
-        /// By default libjxl selects its own optional features. Does not affect JPEG reconstruction.
-        #[arg(long = "jxl-fixed-features", default_value_t = false)]
-        jxl_fixed_features: bool,
-
-        #[arg(long, default_value_t = true)]
-        preserve_timestamps: bool,
-
-        #[arg(long, default_value_t = true)]
-        preserve: bool,
-
-        #[arg(short, long, default_value_t = true)]
-        verbose: bool,
-
-        /// ASCII symbols, no decorative ANSI (also respects `NO_COLOR` / `MODERN_FORMAT_PLAIN_UI=1`).
-        #[arg(long, default_value_t = false)]
-        plain: bool,
-
-        /// Resume from last run: skip files already in progress file.
-        #[arg(long, default_value_t = false)]
-        resume: bool,
-
-        /// Start fresh: ignore previous progress file, process all files.
-        #[arg(long)]
-        no_resume: bool,
-
-        /// Static still delivery: `hevc`→JXL. `av1` is rejected; AVIF is reserved for fast-img Meme Mode.
-        #[arg(long, value_parser = ["hevc", "av1"], default_value = "hevc")]
-        codec: String,
-    },
-
-    Verify {
-        original: PathBuf,
-
-        converted: PathBuf,
-    },
-
-    RestoreTimestamps {
-        #[arg(value_name = "SOURCE_DIR")]
-        source: PathBuf,
-
-        #[arg(value_name = "OUTPUT_DIR")]
-        output: PathBuf,
-    },
-
-    /// Display cache statistics
-    CacheStats,
-
-    /// Internal: Check if a directory is already locked by MFB
-    LockCheck {
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-    },
-
-    /// Internal: Get the lock hash for a directory
-    PathHash {
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-    },
-
-    /// Batch ingest unannotated static image samples into `SQLite` database for Active Learning
-    IngestSamples {
-        #[arg(value_name = "INPUT_DIR")]
-        input: PathBuf,
-
-        #[arg(short, long)]
-        label: Option<String>,
-    },
-
-    /// Perform deep diagnostic scan of the database infrastructure and data integrity
-    DbHealth,
-
-    /// Fast image encoding: JPEG and reconstructible JXL → reversible JXL, or static images → AVIF.
-    ///
-    /// Detects true JPEGs via content identity, requires byte-identical JPEG
-    /// reconstruction after all metadata work, and deletes sources only after
-    /// that final proof. External XMP is appended without rewriting the
-    /// reconstruction-owned JXL boxes, then reconstruction is proved again.
-    /// JXL mode also
-    /// delivers confirmed-lossy static WebP/JP2/JXL/AVIF/HEIC originals to
-    /// Photos with UUID/hash custody proof; uncertain or lossless originals remain.
-    ///
-    /// Locked decisions: D1=Photos import only with shortest-path,
-    /// D2=abort on delete failure, D3=exact JBRD plus orientation audit,
-    /// D4=Rust-only, D5=subcommand,
-    /// D6=verified source delete mandatory, D7=content-based admission.
-    #[command(name = "fast-img")]
-    FastImg {
-        /// Input directory or single static image. JXL encoding accepts true JPEG and
-        /// JPEG-reconstructible JXL. Eligible modern lossy originals use the Photos-delivery tier.
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-
-        /// Exact working copy selected by the launcher. It must match the current
-        /// source, delivery mode and marker state; direct CLI use may omit it.
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Deprecated for fast-img; verified source cleanup is mandatory.
-        #[arg(long, default_value_t = false)]
-        delete_source: bool,
-
-        /// Dry-run: no writes, no deletions.
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-
-        /// Recurse into subdirectories.
-        #[arg(short, long, default_value_t = true)]
-        recursive: bool,
-
-        /// Import verified outputs after Gate 1, then run fresh final Gate 2 before cleanup.
-        #[arg(long = "shortest-path", default_value_t = false)]
-        shortest_path: bool,
-
-        /// Archive mode: direct JXL encoding uses effort 10; JPEG effort and retries follow runtime configuration.
-        #[arg(long, default_value_t = false)]
-        archive: bool,
-
-        /// Explicitly resume a verified matching interrupted task. Changed inputs are rejected.
-        #[arg(long, default_value_t = false)]
-        retry: bool,
-
-        /// Retry only retained failures from a completed task in an independent child attempt.
-        #[arg(long, default_value_t = false, conflicts_with_all = ["retry", "no_resume"])]
-        retry_failed: bool,
-
-        /// Explicit completed parent for a new failed-only attempt; never inferred from --output.
-        #[arg(long, value_name = "WORKING_COPY", requires = "retry_failed")]
-        retry_failed_parent: Option<PathBuf>,
-
-        /// Start in a new working copy without consuming prior state.
-        #[arg(long, default_value_t = false, conflicts_with_all = ["retry", "retry_failed"])]
-        no_resume: bool,
-
-        /// Enable explicitly gated lab-only encoder/decoder fallbacks. Final verification is unchanged.
-        #[arg(long = "allow_expert_options", default_value_t = false)]
-        allow_expert_options: bool,
-
-        /// Meme mode strategy. "jxl" (default) or "avif" (Meme Mode).
-        #[arg(long, value_parser = ["jxl", "avif"], default_value = "jxl")]
-        strategy: String,
-
-        /// Accepted for CLI compatibility. Meme Mode keeps its bounded coarse-plus-binary search.
-        #[arg(long = "extreme-precision", default_value_t = false)]
-        extreme_precision: bool,
-    },
-
-    /// List native Photos folders/albums with the UUIDs accepted by restore-jpeg.
-    #[command(name = "photos-albums")]
-    PhotosAlbums {
-        /// Photos library package to inspect.
-        #[arg(value_name = "LIBRARY")]
-        library: PathBuf,
-
-        /// Emit machine-readable JSON for the native GUI.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-
-    /// Restore exact JPEGs and isolate non-reversible JXL automatically. A
-    /// Photos-library input audits live assets without rewriting media bytes.
-    #[command(name = "restore-jpeg")]
-    RestoreJpeg {
-        /// JXL file/directory, Photos library, or concrete asset inside one.
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-
-        /// Output directory for local exact JPEG restoration.
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Recurse into subdirectories.
-        #[arg(short, long, default_value_t = true)]
-        recursive: bool,
-
-        /// Overwrite existing restored JPEGs.
-        #[arg(short, long, default_value_t = false)]
-        force: bool,
-
-        /// Preserve source JXL files after verified JPEG reconstruction.
-        #[arg(long, default_value_t = false)]
-        keep_source: bool,
-
-        /// Audit only one native Photos album UUID.
-        #[arg(long, conflicts_with = "photos_folder_id")]
-        photos_album_id: Option<String>,
-
-        /// Audit every album below one native Photos folder UUID.
-        #[arg(long, conflicts_with = "photos_album_id")]
-        photos_folder_id: Option<String>,
-    },
 }
 
 fn command_requires_database(command: &Commands) -> bool {
@@ -613,7 +367,7 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
     if archive {
         log_stat!(
             foundation::infra::static_logs::messages::LABEL_CONFIG,
-            "Archive Audit: encoder effort/preset overrides enabled"
+            "Archive Audit: archival search policy enabled"
         );
     }
     if allow_expert_options {
@@ -2699,7 +2453,10 @@ mod conversion_result_adapter_tests {
         );
 
         let inventory = super::scan_fast_img_sources(vec![input.clone()], root.as_path(), "jxl")?;
-        assert_eq!(inventory.source_files, [input.clone()]);
+        assert_eq!(
+            inventory.source_files.as_slice(),
+            std::slice::from_ref(&input)
+        );
         assert!(inventory.modern_lossy_candidates.is_empty());
         let working_copy = root.join("fast-output");
         std::fs::create_dir(&working_copy)?;
@@ -2871,12 +2628,12 @@ mod conversion_result_adapter_tests {
             super::fast_img_delete_prepared_source_jpegs(deletion, &mut removed)?,
             (1, 0)
         );
-        assert_eq!(removed, [kept.clone()]);
+        assert_eq!(removed.as_slice(), std::slice::from_ref(&kept));
         assert!(!kept.exists());
         assert_eq!(std::fs::read(&photos_original)?, kept_bytes);
 
         let with_auxiliary_box = root.join("auxiliary.JXL");
-        let mut ancillary = original.clone();
+        let mut ancillary = original;
         ancillary.extend_from_slice(b"\0\0\0\x09mfbtx");
         std::fs::write(&with_auxiliary_box, ancillary)?;
         assert!(
@@ -3130,16 +2887,12 @@ fn dispatch_static_conversion(
         }
     }
 
-    let is_genuine_png = if format == "PNG" {
-        foundation::is_true_png(input)?
-    } else {
-        false
-    };
+    let is_genuine_png = format == "PNG" && foundation::is_true_png(input)?;
     Ok(match (format, is_lossless) {
         ("PNG", _) if is_genuine_png => {
             if config.verbose() {
                 foundation::log_detail!(&format!(
-                    "{} Genuine PNG→Lossless JXL (effort 10, no size gate): {}",
+                    "{} Genuine PNG→Lossless JXL (adaptive effort, no size gate): {}",
                     foundation::infra::static_logs::messages::LABEL_DONE,
                     input.display()
                 ));
@@ -4195,24 +3948,13 @@ fn fast_img_processing_contract(
             archive,
             allow_expert_options,
         },
-        "avif" => {
-            let searching = config.img.quality_search.enabled(true);
-            FastImgEncodingParameters::Avif {
-                avif_quality: if searching {
-                    100
-                } else {
-                    config.img.avif_quality
-                },
-                avif_speed: config.img.avif_speed,
-                quality_search: if searching {
-                    QualitySearch::Adaptive
-                } else {
-                    QualitySearch::Fixed
-                },
-                avif_metadata_policy: config.img.avif_metadata_policy,
-                allow_expert_options,
-            }
-        }
+        "avif" => FastImgEncodingParameters::Avif {
+            avif_quality: 100,
+            avif_speed: config.img.avif_speed,
+            quality_search: QualitySearch::Adaptive,
+            avif_metadata_policy: config.img.avif_metadata_policy,
+            allow_expert_options,
+        },
         _ => anyhow::bail!("unsupported fast-img strategy for processing contract: {strategy}"),
     };
     let contract = FastImgProcessingContract {
@@ -5012,7 +4754,7 @@ fn fast_img_validate_processing_contract(
         .map_err(anyhow::Error::msg)?;
     if saved != current {
         return Err(resume_admission::SettingsError::Changed(format!(
-            "fast-img processing settings differ from the saved task; no saved result was reused or overwritten. Restore its settings to continue, or use --no-resume for an isolated new task. Saved: {saved:?}; current: {current:?}"
+            "Fast IMG processing settings differ from the saved task. The saved results are preserved. Resume with the saved settings in a compatible version, or use --no-resume for an isolated new task. Saved: {saved:?}. Current: {current:?}"
         ))
         .into());
     }
@@ -5709,13 +5451,8 @@ fn scan_fast_img_sources_with(
             planned_encode_count,
             src_dir.display()
         );
-        let quality = if foundation::jxl_effort_policy::quality_search_enabled(true) {
-            "search q=100..0 (saved fixed Q is inactive)".to_owned()
-        } else {
-            format!("fixed q={} (no quality search)", avif_meme_fixed_quality())
-        };
         println!(
-            "[MEME    ] AVIF {quality}; final speed={}; verified pure-media size policy remains required",
+            "[MEME    ] AVIF quality search Q100 down to Q{AVIF_MEME_MIN_QUALITY}; final speed={}; verified pure-media size policy remains required",
             avif_meme_speed_domain().value()
         );
     } else {
@@ -6328,7 +6065,7 @@ fn run_fast_img_with_format_resolver(
         && !dry_run.0
         && existing_marker
             .as_ref()
-            .is_none_or(|marker| marker.has_admission_plan())
+            .is_none_or(foundation::verification::WorkingCopyMarker::has_admission_plan)
     {
         let plan = inventory.admission_plan(&src_dir)?;
         if let Some(marker) = &existing_marker {
@@ -6935,7 +6672,7 @@ fn fast_img_cleanup_complete_should_resume_shortest_path_import(
         && !fast_img_cleanup_complete_has_shortest_path_proof(marker)
 }
 
-fn fast_img_effective_expected_count(
+const fn fast_img_effective_expected_count(
     marker: &WorkingCopyMarker,
     _current_count: usize,
     _resume_local_delivery_for_shortest_path: bool,
@@ -7159,7 +6896,7 @@ struct FastImgSkippedSourceProof {
 }
 
 enum FastImgTranscodeOutcome {
-    Converted(FastImgTranscodeProof),
+    Converted(Box<FastImgTranscodeProof>),
     Skipped(FastImgSkippedSourceProof),
 }
 
@@ -7486,9 +7223,6 @@ fn avif_meme_speed_domain() -> foundation::exploration_policy::AvifSpeedDomain {
     )
 }
 
-fn avif_meme_fixed_quality() -> u8 {
-    foundation::infra::runtime_config::active().map_or(100, |config| config.img.avif_quality)
-}
 pub(crate) use foundation::infra::constants::AVIF_MEME_MIN_QUALITY;
 
 #[derive(Clone, Debug)]
@@ -7772,7 +7506,6 @@ fn explore_avif_meme_quality(
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
 ) -> AvifQualityExploreResult {
     const COARSE_STEP: u8 = 10;
-    let search_enabled = foundation::jxl_effort_policy::quality_search_enabled(true);
     let source_pure_media_size = match source_pure_media_size(source, format) {
         Ok(size) => size,
         Err(error) => {
@@ -7786,15 +7519,11 @@ fn explore_avif_meme_quality(
 
     let mut evidence = AvifMemeQualityEvidence::default();
     let speed_domain = avif_meme_speed_domain();
-    let mut reuse = (search_enabled
-        && speed_domain == foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_LOCATOR)
+    let mut reuse = (speed_domain
+        == foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_LOCATOR)
         .then(|| AvifProbeReuseContext::new(source, encoder_input, metadata_retry, convert_options))
         .and_then(Result::ok);
-    let mut coarse_quality = if search_enabled {
-        100
-    } else {
-        avif_meme_fixed_quality()
-    };
+    let mut coarse_quality = 100;
     let mut locator_candidate: Option<(AvifMemeCandidate, AvifProbeReuseProof)> = None;
     let mut current_passed_candidate: Option<AvifMemeCandidate> = None;
     let mut last_probe_error = None;
@@ -7841,25 +7570,18 @@ fn explore_avif_meme_quality(
         match outcome {
             AvifMemeProbeOutcome::Fits(candidate) => {
                 evidence.record_fit(&candidate);
-                if !search_enabled || candidate.quality == 100 {
+                if candidate.quality == 100 {
                     return AvifQualityExploreResult::Found {
                         domain: speed_domain.encoder_domain(),
-                        outcome: if search_enabled {
-                            foundation::exploration_policy::ExplorationOutcome::ExploredOptimized
-                        } else {
-                            foundation::exploration_policy::ExplorationOutcome::Adopted
-                        },
+                        outcome:
+                            foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
                         quality: candidate.quality,
                         temp_path: candidate.temp_path,
                         output_size: candidate.output_size,
                         pure_media_size: candidate.pure_media_size,
                         content_blake3: candidate.content_blake3,
                         invocation: candidate.invocation,
-                        selection: if search_enabled {
-                            "highest_verified_fitting"
-                        } else {
-                            "fixed_verified_quality"
-                        },
+                        selection: "highest_verified_fitting",
                         search_scratch: reuse.take().map(AvifProbeReuseContext::into_scratch),
                     };
                 }
@@ -7868,7 +7590,7 @@ fn explore_avif_meme_quality(
             }
             AvifMemeProbeOutcome::Oversize(candidate) => {
                 evidence.record_oversize(&candidate);
-                if search_enabled && coarse_quality == 100 {
+                if coarse_quality == 100 {
                     let q100_already_verified_oversize = reuse
                         .as_ref()
                         .zip(proof.as_ref())
@@ -7914,7 +7636,7 @@ fn explore_avif_meme_quality(
             }
         }
 
-        if !search_enabled || coarse_quality == AVIF_MEME_MIN_QUALITY {
+        if coarse_quality == AVIF_MEME_MIN_QUALITY {
             break;
         }
         let next_coarse_quality = coarse_quality
@@ -7994,15 +7716,7 @@ fn explore_avif_meme_quality(
 
     AvifQualityExploreResult::SourceUnavailable {
         reason: format!(
-            "no AVIF candidate passed the Meme Mode quality gate at q={}{}",
-            if search_enabled {
-                format!("100..={AVIF_MEME_MIN_QUALITY}")
-            } else {
-                format!(
-                    "{} (fixed; no other qualities attempted)",
-                    avif_meme_fixed_quality()
-                )
-            },
+            "no AVIF candidate passed the Meme Mode quality gate between Q{AVIF_MEME_MIN_QUALITY} and Q100{}",
             last_probe_error
                 .as_deref()
                 .map_or_else(String::new, |reason| format!(
@@ -8112,11 +7826,8 @@ fn fast_img_prepare_existing_avif(
     let metadata_policy = fast_img_avif_metadata_policy();
     if foundation::fast_img::existing_avif_meme_needs_progressive(source)? {
         let input = prepare_fast_img_avif_encoder_input(source, FormatKind::Avif, false)?;
-        let quality = if foundation::jxl_effort_policy::quality_search_enabled(true) {
-            100
-        } else {
-            avif_meme_fixed_quality()
-        };
+        // Existing AVIF transformation requires decoded pixel equivalence.
+        let quality = 100;
         let mut builder = foundation::AvifencBuilder::new();
         builder
             .speed(avif_meme_speed_domain().value())
@@ -8547,16 +8258,18 @@ fn fast_img_run_encode_job_inner(
             "published AVIF differs from the verified encoder candidate; source retained"
         );
     }
-    Ok(FastImgTranscodeOutcome::Converted(FastImgTranscodeProof {
-        rel_key: job.rel_key.clone(),
-        out_rel: actual_out_rel,
-        src_hash,
-        out_hash,
-        adopted_existing_jxl,
-        jpeg_invocation,
-        reconstructed_jpeg_execution,
-        avif_invocation,
-    }))
+    Ok(FastImgTranscodeOutcome::Converted(Box::new(
+        FastImgTranscodeProof {
+            rel_key: job.rel_key.clone(),
+            out_rel: actual_out_rel,
+            src_hash,
+            out_hash,
+            adopted_existing_jxl,
+            jpeg_invocation,
+            reconstructed_jpeg_execution,
+            avif_invocation,
+        },
+    )))
 }
 
 fn fast_img_verify_jxl_output(source: &Path, output: &Path) -> anyhow::Result<IntegrityResult> {
@@ -8670,7 +8383,7 @@ fn fast_img_remove_recorded_output(
 fn fast_img_refresh_reused_jxl_delivery(source: &Path, output: &Path) -> anyhow::Result<String> {
     if foundation::image::format_detect::detect_true_format(source)? == FormatKind::Jxl {
         fast_img_verify_jxl_output(source, output)?;
-        return Ok(calculate_blake3_hash(output)?);
+        return calculate_blake3_hash(output);
     }
     let committed = foundation::conversion::commit_reconstructible_jxl_to_output_with_metadata(
         output,
@@ -11665,7 +11378,7 @@ fn restore_jpeg_keep_source_parallel(
             Ok(result) => {
                 if let Some(reason) = &result.proof.source_retention_reason {
                     metadata_reviews.push(RestoreJpegFailure {
-                        source: source.clone(),
+                        source,
                         reason: reason.clone(),
                     });
                 }
@@ -12128,7 +11841,7 @@ enum FastImgCleanupCompleteSourceState {
     StaleCurrent,
 }
 
-fn fast_img_marker_has_empty_primary_inventory(marker: &WorkingCopyMarker) -> bool {
+const fn fast_img_marker_has_empty_primary_inventory(marker: &WorkingCopyMarker) -> bool {
     marker.primary_source_count() == 0
         && marker.blake3_log.is_empty()
         && marker.skipped_sources.is_empty()
@@ -12954,6 +12667,7 @@ fn fast_img_apply_encode_results(
         };
         match outcome {
             FastImgTranscodeOutcome::Converted(proof) => {
+                let proof = *proof;
                 if proof.adopted_existing_jxl {
                     summary.session_adopted += 1;
                 } else {
@@ -13040,7 +12754,6 @@ fn fast_img_apply_encode_results(
                         "Fast IMG could not persist verified encoding; source and output retained",
                     );
                 }
-                continue;
             }
             FastImgTranscodeOutcome::Skipped(proof) => {
                 marker.blake3_log.remove(&proof.rel_key);
@@ -14471,9 +14184,9 @@ mod fast_img_hardening_tests {
 
         fixed.img.quality_search = QualitySearch::Fixed;
         let fixed_avif = super::fast_img_processing_contract(&fixed, "avif", false, false)?;
-        assert_ne!(fixed_avif, avif);
+        assert_eq!(fixed_avif, avif);
         fixed.img.avif_quality = 80;
-        assert_ne!(
+        assert_eq!(
             super::fast_img_processing_contract(&fixed, "avif", false, false)?,
             fixed_avif
         );
@@ -16448,8 +16161,7 @@ mod fast_img_hardening_tests {
         std::fs::write(&existing, b"synthetic existing XMP")?;
         let existing_aae = input.join("WITH-COMPANION.aAe");
         std::fs::write(&existing_aae, b"synth AAE one")?;
-        let original =
-            super::scan_fast_img_sources(vec![source.clone(), second.clone()], &input, "jxl")?;
+        let original = super::scan_fast_img_sources(vec![source.clone(), second], &input, "jxl")?;
         let plan = original.admission_plan(&input)?;
         assert_eq!(
             plan["source.jpg"].xmp,
@@ -16759,7 +16471,9 @@ mod fast_img_hardening_tests {
         };
         let result = super::fast_img_apply_encode_results(
             &mut marker,
-            vec![Ok(super::FastImgTranscodeOutcome::Converted(proof))],
+            vec![Ok(super::FastImgTranscodeOutcome::Converted(Box::new(
+                proof,
+            )))],
             0,
             &source_root,
             &output_root,
@@ -16771,12 +16485,13 @@ mod fast_img_hardening_tests {
         assert!(format!("{error:#}").contains("synthetic execution receipt failure"));
         assert_eq!(marker, previous);
         assert_eq!(super::read_marker(&output_root)?, previous);
-        assert!(
+        assert_eq!(
             foundation::fast_img_store::read_jpeg_execution_receipts_for_source(
                 &output_root,
                 "image.jpg"
             )?
-            .is_empty()
+            .as_slice(),
+            &[]
         );
         assert_eq!(std::fs::read(&source)?, source_bytes);
         assert_eq!(std::fs::read(&output)?, output_bytes);
@@ -18712,7 +18427,7 @@ mod fast_img_hardening_tests {
         let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
         let _guard = FAST_IMG_TEST_ENV_LOCK
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .map_err(|_| anyhow::anyhow!("synthetic cleanup environment lock is poisoned"))?;
         foundation::tools::require(&["cjxl", "djxl", "exiftool", "jxlinfo"])
             .map_err(anyhow::Error::msg)?;
         let root = TempDir::new()?;
@@ -21334,7 +21049,12 @@ esac
         let case = match std::env::var(CHILD) {
             Ok(case) => case,
             Err(std::env::VarError::NotPresent) => {
-                for case in ["fixed_minimum", "fixed_manual", "fixed_highest", "adaptive"] {
+                for case in [
+                    "legacy_minimum",
+                    "legacy_manual",
+                    "legacy_highest",
+                    "adaptive",
+                ] {
                     let output = std::process::Command::new(std::env::current_exe()?)
                         .args([
                             "--exact",
@@ -21355,21 +21075,11 @@ esac
             }
             Err(error) => return Err(error.into()),
         };
-        let (manual_quality, speed, search, expected_quality) = match case.as_str() {
-            "fixed_minimum" => (10, 10, foundation::runtime_config::QualitySearch::Fixed, 10),
-            "fixed_manual" => (80, 8, foundation::runtime_config::QualitySearch::Fixed, 80),
-            "fixed_highest" => (
-                100,
-                0,
-                foundation::runtime_config::QualitySearch::Fixed,
-                100,
-            ),
-            "adaptive" => (
-                10,
-                8,
-                foundation::runtime_config::QualitySearch::Adaptive,
-                100,
-            ),
+        let (manual_quality, speed, search) = match case.as_str() {
+            "legacy_minimum" => (10, 10, foundation::runtime_config::QualitySearch::Fixed),
+            "legacy_manual" => (80, 8, foundation::runtime_config::QualitySearch::Fixed),
+            "legacy_highest" => (100, 0, foundation::runtime_config::QualitySearch::Fixed),
+            "adaptive" => (100, 8, foundation::runtime_config::QualitySearch::Adaptive),
             _ => anyhow::bail!("unknown isolated AVIF test case"),
         };
         let root = TempDir::new()?;
@@ -21417,7 +21127,7 @@ esac
         else {
             anyhow::bail!("{case} did not produce a verified fitting AVIF: {result:?}");
         };
-        assert_eq!(quality, expected_quality);
+        assert_eq!(quality, 100, "legacy settings must not pin AVIF quality");
         assert_eq!(
             domain,
             foundation::exploration_policy::EncoderDomain::avif(speed)

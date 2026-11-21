@@ -1066,14 +1066,16 @@ mod tests {
         std::fs::write(&source, payload).expect("source payload");
         std::fs::write(&destination, payload).expect("existing payload");
         std::fs::write(&sidecar, xmp).expect("source XMP");
-        filetime::set_file_mtime(
+        std::fs::set_times(
             &source,
-            filetime::FileTime::from_unix_time(1_600_000_000, 0),
+            std::fs::FileTimes::new()
+                .set_modified(filetime::FileTime::from_unix_time(1_600_000_000, 0).into()),
         )
         .expect("source time");
-        filetime::set_file_mtime(
+        std::fs::set_times(
             &destination,
-            filetime::FileTime::from_unix_time(1_700_000_000, 0),
+            std::fs::FileTimes::new()
+                .set_modified(filetime::FileTime::from_unix_time(1_700_000_000, 0).into()),
         )
         .expect("stale destination time");
         #[cfg(unix)]
@@ -1131,14 +1133,16 @@ mod tests {
         let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">preserve existing companion</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
         std::fs::write(&sidecar, xmp).expect("source XMP");
         std::fs::write(&existing, xmp).expect("identical existing XMP");
-        filetime::set_file_mtime(
+        std::fs::set_times(
             &sidecar,
-            filetime::FileTime::from_unix_time(1_600_000_000, 0),
+            std::fs::FileTimes::new()
+                .set_modified(filetime::FileTime::from_unix_time(1_600_000_000, 0).into()),
         )
         .expect("source XMP time");
-        filetime::set_file_mtime(
+        std::fs::set_times(
             &existing,
-            filetime::FileTime::from_unix_time(1_700_000_000, 0),
+            std::fs::FileTimes::new()
+                .set_modified(filetime::FileTime::from_unix_time(1_700_000_000, 0).into()),
         )
         .expect("stale existing XMP time");
         #[cfg(unix)]

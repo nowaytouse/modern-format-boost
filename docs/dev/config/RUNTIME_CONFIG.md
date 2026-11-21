@@ -38,14 +38,14 @@ img config path
 img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img run /path/to/images --allow-database --quality-heuristic
-img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
+img fast-img /path/to/images --jpeg-effort-search adaptive --jpeg-effort 8
 img run /path/to/images --jxl-effort 8
-img run /path/to/images --jxl-effort-search adaptive --jxl-effort 8 --quality-search fixed
+img run /path/to/images --jxl-effort 8 --jxl-distance 0.4
 img fast-img /path/to/images --jpeg-effort-search adaptive --jpeg-effort 11
 img run /path/to/images --jpeg-effort-search full
 img fast-img /path/to/images --jpeg-effort-search full
-img fast-img /path/to/images --strategy avif --quality-search fixed --avif-quality 80 --avif-speed 6
-img --avif-quality 10 --avif-speed 0 config show --effective
+img fast-img /path/to/images --strategy avif --avif-speed 6
+img --avif-speed 0 config show --effective
 img fast-img /path/to/images --fallback-policy same-semantics --tool-policy single
 img fast-img /path/to/images --shortest-path --photos-backend native \
   --photos-import-root Archive --photos-album-name Family \
@@ -92,54 +92,26 @@ the app. Its workflow context is the selected operation, not a promise that a
 particular file has already passed a Gate. Actual configuration and per-file
 evidence remain available through settings, run details and history.
 
-- **D: pixel distance.** `img.jxl_distance` is nullable: omission or `null` keeps
-  the existing source/mode decision. An explicit value must be finite in 0..25.
-  It can adjust an eligible legacy-lossy pixel encode, not relax a protected
-  source's fidelity contract. PNG and confirmed-lossless input keep D0; JPEG
-  uses reversible reconstruction. Existing modern-lossy/container retention
-  remains in force. These are private policy decisions, not broken-media errors.
-- **E: encoder effort.** `img.jxl_effort` is nullable: Normal uses E7,
-  Ultimate/archive E10, and PNG E10 unless explicitly overridden. JPEG uses its
-  independent manual `img.jpeg_effort`, initially E11. Explicit supported efforts do not
-  change D, media routing, metadata policy or verification.
-- **D exploration.** `quality_search=adaptive` is the default and requests search
-  only where source and size admission permit. Explicit `mode-default` retains the existing
-  Ultimate/explore/non-archive trigger. `fixed` disables D search; `adaptive`
-  requests it only where source and size admission permit. D0 is the baseline;
-  ladder screening, finalist verification and refinement use the same selected
-  E. The algorithm prefers the lowest fitting D, not the smallest file at any D.
-  Explicit `adaptive` leaves a saved manual D inactive without overwriting it.
-  `mode-default` retains the manual D where the historical route does not explore.
-- **E exploration.** `jxl_effort_search=adaptive` is the default. It
-  compares verified pure-media payloads at one quality within the bounded E
-  candidate range. Equal payloads prefer lower E. This is not low-E assistance
-  for high-E D search and is not a speed guarantee. With both searches enabled,
-  E is selected first, then D is explored in that single E domain. A Normal E7
-  policy ceiling may admit only E7; automatic does not invent a wider domain.
-  Select `fixed` explicitly to use one manual effort.
+- **Pixel JXL effort.** `img.jxl_effort` is an optional search ceiling from E2
+  through E11. With no ceiling override, Normal explores up to E7 and
+  Ultimate/archive or PNG up to E10. Effort comparison evaluates verified
+  pure-media payloads at the same quality. Equal sizes prefer lower E.
+- **Pixel JXL distance.** `img.jxl_distance` is an optional fidelity bound.
+  Zero requires exact output and effort still adapts. Positive values from
+  0.001 through 25 cap the guarded lossy search for eligible inputs. PNG and
+  confirmed-lossless inputs keep D0, and JPEG uses reversible reconstruction.
+  Without a bound, the source policy determines the search domain.
 
-Fast JXL has JPEG E comparison, not pixel D controls.
-Ordinary IMG and Fast JXL share `jpeg_effort_search` with three choices:
+Fast JXL performs reversible JPEG comparison. Ordinary IMG and Fast JXL share
+`jpeg_effort_search`:
 
-- `fixed`: manual opt-out; use `jpeg_effort`, initially E11.
-- `adaptive`: compare the selected E and the lower members of E1/E7/E8/E10/E11.
-  This bounded comparison does not promise the minimum across all levels.
-- `full` (default): independently encode E1 through E11, apply the same delivery metadata
-  policy, then compare complete JXL file bytes, not image payload alone. Ignore
-  the saved `jpeg_effort`; equal sizes retain the lower E. The first candidate and
-  every smaller contender need exact JPEG reconstruction proof. Larger/tied
-  candidates cannot beat that proven winner and do not need another decode for
-  selection. Reuse the winning file; final metadata and delivery Gates still run.
+- `adaptive`: bounded comparison up to `jpeg_effort` (E2–E11).
+- `full` (default): compare every effort from E1 through E11 using complete
+  metadata-enriched JXL size. Equal sizes prefer lower E. An explicit CLI
+  effort ceiling requires adaptive comparison.
 
-Full comparison usually takes more work than a single E11 transcode. No
-Effort equivalence or monotonic size assumption is used. Failure, cancellation,
-unsupported E or changing source/sidecar/tool aborts the search without claiming
-an all-level minimum. Full mode disables parameter-changing compatibility and
-repair retries, even when permitted by `fallback_policy`; fixed/adaptive retain
-their existing recovery rules. A failed full search preserves the original.
-Explicit saved choices are preserved, not forcibly migrated. Resetting GUI
-overrides inherits the current typed configuration; old files that explicitly
-request `fixed` remain manual. Defaults are shared by CLI and direct engine calls.
+The winning file must reconstruct the exact JPEG before reuse. Full comparison
+stops if a required effort fails and keeps its independent delivery checks.
 Existing static JXL inputs with exact JPEG reconstruction enter the full
 E1–E11 comparison. Both the original and the selected JXL must reconstruct the
 same complete JPEG. A replacement must preserve displayed samples, embedded
@@ -153,22 +125,13 @@ retain the original.
 Fast AVIF keeps its own Q search and locator/final Speed domains; JXL D/E does
 not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
 
-- **Fast AVIF fixed Q.** `img.avif_quality` accepts integers 10..100 (default 100).
-  The existing progressive-output policy requires Q at least 10; the encoder's
-  general non-progressive 0..100 range is not this route's supported range.
-  It is active only when `img.quality_search=fixed`; the selected Q is probed once
-  in the final speed domain, not silently lowered on failure or oversize. With
-  `mode-default` or `adaptive`, the stored Q is inactive and the existing bounded
-  search starts at Q100. A true-lossless candidate may still be accepted first
-  for a confirmed-lossless source. A progressive AVIF can keep its existing
-  encoded media. A compatible non-progressive AVIF must pass exact full-sample
-  and payload-budget checks before a progressive candidate can be published.
-  After a Q100 sample mismatch, a direct 8-bit three-component JFIF input up
-  to 16 MiB can retry at the same quality and speed with an RGB identity
-  matrix. The retry admits only a complete JPEG with its single JFIF
-  application segment and no trailing data. The candidate still requires
-  exact samples, progressive output, the configured payload budget and all
-  normal metadata and final-delivery checks.
+- **Fast AVIF Q search.** The bounded search starts at Q100. Confirmed-lossless
+  input can first qualify for true-lossless output. A verified progressive AVIF
+  may keep its existing encoded media. Non-progressive normalization must pass
+  exact full-sample and payload-budget checks. After a Q100 sample mismatch,
+  eligible complete 8-bit JFIF input can retry at the same quality and speed with
+  an RGB identity matrix, subject to the existing structure, sample, metadata
+  and delivery checks.
 - **Fast AVIF final Speed.** `img.avif_speed` accepts integers 0..10 (default 0,
   slowest; 10 is fastest). It applies to true-lossless probes, final-domain Q
   probes and refinement. The fast locator remains Speed6. A different final
@@ -193,47 +156,29 @@ not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
   output also needs a fresh source-profile check before reuse or import.
   Final verification independently repeats the check before source cleanup.
 
-`--avif-quality` and `--avif-speed` are valid for `img fast-img --strategy avif`
-and `img config` inspection, not ordinary IMG, Fast JXL or unrelated commands.
-The launcher uses `--img-avif-quality` and `--img-avif-speed` in Fast AVIF mode.
-Explicit Speed0 survives all boundaries. Q100 is the encoder's highest quality
-setting, not a guarantee of RGB mathematical losslessness for arbitrary inputs.
-All existing health, pixel, payload-size, metadata and delivery checks remain
-mandatory; a fixed Q request can fail them and must preserve the source.
+Use `--avif-speed` with `img fast-img --strategy avif` or configuration inspection.
+The launcher exposes the corresponding `--img-avif-speed`. This setting sets the
+final comparison domain. Each Q candidate still needs its normal proof.
 
 CLI flags and GUI preferences enter the same typed resolver. Existing
 `--explore`, `--match-quality`, `--ultimate` and `--archive` interfaces are not
 retired by this work. Explicit typed search preferences control their own
 algorithm; they do not remove source admission, size or delivery checks.
 
+An older JSON file with fixed JPEG search resolves to full comparison. The
+retired pixel search choices resolve to adaptive comparison. The effective
+configuration omits the former AVIF quality override. A saved positive JXL
+distance below 0.001 resolves to D0 to preserve its stricter fidelity bound.
+Historical receipts keep their saved settings for inspection.
+
 ### Native GUI Overrides
 
-The gear button shows the current image workflow, a standard Video tab,
-Photos settings and Performance settings. Standard and Fast IMG retain
-independent JPEG transcoding effort (1 through 11), fallback,
-quality heuristic and database overrides. Standard IMG preferences are never
-copied into Fast IMG on read; each workflow uses its own saved overrides and the
-backend's effective configuration. Existing independent preferences stay intact.
-Fast AVIF adds **Manual quality** with a Q10..100 input and a Speed0..10 popup.
-Automatic or inherited AVIF-rule selection disables the Q input without deleting
-its saved value. Selecting manual quality reactivates it. Reset removes only the
-GUI overrides; effective source loading and validation still use the same worker
-resolver as execution. These controls are absent from standard IMG and Fast JXL.
-The ordinary Image tab keeps D and E values separate from their independent
-exploration checkboxes. E-only remains available without D exploration; D-only
-does not silently search E. Inactive fixed-D drafts remain saved, while D search
-uses the policy's D0 baseline. Fast JXL shows JPEG E, not pixel D; Fast AVIF shows
-its separate quality selection. Each workflow retains independent preferences.
-The ordinary labels use quality (D), compression level (E) and lossless JPEG
-transcoding rather than algorithm names. When E comparison is enabled, the
-numeric control is labelled "Compare up to level (E)" instead of implying a final
-effort. Turning it off restores the fixed-level label without changing the
-saved value or worker arguments. Unspecified D/E display "Follow archive rules"
-only after configuration is known; a failed lookup remains unknown.
-The D checkbox distinguishes the inherited conditional policy from an explicit
-automatic choice, and accessible labels follow the same visible state.
-An unchanged inherited control does not save an override;
-explicit selection retains one, and reset removes it without changing JSON.
+The gear button keeps separate settings for standard IMG, Fast JXL, Fast AVIF,
+Video, Photos and Performance. Standard IMG exposes pixel search ceilings.
+JPEG-reconstructible routes offer full or adaptive comparison, with an effort
+ceiling for adaptive comparison. Fast AVIF exposes the speed used for final
+quality comparison. Reset This Tab removes that tab's overrides.
+
 Search locates the original setting by localized label, section or choice. In
 Developer mode, runtime keys and flags are searchable too. Results include only
 the current workflow's applicable controls; selecting a Photos advanced parameter
@@ -629,12 +574,13 @@ remain subject to macOS behavior.
 | `execution.error_mode` | `log-and-continue` | IMG/VID recoverable failure policy, including Fast IMG encoding waves and independently isolatable local verification failures. `fail-fast` stops after draining current work; shared safety failures always block and intentional skips remain skips. `--error-mode` overrides files. Fast GIF keeps its own encoding loop. |
 | `img.allow_database` | `false` | Permits the optional image-quality database stack. Quality inference must also be enabled. Does not suppress Photos custody verification or explicit database maintenance commands. |
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
-| `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11; used by fixed/adaptive, inactive in full comparison. Independent of direct pixel encoding. |
-| `img.jxl_distance` | `null` | Optional finite 0..25 pixel-distance override for policy-eligible sources; null retains the existing source/mode decision. Does not permit lossy archival of protected input. |
-| `img.jxl_effort` | `null` | Optional pixel E override; null keeps Normal E7, Ultimate/archive E10 or PNG E10. Fixed encoding uses the value; opt-in E comparison can select a different verified candidate in its bounded range. |
-| `img.jxl_effort_search` | `adaptive` | Verified E payload comparison at fixed quality, independent of D search. `fixed` is the manual opt-out. No cross-E auxiliary D screening. |
-| `img.jpeg_effort_search` | `full` | `fixed`: one selected E; `adaptive`: bounded comparison; `full`: independent E1..E11 comparison by complete metadata-enriched JXL size. Every potential winner needs exact reconstruction proof; no partial minimum on failure. |
-| `img.quality_search` | `adaptive` | Guarded standard D search or separate Fast AVIF Q search. `fixed` is the manual opt-out; explicit `mode-default` retains the historical trigger. Source/size admission remains mandatory. Not source-quality inference. |
+| `img.jpeg_effort` | `11` | Upper E2–E11 bound for adaptive reversible JPEG comparison. |
+| `img.jxl_distance` | `null` | Optional maximum D for policy-eligible pixel exploration. |
+| `img.jxl_effort` | `null` | Optional E2–E11 ceiling for pixel effort exploration. |
+| `img.jxl_effort_search` | `adaptive` | Verified E comparison at a common quality. |
+| `img.jpeg_effort_search` | `full` | `adaptive` compares a bounded effort set. `full` compares all E1–E11. |
+| `img.quality_search` | `adaptive` | Guarded standard D or Fast AVIF Q exploration. |
+| `img.avif_speed` | `0` | Speed 0–10 for Fast AVIF final comparison. |
 | `img.avif_metadata_policy` | `clear` | Explicit private Fast AVIF removable-metadata policy; currently the only supported value. Does not change standard JXL preservation or authorize source/sidecar deletion. |
 | `img.fallback_policy` | `strict` | `strict`: no compatibility/repair retries for a requested encode. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. Full JPEG comparison never changes candidate parameters or repairs input. All delivery and exact reconstruction checks remain mandatory. |
 | `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. Does not select the Fast GIF strategy. |
@@ -808,7 +754,7 @@ requirements remain covered by regression tests.
 The legacy `--allow_expert_options` flag maps to `repair`; an explicit
 `--fallback-policy` takes precedence. The default remains strict. Full JPEG
 comparison never silently changes a requested effort, even if recovery is enabled;
-fixed/adaptive modes retain their explicitly permitted compatibility rules. No setting disables exact
+adaptive comparison retains their explicitly permitted compatibility rules. No setting disables exact
 JPEG reconstruction, metadata preservation, source retention on failure or
 pre-delete Photos custody verification.
 
@@ -1263,9 +1209,9 @@ names. This inventory does not verify candidates, decide whether a task is
 active, or authorize deletion.
 
 New Fast IMG JPEG-to-JXL encodes record the winning `cjxl` command when the
-published output is committed to the task checkpoint. Fixed effort records the
-actual successful invocation. Full search records the winning effort, including
-its actual arguments, executable BLAKE3 and process exit status. The receipt
+published output is committed to the task checkpoint. The receipt records the
+winning effort, including its actual arguments, executable BLAKE3 and process
+exit status. The receipt
 binds the source and published output paths and full hashes, processing
 contract, and the available launcher attempt identifiers. It records neither
 the full environment nor the invocation of any unobserved encoder.

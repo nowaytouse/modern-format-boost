@@ -115,14 +115,16 @@ impl NativeObservation {
         Ok(Self {
             kind,
             length: metadata.len(),
-            accessed: NativeTime::from_filetime(filetime::FileTime::from_last_access_time(
-                metadata,
+            accessed: NativeTime::from_filetime(filetime::FileTime::from_system_time(
+                metadata.accessed()?,
             )),
-            modified: NativeTime::from_filetime(filetime::FileTime::from_last_modification_time(
-                metadata,
+            modified: NativeTime::from_filetime(filetime::FileTime::from_system_time(
+                metadata.modified()?,
             )),
-            created: filetime::FileTime::from_creation_time(metadata)
-                .map(NativeTime::from_filetime),
+            created: metadata
+                .created()
+                .ok()
+                .map(|time| NativeTime::from_filetime(time.into())),
             unix,
         })
     }
@@ -516,10 +518,10 @@ impl SourceDirectoryCleanupSnapshot {
             {
                 return Ok(false);
             }
-            filetime::set_file_handle_times(
-                &handle,
-                Some(directory.metadata.accessed.filetime()),
-                Some(directory.metadata.modified.filetime()),
+            handle.set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(directory.metadata.accessed.filetime().into())
+                    .set_modified(directory.metadata.modified.filetime().into()),
             )?;
         }
         Ok(true)
@@ -612,7 +614,12 @@ mod tests {
 
     fn old_time(path: &Path) -> io::Result<filetime::FileTime> {
         let time = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
-        filetime::set_file_times(path, time, time)?;
+        std::fs::set_times(
+            path,
+            std::fs::FileTimes::new()
+                .set_accessed(time.into())
+                .set_modified(time.into()),
+        )?;
         Ok(time)
     }
 
@@ -669,7 +676,11 @@ mod tests {
         );
         assert!(recovered.restore_after_cleanup(std::slice::from_ref(&source))?);
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(&root)?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(&root)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             original_time
         );
         assert_eq!(fs::read(&retained)?, b"retained bytes");
@@ -709,7 +720,11 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            let before = filetime::FileTime::from_last_modification_time(&fs::metadata(&root)?);
+            let before = filetime::FileTime::from_system_time(
+                fs::metadata(&root)?
+                    .modified()
+                    .expect("read modified timestamp"),
+            );
             assert!(
                 !SourceDirectoryCleanupSnapshot::from_durable_json(&bytes)?
                     .restore_after_cleanup(&[source])?,
@@ -717,7 +732,11 @@ mod tests {
             );
             assert_ne!(before, original);
             assert_eq!(
-                filetime::FileTime::from_last_modification_time(&fs::metadata(&root)?),
+                filetime::FileTime::from_system_time(
+                    fs::metadata(&root)?
+                        .modified()
+                        .expect("read modified timestamp")
+                ),
                 before
             );
         }
@@ -836,7 +855,11 @@ mod tests {
                 .restore_after_cleanup(&[source])?
         );
         assert_ne!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(temporary.path())?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(temporary.path())?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             original
         );
         Ok(())
@@ -862,7 +885,11 @@ mod tests {
         fs::remove_dir(nested)?;
         assert!(snapshot.restore_after_cleanup(&[source, sidecar])?);
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(&root)?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(&root)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             time
         );
         Ok(())
@@ -891,15 +918,25 @@ mod tests {
                 }
                 "touched" => {
                     let time = filetime::FileTime::from_unix_time(1_600_000_000, 0);
-                    filetime::set_file_mtime(&retained, time)?;
+                    std::fs::set_times(
+                        &retained,
+                        std::fs::FileTimes::new().set_modified(time.into()),
+                    )?;
                 }
                 _ => unreachable!(),
             }
-            let observed =
-                filetime::FileTime::from_last_modification_time(&fs::metadata(root.path())?);
+            let observed = filetime::FileTime::from_system_time(
+                fs::metadata(root.path())?
+                    .modified()
+                    .expect("read modified timestamp"),
+            );
             assert!(!snapshot.restore_after_cleanup(&[source])?, "{kind}");
             assert_eq!(
-                filetime::FileTime::from_last_modification_time(&fs::metadata(root.path())?),
+                filetime::FileTime::from_system_time(
+                    fs::metadata(root.path())?
+                        .modified()
+                        .expect("read modified timestamp")
+                ),
                 observed
             );
         }
@@ -926,15 +963,21 @@ mod tests {
                     match kind {
                         "new" => fs::write(root.path().join("user.txt"), b"user edit"),
                         "edited" => fs::write(&retained, b"changed source"),
-                        "directory" => filetime::set_file_mtime(root.path(), user_time),
+                        "directory" => std::fs::set_times(
+                            root.path(),
+                            std::fs::FileTimes::new().set_modified(user_time.into()),
+                        ),
                         _ => unreachable!(),
                     }
                     .expect("apply synthetic concurrent edit");
                 })?,
                 "{kind}"
             );
-            let observed =
-                filetime::FileTime::from_last_modification_time(&fs::metadata(root.path())?);
+            let observed = filetime::FileTime::from_system_time(
+                fs::metadata(root.path())?
+                    .modified()
+                    .expect("read modified timestamp"),
+            );
             assert_ne!(observed, original, "{kind}");
             if kind == "directory" {
                 assert_eq!(observed, user_time);
@@ -954,7 +997,11 @@ mod tests {
         fs::remove_file(source)?;
         assert!(!snapshot.restore_after_cleanup(&[])?);
         assert_ne!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(root.path())?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(root.path())?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             original
         );
         Ok(())
@@ -974,7 +1021,11 @@ mod tests {
         fs::remove_dir(empty)?;
         assert!(!snapshot.restore_after_cleanup(&[source])?);
         assert_ne!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(root.path())?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(root.path())?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             original
         );
         Ok(())

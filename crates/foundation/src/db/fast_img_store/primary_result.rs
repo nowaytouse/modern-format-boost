@@ -1,6 +1,11 @@
 //! Observed primary outcomes share a transaction with the authoritative snapshot.
 
-use super::*;
+use super::{
+    Connection, Context, FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION, JpegExecutionAttempt, Result,
+    Serialize, SourceOutcome, TransactionBehavior, WorkingCopyMarker, as_io, canonical_bytes,
+    cleanup, ensure, inspect_store_schema_version, io, migration, open_store_connection, params,
+    source_outcome, source_outcomes, write_observed_snapshot,
+};
 use crate::infra::static_logs::FileFailurePhase;
 use crate::pipeline::verification::validate_marker_relative_path;
 use serde::Deserialize;

@@ -2326,9 +2326,9 @@ mod tests {
         assert_eq!(original.len(), replacement.len());
         fs::write(&tool, &replacement)?;
         fs::set_permissions(&tool, permissions)?;
-        filetime::set_file_mtime(
+        std::fs::set_times(
             &tool,
-            filetime::FileTime::from_last_modification_time(&metadata),
+            std::fs::FileTimes::new().set_modified(metadata.modified()?),
         )?;
         assert_eq!(metadata.len(), fs::metadata(&tool)?.len());
         assert_eq!(metadata.modified()?, fs::metadata(&tool)?.modified()?);

@@ -383,7 +383,14 @@ pub fn restore_formal_state_snapshot_to(
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod migration {
-    use super::*;
+    use super::{
+        ACTIVE, BACKUP, BACKUPS, CANDIDATE, Component, Connection, Context, DIAGNOSTIC_RECEIPT,
+        DIAGNOSTIC_SNAPSHOT, FileId, FormalStateMigrationReceipt, FormalStateRecoveryPreview,
+        FormalStateRecoveryReceipt, OptionalExtension, PENDING, Path, PathBuf, RELOCATION_KEY,
+        RETIRED_VERSION, RelocationRecord, Result, StatePaths, StoreFileIdentity, StorePathBinding,
+        check_active, create_private_state_directory, database_present, ensure, file_id, fs,
+        read_record, retirement_id, schema_version, valid_digest, validate_opened,
+    };
     use rusqlite::TransactionBehavior;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
@@ -446,7 +453,7 @@ mod migration {
         // SAFETY: geteuid does not access memory.
         let owner = unsafe { libc::geteuid() };
         ensure!(
-            metadata.uid() == owner && metadata.mode() & 0o077 == 0,
+            metadata.uid() == owner && metadata.mode().trailing_zeros() >= 6,
             "Core relocation directory must be owned by and private to this user"
         );
         Ok(())
@@ -459,7 +466,7 @@ mod migration {
         // SAFETY: geteuid does not access memory.
         let owner = unsafe { libc::geteuid() };
         ensure!(
-            metadata.uid() == owner && metadata.mode() & 0o077 == 0,
+            metadata.uid() == owner && metadata.mode().trailing_zeros() >= 6,
             "Core recovery backup directory must be owned by and private to this user"
         );
         Ok(())
@@ -982,6 +989,7 @@ mod migration {
 
     #[cfg(test)]
     mod tests {
+        use super::super::{STORE_FILE_NAME, formal_store_path_at, verify_formal_store_connection};
         use super::*;
 
         fn seed(root: &Path) -> Result<StatePaths> {
@@ -1378,7 +1386,7 @@ pub(super) fn create_private_state_directory(path: &Path) -> Result<()> {
         // SAFETY: geteuid does not access memory.
         let owner = unsafe { libc::geteuid() };
         ensure!(
-            metadata.uid() == owner && metadata.mode() & 0o077 == 0,
+            metadata.uid() == owner && metadata.mode().trailing_zeros() >= 6,
             "Core state directory must be owned by and private to this user"
         );
     }

@@ -257,13 +257,8 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
                     "cjxl '{}' '{}' -d {}",
                     input_path,
                     output_path.display(),
-                    foundation::runtime_config::active()
-                        .filter(|config| {
-                            config.img.quality_search
-                                != foundation::runtime_config::QualitySearch::Adaptive
-                        })
-                        .and_then(|config| config.img.jxl_distance)
-                        .unwrap_or(foundation::constants::JXL_ULTIMATE_DISTANCE)
+                    foundation::constants::JXL_ULTIMATE_DISTANCE
+                        .min(crate::lossless_converter::jxl_lossy_distance_limit())
                 ),
                 expected_reduction: foundation::constants::EXPECTED_REDUCTION_JXL_LOSSY_STATIC,
             })
@@ -642,12 +637,8 @@ fn convert_to_jxl(
                 | DetectedFormat::WEBM
                 | DetectedFormat::Unknown(_)
         ) {
-        foundation::runtime_config::active()
-            .filter(|config| {
-                config.img.quality_search != foundation::runtime_config::QualitySearch::Adaptive
-            })
-            .and_then(|config| config.img.jxl_distance)
-            .unwrap_or(foundation::constants::JXL_ULTIMATE_DISTANCE)
+        foundation::constants::JXL_ULTIMATE_DISTANCE
+            .min(crate::lossless_converter::jxl_lossy_distance_limit())
     } else {
         0.0
     };

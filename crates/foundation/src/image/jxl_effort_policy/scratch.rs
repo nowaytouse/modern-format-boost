@@ -386,7 +386,7 @@ pub struct JpegScratchInventory {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 impl JpegScratchInventory {
-    fn empty() -> Self {
+    const fn empty() -> Self {
         Self {
             schema_version: 1,
             kind: "fast_img_jpeg_scratch_list",
@@ -456,6 +456,7 @@ fn observed_scratch_inventory(
 }
 
 /// List bounded reservations in the configured formal temporary directory.
+///
 /// Only examined entries contribute to counts. Limit flags identify partial observations.
 /// Unknown matching names have no recognized ownership and are never included in the bytes.
 /// # Errors

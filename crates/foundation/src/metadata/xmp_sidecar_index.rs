@@ -38,8 +38,8 @@ impl XmpSidecarIndex {
             }
         }
         Ok(Self {
-            directories,
             include_aae,
+            directories,
         })
     }
 
@@ -92,7 +92,11 @@ impl XmpSidecarIndex {
         };
         match candidates.as_slice() {
             [] => Ok(None),
-            [path] => super::require_regular_sidecar(path.clone(), "AAE").map(Some),
+            [path] => {
+                let path = path.clone();
+                drop(view);
+                super::require_regular_sidecar(path, "AAE").map(Some)
+            }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -329,7 +333,11 @@ mod tests {
         index.verify_unchanged()?;
         let modified = fs::metadata(root.path())?.modified()?;
         fs::write(root.path().join("synthetic.jpg.xmp"), b"new sidecar")?;
-        filetime::set_file_mtime(root.path(), filetime::FileTime::from_system_time(modified))?;
+        std::fs::set_times(
+            root.path(),
+            std::fs::FileTimes::new()
+                .set_modified(filetime::FileTime::from_system_time(modified).into()),
+        )?;
         assert!(index.verify_unchanged().is_err());
         let fresh = XmpSidecarIndex::capture(std::slice::from_ref(&source))?;
         assert_eq!(

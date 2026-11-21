@@ -146,16 +146,18 @@ pub struct ImgPolicy {
     pub allow_size_tolerance: bool,
     /// Standard IMG only: inclusive pure-media byte allowance; metadata is excluded.
     pub size_tolerance_bytes: u64,
-    /// Fixed AVIF quality used by Fast IMG AVIF; progressive AVIF requires at least Q10.
+    /// Decode the retired AVIF quality setting from older configurations.
+    #[serde(skip_serializing_if = "legacy_avif_quality_is_default")]
     pub avif_quality: u8,
     /// Final AVIF encoder speed used by Fast IMG AVIF delivery.
     pub avif_speed: u8,
     /// Fast AVIF's private removable-metadata contract, independent of JXL preservation.
     pub avif_metadata_policy: AvifMetadataPolicy,
+    /// Upper effort considered by adaptive JPEG reconstruction search.
     pub jpeg_effort: u8,
-    /// Override distance only where the private media policy permits lossy encoding.
+    /// Maximum distance where the media policy permits a lossy JXL encode.
     pub jxl_distance: Option<f32>,
-    /// None retains the normal/ultimate or PNG effort selected by the media policy.
+    /// Upper effort considered by direct JXL search. None uses the source policy.
     pub jxl_effort: Option<u8>,
     /// Compare verified encodes at fixed quality before distance exploration.
     pub jxl_effort_search: EffortSearch,
@@ -202,35 +204,39 @@ impl AvifMetadataPolicy {
     }
 }
 
-/// Parse a final direct pixel JXL effort.
+/// Parse a direct pixel JXL search ceiling.
 ///
 /// # Errors
-/// Rejects values outside the encoder range (1 through 11).
+/// Rejects ceilings below 2 or above 11.
 pub fn parse_direct_jxl_effort(value: &str) -> std::result::Result<u8, String> {
     let effort = value.parse::<u8>().map_err(|error| error.to_string())?;
-    if (1..=11).contains(&effort) {
+    if (2..=11).contains(&effort) {
         Ok(effort)
     } else {
-        Err("direct JXL effort must be 1..11".into())
+        Err("direct JXL search effort ceiling must be 2..11".into())
     }
 }
 
-/// Parse a finite JXL distance within the encoder range.
+/// Parse a finite maximum lossy JXL distance.
 ///
 /// # Errors
-/// Rejects non-finite values and distances outside 0 through 25.
+/// Accepts zero for exact-only output or a lossy ceiling in 0.001..=25.
 pub fn parse_jxl_distance(value: &str) -> std::result::Result<f32, String> {
     let distance = value.parse::<f32>().map_err(|error| error.to_string())?;
-    if distance.is_finite() && (0.0..=25.0).contains(&distance) {
+    if distance == 0.0
+        || (distance.is_finite()
+            && (crate::constants::JXL_EXPLORE_FLOOR..=25.0).contains(&distance))
+    {
         Ok(distance)
     } else {
-        Err("JXL distance must be finite and within 0..25".into())
+        Err("JXL distance ceiling must be 0 (exact only) or finite within 0.001..25".into())
     }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum EffortSearch {
+    #[value(skip)]
     Fixed,
     #[default]
     Adaptive,
@@ -239,14 +245,12 @@ pub enum EffortSearch {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum JpegEffortSearch {
-    #[value(help = "Use the selected JPEG effort only")]
+    #[value(skip)]
     Fixed,
-    #[value(
-        help = "Compare selected efforts up to the selected JPEG effort; not an exhaustive search"
-    )]
+    #[value(help = "Compare a subset of JPEG efforts within the configured ceiling")]
     Adaptive,
     #[default]
-    #[value(help = "Compare every JPEG effort E1 through E11; ignores the selected JPEG effort")]
+    #[value(help = "Compare every JPEG effort E1 through E11")]
     Full,
 }
 
@@ -264,7 +268,9 @@ impl JpegEffortSearch {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum QualitySearch {
+    #[value(skip)]
     ModeDefault,
+    #[value(skip)]
     Fixed,
     #[default]
     Adaptive,
@@ -305,6 +311,14 @@ pub struct VidPolicy {
     pub codec: VidCodec,
     /// Standard VID only: run fusion quality verification even for long videos.
     pub force_ms_ssim_long: bool,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Serde passes field predicates by reference"
+)]
+const fn legacy_avif_quality_is_default(quality: &u8) -> bool {
+    *quality == 100
 }
 
 impl Default for ImgPolicy {
@@ -543,6 +557,43 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    /// Migrate settings for active use while preserving historic values when decoding receipts.
+    fn migrate_image_search(&mut self) -> Vec<&'static str> {
+        let mut migrated = Vec::new();
+        if self.img.avif_quality != 100 {
+            self.img.avif_quality = 100;
+            migrated.push("img.avif_quality");
+        }
+        if self.img.quality_search != QualitySearch::Adaptive {
+            self.img.quality_search = QualitySearch::Adaptive;
+            migrated.push("img.quality_search");
+        }
+        if self.img.jxl_effort_search != EffortSearch::Adaptive {
+            self.img.jxl_effort_search = EffortSearch::Adaptive;
+            migrated.push("img.jxl_effort_search");
+        }
+        if self.img.jpeg_effort_search == JpegEffortSearch::Fixed {
+            self.img.jpeg_effort_search = JpegEffortSearch::Full;
+            migrated.push("img.jpeg_effort_search");
+        }
+        if self.img.jpeg_effort_search == JpegEffortSearch::Adaptive && self.img.jpeg_effort == 1 {
+            self.img.jpeg_effort = 2;
+            migrated.push("img.jpeg_effort");
+        }
+        if self.img.jxl_effort == Some(1) {
+            self.img.jxl_effort = Some(2);
+            migrated.push("img.jxl_effort");
+        }
+        if let Some(distance) = self.img.jxl_distance
+            && (0.0..crate::constants::JXL_EXPLORE_FLOOR).contains(&distance)
+            && distance != 0.0
+        {
+            self.img.jxl_distance = Some(0.0);
+            migrated.push("img.jxl_distance");
+        }
+        migrated
+    }
+
     pub fn validate(&self) -> Result<()> {
         self.cache.validate()?;
         ensure!(
@@ -687,8 +738,12 @@ impl LoadedConfig {
 
 static ACTIVE: OnceLock<RuntimeConfig> = OnceLock::new();
 
-pub fn install(config: RuntimeConfig) -> Result<()> {
+pub fn install(mut config: RuntimeConfig) -> Result<()> {
     config.validate()?;
+    let migrated = config.migrate_image_search();
+    if !migrated.is_empty() {
+        tracing::warn!(settings = ?migrated, "migrated retired image settings to exploration");
+    }
     ACTIVE
         .set(config)
         .map_err(|_| anyhow::anyhow!("runtime config already installed"))
@@ -973,8 +1028,23 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             apply_file(&mut value, path, &mut sources, &mut source_chain)?;
         }
     }
-    let config: RuntimeConfig = serde_json::from_value(value)?;
+    let mut config: RuntimeConfig = serde_json::from_value(value)?;
     config.validate()?;
+    let migrated = config.migrate_image_search();
+    if !migrated.is_empty() {
+        tracing::warn!(settings = ?migrated, "migrated retired image settings to exploration");
+    }
+    for key in migrated {
+        record_source(
+            &mut sources,
+            &mut source_chain,
+            key,
+            "exploration migration",
+        );
+    }
+    // The retired quality value is available for historic deserialization only.
+    sources.remove("img.avif_quality");
+    source_chain.remove("img.avif_quality");
     Ok(LoadedConfig {
         config,
         sources,
@@ -998,7 +1068,8 @@ mod tests {
             serde_json::to_value(&config)?["img"]["jxl_effort"],
             Value::Null
         );
-        for effort in 1..=11 {
+        assert!(parse_direct_jxl_effort("1").is_err());
+        for effort in 2..=11 {
             config.img.jxl_effort = Some(effort);
             config.validate()?;
             assert_eq!(parse_direct_jxl_effort(&effort.to_string()), Ok(effort));
@@ -1035,6 +1106,7 @@ mod tests {
             config.validate()?;
             assert_eq!(parse_jxl_distance(&distance.to_string()), Ok(distance));
         }
+        assert!(parse_jxl_distance("0.0009").is_err());
         for distance in [-0.1, 25.1, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             config.img.jxl_distance = Some(distance);
             assert!(config.validate().is_err());

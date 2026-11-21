@@ -284,7 +284,10 @@ fn jpeg_execution_receipt_is_atomic_historical_and_rejects_corruption() -> Resul
     prior.encoded_count = 0;
     prior.blake3_log.clear();
     write_marker(&prior)?;
-    assert!(read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?.is_empty());
+    assert_eq!(
+        read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?.len(),
+        0
+    );
     let encoder = JpegEncoderInvocation {
         executable: "/synthetic/cjxl".to_owned(),
         executable_blake3: digest(b"encoder"),
@@ -322,7 +325,10 @@ fn jpeg_execution_receipt_is_atomic_historical_and_rejects_corruption() -> Resul
         "{error:#}"
     );
     assert_eq!(read_marker(&published.working_copy)?, prior);
-    assert!(read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?.is_empty());
+    assert_eq!(
+        read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?.len(),
+        0
+    );
     assert!(
         read_source_evidence(&published.working_copy, rel)?
             .primary_result
@@ -365,9 +371,10 @@ fn jpeg_execution_receipt_is_atomic_historical_and_rejects_corruption() -> Resul
         read_jpeg_execution_receipts_for_source(&published.working_copy, rel)?,
         receipts
     );
-    assert!(
+    assert_eq!(
         read_jpeg_execution_receipts_for_source(&published.working_copy, "Nested/converted.jpg")?
-            .is_empty()
+            .len(),
+        0
     );
     assert_eq!(inspect_integrity(&conn)?, inspect_row_count(&conn)?);
     conn.execute(
@@ -462,7 +469,10 @@ fn reconstructed_jpeg_execution_keeps_jxl_and_encoder_input_evidence_distinct() 
         .is_err()
     );
     assert_eq!(read_marker(&marker.working_copy)?, prior);
-    assert!(read_jpeg_execution_receipts_for_source(&marker.working_copy, source_rel)?.is_empty());
+    assert_eq!(
+        read_jpeg_execution_receipts_for_source(&marker.working_copy, source_rel)?.len(),
+        0
+    );
     write_marker_with_reconstructed_jpeg_execution(
         &marker,
         source_rel,
@@ -577,10 +587,11 @@ fn avif_execution_receipt_is_atomic_historical_and_rejects_corruption() -> Resul
             .contains("synthetic AVIF receipt write failure")
     );
     assert_eq!(read_marker(&marker.working_copy)?, before);
-    assert!(
+    assert_eq!(
         read_avif_execution_receipt_page(&marker.working_copy, source_rel, None)?
             .receipts
-            .is_empty()
+            .len(),
+        0
     );
     conn.execute_batch("DROP TRIGGER reject_synthetic_avif")?;
     save(&output_blake3)?;
@@ -599,12 +610,16 @@ fn avif_execution_receipt_is_atomic_historical_and_rejects_corruption() -> Resul
     assert_eq!(receipt.output_blake3, output_blake3);
     assert_eq!(receipt.source_blake3, digest(b"original source"));
     assert_eq!(read_marker(&marker.working_copy)?, marker);
-    assert!(
+    assert_eq!(
         read_avif_execution_receipt_page(&marker.working_copy, "Nested/converted.png", None)?
             .receipts
-            .is_empty()
+            .len(),
+        0
     );
-    assert!(read_jpeg_execution_receipts_for_source(&marker.working_copy, source_rel)?.is_empty());
+    assert_eq!(
+        read_jpeg_execution_receipts_for_source(&marker.working_copy, source_rel)?.len(),
+        0
+    );
     assert_eq!(inspect_integrity(&conn)?, inspect_row_count(&conn)?);
     conn.execute(
         "UPDATE fast_img_avif_execution SET payload_blake3=zeroblob(32)",

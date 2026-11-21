@@ -11,72 +11,64 @@ pub const F32_EPSILON: f32 = crate::constants::F32_EPSILON;
 #[must_use]
 pub fn approx_eq_f64(a: f64, b: f64) -> bool {
     let diff = a - b;
-    if diff.abs() <= F64_EPSILON {
-        #[cfg(not(test))]
-        if diff.abs() > 0.0 {
-            crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                    "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} \
+    let matches = diff.abs() <= F64_EPSILON;
+    #[cfg(not(test))]
+    if matches && diff.abs() > 0.0 {
+        crate::media_conversion_gate::delivery_numeric_fallback_audit(
+            "delivery_numeric",
+            format!(
+                "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} \
                      (threshold={F64_EPSILON})"
-                ),
-            );
-        }
-        return true;
+            ),
+        );
     }
-    false
+    matches
 }
 
 #[inline]
 #[must_use]
 pub fn approx_eq_f32(a: f32, b: f32) -> bool {
     let diff = a - b;
-    if diff.abs() <= F32_EPSILON {
-        #[cfg(not(test))]
-        if diff.abs() > 0.0 {
-            crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                    "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} \
+    let matches = diff.abs() <= F32_EPSILON;
+    #[cfg(not(test))]
+    if matches && diff.abs() > 0.0 {
+        crate::media_conversion_gate::delivery_numeric_fallback_audit(
+            "delivery_numeric",
+            format!(
+                "Perfunctory float comparison passed: a={a}, b={b}, diff={diff} \
                      (threshold={F32_EPSILON})"
-                ),
-            );
-        }
-        return true;
+            ),
+        );
     }
-    false
+    matches
 }
 
 #[inline]
 #[must_use]
 pub fn approx_zero_f64(a: f64) -> bool {
-    if a.abs() <= F64_EPSILON {
-        #[cfg(not(test))]
-        if a.abs() > 0.0 {
-            crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!("Perfunctory zero comparison passed: a={a} (threshold={F64_EPSILON})"),
-            );
-        }
-        return true;
+    let matches = a.abs() <= F64_EPSILON;
+    #[cfg(not(test))]
+    if matches && a.abs() > 0.0 {
+        crate::media_conversion_gate::delivery_numeric_fallback_audit(
+            "delivery_numeric",
+            format!("Perfunctory zero comparison passed: a={a} (threshold={F64_EPSILON})"),
+        );
     }
-    false
+    matches
 }
 
 #[inline]
 #[must_use]
 pub fn approx_zero_f32(a: f32) -> bool {
-    if a.abs() <= F32_EPSILON {
-        #[cfg(not(test))]
-        if a.abs() > 0.0 {
-            crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!("Perfunctory zero comparison passed: a={a} (threshold={F32_EPSILON})"),
-            );
-        }
-        return true;
+    let matches = a.abs() <= F32_EPSILON;
+    #[cfg(not(test))]
+    if matches && a.abs() > 0.0 {
+        crate::media_conversion_gate::delivery_numeric_fallback_audit(
+            "delivery_numeric",
+            format!("Perfunctory zero comparison passed: a={a} (threshold={F32_EPSILON})"),
+        );
     }
-    false
+    matches
 }
 
 #[inline]
@@ -99,60 +91,54 @@ pub const PSNR_EPSILON: f64 = crate::constants::PSNR_EPSILON;
 #[must_use]
 pub fn approx_eq_ssim(a: f64, b: f64) -> bool {
     let diff = a - b;
-    if diff.abs() <= SSIM_EPSILON {
-        #[cfg(not(test))]
-        if diff.abs() > 0.0 {
-            crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_msssim",
-                format!(
-                    "Perfunctory SSIM comparison passed: a={a}, b={b}, diff={diff} \
+    let matches = diff.abs() <= SSIM_EPSILON;
+    #[cfg(not(test))]
+    if matches && diff.abs() > 0.0 {
+        crate::media_conversion_gate::delivery_numeric_fallback_audit(
+            "delivery_msssim",
+            format!(
+                "Perfunctory SSIM comparison passed: a={a}, b={b}, diff={diff} \
                      (threshold={SSIM_EPSILON})"
-                ),
-            );
-        }
-        return true;
+            ),
+        );
     }
-    false
+    matches
 }
 
 #[inline]
 #[must_use]
 pub fn approx_eq_crf(a: f32, b: f32) -> bool {
     let diff = a - b;
-    if diff.abs() <= CRF_EPSILON {
-        #[cfg(not(test))]
-        if diff.abs() > 0.0 {
-            crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                    "Perfunctory CRF comparison passed: a={a}, b={b}, diff={diff} \
+    let matches = diff.abs() <= CRF_EPSILON;
+    #[cfg(not(test))]
+    if matches && diff.abs() > 0.0 {
+        crate::media_conversion_gate::delivery_numeric_fallback_audit(
+            "delivery_numeric",
+            format!(
+                "Perfunctory CRF comparison passed: a={a}, b={b}, diff={diff} \
                      (threshold={CRF_EPSILON})"
-                ),
-            );
-        }
-        return true;
+            ),
+        );
     }
-    false
+    matches
 }
 
 #[inline]
 #[must_use]
 pub fn approx_eq_psnr(a: f64, b: f64) -> bool {
     let diff = a - b;
-    if diff.abs() <= PSNR_EPSILON {
-        #[cfg(not(test))]
-        if diff.abs() > 0.0 {
-            crate::media_conversion_gate::delivery_numeric_fallback_audit(
-                "delivery_numeric",
-                format!(
-                    "Perfunctory PSNR comparison passed: a={a}, b={b}, diff={diff} \
+    let matches = diff.abs() <= PSNR_EPSILON;
+    #[cfg(not(test))]
+    if matches && diff.abs() > 0.0 {
+        crate::media_conversion_gate::delivery_numeric_fallback_audit(
+            "delivery_numeric",
+            format!(
+                "Perfunctory PSNR comparison passed: a={a}, b={b}, diff={diff} \
                      (threshold={PSNR_EPSILON})"
-                ),
-            );
-        }
-        return true;
+            ),
+        );
     }
-    false
+    matches
 }
 
 #[inline]

@@ -1,6 +1,12 @@
 //! Durable primary unlink intents and observations for one committed Fast IMG task.
 
-use super::*;
+use super::{
+    BTreeMap, Connection, Context, FailedRetryAdmission, FailedRetrySidecar, FastImgAdmissionPlan,
+    FastImgAdmissionRoute, FastImgAdmissionSidecar, Path, PathBuf, Result, Serialize,
+    TransactionBehavior, WorkingCopyMarker, admission, bail, canonical_bytes, canonical_text,
+    ensure, in_snapshot, inspect_store_schema_version, io, key_for_canonical, open_readonly,
+    open_store_connection, params, read_snapshot, retry, text,
+};
 use crate::batch::{DiscoveredSource, planned_source::PlannedSource};
 use crate::image::fast_img::{SourceUnlinkEvent, SourceUnlinkKind};
 use crate::pipeline::verification::{
@@ -47,8 +53,9 @@ fn validate_child_entries(
     let media = entries
         .get(&(source.to_owned(), source.to_owned()))
         .context("Failed-only cleanup has no media intent")?;
+    let hash_matches = media.hash == admission.admitted_source_blake3;
     ensure!(
-        media.hash == admission.admitted_source_blake3 && media.claim == admission.claim,
+        hash_matches && media.claim == admission.claim,
         "Failed-only cleanup media differs from the immutable admission"
     );
     let mut companions = entries
@@ -632,6 +639,10 @@ pub(super) fn require_revision(conn: &Connection, key: &str, expected: i64) -> R
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        Blake3Entry, FastImgSourceAdmission, initialize_with_admission, read_marker,
+        read_source_evidence, write_marker,
+    };
     use super::*;
     use crate::db::mfb_sqlite_store::set_test_store_path_for_tests;
 

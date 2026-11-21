@@ -686,9 +686,10 @@ mod tests {
             crate::copy(&source, &destination).expect("align baseline metadata");
             let source_before = fs::metadata(&source).expect("source metadata");
             if mismatch == "mtime" {
-                filetime::set_file_mtime(
+                std::fs::set_times(
                     &destination,
-                    filetime::FileTime::from_unix_time(1_600_000_000, 0),
+                    std::fs::FileTimes::new()
+                        .set_modified(filetime::FileTime::from_unix_time(1_600_000_000, 0).into()),
                 )
                 .expect("set stale output timestamp");
             } else {
@@ -922,7 +923,11 @@ mod tests {
         fs::write(&wrong_ext, header).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let saved_time = filetime::FileTime::from_unix_time(1_500_000_000, 0);
-        filetime::set_file_mtime(temp.path(), saved_time).expect("set synthetic directory date");
+        std::fs::set_times(
+            temp.path(),
+            std::fs::FileTimes::new().set_modified(saved_time.into()),
+        )
+        .expect("set synthetic directory date");
         let checked = check_extension_mismatch_readonly(&wrong_ext)
             .unwrap_or_else(|e| panic!("error: {e:?}"));
 
@@ -932,8 +937,11 @@ mod tests {
         assert!(wrong_ext.exists());
         assert!(!temp.path().join("video_readonly.mp4").exists());
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(
-                &fs::metadata(temp.path()).expect("source directory metadata")
+            filetime::FileTime::from_system_time(
+                fs::metadata(temp.path())
+                    .expect("source directory metadata")
+                    .modified()
+                    .expect("read modified timestamp")
             ),
             saved_time
         );

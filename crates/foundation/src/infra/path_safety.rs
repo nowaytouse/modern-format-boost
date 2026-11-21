@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 /// Compare a requested name with the entry resolved by the caller's output policy.
+///
 /// Resolve only parents so a linked final component cannot stand in for another entry.
 /// The caller must still use the resolved path for I/O.
 #[must_use]

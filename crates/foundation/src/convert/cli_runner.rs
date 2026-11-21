@@ -1385,7 +1385,12 @@ mod tests {
         std::fs::create_dir(&output)?;
         std::fs::write(input.join("bad.mp4"), MINIMAL_MP4)?;
         let initial = filetime::FileTime::from_unix_time(1_600_000_000, 0);
-        filetime::set_file_times(&input, initial, initial)?;
+        std::fs::set_times(
+            &input,
+            std::fs::FileTimes::new()
+                .set_accessed(initial.into())
+                .set_modified(initial.into()),
+        )?;
         let mut config = test_config(input);
         config.output = Some(output.clone());
         config.error_mode = crate::BatchErrorMode::FailFast;
@@ -1400,7 +1405,11 @@ mod tests {
             "the original batch error must remain visible"
         );
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&std::fs::metadata(output)?),
+            filetime::FileTime::from_system_time(
+                std::fs::metadata(output)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             initial,
             "a partial run must finalize its existing output directory metadata"
         );

@@ -47,6 +47,8 @@ fn configuration_precedence_and_failure_are_observable_without_media() -> anyhow
             "explicit.json",
             "--jpeg-effort",
             "7",
+            "--jpeg-effort-search",
+            "adaptive",
             "--tool",
             "cjxl=/cli/cjxl",
         ],

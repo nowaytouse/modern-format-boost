@@ -2223,7 +2223,12 @@ impl XmpMerger {
         _xmp: Option<(filetime::FileTime, filetime::FileTime)>,
     ) {
         if let Some((atime, mtime)) = original
-            && let Err(e) = filetime::set_file_times(media_path, atime, mtime)
+            && let Err(e) = std::fs::set_times(
+                media_path,
+                std::fs::FileTimes::new()
+                    .set_accessed(atime.into())
+                    .set_modified(mtime.into()),
+            )
         {
             crate::media_conversion_gate::delivery_metadata_path_audit(
                 "delivery_metadata_xmp",

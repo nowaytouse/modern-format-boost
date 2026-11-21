@@ -533,6 +533,7 @@ pub fn read_jpeg_execution_receipts_for_source(
 }
 
 /// Read up to 64 historical receipts in deterministic key order for an exact source.
+///
 /// Pass a cursor returned for this task and source to continue after that receipt.
 /// Each call sees a new store snapshot, so concurrent appends can change later pages.
 /// # Errors

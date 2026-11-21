@@ -23,6 +23,16 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Media Exploration and Batch Reporting (2026-11-21)
+
+- Choose full or adaptive reversible JPEG comparison. Pixel JXL and Fast AVIF
+  adapt to each input, with optional search limits. Pixel JXL can require exact
+  output while still comparing encoder efforts. Retire fixed encoder settings
+  and resolve saved legacy settings to the current search policy.
+- Reuse the Fast IMG worker’s output-size receipt. Older receipts can still
+  report JXL or AVIF size through a fallback scan. Delivery verification runs
+  independently of size reporting.
+
 ### Media Recovery and Verification (2026-11-14)
 
 - Bind Fast IMG previews, retries and cleanup to saved source, output and

@@ -1101,7 +1101,12 @@ mod tests {
         let origin = original.working_copy.join(".mfb_wc");
         fs::write(&origin, &raw)?;
         let time = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
-        filetime::set_file_times(&original.working_copy, time, time)?;
+        std::fs::set_times(
+            &original.working_copy,
+            std::fs::FileTimes::new()
+                .set_accessed(time.into())
+                .set_modified(time.into()),
+        )?;
         assert!(
             reject_unmigrated_for_source(&original.src_dir)
                 .unwrap_err()
@@ -1116,7 +1121,11 @@ mod tests {
         assert_eq!((report.migrated, report.retired), (1, 1));
         assert!(!origin.exists());
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(&original.working_copy)?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(&original.working_copy)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             time
         );
         let conn = open_readonly()?.context("Migration did not create SQL")?;
@@ -1137,11 +1146,20 @@ mod tests {
         // generation back to the previous retirement's timestamp.
         fs::write(&origin, &raw)?;
         let new_time = filetime::FileTime::from_unix_time(1_600_000_000, 987_654_321);
-        filetime::set_file_times(&original.working_copy, new_time, new_time)?;
+        std::fs::set_times(
+            &original.working_copy,
+            std::fs::FileTimes::new()
+                .set_accessed(new_time.into())
+                .set_modified(new_time.into()),
+        )?;
         assert!(migrate_legacy_for_source(&original.src_dir, None).is_err());
         assert_eq!(fs::read(&origin)?, raw);
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(&original.working_copy)?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(&original.working_copy)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             new_time
         );
         fs::remove_file(&origin)?;
@@ -1212,10 +1230,11 @@ mod tests {
         assert_eq!(read_snapshot(&conn, &key)?.unwrap(), original);
         fs::write(&origin, &raw)?;
         let before_interruption = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
-        filetime::set_file_times(
+        std::fs::set_times(
             &original.working_copy,
-            before_interruption,
-            before_interruption,
+            std::fs::FileTimes::new()
+                .set_accessed(before_interruption.into())
+                .set_modified(before_interruption.into()),
         )?;
         let pending = backup_for_origin(&conn, &origin)?;
         let saved = prepare_retirement_baseline(&mut conn, &pending)?;
@@ -1229,13 +1248,22 @@ mod tests {
         // Simulate the changed directory time left by the interrupted process.
         // It must not become the recovery attempt's replacement baseline.
         let interrupted_time = filetime::FileTime::from_unix_time(1_600_000_000, 987_654_321);
-        filetime::set_file_times(&original.working_copy, interrupted_time, interrupted_time)?;
+        std::fs::set_times(
+            &original.working_copy,
+            std::fs::FileTimes::new()
+                .set_accessed(interrupted_time.into())
+                .set_modified(interrupted_time.into()),
+        )?;
         assert!(reject_unmigrated_for_working_copy(&original.working_copy).is_err());
         let report = migrate_legacy_for_source(&original.src_dir, None)?;
         assert_eq!((report.migrated, report.retired), (0, 1));
         assert!(!origin.exists() && !holding.exists());
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(&original.working_copy)?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(&original.working_copy)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             before_interruption,
             "recovery must restore the pre-interruption timestamp, not recapture the changed one",
         );
@@ -1271,7 +1299,12 @@ mod tests {
         let root = tempfile::tempdir()?;
         let (original, mut conn, backup) = pending_fixture(root.path(), "removed")?;
         let before = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
-        filetime::set_file_times(&original.working_copy, before, before)?;
+        std::fs::set_times(
+            &original.working_copy,
+            std::fs::FileTimes::new()
+                .set_accessed(before.into())
+                .set_modified(before.into()),
+        )?;
         let saved = prepare_retirement_baseline(&mut conn, &backup)?;
         let (parent, holding, moved) = retirement_paths(&saved)?;
         fs::create_dir(&holding)?;
@@ -1279,12 +1312,21 @@ mod tests {
         fs::remove_file(&moved)?;
         fs::remove_dir(&holding)?;
         let interrupted = filetime::FileTime::from_unix_time(1_600_000_000, 987_654_321);
-        filetime::set_file_times(&parent, interrupted, interrupted)?;
+        std::fs::set_times(
+            &parent,
+            std::fs::FileTimes::new()
+                .set_accessed(interrupted.into())
+                .set_modified(interrupted.into()),
+        )?;
         drop(conn);
         let report = migrate_legacy_for_source(&original.src_dir, None)?;
         assert_eq!((report.migrated, report.retired), (0, 1));
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(&parent)?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(&parent)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             before
         );
 
@@ -1331,7 +1373,12 @@ mod tests {
         let retained = original.working_copy.join("unrelated.txt");
         fs::write(&retained, b"original unrelated bytes")?;
         let before = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
-        filetime::set_file_times(&original.working_copy, before, before)?;
+        std::fs::set_times(
+            &original.working_copy,
+            std::fs::FileTimes::new()
+                .set_accessed(before.into())
+                .set_modified(before.into()),
+        )?;
         let saved = prepare_retirement_baseline(&mut conn, &backup)?;
         conn.execute(
             "UPDATE fast_img_migrations SET directory_snapshot_blake3=?1 WHERE origin_path=?2",
@@ -1350,12 +1397,21 @@ mod tests {
         fs::rename(&saved.path, &moved)?;
         fs::write(&retained, b"externally changed unrelated bytes")?;
         let external_time = filetime::FileTime::from_unix_time(1_600_000_000, 987_654_321);
-        filetime::set_file_times(&original.working_copy, external_time, external_time)?;
+        std::fs::set_times(
+            &original.working_copy,
+            std::fs::FileTimes::new()
+                .set_accessed(external_time.into())
+                .set_modified(external_time.into()),
+        )?;
         assert!(migrate_legacy_for_source(&original.src_dir, None).is_err());
         assert_eq!(fs::read(&retained)?, b"externally changed unrelated bytes");
         assert!(!backup_for_origin(&conn, &saved.path)?.retired);
         assert_ne!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(&original.working_copy)?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(&original.working_copy)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789)
         );
         inspect_backups(&conn)?;
@@ -1392,7 +1448,12 @@ mod tests {
         }
         tx.commit()?;
         let before = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
-        filetime::set_file_times(&directory, before, before)?;
+        std::fs::set_times(
+            &directory,
+            std::fs::FileTimes::new()
+                .set_accessed(before.into())
+                .set_modified(before.into()),
+        )?;
         // Select the last filename so ordinary pathname order would incorrectly
         // capture its sibling while this baseline's holding directory exists.
         let last = backups(&conn)?
@@ -1407,7 +1468,11 @@ mod tests {
         assert_eq!((report.migrated, report.retired), (0, 2));
         assert!(fs::read_dir(&directory)?.next().is_none());
         assert_eq!(
-            filetime::FileTime::from_last_modification_time(&fs::metadata(&directory)?),
+            filetime::FileTime::from_system_time(
+                fs::metadata(&directory)?
+                    .modified()
+                    .expect("read modified timestamp")
+            ),
             before
         );
         let conn = open_readonly()?.context("Migration DB disappeared")?;

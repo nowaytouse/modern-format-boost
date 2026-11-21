@@ -492,7 +492,6 @@ impl WorkerObservation {
 }
 
 impl PreflightReport {
-    #[must_use]
     pub fn new(
         plans: Vec<RoutingPlan>,
         workers: Vec<WorkerObservation>,

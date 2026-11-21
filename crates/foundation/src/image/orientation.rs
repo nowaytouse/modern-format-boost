@@ -209,12 +209,11 @@ pub fn verify_orientation_pixel_diff(
         );
         return Ok(PixelDiffResult::SkippedToolAbsent { tool: decoder_tool });
     };
-    let float_source = if matches!(
+    let float_source = matches!(
         diff_tolerance,
         DiffTolerance::Exact | DiffTolerance::JxlOrientation | DiffTolerance::JxlPixelEquivalent
     ) && fmt == FormatKind::Jxl
-    {
-        match crate::image_detection::open_image_with_limits(source_image) {
+        && match crate::image_detection::open_image_with_limits(source_image) {
             Ok(image) => matches!(
                 image.color(),
                 image::ColorType::Rgb32F | image::ColorType::Rgba32F
@@ -230,10 +229,7 @@ pub fn verify_orientation_pixel_diff(
                 );
                 false
             }
-        }
-    } else {
-        false
-    };
+        };
     let decode_cmd = |inp: &Path, out: &Path| {
         let mut command = std::process::Command::new(&decoder_path);
         command.arg(inp);
@@ -1027,6 +1023,7 @@ fn max_rgb_delta(ref_img: &image::DynamicImage, out_img: &image::DynamicImage) -
 }
 
 /// Read the EXIF Orientation value (1–8) from a file.
+///
 /// A missing tag means orientation 1 only after a complete orientation read.
 /// Known unrelated ICC/IPTC/UserComment/MakerNotes diagnostics remain recorded warnings.
 ///
@@ -2239,7 +2236,7 @@ mod tests {
         let mut duplicate = explicit.clone();
         duplicate[0]["IFD0:Copy1:Orientation"] = serde_json::json!(6);
         assert!(parse(&duplicate).is_err());
-        let mut error = accepted.clone();
+        let mut error = accepted;
         error[0]["ExifTool:Error"] = serde_json::json!("read failed");
         assert!(parse(&error).is_err());
     }
@@ -2248,8 +2245,8 @@ mod tests {
     fn orientation_json_requires_one_identified_complete_record() {
         let source = std::path::Path::new("source.jpg");
         for json in [
-            br#"[]"#.as_slice(),
-            br#"[{},{}]"#,
+            b"[]".as_slice(),
+            b"[{},{}]",
             br#"[{"IFD0:Orientation":6}]"#,
             br#"[{"SourceFile":"other.jpg"}]"#,
             br#"[{"SourceFile":"source.jpg","IFD0:Orientation":6,"IFD0:Orientation":1}]"#,
@@ -2314,7 +2311,7 @@ mod tests {
         assert_eq!(std::fs::read(&source).unwrap(), fixture);
         // An unreadable IFD0 must still reject when the same unrelated ICC
         // warning is present. No warning suppression is part of this proof.
-        let mut broken_exif = exif.to_vec();
+        let mut broken_exif = exif.clone();
         broken_exif[10..14].copy_from_slice(&u32::MAX.to_le_bytes());
         let mut broken = jpeg[..2].to_vec();
         broken.extend(segment(0xe2, &icc));

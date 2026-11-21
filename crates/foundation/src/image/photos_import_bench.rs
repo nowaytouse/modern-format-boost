@@ -237,7 +237,7 @@ fn photos_pipeline_debug_benchmark() -> anyhow::Result<()> {
         anyhow::ensure!(output.status.success(), "Photos asset count failed");
         Ok(String::from_utf8(output.stdout)?.trim().parse()?)
     };
-    let before = (count <= 1000).then(&count_assets).transpose()?;
+    let before = (count <= 1000).then(count_assets).transpose()?;
 
     // Keep synthetic inputs and the report after any failed or uncertain import.
     let scratch = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(

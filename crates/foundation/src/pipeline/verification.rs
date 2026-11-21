@@ -2338,9 +2338,10 @@ mod tests {
                 ctx.blake3_log["synthetic.jpg"].out
             );
         }
-        filetime::set_file_mtime(
+        std::fs::set_times(
             &output,
-            filetime::FileTime::from_unix_time(1_600_000_000, 0),
+            std::fs::FileTimes::new()
+                .set_modified(filetime::FileTime::from_unix_time(1_600_000_000, 0).into()),
         )
         .unwrap();
         let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
@@ -3300,10 +3301,18 @@ mod tests {
         let out = wc.join("a.JXL");
         std::fs::write(&src, b"source-jpeg-bytes").unwrap();
         std::fs::write(&out, b"jxl-output-bytes").unwrap();
-        filetime::set_file_mtime(&src, filetime::FileTime::from_unix_time(1_700_000_000, 0))
-            .unwrap();
-        filetime::set_file_mtime(&out, filetime::FileTime::from_unix_time(1_700_000_123, 0))
-            .unwrap();
+        std::fs::set_times(
+            &src,
+            std::fs::FileTimes::new()
+                .set_modified(filetime::FileTime::from_unix_time(1_700_000_000, 0).into()),
+        )
+        .unwrap();
+        std::fs::set_times(
+            &out,
+            std::fs::FileTimes::new()
+                .set_modified(filetime::FileTime::from_unix_time(1_700_000_123, 0).into()),
+        )
+        .unwrap();
         let mut ctx = PipelineCtx {
             working_copy: wc,
             src_dir,
@@ -3368,8 +3377,8 @@ mod tests {
         std::fs::write(&src, &malformed).unwrap();
         std::fs::write(&out, &malformed).unwrap();
         let mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
-        filetime::set_file_mtime(&src, mtime).unwrap();
-        filetime::set_file_mtime(&out, mtime).unwrap();
+        std::fs::set_times(&src, std::fs::FileTimes::new().set_modified(mtime.into())).unwrap();
+        std::fs::set_times(&out, std::fs::FileTimes::new().set_modified(mtime.into())).unwrap();
         let ctx = PipelineCtx {
             working_copy: wc,
             src_dir,
@@ -3390,7 +3399,7 @@ mod tests {
         let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
         assert!(!result.passed);
         assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
-        assert_eq!(result.affected_files, [out.clone()]);
+        assert_eq!(result.affected_files.as_slice(), std::slice::from_ref(&out));
         assert!(
             result.actual.contains("Bad IFD1 directory"),
             "{}",
@@ -3406,7 +3415,7 @@ mod tests {
         xmp_jpeg.extend_from_slice(&jpeg[2..]);
         for path in [&src, &out] {
             std::fs::write(path, &xmp_jpeg).unwrap();
-            filetime::set_file_mtime(path, mtime).unwrap();
+            std::fs::set_times(path, std::fs::FileTimes::new().set_modified(mtime.into())).unwrap();
         }
         let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
         assert!(!result.passed);
@@ -3451,8 +3460,16 @@ mod tests {
             );
         }
         let shared_mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
-        filetime::set_file_mtime(&src, shared_mtime).unwrap();
-        filetime::set_file_mtime(&out, shared_mtime).unwrap();
+        std::fs::set_times(
+            &src,
+            std::fs::FileTimes::new().set_modified(shared_mtime.into()),
+        )
+        .unwrap();
+        std::fs::set_times(
+            &out,
+            std::fs::FileTimes::new().set_modified(shared_mtime.into()),
+        )
+        .unwrap();
         let mut ctx = PipelineCtx {
             working_copy: wc,
             src_dir,
@@ -4729,21 +4746,21 @@ impl WorkingCopyMarker {
     }
 
     #[must_use]
-    pub fn failed_source_count(&self) -> usize {
+    pub const fn failed_source_count(&self) -> usize {
         self.failed_sources
             .len()
             .saturating_add(self.tier2_failed_sources.len())
     }
 
     #[must_use]
-    pub fn expected_output_count(&self) -> usize {
+    pub const fn expected_output_count(&self) -> usize {
         self.primary_source_count()
             .saturating_sub(self.skipped_sources.len())
             .saturating_sub(self.failed_sources.len())
     }
 
     #[must_use]
-    pub fn recorded_source_count(&self) -> usize {
+    pub const fn recorded_source_count(&self) -> usize {
         self.blake3_log
             .len()
             .saturating_add(self.skipped_sources.len())
@@ -4751,12 +4768,12 @@ impl WorkingCopyMarker {
     }
 
     #[must_use]
-    pub fn source_disposition_is_complete(&self) -> bool {
+    pub const fn source_disposition_is_complete(&self) -> bool {
         self.recorded_source_count() == self.primary_source_count()
     }
 
     #[must_use]
-    pub fn source_disposition_over_recorded(&self) -> bool {
+    pub const fn source_disposition_over_recorded(&self) -> bool {
         self.recorded_source_count() > self.primary_source_count()
     }
 
@@ -5076,10 +5093,12 @@ impl std::fmt::Display for PhotosWorkingCopyUnavailable {
 impl std::error::Error for PhotosWorkingCopyUnavailable {}
 
 /// Distinguish a blocked private output from an unreadable state authority.
+#[must_use]
 pub fn is_photos_working_copy_unavailable(error: &std::io::Error) -> bool {
     error
         .get_ref()
-        .is_some_and(|cause| cause.is::<PhotosWorkingCopyUnavailable>())
+        .and_then(|cause| cause.downcast_ref::<PhotosWorkingCopyUnavailable>())
+        .is_some()
 }
 
 fn inspect_photos_working_copy_directory(directory: &Path) -> std::io::Result<()> {
@@ -6211,7 +6230,7 @@ mod working_copy_tests {
         let sibling = working_copy_dir(&source);
         std::fs::write(&sibling, b"unowned sibling")?;
         let (private, conflicts) = inspect_fresh_working_copy_dir_for_delivery(&source, true, 10)?;
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts.len(), 0);
         assert_eq!(
             private,
             resolve_working_copy_dir_for_delivery(&source, "jxl", true)?

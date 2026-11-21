@@ -1,6 +1,12 @@
 //! Durable source unlink evidence for original-format Photos delivery.
 
-use super::*;
+use super::{
+    BTreeMap, BTreeSet, Connection, Context, FailedRetryAdmission, FailedRetrySidecar,
+    FastImgAdmissionPlan, FastImgAdmissionRoute, FastImgAdmissionSidecar, Path, Result, Serialize,
+    TransactionBehavior, WorkingCopyMarker, bail, canonical_bytes, canonical_text, cleanup, ensure,
+    in_snapshot, inspect_store_schema_version, io, key_for_canonical, open_readonly,
+    open_store_connection, params, read_snapshot, retry,
+};
 use crate::batch::{DiscoveredSource, planned_source::PlannedSource};
 use crate::image::fast_img::{SourceUnlinkEvent, SourceUnlinkKind, Tier2CleanupObserver};
 use crate::pipeline::verification::{
@@ -117,8 +123,9 @@ fn validate_entries(
         _ => bail!("Tier-2 XMP intent coverage differs from Photos receipt"),
     }
     if let Some(admission) = admission {
+        let hash_matches = admission.admitted_source_blake3 == media.hash;
         ensure!(
-            admission.admitted_source_blake3 == media.hash && admission.claim == media.claim,
+            hash_matches && admission.claim == media.claim,
             "Tier-2 media intent differs from immutable failed-only admission"
         );
         match (&admission.xmp, companion) {
@@ -704,6 +711,7 @@ impl Tier2CleanupObserver for Tier2CleanupJournal<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{read_marker, text, write_marker};
     use super::*;
     use crate::db::mfb_sqlite_store::set_test_store_path_for_tests;
     use SourceUnlinkEvent::{Intent, Ready, Removed};

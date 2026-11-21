@@ -12,9 +12,9 @@ use dev::infra::drag_drop::{
     IntegrityUnavailableReason, OutputCleanupOutcome, OutputCleanupReceipt,
     PhotosQuarantineBlocked, ProcessingFilter, ScanRoute, acquire_global_lock,
     adjacent_output_for_target, build_size_comparison_summary, confirm_in_place,
-    count_fast_img_jxl_outputs, create_directory_structure,
-    delete_fast_img_shortest_path_output_dir, exact_fast_img_photos_cleanup_recovery,
-    fast_img_cleanup_checkpoint_digest, fast_img_partial_cleanup_verified,
+    create_directory_structure, delete_fast_img_shortest_path_output_dir,
+    exact_fast_img_photos_cleanup_recovery, fast_img_cleanup_checkpoint_digest,
+    fast_img_partial_cleanup_verified, fast_img_reported_output_bytes,
     fast_img_retained_file_names, fast_img_retained_only_verified, fast_img_session_size_metrics,
     observe_historical_fast_img_outputs, recover_fast_img_shortest_path_output_dir,
     run_unified_verification, safety_check, scan_content, sync_non_media_files,
@@ -206,28 +206,25 @@ struct Args {
     #[arg(long, value_enum)]
     img_tool_policy: Option<ToolPolicy>,
 
-    /// JPEG reversible recompression effort, from 1 through 11; full search compares all efforts.
-    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=11))]
+    /// Upper effort for adaptive reversible JPEG comparison, from 2 through 11.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(2..=11))]
     img_jpeg_effort: Option<u8>,
-    /// JPEG search: fixed uses one effort, adaptive compares selected efforts, full compares all E1..E11.
+    /// JPEG search: adaptive compares selected efforts, full compares all E1..E11.
     #[arg(long, value_enum)]
     img_jpeg_effort_search: Option<foundation::runtime_config::JpegEffortSearch>,
 
-    /// Override pixel distance only where the private media policy permits lossy encoding.
+    /// Pixel JXL fidelity bound: 0 requires exact output, positive values cap eligible search.
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_jxl_distance)]
     img_jxl_distance: Option<f32>,
 
-    /// Fixed JXL pixel effort, or the highest candidate when effort search is enabled.
+    /// Upper effort for direct pixel JXL exploration, from 2 through 11.
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_direct_jxl_effort)]
     img_jxl_effort: Option<u8>,
     #[arg(long, value_enum)]
     img_jxl_effort_search: Option<foundation::runtime_config::EffortSearch>,
     #[arg(long, value_enum)]
     img_quality_search: Option<foundation::runtime_config::QualitySearch>,
-    /// Fast IMG AVIF quality, from 10 through 100.
-    #[arg(long, value_parser = clap::value_parser!(u8).range(10..=100))]
-    img_avif_quality: Option<u8>,
-    /// Fast IMG AVIF encoder speed, from 0 through 10.
+    /// Encoder speed for final Fast IMG AVIF quality comparison, from 0 through 10.
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=10))]
     img_avif_speed: Option<u8>,
 
@@ -718,15 +715,21 @@ fn validate_media_options(args: &Args) -> Result<()> {
         "--retry-failed requires --mode fast-img and exactly one source directory"
     );
     anyhow::ensure!(
-        (args.img_avif_quality.is_none() && args.img_avif_speed.is_none())
+        args.img_avif_speed.is_none()
             || (args.mode == LaunchMode::FastImg && args.strategy.as_deref() == Some("avif")),
-        "AVIF quality and speed require --mode fast-img --strategy avif"
+        "AVIF search speed requires --mode fast-img --strategy avif"
     );
     anyhow::ensure!(
         args.mode != LaunchMode::FastImg
             || args.strategy.as_deref() != Some("avif")
             || (args.img_jpeg_effort.is_none() && args.img_jpeg_effort_search.is_none()),
         "JPEG effort does not apply to Fast IMG AVIF"
+    );
+    anyhow::ensure!(
+        args.img_jpeg_effort.is_none()
+            || args.img_jpeg_effort_search
+                != Some(foundation::runtime_config::JpegEffortSearch::Full),
+        "a JPEG effort ceiling applies only to adaptive comparison; full comparison always searches E1 through E11"
     );
     anyhow::ensure!(
         (args.img_jxl_effort.is_none() && args.img_jxl_effort_search.is_none())
@@ -802,7 +805,6 @@ fn validate_media_options(args: &Args) -> Result<()> {
         || args.img_jxl_effort.is_some()
         || args.img_jxl_effort_search.is_some()
         || args.img_quality_search.is_some()
-        || args.img_avif_quality.is_some()
         || args.img_avif_speed.is_some()
         || args.img_quality_heuristic.is_some()
         || args.img_allow_database.is_some()
@@ -1659,23 +1661,16 @@ fn run_fast_img_post_success(
     let cleanup_output_path =
         std::path::absolute(output_dir).context("resolve output cleanup receipt path")?;
     if recovery.is_none() {
-        let (_, size) = match count_fast_img_jxl_outputs(output_dir) {
-            Ok(counts) => counts,
+        match fast_img_reported_output_bytes(
+            summary.fast_img_session_output_bytes,
+            output_dir,
+            args.strategy.as_deref().unwrap_or("jxl"),
+        ) {
+            Ok(bytes) => summary.fast_img_size_after_override = Some(bytes),
             Err(error) => {
-                let receipt = if args.shortest_path {
-                    OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
-                } else {
-                    OutputCleanupReceipt::not_requested(&cleanup_output_path)
-                };
-                if let Err(receipt_error) = session.record_output_cleanup(receipt) {
-                    return Err(error.context(format!(
-                        "also failed to persist output cleanup receipt: {receipt_error:#}"
-                    )));
-                }
-                return Err(error);
+                eprintln!("[WARN] Fast IMG output byte measurement unavailable: {error:#}")
             }
-        };
-        summary.fast_img_size_after_override = summary.fast_img_session_output_bytes.or(Some(size));
+        }
     }
 
     draw_separator("Auto Verification");
@@ -1684,7 +1679,7 @@ fn run_fast_img_post_success(
         pick_symbol("🔍", "[CHECK]")
     );
     let target = args.inputs.first().context("input required")?;
-    let verification = (|| {
+    let verification = {
         let mode = if let Some(digest) = &recovery_digest {
             dev::infra::drag_drop::VerifyFastImgMode::PhotosCleanupRecovery(digest.clone())
         } else {
@@ -1705,7 +1700,7 @@ fn run_fast_img_post_success(
                 strategy: args.strategy.clone(),
             },
         )
-    })();
+    };
     let verify = match verification {
         Ok(verify) => verify,
         Err(error) => {
@@ -2448,9 +2443,6 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
             foundation::runtime_config::QualitySearch::Adaptive => "adaptive",
         };
         command.extend(["--quality-search".to_owned(), value.to_owned()]);
-    }
-    if let Some(quality) = args.img_avif_quality {
-        command.extend(["--avif-quality".to_owned(), quality.to_string()]);
     }
     if let Some(speed) = args.img_avif_speed {
         command.extend(["--avif-speed".to_owned(), speed.to_string()]);
@@ -3409,21 +3401,16 @@ fn run_drag_drop_inner(
         if let Some(ref scan) = scan
             && first_error.is_none()
         {
-            let (before, after) = if matches!(args.mode, LaunchMode::FastImg) {
+            let size_comparison = if matches!(args.mode, LaunchMode::FastImg) {
                 let before = summary
                     .fast_img_session_source_bytes
                     .unwrap_or(scan.media_total_size);
-                let after = if let Some(bytes) = summary
+                summary
                     .fast_img_size_after_override
                     .or(summary.fast_img_session_output_bytes)
-                {
-                    bytes
-                } else {
-                    du_size_recursive(&adjacent_output_dir(args))?
-                };
-                (before, after)
+                    .map(|after| (before, after))
             } else if args.in_place {
-                (scan.media_total_size, scan.media_total_size)
+                Some((scan.media_total_size, scan.media_total_size))
             } else if plans.len() > 1 {
                 let after = plans.iter().try_fold(0u64, |total, plan| {
                     let output = plan
@@ -3434,21 +3421,23 @@ fn run_drag_drop_inner(
                         .checked_add(du_size_recursive(output)?)
                         .context("batch output byte count overflow")
                 })?;
-                (scan.media_total_size, after)
+                Some((scan.media_total_size, after))
             } else {
-                (
+                Some((
                     scan.media_total_size,
                     du_size_recursive(&adjacent_output_dir(args))?,
-                )
+                ))
             };
-            let block = build_size_comparison_summary(
-                before,
-                after,
-                if args.in_place { "every" } else { "normal" },
-                processing_filter(args).verify_mode_label(),
-            );
-            println!("\n{block}");
-            size_summary_block = Some(block);
+            if let Some((before, after)) = size_comparison {
+                let block = build_size_comparison_summary(
+                    before,
+                    after,
+                    if args.in_place { "every" } else { "normal" },
+                    processing_filter(args).verify_mode_label(),
+                );
+                println!("\n{block}");
+                size_summary_block = Some(block);
+            }
         }
     }
     if let Some(sess) = session
@@ -3474,15 +3463,22 @@ fn run_drag_drop_inner(
     }
 
     if plans.len() == 1
-        && let (Some(sess), Some(output_dir)) = (session, &args.output)
+        && session.is_some()
+        && let Some(output_dir) = &args.output
     {
-        let output_size = if let Some(override_size) = summary.fast_img_size_after_override {
-            override_size
+        let sizes = if matches!(args.mode, LaunchMode::FastImg) {
+            summary
+                .fast_img_session_source_bytes
+                .zip(summary.fast_img_size_after_override)
+        } else if let Some(source_dir) = args.inputs.first() {
+            Some((
+                du_size_recursive(source_dir)?,
+                du_size_recursive(output_dir)?,
+            ))
         } else {
-            du_size_recursive(output_dir)?
+            None
         };
-        if let Some(source_dir) = args.inputs.first() {
-            let source_size = du_size_recursive(source_dir)?;
+        if let Some((source_size, output_size)) = sizes {
             let ratio = if source_size > 0 {
                 foundation::numeric_cast::u64_to_f64(output_size)
                     / foundation::numeric_cast::u64_to_f64(source_size)
@@ -3496,7 +3492,6 @@ fn run_drag_drop_inner(
                 format_bytes(output_size),
                 ratio * 100.0
             );
-            let _ = &sess;
         }
     }
 
@@ -3902,7 +3897,6 @@ fn build_run_args(
         img_jxl_effort: None,
         img_jxl_effort_search: None,
         img_quality_search: None,
-        img_avif_quality: None,
         img_avif_speed: None,
         img_quality_heuristic: None,
         img_allow_database: None,
@@ -4813,7 +4807,7 @@ fn main() -> Result<()> {
                 return Err(err);
             }
             eprintln!("drag/drop session archive failed: {err:#}");
-            let processing = format!("{:#}", run_result.as_ref().err().expect("checked"));
+            let processing = format!("{:#}", run_result.as_ref().expect_err("checked"));
             run_result = Err(err.context(format!(
                 "archive session; processing also reported: {processing}"
             )));
@@ -6247,17 +6241,13 @@ mod tests {
     }
 
     #[test]
-    fn child_config_marker_preserves_fast_avif_numeric_overrides() -> Result<()> {
+    fn child_config_marker_preserves_fast_avif_search_speed() -> Result<()> {
         let mut marker = synthetic_config_marker("img");
-        marker["config"]["img"]["avif_quality"] = serde_json::json!(10);
         marker["config"]["img"]["avif_speed"] = serde_json::json!(10);
-        marker["sources"]["img.avif_quality"] = serde_json::json!("CLI");
         marker["sources"]["img.avif_speed"] = serde_json::json!("CLI");
 
         let resolved = ChildConfigMarker::parse(&marker.to_string(), "img")?;
-        assert_eq!(resolved.config.img.avif_quality, 10);
         assert_eq!(resolved.config.img.avif_speed, 10);
-        assert_eq!(resolved.sources["img.avif_quality"], "CLI");
         assert_eq!(resolved.sources["img.avif_speed"], "CLI");
         Ok(())
     }
@@ -7112,6 +7102,8 @@ mod tests {
                 "strict",
                 "--img-tool-policy",
                 "single",
+                "--img-jpeg-effort-search",
+                "adaptive",
                 "--img-jpeg-effort",
                 "11",
                 "--img-quality-heuristic=false",
@@ -7183,105 +7175,38 @@ mod tests {
 
     #[test]
     #[serial]
-    fn fast_avif_numeric_settings_are_isolated_and_forwarded_exactly() -> Result<()> {
+    fn fast_avif_search_speed_is_isolated_and_forwarded_exactly() -> Result<()> {
         if isolated_state_test() {
             return Ok(());
         }
         let (input, _guard) = fast_img_plan_fixture();
-        for arguments in [
-            vec!["mfb", "--mode", "images", "--img-avif-quality", "10"],
-            vec![
+        assert!(Args::try_parse_from(["mfb", "--img-avif-quality", "80"]).is_err());
+        for speed in ["-1", "11"] {
+            assert!(Args::try_parse_from(["mfb", "--img-avif-speed", speed]).is_err());
+        }
+        for speed in ["0", "10"] {
+            let mut args = Args::try_parse_from([
                 "mfb",
                 "--mode",
                 "fast-img",
                 "--strategy",
-                "jxl",
+                "avif",
                 "--img-avif-speed",
-                "10",
-            ],
-            vec!["mfb", "--mode", "fast-vid", "--img-avif-quality", "100"],
-        ] {
-            let args = Args::try_parse_from(arguments)?;
+                speed,
+            ])?;
+            validate_media_options(&args)?;
+            let (command, _) = fast_img_launch_command(&args, Path::new("/repo"), input.path())?;
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--avif-speed", speed])
+            );
+            args.strategy = Some("jxl".to_owned());
+            assert!(validate_media_options(&args).is_err());
+            args.mode = LaunchMode::Images;
             assert!(validate_media_options(&args).is_err());
         }
-
-        for (flag, value) in [
-            ("--img-avif-quality", "-1"),
-            ("--img-avif-quality", "0"),
-            ("--img-avif-quality", "9"),
-            ("--img-avif-quality", "101"),
-            ("--img-avif-speed", "-1"),
-            ("--img-avif-speed", "11"),
-        ] {
-            assert!(
-                Args::try_parse_from([
-                    "mfb",
-                    "--mode",
-                    "fast-img",
-                    "--strategy",
-                    "avif",
-                    flag,
-                    value,
-                ])
-                .is_err()
-            );
-        }
-
-        let args = Args::try_parse_from([
-            "mfb",
-            "--mode",
-            "fast-img",
-            "--strategy",
-            "avif",
-            "--img-avif-quality",
-            "10",
-            "--img-avif-speed",
-            "0",
-            "/synthetic/input",
-        ])?;
-        validate_media_options(&args)?;
-        let (command, _) = fast_img_launch_command(&args, Path::new("/repo"), input.path())?;
-        assert!(
-            command
-                .args
-                .windows(2)
-                .any(|pair| pair == ["--avif-quality", "10"])
-        );
-        assert!(
-            command
-                .args
-                .windows(2)
-                .any(|pair| pair == ["--avif-speed", "0"])
-        );
-
-        let mut args = Args::try_parse_from([
-            "mfb",
-            "--mode",
-            "fast-img",
-            "--strategy",
-            "avif",
-            "--img-avif-quality",
-            "100",
-            "--img-avif-speed",
-            "10",
-            "/synthetic/input",
-        ])?;
-        validate_media_options(&args)?;
-        let (command, _) = fast_img_launch_command(&args, Path::new("/repo"), input.path())?;
-        assert!(
-            command
-                .args
-                .windows(2)
-                .any(|pair| pair == ["--avif-quality", "100"])
-        );
-        assert!(
-            command
-                .args
-                .windows(2)
-                .any(|pair| pair == ["--avif-speed", "10"])
-        );
-        args.mode = LaunchMode::Images;
-        assert!(validate_media_options(&args).is_err());
         Ok(())
     }
 
@@ -7300,6 +7225,8 @@ mod tests {
             "8",
             "--img-jxl-distance",
             "0.4",
+            "--img-jpeg-effort-search",
+            "adaptive",
             "--img-jpeg-effort",
             "11",
         ])?;
@@ -7333,7 +7260,7 @@ mod tests {
         fast.mode = LaunchMode::FastImg;
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_effort = None;
-        fast.img_jxl_distance = Some(0.0);
+        fast.img_jxl_distance = Some(0.001);
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_distance = None;
         fast.img_jpeg_effort_search = Some(foundation::runtime_config::JpegEffortSearch::Adaptive);
@@ -7351,8 +7278,9 @@ mod tests {
         for mode in [LaunchMode::Images, LaunchMode::FastImg] {
             let mut full = fast.clone();
             full.mode = mode;
-            full.img_jpeg_effort = Some(1);
             full.img_jpeg_effort_search = Some(foundation::runtime_config::JpegEffortSearch::Full);
+            assert!(validate_media_options(&full).is_err());
+            full.img_jpeg_effort = None;
             validate_media_options(&full)?;
             let command = if full.mode == LaunchMode::FastImg {
                 fast_img_launch_command(&full, Path::new("/repo"), input.path())?.0
@@ -7365,30 +7293,37 @@ mod tests {
                     .windows(2)
                     .any(|pair| pair == ["--jpeg-effort-search", "full"])
             );
-            assert!(
-                command
-                    .args
-                    .windows(2)
-                    .any(|pair| pair == ["--jpeg-effort", "1"])
-            );
+            assert!(!command.args.iter().any(|arg| arg == "--jpeg-effort"));
         }
         fast.img_jxl_distance = Some(0.4);
         assert!(validate_media_options(&fast).is_err());
-        fast.img_jxl_distance = Some(0.0);
+        fast.img_jxl_distance = Some(0.001);
         fast.strategy = Some("avif".to_owned());
         fast.img_jpeg_effort = None;
         assert!(validate_media_options(&fast).is_err());
-        for value in ["0", "12", "255"] {
+        for value in ["0", "1", "12", "255"] {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", value]).is_err());
         }
-        for effort in 1..=11 {
+        assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort", "1"]).is_err());
+        for flag in [
+            "--img-jpeg-effort-search",
+            "--img-jxl-effort-search",
+            "--img-quality-search",
+        ] {
+            assert!(Args::try_parse_from(["mfb", flag, "fixed"]).is_err());
+        }
+        assert!(Args::try_parse_from(["mfb", "--img-quality-search", "mode-default"]).is_err());
+        for effort in 2..=11 {
             let value = effort.to_string();
             assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", &value]).is_ok());
         }
         assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "adaptive"]).is_ok());
         assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "full"]).is_ok());
         assert!(Args::try_parse_from(["mfb", "--img-jxl-effort-search", "full"]).is_err());
-        for value in ["-0.1", "25.1", "NaN", "inf"] {
+        let exact = Args::try_parse_from(["mfb", "--mode", "images", "--img-jxl-distance", "0"])?;
+        assert_eq!(exact.img_jxl_distance, Some(0.0));
+        validate_media_options(&exact)?;
+        for value in ["-0.1", "0.0001", "25.1", "NaN", "inf"] {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-distance", value]).is_err());
         }
         for mode in ["videos", "fast-vid", "fast-img", "restore-jpeg", "collect"] {
@@ -7405,7 +7340,8 @@ mod tests {
         ])?;
         assert!(validate_media_options(&videos_only).is_err());
         for mode in ["videos", "fast-vid", "restore-jpeg", "collect"] {
-            let args = Args::try_parse_from(["mfb", "--mode", mode, "--img-jxl-distance", "0"])?;
+            let args =
+                Args::try_parse_from(["mfb", "--mode", mode, "--img-jxl-distance", "0.001"])?;
             assert!(validate_media_options(&args).is_err());
         }
         let args = Args::try_parse_from(["mfb", "--mode", "images"])?;
@@ -8264,10 +8200,10 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        assert!(args.contains(&"--rust-only".to_string()));
-        assert!(args.contains(&"--img".to_string()));
-        assert!(args.contains(&"--verify".to_string()));
-        assert!(!args.contains(&"--update".to_string()));
+        assert!(args.iter().any(|i: &String| i == "--rust-only"));
+        assert!(args.iter().any(|i: &String| i == "--img"));
+        assert!(args.iter().any(|i: &String| i == "--verify"));
+        assert!(!args.iter().any(|i: &String| i == "--update"));
     }
 
     #[test]
@@ -8279,11 +8215,11 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        assert!(args.contains(&"--locked".to_string()));
-        assert!(args.contains(&"--rust-only".to_string()));
-        assert!(args.contains(&"--vid".to_string()));
-        assert!(args.contains(&"--verify".to_string()));
-        assert!(!args.contains(&"--update".to_string()));
+        assert!(args.iter().any(|i: &String| i == "--locked"));
+        assert!(args.iter().any(|i: &String| i == "--rust-only"));
+        assert!(args.iter().any(|i: &String| i == "--vid"));
+        assert!(args.iter().any(|i: &String| i == "--verify"));
+        assert!(!args.iter().any(|i: &String| i == "--update"));
     }
 
     #[cfg(target_os = "macos")]
@@ -9969,7 +9905,6 @@ printf '%s\n' 'MFB_INTEGRITY_SUMMARY_JSON {"has_warnings":false,"issue_count":0,
             img_jxl_effort: None,
             img_jxl_effort_search: None,
             img_quality_search: None,
-            img_avif_quality: None,
             img_avif_speed: None,
             img_quality_heuristic: None,
             img_allow_database: None,
@@ -9992,12 +9927,12 @@ printf '%s\n' 'MFB_INTEGRITY_SUMMARY_JSON {"has_warnings":false,"issue_count":0,
             commands[1].program,
             PathBuf::from("/repo/target/release/vid")
         );
-        assert!(commands[0].args.contains(&"run".to_string()));
-        assert!(commands[1].args.contains(&"run".to_string()));
-        assert!(commands[0].args.contains(&"--archive".to_string()));
-        assert!(commands[1].args.contains(&"--archive".to_string()));
-        assert!(commands[0].args.contains(&"--plain".to_string()));
-        assert!(commands[1].args.contains(&"--plain".to_string()));
+        assert!(commands[0].args.iter().any(|i| i == "run"));
+        assert!(commands[1].args.iter().any(|i| i == "run"));
+        assert!(commands[0].args.iter().any(|i| i == "--archive"));
+        assert!(commands[1].args.iter().any(|i| i == "--archive"));
+        assert!(commands[0].args.iter().any(|i| i == "--plain"));
+        assert!(commands[1].args.iter().any(|i| i == "--plain"));
     }
 
     #[test]
@@ -10092,7 +10027,6 @@ printf '%s\n' 'MFB_INTEGRITY_SUMMARY_JSON {"has_warnings":false,"issue_count":0,
                 img_jxl_effort: None,
                 img_jxl_effort_search: None,
                 img_quality_search: None,
-                img_avif_quality: None,
                 img_avif_speed: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
@@ -10156,7 +10090,6 @@ printf '%s\n' 'MFB_INTEGRITY_SUMMARY_JSON {"has_warnings":false,"issue_count":0,
             img_jxl_effort: None,
             img_jxl_effort_search: None,
             img_quality_search: None,
-            img_avif_quality: None,
             img_avif_speed: None,
             img_quality_heuristic: None,
             img_allow_database: None,
@@ -10242,7 +10175,6 @@ printf '%s\n' 'MFB_INTEGRITY_SUMMARY_JSON {"has_warnings":false,"issue_count":0,
                 img_jxl_effort: None,
                 img_jxl_effort_search: None,
                 img_quality_search: None,
-                img_avif_quality: None,
                 img_avif_speed: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,

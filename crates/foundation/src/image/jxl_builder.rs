@@ -321,10 +321,10 @@ mod tests {
                     .any(|pair| pair == ["-e", &effort.to_string()])
             );
             assert_eq!(
-                args.contains(&"--allow_expert_options".to_string()),
+                args.iter().any(|arg| arg == "--allow_expert_options"),
                 effort == 11
             );
-            assert!(args.contains(&"--lossless_jpeg=1".to_string()));
+            assert!(args.iter().any(|arg| arg == "--lossless_jpeg=1"));
         }
     }
 
@@ -380,10 +380,26 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        assert!(!args.contains(&constants::JXL_ARG_PROGRESSIVE_DC_DISABLED.to_string()));
-        assert!(!args.contains(&constants::JXL_ARG_RESPONSIVE_DISABLED.to_string()));
-        assert!(!args.contains(&constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED.to_string()));
-        assert!(!args.contains(&constants::JXL_ARG_PHOTON_NOISE_DISABLED.to_string()));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == constants::JXL_ARG_PROGRESSIVE_DC_DISABLED)
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == constants::JXL_ARG_RESPONSIVE_DISABLED)
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED)
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == constants::JXL_ARG_PHOTON_NOISE_DISABLED)
+        );
     }
 
     #[test]
@@ -417,9 +433,9 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
 
-        assert!(args.contains(&"-e".to_string()));
-        assert!(args.contains(&"11".to_string()));
-        assert!(args.contains(&"--allow_expert_options".to_string()));
+        assert!(args.iter().any(|arg| arg == "-e"));
+        assert!(args.iter().any(|arg| arg == "11"));
+        assert!(args.iter().any(|arg| arg == "--allow_expert_options"));
     }
 
     /// CONTRACT: `--compress_boxes=0` only when `apple_compat` is enabled

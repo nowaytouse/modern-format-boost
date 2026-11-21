@@ -421,9 +421,8 @@ fn verify_existing_avif_meme_custody(
     }
     if source_features != output_features {
         let keep_feature = |line: &&str| {
-            !line
-                .split_once(':')
-                .is_some_and(|(label, _)| label.trim() == "* Progressive")
+            line.split_once(':')
+                .is_none_or(|(label, _)| label.trim() != "* Progressive")
         };
         if !allow_progressive_normalization
             || !avif_report_needs_progressive(&source_features)?
@@ -1157,7 +1156,7 @@ fn delete_matching_xmp_sidecar_path(
             output.display()
         ))
     })?;
-    removed_files.push(xmp_sidecar.to_path_buf());
+    removed_files.push(xmp_sidecar.clone());
     Ok(true)
 }
 
@@ -3658,7 +3657,7 @@ fn reconcile_uncertain_tier2_imports(
             }
             Ok(None) => (),
             Err(error) => {
-                tracing::warn!(target: "photos_import", %error, "Exact reconciliation of held original Photos submission did not succeed")
+                tracing::warn!(target: "photos_import", %error, "Exact reconciliation of held original Photos submission did not succeed");
             }
         }
     }
@@ -4210,7 +4209,7 @@ fn run_original_photos_submission_with(
             );
             report.map(|_| stdout)
         });
-        return match result {
+        match result {
             Err(error) if armed && photos_dispatch_error_is_known_unsent(&error) => {
                 crate::fast_img_store::release_unsent_photos_submission(marker, &intent)?;
                 Err(error)
@@ -4219,7 +4218,7 @@ fn run_original_photos_submission_with(
                 PhotosArmedSubmissionError(error).into(),
             )),
             other => other,
-        };
+        }
     } else {
         if permit.is_some() {
             return Err(ImgQualityError::AnalysisError(
@@ -4934,7 +4933,7 @@ where
                 }
                 Ok(None) => (),
                 Err(error) => {
-                    tracing::warn!(target: "photos_import", %error, "Exact reconciliation of held Photos submission did not succeed")
+                    tracing::warn!(target: "photos_import", %error, "Exact reconciliation of held Photos submission did not succeed");
                 }
             }
         }
@@ -5396,7 +5395,7 @@ where
         Ok(Some(assets)) => return Ok(PhotosImportBatchOutcome::Recovered(assets)),
         Ok(None) => (),
         Err(error) => {
-            tracing::warn!(target: "photos_import", %error, "Exact reconciliation did not establish Photos custody")
+            tracing::warn!(target: "photos_import", %error, "Exact reconciliation did not establish Photos custody");
         }
     }
     if fail_fast {
@@ -6565,9 +6564,7 @@ fn photos_import_retry_reason(detail: &str) -> Option<&'static str> {
         || detail.contains("没有权限")
         || detail.contains("不允许")
         || detail.contains("文件已损坏")
-    {
-        None
-    } else if (lower.contains("photos returned") && lower.contains(" imported items for "))
+        || (lower.contains("photos returned") && lower.contains(" imported items for "))
         || (lower.contains("photos applescript import returned") && lower.contains(" ids for "))
     {
         None
@@ -8783,7 +8780,7 @@ fn strict_photos_quarantine(path: &Path) -> Result<bool> {
 // A clean Tier-2 receipt previously required an unmarked submitted file and
 // original. New direct receipts allow only the documented Photos-local mark on
 // the exact original. Either receipt still attests to a clean submitted file.
-fn tier2_receipt_allows_photos_provenance(asset: &LibraryAssetRecord) -> bool {
+const fn tier2_receipt_allows_photos_provenance(asset: &LibraryAssetRecord) -> bool {
     !asset.quarantined && asset.library_blake3.is_none() && asset.xmp_sidecar_blake3.is_none()
 }
 
@@ -9734,7 +9731,7 @@ mod tests {
         let out_hash = crate::common_utils::calculate_blake3_hash(&out)?;
         let candidates = vec![PhotosImportCandidate {
             rel_path: "nested/a.GIF".to_string(),
-            path: out.clone(),
+            path: out,
             blake3: out_hash.clone(),
             album_name: "✨clip_gif".to_string(),
         }];
@@ -9993,7 +9990,7 @@ mod tests {
                 .to_string()
                 .contains("could not bind")
         );
-        assert!(verified.is_empty());
+        assert_eq!(verified.len(), 0);
         #[cfg(unix)]
         {
             legacy[0].blake3 = out_hash;
@@ -11056,7 +11053,7 @@ mod tests {
         reject_referenced_cleanup_targets(&[probe(original)], &targets)?;
         assert!(b.exists() && xmp.exists());
         let later = root.path().join("missing-parent/later.webp");
-        let absent = tier2_cleanup_targets(&[later.clone()])?;
+        let absent = tier2_cleanup_targets(std::slice::from_ref(&later))?;
         std::fs::create_dir_all(later.parent().unwrap())?;
         std::fs::write(&later, b"newly appeared input")?;
         assert!(tier2_cleanup_source_present(&later, &absent).is_err());
@@ -11859,9 +11856,9 @@ end mfbResolveAlbumComponent
             marker.blake3_log.insert(
                 source_rel,
                 Blake3Entry {
-                    out_rel: Some(rel_path.clone()),
+                    out_rel: Some(rel_path),
                     src: blake3::hash(name.as_bytes()).to_hex().to_string(),
-                    out: out.clone(),
+                    out,
                     library_asset: None,
                 },
             );
@@ -12770,11 +12767,11 @@ end mfbResolveAlbumComponent
                     panic!("unknown submission must remain pending");
                 };
                 assert!(error.to_string().contains("submission remains unconfirmed"));
-                assert!(marker.photos_imported_assets.is_empty());
+                assert_eq!(marker.photos_imported_assets.len(), 0);
                 assert!(marker.blake3_log["a.jpg"].library_asset.is_none());
             } else {
                 assert!(matches!(result, Ok(PhotosImportBatchOutcome::Uncertain)));
-                assert!(marker.photos_imported_assets.is_empty());
+                assert_eq!(marker.photos_imported_assets.len(), 0);
                 assert!(marker.blake3_log["a.jpg"].library_asset.is_none());
             }
             assert_eq!(std::fs::read(&source)?, b"source bytes");
@@ -13077,7 +13074,10 @@ end mfbResolveAlbumComponent
                 .contains("this media import was not sent")
         );
         assert_eq!(sends, 0);
-        assert!(crate::fast_img_store::uncertain_photos_intents(&marker)?.is_empty());
+        assert_eq!(
+            crate::fast_img_store::uncertain_photos_intents(&marker)?.len(),
+            0
+        );
         sql("DROP TRIGGER reject_dispatch;
              CREATE TRIGGER reject_receipt BEFORE INSERT ON fast_img_photos_receipts
              BEGIN SELECT RAISE(ABORT, 'synthetic receipt persistence failure'); END")?;
@@ -13136,7 +13136,7 @@ end mfbResolveAlbumComponent
         sql("DROP TRIGGER reject_receipt")?;
 
         let mut marker = crate::pipeline::verification::read_marker(&working)?;
-        assert!(marker.photos_imported_assets.is_empty());
+        assert_eq!(marker.photos_imported_assets.len(), 0);
         let mut plan = photos_import_checkpoint_plan(&marker, |_| Ok(false))?;
         assert_eq!(
             reconcile_uncertain_primary_imports(
@@ -14708,12 +14708,12 @@ end mfbResolveAlbumComponent
                 .to_string()
                 .contains("AAE companion custody differs from admission")
         );
-        assert!(removed.is_empty());
+        assert_eq!(removed.len(), 0);
         assert!(source.is_file());
         std::fs::write(&aae, b"synthetic adjustment")?;
         std::fs::copy(&aae, &copied)?;
         delete(&mut removed)?;
-        assert_eq!(removed, [source.clone()]);
+        assert_eq!(removed.as_slice(), std::slice::from_ref(&source));
         assert!(!source.exists());
         assert_eq!(std::fs::read(&aae)?, b"synthetic adjustment");
         assert_eq!(std::fs::read(&copied)?, b"synthetic adjustment");
@@ -14896,7 +14896,7 @@ end mfbResolveAlbumComponent
             match failure {
                 "ready" | "replaced" => {
                     assert_eq!(events.len(), 3);
-                    assert!(removed.is_empty());
+                    assert_eq!(removed.len(), 0);
                     assert!(source.is_file() && xmp.is_file());
                 }
                 "media receipt" => {
@@ -14976,7 +14976,7 @@ end mfbResolveAlbumComponent
         );
         assert!(reappeared.is_err());
         assert!(xmp.is_file());
-        assert!(removed.is_empty());
+        assert_eq!(removed.len(), 0);
         Ok(())
     }
 
@@ -14993,9 +14993,10 @@ end mfbResolveAlbumComponent
             let verified = super::VerifiedXmpCleanup::capture(sidecar.clone())?;
             match change {
                 "content" => std::fs::write(&sidecar, b"new unverified XMP")?,
-                "filesystem" => filetime::set_file_mtime(
+                "filesystem" => std::fs::set_times(
                     &sidecar,
-                    filetime::FileTime::from_unix_time(1_600_000_000, 0),
+                    std::fs::FileTimes::new()
+                        .set_modified(filetime::FileTime::from_unix_time(1_600_000_000, 0).into()),
                 )?,
                 _ => {
                     let replacement = root.path().join("replacement");
@@ -15015,7 +15016,7 @@ end mfbResolveAlbumComponent
                 .is_err(),
                 "{change} must invalidate the sidecar unlink proof"
             );
-            assert!(removed.is_empty());
+            assert_eq!(removed.len(), 0);
             assert!(source.exists() && output.exists() && sidecar.exists());
         }
         Ok(())
@@ -15268,7 +15269,7 @@ end mfbResolveAlbumComponent
         )
         .unwrap_err();
         assert!(error.to_string().contains("detected source drift"));
-        assert!(removed.is_empty());
+        assert_eq!(removed.len(), 0);
         assert_eq!(std::fs::read(path)?, b"changed synthetic source");
         Ok(())
     }
@@ -15388,7 +15389,7 @@ end mfbResolveAlbumComponent
         observer.reject = Some((Removed, Media));
         assert!(attempt(&mut removed, &mut observer).is_err());
         assert_eq!(observer.events.last(), Some(&(Removed, Media)));
-        assert_eq!(removed, [source.clone()]);
+        assert_eq!(removed.as_slice(), std::slice::from_ref(&source));
         assert!(!source.exists() && xmp.is_file());
 
         observer.events.clear();

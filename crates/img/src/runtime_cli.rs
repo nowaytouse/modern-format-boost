@@ -178,9 +178,6 @@ pub(super) struct RuntimeArgs {
     /// Standard IMG only: maximum pure-media growth in bytes when tolerance is enabled.
     #[arg(long, global = true)]
     size_tolerance_bytes: Option<u64>,
-    /// Fixed AVIF quality for Fast IMG AVIF; progressive AVIF requires Q10 or higher.
-    #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(10..=100))]
-    avif_quality: Option<u8>,
     /// Final AVIF encoder speed for Fast IMG AVIF, in the backend's 0..10 range.
     #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(0..=10))]
     avif_speed: Option<u8>,
@@ -193,22 +190,22 @@ pub(super) struct RuntimeArgs {
     /// Permit alternate encoding/recovery tools, not repairs by itself; required analysis, decoding, metadata and verification tools remain available.
     #[arg(long, global = true, value_enum)]
     tool_policy: Option<ToolPolicy>,
-    /// Effort for fixed/sparse reversible JPEG-to-JXL encoding; full search always compares E1..E11.
-    #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(1..=11))]
+    /// Upper effort (E2..E11) for adaptive JPEG-to-JXL exploration.
+    #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(2..=11))]
     jpeg_effort: Option<u8>,
-    /// JPEG search: full (default) compares E1..E11; adaptive compares selected efforts; fixed uses one.
+    /// JPEG search: full (default) compares E1..E11; adaptive searches within an effort ceiling.
     #[arg(long, global = true, value_enum)]
     jpeg_effort_search: Option<runtime_config::JpegEffortSearch>,
-    /// Override distance for media where the private policy permits lossy encoding.
+    /// Maximum lossy JXL distance where the policy permits it. Zero allows only exact output.
     #[arg(long, global = true, value_parser = runtime_config::parse_jxl_distance)]
     jxl_distance: Option<f32>,
-    /// Fixed effort for direct pixel JXL encoding, or the highest candidate when searching.
+    /// Upper effort (E2..E11) for direct JXL exploration.
     #[arg(long, global = true, value_parser = runtime_config::parse_direct_jxl_effort)]
     jxl_effort: Option<u8>,
-    /// Direct JXL effort: adaptive (default) compares verified encodes; fixed uses one effort.
+    /// Compare verified direct JXL encodes within the effort ceiling.
     #[arg(long, global = true, value_enum)]
     jxl_effort_search: Option<runtime_config::EffortSearch>,
-    /// Quality search: adaptive (default) searches policy-eligible media; fixed disables the search.
+    /// Search for a fitting quality on eligible media.
     #[arg(long, global = true, value_enum)]
     quality_search: Option<runtime_config::QualitySearch>,
     #[command(flatten)]
@@ -263,11 +260,8 @@ impl RuntimeArgs {
             "Fast IMG JXL reconstructs exact JPEG bytes and has no quality search"
         );
         anyhow::ensure!(
-            strategy != "jxl"
-                || (self.avif_quality.is_none()
-                    && self.avif_speed.is_none()
-                    && self.avif_metadata_policy.is_none()),
-            "AVIF quality, speed and metadata policy settings apply only to Fast IMG AVIF"
+            strategy != "jxl" || (self.avif_speed.is_none() && self.avif_metadata_policy.is_none()),
+            "AVIF speed and metadata policy settings apply only to Fast IMG AVIF"
         );
         Ok(())
     }
@@ -275,10 +269,8 @@ impl RuntimeArgs {
     pub(crate) fn validate_avif_settings_scope(&self, fast_avif_or_config: bool) -> Result<()> {
         anyhow::ensure!(
             fast_avif_or_config
-                || (self.avif_quality.is_none()
-                    && self.avif_speed.is_none()
-                    && self.avif_metadata_policy.is_none()),
-            "AVIF quality, speed and metadata policy flags require Fast IMG AVIF or img config"
+                || (self.avif_speed.is_none() && self.avif_metadata_policy.is_none()),
+            "AVIF speed and metadata policy flags require Fast IMG AVIF or img config"
         );
         Ok(())
     }
@@ -413,13 +405,6 @@ impl RuntimeArgs {
             "img.size_tolerance_bytes",
         );
         apply(
-            self.avif_quality,
-            &mut config.img.avif_quality,
-            sources,
-            source_chain,
-            "img.avif_quality",
-        );
-        apply(
             self.avif_speed,
             &mut config.img.avif_speed,
             sources,
@@ -501,6 +486,12 @@ impl RuntimeArgs {
         self.execution.apply_to(&mut loaded);
         self.cache.apply_to(&mut loaded);
         self.tools.apply_to(&mut loaded)?;
+        anyhow::ensure!(
+            self.jpeg_effort.is_none()
+                || loaded.config.img.jpeg_effort_search
+                    == runtime_config::JpegEffortSearch::Adaptive,
+            "--jpeg-effort requires adaptive JPEG search (--jpeg-effort-search adaptive)"
+        );
         loaded.config.validate()?;
         Ok(loaded)
     }
@@ -566,15 +557,18 @@ mod tests {
             "avif",
             "--config",
             path,
-            "--avif-quality",
-            "10",
             "--avif-speed",
             "10",
             "--avif-metadata-policy",
             "clear",
         ])?;
         let loaded = cli.policy.resolve(false)?;
-        assert_eq!(loaded.config.img.avif_quality, 10);
+        assert_eq!(loaded.config.img.avif_quality, 100);
+        assert!(
+            serde_json::to_value(&loaded.config)?["img"]
+                .get("avif_quality")
+                .is_none()
+        );
         assert_eq!(loaded.config.img.avif_speed, 10);
         assert_eq!(
             loaded.config.img.avif_metadata_policy,
@@ -584,13 +578,9 @@ mod tests {
             loaded.config.img.quality_search,
             runtime_config::QualitySearch::Adaptive
         );
-        assert_eq!(loaded.sources["img.avif_quality"], "CLI");
+        assert!(!loaded.sources.contains_key("img.avif_quality"));
         assert_eq!(loaded.sources["img.avif_speed"], "CLI");
         assert_eq!(loaded.sources["img.avif_metadata_policy"], "CLI");
-        assert_eq!(
-            loaded.source_chain["img.avif_quality"],
-            ["default", path, "CLI"]
-        );
         assert_eq!(loaded.sources["img.quality_search"], path);
         assert_eq!(
             loaded.source_chain["img.avif_metadata_policy"],
@@ -603,11 +593,7 @@ mod tests {
 
     #[test]
     fn fast_avif_flags_are_scoped_before_processing() -> Result<()> {
-        for (flag, value) in [
-            ("--avif-quality", "10"),
-            ("--avif-speed", "10"),
-            ("--avif-metadata-policy", "clear"),
-        ] {
+        for (flag, value) in [("--avif-speed", "10"), ("--avif-metadata-policy", "clear")] {
             let run = crate::Cli::try_parse_from(["img", "run", "/unused", flag, value])?;
             assert!(run.policy.validate_avif_settings_scope(false).is_err());
 
@@ -626,9 +612,7 @@ mod tests {
             assert!(config.policy.validate_avif_settings_scope(true).is_ok());
         }
         for (flag, invalid) in [
-            ("--avif-quality", "0"),
-            ("--avif-quality", "9"),
-            ("--avif-quality", "101"),
+            ("--avif-quality", "85"),
             ("--avif-speed", "11"),
             ("--avif-metadata-policy", "preserve"),
             ("--avif-metadata-policy", "unknown"),
@@ -654,7 +638,7 @@ mod tests {
             "fast-img",
             "/unused",
             "--quality-search",
-            "fixed",
+            "adaptive",
         ])?;
         assert!(fast.policy.validate_fast_strategy("jxl").is_err());
         fast.policy.validate_fast_strategy("avif")?;
@@ -725,6 +709,58 @@ mod tests {
     }
 
     #[test]
+    fn saved_fixed_settings_migrate_and_fixed_cli_values_are_rejected() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("legacy.json");
+        std::fs::write(
+            &path,
+            br#"{"config_version":1,"img":{"avif_quality":85,"quality_search":"fixed","jxl_effort_search":"fixed","jpeg_effort_search":"fixed","jxl_effort":1,"jxl_distance":0.0001}}"#,
+        )?;
+        let path = path.to_str().context("test configuration path")?;
+        let loaded = crate::Cli::try_parse_from(["img", "config", "show", "--config", path])?
+            .policy
+            .resolve(false)?;
+        assert_eq!(
+            loaded.config.img.jpeg_effort_search,
+            runtime_config::JpegEffortSearch::Full
+        );
+        assert_eq!(
+            loaded.config.img.jxl_effort_search,
+            runtime_config::EffortSearch::Adaptive
+        );
+        assert_eq!(
+            loaded.config.img.quality_search,
+            runtime_config::QualitySearch::Adaptive
+        );
+        assert_eq!(loaded.config.img.jxl_effort, Some(2));
+        assert_eq!(loaded.config.img.jxl_distance, Some(0.0));
+        assert_eq!(loaded.sources["img.jxl_distance"], "exploration migration");
+        assert_eq!(loaded.config.img.avif_quality, 100);
+        for (flag, mode) in [
+            ("--jpeg-effort-search", "fixed"),
+            ("--jxl-effort-search", "fixed"),
+            ("--quality-search", "fixed"),
+            ("--quality-search", "mode-default"),
+        ] {
+            assert!(crate::Cli::try_parse_from(["img", "config", "show", flag, mode]).is_err());
+        }
+        let implicit_full = crate::Cli::try_parse_from([
+            "img",
+            "config",
+            "show",
+            "--no-config",
+            "--jpeg-effort",
+            "8",
+        ])?;
+        let Err(error) = implicit_full.policy.resolve(false) else {
+            anyhow::bail!("full search must reject an effort ceiling")
+        };
+        let error = error.to_string();
+        assert!(error.contains("requires adaptive JPEG search"));
+        Ok(())
+    }
+
+    #[test]
     fn full_jpeg_search_is_available_to_both_image_commands() -> Result<()> {
         for command in ["run", "fast-img"] {
             let defaults = crate::Cli::try_parse_from(["img", command, "/unused", "--no-config"])?
@@ -739,8 +775,6 @@ mod tests {
                 command,
                 "/unused",
                 "--no-config",
-                "--jpeg-effort",
-                "1",
                 "--jpeg-effort-search",
                 "full",
             ])?;
@@ -753,7 +787,7 @@ mod tests {
                 loaded.config.img.jpeg_effort_search,
                 runtime_config::JpegEffortSearch::Full
             );
-            assert_eq!(loaded.config.img.jpeg_effort, 1);
+            assert_eq!(loaded.config.img.jpeg_effort, 11);
             assert_eq!(
                 loaded.config.img.jxl_effort_search,
                 runtime_config::EffortSearch::Adaptive
@@ -785,7 +819,7 @@ mod tests {
                 (Vec::new(), 8, path),
                 (vec!["--jxl-effort", "7"], 7, "CLI"),
                 (vec!["--jxl-effort", "10"], 10, "CLI"),
-                (vec!["--jxl-effort", "1"], 1, "CLI"),
+                (vec!["--jxl-effort", "2"], 2, "CLI"),
                 (vec!["--jxl-effort", "11"], 11, "CLI"),
             ] {
                 let argv = [vec!["img", command, tail, "--config", path], flags].concat();
@@ -802,7 +836,7 @@ mod tests {
                 );
             }
         }
-        for effort in ["0", "12", "255", "256", "null"] {
+        for effort in ["0", "1", "12", "255", "256", "null"] {
             assert!(
                 crate::Cli::try_parse_from(["img", "config", "show", "--jxl-effort", effort])
                     .is_err()
@@ -822,7 +856,7 @@ mod tests {
         assert_eq!(loaded.config.img.jxl_effort, Some(8));
         assert_eq!(loaded.sources["img.jxl_distance"], path);
         assert_eq!(loaded.sources["img.jxl_effort"], path);
-        for distance in ["-0.1", "25.1", "NaN", "inf"] {
+        for distance in ["-0.1", "0.0009", "25.1", "NaN", "inf"] {
             assert!(
                 crate::Cli::try_parse_from(["img", "config", "show", "--jxl-distance", distance,])
                     .is_err()
@@ -857,38 +891,36 @@ mod tests {
 
     #[test]
     fn product_flags_do_not_rewrite_typed_parameter_overrides() -> Result<()> {
-        for quality in ["mode-default", "fixed", "adaptive"] {
-            for product_flag in ["--ultimate", "--archive", "--match-quality", "--explore"] {
-                let cli = crate::Cli::try_parse_from([
-                    "img",
-                    "run",
-                    "/unused",
-                    "--no-config",
-                    product_flag,
-                    "--jxl-effort",
-                    "7",
-                    "--jxl-distance",
-                    "0.4",
-                    "--quality-search",
-                    quality,
-                ])?;
-                let loaded = cli.policy.resolve(false)?;
-                assert_eq!(loaded.config.img.jxl_effort, Some(7));
-                assert_eq!(loaded.config.img.jxl_distance, Some(0.4));
-                assert_eq!(loaded.sources["img.jxl_effort"], "CLI");
-                assert_eq!(loaded.sources["img.jxl_distance"], "CLI");
-                assert_eq!(loaded.sources["img.quality_search"], "CLI");
-                assert_eq!(
-                    loaded.source_chain["img.jxl_effort"]
-                        .last()
-                        .map(String::as_str),
-                    Some("CLI")
-                );
-                assert_eq!(
-                    serde_json::to_value(loaded.config.img.quality_search)?,
-                    quality
-                );
-            }
+        for product_flag in ["--ultimate", "--archive", "--match-quality", "--explore"] {
+            let cli = crate::Cli::try_parse_from([
+                "img",
+                "run",
+                "/unused",
+                "--no-config",
+                product_flag,
+                "--jxl-effort",
+                "7",
+                "--jxl-distance",
+                "0.4",
+                "--quality-search",
+                "adaptive",
+            ])?;
+            let loaded = cli.policy.resolve(false)?;
+            assert_eq!(loaded.config.img.jxl_effort, Some(7));
+            assert_eq!(loaded.config.img.jxl_distance, Some(0.4));
+            assert_eq!(loaded.sources["img.jxl_effort"], "CLI");
+            assert_eq!(loaded.sources["img.jxl_distance"], "CLI");
+            assert_eq!(loaded.sources["img.quality_search"], "CLI");
+            assert_eq!(
+                loaded.source_chain["img.jxl_effort"]
+                    .last()
+                    .map(String::as_str),
+                Some("CLI")
+            );
+            assert_eq!(
+                serde_json::to_value(loaded.config.img.quality_search)?,
+                "adaptive"
+            );
         }
         Ok(())
     }
@@ -1112,6 +1144,8 @@ mod tests {
             "--quality-heuristic=false",
             "--jpeg-effort",
             "9",
+            "--jpeg-effort-search",
+            "adaptive",
             "--photos-import-root",
             "Archive",
             "--photos-album-name",

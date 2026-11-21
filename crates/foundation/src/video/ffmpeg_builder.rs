@@ -874,10 +874,10 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
 
-        assert!(args.contains(&"-show_streams".to_string()));
-        assert!(args.contains(&"-show_format".to_string()));
-        assert!(args.contains(&"json".to_string()));
-        assert!(args.contains(&"test.mp4".to_string()));
+        assert!(args.iter().any(|arg| arg == "-show_streams"));
+        assert!(args.iter().any(|arg| arg == "-show_format"));
+        assert!(args.iter().any(|arg| arg == "json"));
+        assert!(args.iter().any(|arg| arg == "test.mp4"));
     }
 
     #[test]

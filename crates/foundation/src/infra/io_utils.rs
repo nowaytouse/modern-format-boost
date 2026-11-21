@@ -407,8 +407,8 @@ fn prune_empty_directory_candidates_within(
 ) -> std::io::Result<usize> {
     let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
     // Bounded post-delivery pruning still enforces the protected-root checks.
-    crate::safety::check_dangerous_directory(root).map_err(&invalid)?;
-    crate::safety::check_apple_photos_library(root).map_err(&invalid)?;
+    crate::safety::check_dangerous_directory(root).map_err(invalid)?;
+    crate::safety::check_apple_photos_library(root).map_err(invalid)?;
 
     let root_metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
@@ -892,12 +892,26 @@ mod tests {
         fs::create_dir_all(&empty)?;
         fs::write(root.join("retained/verified.jpeg"), b"synthetic")?;
         let old = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
-        filetime::set_file_times(&root, old, old)?;
-        filetime::set_file_times(root.join("retained"), old, old)?;
+        std::fs::set_times(
+            &root,
+            std::fs::FileTimes::new()
+                .set_accessed(old.into())
+                .set_modified(old.into()),
+        )?;
+        std::fs::set_times(
+            root.join("retained"),
+            std::fs::FileTimes::new()
+                .set_accessed(old.into())
+                .set_modified(old.into()),
+        )?;
         assert_eq!(prune_empty_directories_within(&root, &[empty])?, 1);
         for path in [&root, &root.join("retained")] {
             assert_eq!(
-                filetime::FileTime::from_last_modification_time(&fs::metadata(path)?),
+                filetime::FileTime::from_system_time(
+                    fs::metadata(path)?
+                        .modified()
+                        .expect("read modified timestamp")
+                ),
                 old
             );
         }
