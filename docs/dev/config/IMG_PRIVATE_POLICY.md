@@ -52,15 +52,16 @@ ExifTool diagnostic, including duplicate warnings. Precisely recognized warnings
 about ICC length, IPTC digest consistency, UserComment text or an unrecognized
 MakerNotes payload do not describe the IFD0 orientation, so they remain recorded
 and are assessed by the separate
-metadata gate. Structural EXIF warnings and invalid values, including 0, still
-reject orientation proof. After a successful, quiet metadata request with complete
+metadata gate. A JPEG orientation of 0 denotes stored geometry. Structural EXIF
+warnings and other out-of-range values still reject orientation proof. After a successful, quiet metadata request with complete
 and exact source/output identities, an ExifTool file Warning that lacks independent
 preservation proof fails that file, including previously unknown warning text.
 Process errors, stderr diagnostics, Error records and malformed responses remain
 shared failures. In record-and-continue mode, failed files can be isolated only
 after every required local check completes, followed by full verification of the
-remaining outputs. A failed PNG rendering decode cannot be replaced with JPEG
-reconstruction and called a successful rendering proof.
+remaining outputs. The JXL display and decode checks consume a complete independently decoded
+binary raster. A header alone, a truncated raster or a JPEG reconstruction
+cannot establish successful rendering.
 
 Pixel-encoded JXL uses exact samples in the source display domain, preserving
 integer precision, alpha and floating-point bit patterns through orientation

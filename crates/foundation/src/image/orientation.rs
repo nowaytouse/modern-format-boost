@@ -6,8 +6,6 @@ use crate::image::format_detect::{
 use crate::unified_error::{ImgQualityError, Result};
 use std::path::Path;
 
-const JXL_RECONSTRUCTION_PNM_MAX_PIXELS: u64 = 4_000_000;
-
 /// Outcome of the selected decoded-image evidence contract.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PixelDiffResult {
@@ -241,7 +239,7 @@ pub fn verify_orientation_pixel_diff(
         command.arg(out).output()
     };
 
-    let reconstruction = if diff_tolerance == DiffTolerance::JxlReconstructionOrientation {
+    if diff_tolerance == DiffTolerance::JxlReconstructionOrientation {
         let source_orientation = read_exif_orientation(source_image)?;
         let source_dimensions = read_expected_raster_dimensions(source_image, FormatKind::Jpeg)
             .map_err(|error| {
@@ -250,31 +248,15 @@ pub fn verify_orientation_pixel_diff(
                 ))
             })?;
         let codestream = read_jxl_codestream_info(output)?;
-        let (width, height) = source_dimensions;
-        let pixels = u64::from(width) * u64::from(height);
-        // Full djxl raster output without PNG compression. Limit uncompressed scratch
-        // size and use PNG if this decoder cannot produce a readable PNM.
-        if source_dimensions == codestream.dimensions
-            && (1..=JXL_RECONSTRUCTION_PNM_MAX_PIXELS).contains(&pixels)
-            && let Ok(tmp) = orientation_decode_tempfile(".pnm")
-            && let Ok(decoded) = decode_cmd(output, tmp.path())
-            && decoded.status.success()
-            && let Ok(decoded_dimensions) =
-                read_expected_raster_dimensions(tmp.path(), FormatKind::Pnm)
-        {
-            log_suppressed_tool_output(decoder_tool, output, &decoded.stdout, &decoded.stderr);
-            verify_reconstruction_geometry(
-                source_orientation,
-                source_dimensions,
-                codestream,
-                decoded_dimensions,
-            )?;
-            return Ok(PixelDiffResult::Match);
-        }
-        Some((source_orientation, source_dimensions, codestream))
-    } else {
-        None
-    };
+        let dimensions = decode_jxl_display_dimensions(&decoder_path, output)?;
+        verify_reconstruction_geometry(
+            source_orientation,
+            source_dimensions,
+            codestream,
+            dimensions,
+        )?;
+        return Ok(PixelDiffResult::Match);
+    }
 
     let primary_temp_suffix = decode_temp_extension_for_format(fmt).ok_or_else(|| {
         ImgQualityError::AnalysisError(format!(
@@ -312,23 +294,81 @@ pub fn verify_orientation_pixel_diff(
         &decode_output.stderr,
     );
 
-    if let Some((source_orientation, source_dimensions, codestream)) = reconstruction {
-        let decoded = tmp_decoded.path();
-        let decoded_dimensions = read_expected_raster_dimensions(decoded, FormatKind::Png)
+    verify_pixel_diff_against_decoded_image(source_image, tmp_decoded.path(), diff_tolerance)
+}
+
+/// The rendered raster proves display geometry. PNG would impose an additional,
+/// unrelated iCCP serialization requirement on the original JPEG profile.
+pub(crate) fn decode_jxl_display_dimensions(decoder: &Path, output: &Path) -> Result<(u32, u32)> {
+    let mut command = std::process::Command::new(decoder);
+    command
+        .arg(output)
+        .args(["-", "--output_format=pam", "--num_threads"])
+        .arg(
+            crate::thread_manager::calculate_optimal_threads(
+                &crate::thread_manager::ThreadConfig::conservative(),
+            )
+            .max(1)
+            .to_string(),
+        );
+    let (process, raster) =
+        crate::process_runner::ManagedProcess::spawn_captured_binary_stdout(&mut command)?;
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(move || read_jxl_display_raster(raster));
+        let result = process.wait_liveness_timeout_for_short_task(
+            std::time::Duration::from_secs(120),
+            crate::process_runner::image_process_hard_timeout(),
+            "JXL display raster",
+        )?;
+        if !result.status.success() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "pixel-diff: djxl display decode failed ({}): {}",
+                result.status,
+                result.stderr.trim()
+            )));
+        }
+        reader
+            .join()
+            .map_err(|_| {
+                ImgQualityError::AnalysisError("pixel-diff: display raster reader failed".into())
+            })?
             .map_err(|error| {
                 ImgQualityError::AnalysisError(format!(
-                    "pixel-diff: cannot read independently decoded JXL geometry: {error}"
+                    "pixel-diff: invalid decoded JXL display raster: {error}"
                 ))
-            })?;
-        verify_reconstruction_geometry(
-            source_orientation,
-            source_dimensions,
-            codestream,
-            decoded_dimensions,
-        )?;
-        return Ok(PixelDiffResult::Match);
-    }
-    verify_pixel_diff_against_decoded_image(source_image, tmp_decoded.path(), diff_tolerance)
+            })
+    })
+}
+
+fn read_jxl_display_raster(input: impl std::io::Read) -> anyhow::Result<(u32, u32)> {
+    use image::codecs::pnm::PnmDecoder;
+    use std::io::{BufReader, Read};
+
+    let mut input = BufReader::new(input);
+    // djxl emits one PAM raster, including alpha when present. Bound header parsing independently
+    // of image size and count the whole payload without storing pixels on disk.
+    let decoder = PnmDecoder::new((&mut input).take(4096))?;
+    let header = decoder
+        .header()
+        .as_arbitrary()
+        .ok_or_else(|| anyhow::anyhow!("expected a binary PAM raster"))?;
+    let dimensions = (header.width, header.height);
+    let channels = u64::from(header.depth);
+    let bytes_per_sample = match header.maxval {
+        1..=255 => 1,
+        256..=65535 => 2,
+        _ => anyhow::bail!("invalid sample depth"),
+    };
+    let expected = (u64::from(dimensions.0) * u64::from(dimensions.1))
+        .checked_mul(channels * bytes_per_sample)
+        .filter(|size| *size > 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid raster dimensions"))?;
+    let bytes = std::io::copy(&mut input, &mut std::io::sink())?;
+    anyhow::ensure!(
+        bytes == expected,
+        "expected {expected} raster bytes, received {bytes}"
+    );
+    Ok(dimensions)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1148,10 +1188,10 @@ fn parse_exif_orientation_evidence(
         if !unrelated_orientation_warning(warning) {
             return Err(invalid(warning));
         }
-        tracing::warn!(
+        tracing::info!(
             source = %path.display(),
             diagnostic = warning,
-            "Source metadata warning does not affect IFD0 orientation evidence"
+            "IFD0 orientation verified with unrelated source metadata diagnostic"
         );
     }
     Ok(orientation)
@@ -1507,6 +1547,21 @@ mod tests {
                     ));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn rendered_geometry_requires_one_complete_binary_raster() {
+        for (raster, dimensions) in [
+            (b"P7\nWIDTH 2\nHEIGHT 1\nDEPTH 1\nMAXVAL 255\nTUPLTYPE GRAYSCALE\nENDHDR\n\x00\xff".as_slice(), (2, 1)),
+            (b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 65535\nTUPLTYPE RGB_ALPHA\nENDHDR\n\x00\x00\x00\x01\x00\xff\x00\xff", (1, 1)),
+        ] {
+            assert_eq!(super::read_jxl_display_raster(raster).unwrap(), dimensions);
+            assert!(super::read_jxl_display_raster(&raster[..raster.len() - 1]).is_err());
+            assert!(super::read_jxl_display_raster([raster, b"x"].concat().as_slice()).is_err());
+        }
+        for invalid in [b"".as_slice(), b"P2\n1 1\n255\n0", b"P6\n1 1\n255\n"] {
+            assert!(super::read_jxl_display_raster(invalid).is_err());
         }
     }
 

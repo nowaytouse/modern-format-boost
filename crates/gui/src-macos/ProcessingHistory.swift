@@ -1556,7 +1556,8 @@ private struct HistoryEntry {
                 || ((countStatus.hasPrefix("MATCH (") || countStatus.hasPrefix("EXPLAINED (")) && countStatus.hasSuffix(")")),
               let finished,
               (finished.outcome == "completed" && finished.error == nil)
-                || (finished.outcome == "failed" && finished.error == "fast-img exited with code 1") else { return false }
+                || (finished.outcome == "failed" && (finished.completed_with_file_errors == true
+                    || finished.error == "fast-img exited with code 1")) else { return false }
         let active = [summary.img, summary.vid].filter(\.active)
         return hasPartialProcessingSuccess(succeeded: active.map(\.succeeded), failed: active.map(\.failed),
                                            countsComplete: true)
@@ -7878,7 +7879,9 @@ func runProcessingHistorySelfTests() throws {
                     && mixed.succeededLabel == "2" && mixed.finished?.outcome == (finish == completed ? "completed" : "failed"),
                     "Counts without preservation proof became a confirmed partial result")
     }
-    for finish in [completed, fileFailureFinish] {
+    let confirmedFileFailures = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed",
+        "completed_with_file_errors": true, "error": "batch completed with 1 failed source(s); failed originals verified and retained"])
+    for finish in [completed, fileFailureFinish, confirmedFileFailures] {
         let mixed = try parsed([fastContext, mixedEvent, preservedEvent, finish]).entries[0]
         try require(mixed.hasPartialSuccess && mixed.statusKey == "history.status.partial"
                     && mixed.statusColor == .systemOrange && mixed.succeededLabel == "2",

@@ -786,9 +786,8 @@ pub fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
 
 /// True when `djxl` PNG output failed on an embedded ICC profile.
 ///
-/// JPEG-lossless JXLs can still be reconstructed to JPEG, so callers should
-/// retry with a `.jpg` temp output instead of treating the bitstream as
-/// corrupt.
+/// This diagnostic identifies the PNG writer. Independent JXL display checks
+/// require a complete rendered raster.
 #[must_use]
 pub fn is_jxl_png_icc_decode_error(stderr: &str) -> bool {
     let s = stderr.to_lowercase();

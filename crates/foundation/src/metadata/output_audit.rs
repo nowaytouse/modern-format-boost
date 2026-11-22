@@ -1172,7 +1172,7 @@ fn parse_metadata_records_for_requested_paths(
                         .is_some_and(|allowed| allowed.contains(message))
                 })
             {
-                tracing::warn!(target: "mfb.metadata", source = path, "{diagnostic}; original EXIF payload preserved byte-for-byte");
+                tracing::info!(target: "mfb.metadata", source = path, "{diagnostic}; original EXIF payload preserved byte-for-byte");
                 continue;
             }
             // A stale digest warns about source consistency, not an unreadable

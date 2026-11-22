@@ -852,7 +852,7 @@ fn main_inner() -> anyhow::Result<()> {
                 .context("fast-img command omitted its run options")?;
             options.planned_scope = cli.planned_fast_img_scope.as_deref();
             if let Err(error) = run_fast_img(options) {
-                if error.is::<fast_img_result::FileFailures>() {
+                if error.chain().count() == 1 && error.is::<fast_img_result::FileFailures>() {
                     println!("[WARN] {error:#}");
                     std::process::exit(1);
                 }

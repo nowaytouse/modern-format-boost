@@ -2027,124 +2027,12 @@ fn avifdec_decode_probe(path: &Path) -> std::io::Result<()> {
 }
 
 fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
-    // Scratch must be .png, not .ppm: PPM is RGB-only, so grayscale (or CMYK) JXL
-    // outputs make djxl fail with "SelectFormat failed" despite a valid bitstream.
-    let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
-        "fast_img_gate1_decode_probe",
-        Some("mfb_gate1_decode"),
-        Some(".png"),
-    )
-    .map_err(|err| std::io::Error::other(format!("decode probe scratch tempfile failed: {err}")))?;
     let djxl = resolve_tool_path("djxl").ok_or_else(|| {
         std::io::Error::other("djxl was not found or failed its runtime health check")
     })?;
-    let threads = crate::thread_manager::calculate_optimal_threads(
-        &crate::thread_manager::ThreadConfig::conservative(),
-    );
-    let mut command = decode_probe_command(&djxl, path, temp.path(), "--num_threads", threads);
-    let output = crate::process_runner::run_command_with_liveness_timeout(
-        &mut command,
-        std::time::Duration::from_secs(120),
-        crate::process_runner::image_process_hard_timeout(),
-        "fast-img JXL decode probe",
-    )
-    .map_err(|err| std::io::Error::other(format!("djxl decode probe spawn failed: {err}")))?;
-    if output.status.success() {
-        let output_len = temp
-            .as_file()
-            .metadata()
-            .map_err(|err| {
-                std::io::Error::other(format!("djxl decode output metadata probe failed: {err}"))
-            })?
-            .len();
-        if output_len > 0 {
-            return Ok(());
-        }
-        return Err(std::io::Error::other(
-            "djxl decode probe returned success but produced an empty output",
-        ));
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if crate::image::jxl_utils::is_jxl_png_icc_decode_error(&stderr) {
-        let jpeg_temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
-            "fast_img_gate1_decode_probe",
-            Some("mfb_gate1_decode"),
-            Some(".jpg"),
-        )
-        .map_err(|err| {
-            std::io::Error::other(format!("decode probe JPEG scratch tempfile failed: {err}"))
-        })?;
-        let mut jpeg_command = decode_probe_command(
-            &djxl,
-            path,
-            jpeg_temp.path(),
-            "--num_threads",
-            crate::thread_manager::calculate_optimal_threads(
-                &crate::thread_manager::ThreadConfig::conservative(),
-            ),
-        );
-        let jpeg_output = crate::process_runner::run_command_with_liveness_timeout(
-            &mut jpeg_command,
-            std::time::Duration::from_secs(120),
-            crate::process_runner::image_process_hard_timeout(),
-            "fast-img JXL JPEG decode probe",
-        )
-        .map_err(|err| {
-            std::io::Error::other(format!("djxl JPEG decode probe spawn failed: {err}"))
-        })?;
-        if jpeg_output.status.success() {
-            let output_len = jpeg_temp
-                .as_file()
-                .metadata()
-                .map_err(|err| {
-                    std::io::Error::other(format!(
-                        "djxl JPEG decode output metadata probe failed: {err}"
-                    ))
-                })?
-                .len();
-            if output_len > 0 {
-                crate::log_detail!(format!(
-                    "djxl decode probe retried as JPEG reconstruction after PNG ICC failure: {}",
-                    path.display()
-                ));
-                return Ok(());
-            }
-            return Err(std::io::Error::other(
-                "djxl JPEG decode probe returned success but produced an empty output",
-            ));
-        }
-        let jpeg_stderr = String::from_utf8_lossy(&jpeg_output.stderr);
-        let jpeg_stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
-            jpeg_stderr
-                .lines()
-                .rev()
-                .find(|line| !line.trim().is_empty()),
-        );
-        crate::log_detail!(format!(
-            "djxl JPEG decode probe failed: djxl {} {} -> exit {:?}; stderr tail: \
-             {jpeg_stderr_tail}",
-            path.display(),
-            jpeg_temp.path().display(),
-            jpeg_output.status.code()
-        ));
-        return Err(std::io::Error::other(format!(
-            "djxl JPEG decode probe exited {:?}; stderr tail: {jpeg_stderr_tail}",
-            jpeg_output.status.code()
-        )));
-    }
-    let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
-        stderr.lines().rev().find(|line| !line.trim().is_empty()),
-    );
-    crate::log_detail!(format!(
-        "djxl decode probe failed: djxl {} {} -> exit {:?}; stderr tail: {stderr_tail}",
-        path.display(),
-        temp.path().display(),
-        output.status.code()
-    ));
-    Err(std::io::Error::other(format!(
-        "djxl decode probe exited {:?}; stderr tail: {stderr_tail}",
-        output.status.code()
-    )))
+    crate::image::orientation::decode_jxl_display_dimensions(&djxl, path)
+        .map(|_| ())
+        .map_err(std::io::Error::other)
 }
 
 fn sample_size(expected_count: usize) -> usize {

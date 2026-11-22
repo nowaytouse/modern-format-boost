@@ -1507,15 +1507,25 @@ fn fast_img_file_failure_receipt(
 pub fn fast_img_partial_cleanup_verified(
     text: &str,
     stats: &crate::infra::process_stream::ProcessorStats,
+    source: &Path,
+    output: &Path,
+    photos: bool,
 ) -> Option<usize> {
     let report = fast_img_file_failure_receipt(text, stats)?;
     let succeeded = u64::try_from(stats.succeeded).ok()?;
-    (report["primary_cleanup_complete"].as_bool() == Some(true)
-        && report["retained_only_complete"].as_bool() != Some(true)
-        && report["photos_verified"].as_u64() == Some(succeeded)
-        && report["encoded"]
-            .as_u64()
-            .is_some_and(|encoded| encoded <= succeeded))
+    let encoded = report["encoded"].as_u64()?;
+    let photos_verified = report["photos_verified"].as_u64()?;
+    let delivered = if photos {
+        photos_verified == succeeded && encoded <= succeeded
+    } else {
+        photos_verified == 0 && encoded == succeeded
+    };
+    (delivered
+        && report["source_directory"].as_str().map(Path::new) == Some(source)
+        && report["output_directory"].as_str().map(Path::new) == Some(output)
+        && report["primary_verification_complete"].as_bool() == Some(true)
+        && report["primary_cleanup_complete"].as_bool() == Some(true)
+        && report["retained_only_complete"].as_bool() != Some(true))
     .then_some(stats.failed)
 }
 
@@ -3885,7 +3895,13 @@ printf '%s\n' "$MFB_TEST_VERIFY_SUMMARY"
             assert!(!verified(&invalid), "{key}");
         }
         assert_eq!(
-            fast_img_partial_cleanup_verified(&format!("MFB_FAST_IMG_RESULT={receipt}"), &stats),
+            fast_img_partial_cleanup_verified(
+                &format!("MFB_FAST_IMG_RESULT={receipt}"),
+                &stats,
+                Path::new("/source"),
+                Path::new("/output"),
+                true
+            ),
             None
         );
     }
@@ -3903,32 +3919,42 @@ printf '%s\n' "$MFB_TEST_VERIFY_SUMMARY"
         let receipt = serde_json::json!({"schema_version": 1, "succeeded": 2, "skipped": 0,
             "ignored": 0, "failed": 1, "unprocessed": 0, "photos_verified": 2, "encoded": 2,
             "failed_sources_retained": 1, "failed_sources_verified": 1, "source_retained": 1,
-            "primary_cleanup_complete": true, "finalization_error": null,
+            "source_directory": "/source", "output_directory": "/output",
+            "primary_verification_complete": true, "primary_cleanup_complete": true, "finalization_error": null,
             "retention_unknown_reason": null, "failed_source_verification_error": null});
         let event = |value: &serde_json::Value| format!("MFB_FAST_IMG_RESULT={value}");
-        assert_eq!(
-            fast_img_partial_cleanup_verified(&event(&receipt), &stats),
-            Some(1)
-        );
+        let verified = |text: &str, photos| {
+            fast_img_partial_cleanup_verified(
+                text,
+                &stats,
+                Path::new("/source"),
+                Path::new("/output"),
+                photos,
+            )
+        };
+        let mut local = receipt.clone();
+        local["photos_verified"] = 0.into();
+        assert_eq!(verified(&event(&local), false), Some(1));
+        assert_eq!(verified(&event(&local), true), None);
+        assert_eq!(verified(&event(&receipt), false), None);
+        local["encoded"] = 1.into();
+        assert_eq!(verified(&event(&local), false), None);
+        assert_eq!(verified(&event(&receipt), true), Some(1));
         for (key, value) in [
             ("failed_sources_verified", serde_json::Value::Null),
             ("primary_cleanup_complete", false.into()),
+            ("primary_verification_complete", false.into()),
+            ("source_directory", "/other".into()),
+            ("output_directory", "/other".into()),
             ("photos_verified", 1.into()),
             ("finalization_error", "marker persistence failed".into()),
         ] {
             let mut invalid = receipt.clone();
             invalid[key] = value;
-            assert_eq!(
-                fast_img_partial_cleanup_verified(&event(&invalid), &stats),
-                None,
-                "{key}"
-            );
+            assert_eq!(verified(&event(&invalid), true), None, "{key}");
         }
         assert_eq!(
-            fast_img_partial_cleanup_verified(
-                &format!("{}\n{}", event(&receipt), event(&receipt)),
-                &stats
-            ),
+            verified(&format!("{}\n{}", event(&receipt), event(&receipt)), true),
             None
         );
     }

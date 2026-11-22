@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Read};
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{Child, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -321,6 +321,46 @@ impl ManagedProcess {
         isolated: bool,
         relay_stdout: impl Fn(u32, &str) -> bool + Send + 'static,
     ) -> Result<Self> {
+        let (mut process, stdout) = Self::spawn_with_pipes(
+            cmd,
+            stream_verbose_stderr,
+            audit_nonzero_exit,
+            capture_max_bytes,
+            isolated,
+        )?;
+        let pid = process.pid();
+        let stdout_command_line = process.command_line.clone();
+        let stdout_thread = thread::spawn(move || {
+            capture_text_stream_bounded(
+                stdout,
+                capture_max_bytes,
+                "stdout",
+                &stdout_command_line,
+                false,
+                |line| relay_stdout(pid, line),
+            )
+        });
+
+        process.stdout_thread = Some(stdout_thread);
+        Ok(process)
+    }
+
+    /// Give a binary stdout stream to its consumer while retaining managed stderr and deadlines.
+    /// The caller must drain stdout concurrently with waiting.
+    ///
+    /// # Errors
+    /// Returns an error if the process or its pipes cannot be opened.
+    pub(crate) fn spawn_captured_binary_stdout(cmd: &mut Command) -> Result<(Self, ChildStdout)> {
+        Self::spawn_with_pipes(cmd, false, false, MANAGED_PROCESS_CAPTURE_MAX_BYTES, false)
+    }
+
+    fn spawn_with_pipes(
+        cmd: &mut Command,
+        stream_verbose_stderr: bool,
+        audit_nonzero_exit: bool,
+        capture_max_bytes: usize,
+        isolated: bool,
+    ) -> Result<(Self, ChildStdout)> {
         let command_line = crate::common_utils::format_command_for_audit(cmd);
         crate::log_debug!(
             &crate::infra::static_logs::messages::MSG_PROCESS_SPAWN.replace("{}", &command_line)
@@ -357,18 +397,6 @@ impl ManagedProcess {
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr"))?;
 
-        let stdout_command_line = process.command_line.clone();
-        let stdout_thread = thread::spawn(move || {
-            capture_text_stream_bounded(
-                stdout,
-                capture_max_bytes,
-                "stdout",
-                &stdout_command_line,
-                false,
-                |line| relay_stdout(pid, line),
-            )
-        });
-
         let stderr_command_line = process.command_line.clone();
         let stderr_thread = thread::spawn(move || {
             capture_text_stream_bounded(
@@ -381,9 +409,8 @@ impl ManagedProcess {
             )
         });
 
-        process.stdout_thread = Some(stdout_thread);
         process.stderr_thread = Some(stderr_thread);
-        Ok(process)
+        Ok((process, stdout))
     }
 
     fn stop_isolated_group(&mut self) -> Result<()> {
@@ -453,18 +480,20 @@ impl ManagedProcess {
 
     fn finalize(mut self, status: ExitStatus) -> Result<ProcessOutput> {
         self.stop_isolated_group()?;
-        let stdout_thread = self
-            .stdout_thread
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Stdout thread missing during join"))?;
+        // Binary stdout belongs to the caller and is never copied into the text log.
+        let stdout_thread = self.stdout_thread.take();
         let stderr_thread = self
             .stderr_thread
             .take()
             .ok_or_else(|| anyhow::anyhow!("Stderr thread missing during join"))?;
-        let stdout = stdout_thread.join();
+        let stdout = stdout_thread.map(JoinHandle::join);
         let stderr = stderr_thread.join();
-        let stdout =
-            stdout.map_err(|error| anyhow::anyhow!("Stdout reader panicked: {error:?}"))??;
+        let stdout = match stdout {
+            Some(output) => {
+                output.map_err(|error| anyhow::anyhow!("Stdout reader panicked: {error:?}"))??
+            }
+            None => String::new(),
+        };
         let stderr =
             stderr.map_err(|error| anyhow::anyhow!("Stderr reader panicked: {error:?}"))??;
 

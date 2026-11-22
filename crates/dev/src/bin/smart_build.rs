@@ -438,11 +438,16 @@ fn newest_source_mtime_in_dir(dir: &Path, extensions: &[&str]) -> f64 {
         return 0.0;
     }
 
-    let mut newest = get_mtime(&dir.join("Cargo.toml"));
+    let manifest = dir.join("Cargo.toml");
+    let is_crate = manifest.is_file();
+    let mut newest = get_mtime(&manifest);
     for entry in walkdir::WalkDir::new(dir)
         .into_iter()
         .filter_entry(|entry| {
-            !entry.file_type().is_dir() || !is_ignored_source_directory(entry.path())
+            // Cargo builds top-level integration tests separately from the packaged binaries.
+            let integration_tests = is_crate && entry.depth() == 1 && entry.file_name() == "tests";
+            !entry.file_type().is_dir()
+                || (!integration_tests && !is_ignored_source_directory(entry.path()))
         })
         .filter_map(Result::ok)
     {
@@ -2732,7 +2737,14 @@ mod tests {
         fs::create_dir_all(source.parent().context("fixture source parent")?)?;
         fs::write(&source, b"// shared state changed")?;
         set_mtime(&source, 1_600_000_000)?;
+        let img = root.join("crates/img");
+        fs::create_dir_all(img.join("tests"))?;
+        fs::write(img.join("Cargo.toml"), b"")?;
+        set_mtime(&img.join("Cargo.toml"), 1_600_000_000)?;
         let baseline = app_bundle_source_baseline(root)?;
+        let test = img.join("tests/production_matrix.rs");
+        fs::write(&test, b"// newer integration test")?;
+        set_mtime(&test, 1_600_000_200)?;
         require_current_app_bundle_targets(root, &baseline)?;
 
         let cache_cleaner = release.join("cache_cleaner");

@@ -3230,6 +3230,13 @@ fn run_drag_drop_inner(
                                         &source_root,
                                         &output,
                                     );
+                                    failed_sources_verified = fast_img_partial_cleanup_verified(
+                                        &text,
+                                        &stats,
+                                        &source_root,
+                                        &output,
+                                        args.shortest_path,
+                                    );
                                     if args.shortest_path {
                                         quarantine_blocked = report.as_ref().and_then(|report| {
                                             PhotosQuarantineBlocked::from_receipt(
@@ -3241,10 +3248,6 @@ fn run_drag_drop_inner(
                                         });
                                     }
                                 }
-                            }
-                            if args.shortest_path {
-                                failed_sources_verified =
-                                    fast_img_partial_cleanup_verified(&text, &stats);
                             }
                             let metrics = fast_img_session_size_metrics(&text);
                             summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
@@ -3390,11 +3393,21 @@ fn run_drag_drop_inner(
             );
         }
         if let Some(failed_files) = summary.total_count(3).filter(|count| *count > 0) {
-            eprintln!(
-                "\n   {} Exiting with failures: {failed_files} file(s) did not complete \
+            if first_error
+                .as_ref()
+                .and_then(dev::infra::rich_panel::completed_file_failure_count)
+                == Some(failed_files)
+            {
+                println!(
+                    "[WARN] {failed_files} file(s) failed; their original files were verified and retained."
+                );
+            } else {
+                eprintln!(
+                    "\n   {} Exiting with failures: {failed_files} file(s) did not complete \
                  successfully.",
-                pick_symbol("❌", "[ERROR]")
-            );
+                    pick_symbol("❌", "[ERROR]")
+                );
+            }
             // Enumerate every retained file so the user doesn't have to grep logs
             if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
                 eprintln!("   Retained files:");
@@ -4718,7 +4731,7 @@ fn start_leased_session<L>(
     Ok((lease, start_session()?))
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<std::process::ExitCode> {
     use std::io::IsTerminal;
     let args = apply_mode_overrides(Args::parse());
     if args.plan_json {
@@ -4740,7 +4753,7 @@ fn main() -> Result<()> {
             })?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        return Ok(());
+        return Ok(std::process::ExitCode::SUCCESS);
     }
     if args.migrate_fast_img_state {
         #[cfg(unix)]
@@ -4750,7 +4763,7 @@ fn main() -> Result<()> {
             "{}",
             serde_json::to_string_pretty(&migrate_fast_img_state(&args)?)?
         );
-        return Ok(());
+        return Ok(std::process::ExitCode::SUCCESS);
     }
     unsafe {
         std::env::set_var("MFB_GUI_LAUNCH", "1");
@@ -4829,7 +4842,12 @@ fn main() -> Result<()> {
         }
         report_drag_drop_failure(&run_result);
     }
-    run_result
+    match run_result {
+        Err(error) if dev::infra::rich_panel::completed_file_failure_count(&error).is_some() => {
+            Ok(std::process::ExitCode::FAILURE)
+        }
+        other => other.map(|()| std::process::ExitCode::SUCCESS),
+    }
 }
 
 fn report_drag_drop_failure(result: &Result<()>) {

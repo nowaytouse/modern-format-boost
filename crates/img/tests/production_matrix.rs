@@ -620,6 +620,61 @@ fn convert_exact_jpeg_fixture(source: &Path, output_dir: &Path) -> Result<PathBu
 }
 
 #[test]
+fn jpeg_with_bad_icc_length_has_separate_display_and_metadata_verdicts() -> Result<()> {
+    for tool in ["magick", "cjxl", "djxl", "jxlinfo", "exiftool"] {
+        if !tool_available(tool) {
+            eprintln!("Skipping ICC fixture: {tool} is unavailable");
+            return Ok(());
+        }
+    }
+    let Some(profile) = find_icc_profile() else {
+        eprintln!("Skipping ICC fixture: no system RGB profile available");
+        return Ok(());
+    };
+    let root = tempfile::tempdir()?;
+    let source = root.path().join("padded-profile.jpg");
+    let output = root.path().join("padded-profile.jxl");
+    let mut magick = Command::new(tool_path("magick")?);
+    magick
+        .args(["-size", "2100x2000", "gradient:navy-orange"])
+        .arg(&source);
+    run_status(magick, "generate large synthetic JPEG")?;
+    let mut app2 = b"ICC_PROFILE\0\x01\x01".to_vec();
+    app2.extend(fs::read(profile)?);
+    app2.extend([0; 4]); // Declared ICC length differs from the APP2 profile payload.
+    let length = u16::try_from(app2.len() + 2)?.to_be_bytes();
+    let jpeg = fs::read(&source)?;
+    ensure!(jpeg.starts_with(&[0xff, 0xd8]), "invalid JPEG fixture");
+    let mut tagged = vec![0xff, 0xd8, 0xff, 0xe2];
+    tagged.extend(length);
+    tagged.extend(app2);
+    tagged.extend_from_slice(&jpeg[2..]);
+    fs::write(&source, &tagged)?;
+    let mut cjxl = Command::new(tool_path("cjxl")?);
+    cjxl.arg(&source).arg(&output).arg("--lossless_jpeg=1");
+    run_status(cjxl, "reversibly encode padded-profile JPEG")?;
+
+    verify_final_jxl_delivery_integrity(&source, &output)?;
+    let audit = foundation::metadata::verify_output_embedded_metadata(
+        &source,
+        &output,
+        foundation::metadata::MetadataOutputPolicy::PreserveSource,
+    )
+    .err()
+    .context("a malformed ICC profile must block delivery")?;
+    ensure!(
+        audit.kind() == std::io::ErrorKind::InvalidData
+            && audit.to_string().contains("Bad length ICC_Profile"),
+        "unexpected profile verdict: {audit}"
+    );
+    ensure!(
+        fs::read(&source)? == tagged,
+        "source changed during verification"
+    );
+    Ok(())
+}
+
+#[test]
 fn jpeg_orientation_matrix_and_encoding_variants_are_fail_closed() -> Result<()> {
     for tool in ["magick", "cjxl", "djxl", "jxlinfo", "exiftool"] {
         if !tool_available(tool) {

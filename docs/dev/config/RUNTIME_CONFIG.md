@@ -450,9 +450,9 @@ Worker-time totals include hash reads, scratch allocation, decoder startup,
 decoder completion (including its JPEG write), and orientation/gain-map
 checks. These totals can overlap across workers. Exact JPEG reconstruction
 uses shorter initial process polling and the existing deadlines. The
-independent orientation check can use an uncompressed PNM raster for matching
-source and codestream dimensions up to four million pixels, with PNG retained
-for larger images or when PNM cannot be read. Final hashes must match the
+independent orientation check streams the full binary PAM raster
+from djxl. It verifies its byte count and displayed dimensions for every size.
+The intermediate raster does not serialize the source ICC as a PNG chunk. Final hashes must match the
 hashes observed during the exact roundtrip.
 
 History's file-failure details and their complete-detail copy include the
