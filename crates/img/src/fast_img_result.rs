@@ -94,6 +94,12 @@ struct FailedSourceProof {
 }
 
 #[derive(Debug, serde::Serialize)]
+struct OriginalDelivery {
+    photos_verified: usize,
+    source_cleanup_confirmed: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
 struct Report {
     schema_version: u8,
     source_directory: std::path::PathBuf,
@@ -109,6 +115,8 @@ struct Report {
     unprocessed: usize,
     encoded: usize,
     photos_verified: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_delivery: Option<OriginalDelivery>,
     source_retained: Option<usize>,
     failed_sources_retained: Option<usize>,
     failed_sources_verified: Option<usize>,
@@ -220,11 +228,30 @@ impl Report {
         } else {
             0
         };
-        let succeeded = checked_add(
-            primary_succeeded,
-            marker.tier2_imported_assets.len(),
-            "succeeded",
-        )?;
+        let original_photos_verified = marker.tier2_imported_assets.len();
+        anyhow::ensure!(
+            photos || original_photos_verified == 0,
+            "local delivery has original-format Photos receipts"
+        );
+        let original_cleanup = if original_photos_verified == 0 {
+            Ok(0)
+        } else if marker.is_terminal() {
+            foundation::fast_img_store::verify_tier2_cleanup_complete(marker)
+                .map(|()| original_photos_verified)
+        } else {
+            foundation::fast_img_store::count_recorded_tier2_unlinks(marker)
+        };
+        let original_cleanup_confirmed = if let Ok(count) = original_cleanup {
+            count
+        } else {
+            tracing::warn!("could not establish the original-format source cleanup count");
+            0
+        };
+        anyhow::ensure!(
+            original_cleanup_confirmed <= original_photos_verified,
+            "original-format cleanup exceeds verified Photos receipts"
+        );
+        let succeeded = checked_add(primary_succeeded, original_cleanup_confirmed, "succeeded")?;
         // Count only explicit file failures; unresolved originals stay unprocessed.
         let anonymous_original_failures = match (routed, recorded_failures) {
             (None, Some(failures)) => failures
@@ -258,7 +285,7 @@ impl Report {
         })?;
         let photos_verified = checked_add(
             marker.photos_imported_assets.len(),
-            marker.tier2_imported_assets.len(),
+            original_photos_verified,
             "Photos-verified",
         )?;
         let sources = marker
@@ -277,15 +304,34 @@ impl Report {
         let is_failed = |rel: &str| {
             marker.failed_sources.contains_key(rel) || marker.tier2_failed_sources.contains_key(rel)
         };
+        let mut checked_source_parents = BTreeSet::new();
         let retention = sources
             .iter()
             .try_fold((0usize, 0usize), |(count, failures), rel| {
-                marker.src_dir.join(rel).try_exists().map(|exists| {
-                    (
-                        count + usize::from(exists),
-                        failures + usize::from(exists && is_failed(rel)),
+                let path = std::path::Path::new(rel);
+                if let Some(parent) = path.parent()
+                    && checked_source_parents.insert(parent)
+                {
+                    foundation::pipeline::verification::validate_no_symlink_components(
+                        &marker.src_dir,
+                        parent,
                     )
-                })
+                    .map_err(|_| {
+                        std::io::Error::other("an inventory source parent could not be verified")
+                    })?;
+                }
+                match std::fs::symlink_metadata(marker.src_dir.join(path)) {
+                    Ok(metadata) if metadata.is_file() => {
+                        Ok((count + 1, failures + usize::from(is_failed(rel))))
+                    }
+                    Ok(_) => Err(std::io::Error::other(
+                        "an inventory source path is no longer a regular file",
+                    )),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        Ok((count, failures))
+                    }
+                    Err(error) => Err(error),
+                }
             });
         let failed_sources_retained = match &retention {
             Ok((_, count)) if unbound_failures == 0 && anonymous_original_failures == 0 => {
@@ -393,6 +439,10 @@ impl Report {
             unprocessed,
             encoded: marker.blake3_log.len(),
             photos_verified,
+            original_delivery: (original_photos_verified > 0).then_some(OriginalDelivery {
+                photos_verified: original_photos_verified,
+                source_cleanup_confirmed: original_cleanup_confirmed,
+            }),
             source_retained,
             failed_sources_retained,
             failed_sources_verified,
@@ -512,10 +562,18 @@ pub(super) fn finish(
         "[RESULT  ] encoded={} Photos-verified={} unprocessed={} primary-cleanup-complete={}",
         report.encoded, report.photos_verified, report.unprocessed, report.primary_cleanup_complete
     );
+    if let Some(original) = &report.original_delivery {
+        println!(
+            "[RESULT  ] Original-format Photos verified={} source-cleanup-confirmed={} source-cleanup-unconfirmed={}",
+            original.photos_verified,
+            original.source_cleanup_confirmed,
+            original.photos_verified - original.source_cleanup_confirmed
+        );
+    }
     execution?;
     if report.unprocessed != 0 {
         anyhow::bail!(
-            "fast-img left {} input(s) unprocessed; sources retained",
+            "fast-img left {} input(s) unprocessed; inspect the delivery and source cleanup receipts",
             report.unprocessed
         );
     }
@@ -702,7 +760,8 @@ mod tests {
         std::fs::remove_file(&source)?;
         std::fs::create_dir(&source)?;
         let report = Report::from_marker(&marker, false, &[], 0, None)?;
-        assert_eq!(report.failed_sources_retained, Some(1));
+        assert_eq!(report.failed_sources_retained, None);
+        assert!(report.retention_unknown_reason.is_some());
         assert_eq!(report.failed_sources_verified, None);
         Ok(())
     }
@@ -723,7 +782,8 @@ mod tests {
             .src = calculate_blake3_hash(&original)?;
         std::os::unix::fs::symlink(&original, marker.src_dir.join("invalid.jpg"))?;
         let report = Report::from_marker(&marker, false, &[], 0, None)?;
-        assert_eq!(report.failed_sources_retained, Some(1));
+        assert_eq!(report.failed_sources_retained, None);
+        assert!(report.retention_unknown_reason.is_some());
         assert_eq!(report.failed_sources_verified, None);
 
         std::fs::remove_file(marker.src_dir.join("invalid.jpg"))?;
@@ -736,6 +796,8 @@ mod tests {
             .insert("linked/original.jpg".into(), entry);
         std::os::unix::fs::symlink(root.path(), marker.src_dir.join("linked"))?;
         let report = Report::from_marker(&marker, false, &[], 0, None)?;
+        assert_eq!(report.failed_sources_retained, None);
+        assert!(report.retention_unknown_reason.is_some());
         assert_eq!(report.failed_sources_verified, None);
         Ok(())
     }
@@ -987,6 +1049,68 @@ mod tests {
         assert_eq!((local.succeeded, local.unprocessed), (3, 0));
         marker.skipped_sources = marker.failed_sources.clone();
         assert!(Report::from_marker(&marker, true, &[], 0, None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn originals_with_photos_receipts_stay_pending_until_source_cleanup() -> anyhow::Result<()> {
+        use foundation::pipeline::verification::LibraryAssetRecord;
+
+        let root = tempfile::tempdir()?;
+        let mut marker =
+            WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
+        std::fs::create_dir(&marker.src_dir)?;
+        let source = marker.src_dir.join("original.webp");
+        std::fs::write(&source, b"synthetic original")?;
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.tier2_in_progress = true;
+        marker.tier2_imported_assets.push(LibraryAssetRecord {
+            rel_path: "original.webp".into(),
+            blake3: "a".repeat(64),
+            photos_uuid: Some("synthetic-asset".into()),
+            ..LibraryAssetRecord::default()
+        });
+
+        let pending = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!(
+            (
+                pending.succeeded,
+                pending.unprocessed,
+                pending.photos_verified
+            ),
+            (0, 1, 1)
+        );
+        assert_eq!(pending.source_retained, Some(1));
+        assert_eq!(
+            pending
+                .original_delivery
+                .context("missing custody counts")?
+                .source_cleanup_confirmed,
+            0
+        );
+
+        marker.tier2_in_progress = false;
+        let conflicting = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!((conflicting.succeeded, conflicting.unprocessed), (0, 1));
+
+        std::fs::remove_file(source)?;
+        let complete = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!(
+            (
+                complete.succeeded,
+                complete.unprocessed,
+                complete.photos_verified
+            ),
+            (1, 0, 1)
+        );
+        assert_eq!(complete.source_retained, Some(0));
+        assert_eq!(
+            complete
+                .original_delivery
+                .context("missing cleanup counts")?
+                .source_cleanup_confirmed,
+            1
+        );
         Ok(())
     }
 

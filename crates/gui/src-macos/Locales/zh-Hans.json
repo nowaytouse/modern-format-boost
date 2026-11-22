@@ -811,6 +811,7 @@
   "result.independent_delivery_facts": "独立回执：已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@",
   "result.integrity_issues": "完整性检查发现 %@ 项问题 · 请查看处理记录",
   "result.invalid": "批次结果格式无效或不受支持，结果计数不可用。",
+  "result.original_delivery_counts": "原格式 · 照片已核验 %@ 项 · 源文件清理已确认 %@ 项 · 清理待确认 %@ 项",
   "result.partially_completed": "部分成功，仍有文件失败",
   "result.pending_count": "%@ 项未完成",
   "result.photos_local_count": "照片本地已核验 %@ 项。",

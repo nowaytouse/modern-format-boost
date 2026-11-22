@@ -334,6 +334,30 @@ impl AppSession {
                 "fast-img result count {key} disagrees with worker output"
             );
         }
+        if let Some(original) = report
+            .get("original_delivery")
+            .filter(|value| !value.is_null())
+        {
+            let verified = original["photos_verified"]
+                .as_u64()
+                .context("missing original-format Photos count")?;
+            let cleaned = original["source_cleanup_confirmed"]
+                .as_u64()
+                .context("missing original-format source cleanup count")?;
+            anyhow::ensure!(
+                verified > 0
+                    && report["photos_verified"]
+                        .as_u64()
+                        .is_some_and(|total| verified <= total)
+                    && cleaned <= u64::try_from(stats.succeeded)?
+                    && verified.checked_sub(cleaned).is_some_and(|pending| {
+                        report["unprocessed"]
+                            .as_u64()
+                            .is_some_and(|total| pending <= total)
+                    }),
+                "original-format delivery counts conflict with the current worker result"
+            );
+        }
         self.append_history_event("MFB_HISTORY_FAST_IMG_RESULT", report.clone())?;
         Ok(Some(report))
     }

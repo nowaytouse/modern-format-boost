@@ -6184,7 +6184,7 @@ private struct BatchResults {
               !isIncomplete, !fastDeliveryInvalid, !fastDeliveries.isEmpty,
               totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
               let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
-              pending == fastDeliveryCount(\.unprocessed),
+              pending == 0, pending == fastDeliveryCount(\.unprocessed),
               fastDeliveries.allSatisfy({ $0.finalizationError == nil && $0.failedSourcesRetained == $0.failed
                   && $0.failedSourcesVerified == $0.failed && $0.failedSourceVerificationError == nil
                   && ($0.failed == 0 || $0.primaryCleanupComplete || $0.isRetainedOnly) }),
@@ -10808,7 +10808,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         let quarantineReason = quarantineLocations ?? finalPhotosQuarantine.flatMap { count in
             count > 0 ? localized("result.final_photos_quarantine", String(count)) : nil
         }
-        batchOverviewDelivery.maximumNumberOfLines = deferred || quarantineReason != nil || unavailableVerification != nil ? 0 : 2
+        let originalDelivery = batchResults.fastDeliveryInvalid ? []
+            : batchResults.fastDeliveries.compactMap(\.originalDelivery)
+        batchOverviewDelivery.maximumNumberOfLines = deferred || quarantineReason != nil
+            || unavailableVerification != nil || !originalDelivery.isEmpty ? 0 : 2
         let retainedOnly = confirmed && batchResults.fastDeliveries.allSatisfy(\.isRetainedOnly)
         let quarantineChanged = hasConfirmedPhotosQuarantine != quarantineBlocked
         let presentationChanged = hasConfirmedFileFailures != (confirmed && batchResults.hasFileFailures)
@@ -10909,6 +10912,10 @@ private final class AppController: NSObject, NSWindowDelegate {
                     .map(\.deferredDetails).joined(separator: "\n")
                 batchOverviewCleanup.isHidden = !logDetailsExpanded
             }
+        }
+        if !originalDelivery.isEmpty {
+            batchOverviewDelivery.stringValue += "\n" + originalDelivery.map(\.summary).joined(separator: "\n")
+            batchOverviewDelivery.isHidden = false
         }
         if let unavailableVerification {
             let facts = batchOverviewDelivery.isHidden ? "" : "\n" + batchOverviewDelivery.stringValue
@@ -11521,6 +11528,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let receipt: [String: Any] = ["schema_version": 1, "succeeded": 1829, "skipped": 0,
             "ignored": 2693, "failed": 1, "unprocessed": 0, "encoded": 1163,
             "photos_verified": 1829, "source_retained": 1, "failed_sources_retained": 1,
+            "original_delivery": ["photos_verified": 666, "source_cleanup_confirmed": 666],
             "failed_sources_verified": 1, "failed_source_verification_error": NSNull(),
             "retention_unknown_reason": NSNull(),
             "primary_cleanup_complete": true, "finalization_error": NSNull()]
@@ -11540,6 +11548,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         for (key, value) in [("photos_verified", 1828 as Any), ("source_retained", 0 as Any),
                              ("succeeded", 1830 as Any), ("finalization_error", "cleanup failed" as Any),
                              ("encoded", -1 as Any), ("failed", Int.max as Any), ("failed_sources_retained", 0 as Any),
+                             ("original_delivery", ["photos_verified": 666, "source_cleanup_confirmed": 667] as Any),
                              ("primary_cleanup_complete", false as Any)] {
             var changed = receipt
             changed[key] = value

@@ -509,6 +509,16 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
         let affected: Int
     }
 
+    struct OriginalDelivery: Codable, Equatable {
+        let photosVerified: Int
+        let sourceCleanupConfirmed: Int
+
+        var summary: String {
+            localized("result.original_delivery_counts", String(photosVerified), String(sourceCleanupConfirmed),
+                      String(photosVerified - sourceCleanupConfirmed))
+        }
+    }
+
     static let prefix = "MFB_FAST_IMG_RESULT="
     static let historyPrefix = "MFB_HISTORY_FAST_IMG_RESULT="
     let schemaVersion: Int
@@ -519,6 +529,7 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
     let unprocessed: Int
     let encoded: Int
     let photosVerified: Int
+    let originalDelivery: OriginalDelivery?
     let sourceRetained: Int?
     let failedSourcesRetained: Int?
     let failedSourcesVerified: Int?
@@ -543,6 +554,12 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
               let total = processingCountTotal(counts + [unprocessed]),
               let capacity = processingCountTotal([succeeded, unprocessed]),
               encoded >= 0, encoded <= capacity, photosVerified >= 0, photosVerified <= capacity else { return false }
+        if let original = originalDelivery {
+            guard original.photosVerified > 0, original.photosVerified <= photosVerified,
+                  (0...original.photosVerified).contains(original.sourceCleanupConfirmed),
+                  original.sourceCleanupConfirmed <= succeeded,
+                  original.photosVerified - original.sourceCleanupConfirmed <= unprocessed else { return false }
+        }
         if let failedSourcesRetained, !(0...failed).contains(failedSourcesRetained) { return false }
         if let failedSourcesVerified, !(0...failed).contains(failedSourcesVerified) { return false }
         if let proof = failedSourceProof {
@@ -4574,6 +4591,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             if !entry.fastDeliveryInvalid {
                 let confirmedQuarantine = entry.confirmedPhotosQuarantine
                 for receipt in entry.fastDeliveries {
+                    if let original = receipt.originalDelivery {
+                        lines += ["", localized("result.delivery_record_title"), original.summary]
+                    }
                     guard let quarantined = receipt.finalPhotosQuarantineCount else { continue }
                     let locations = confirmedQuarantine == quarantined ? receipt.finalPhotosQuarantineLocationsText : nil
                     lines += ["", localized("result.delivery_record_title"),

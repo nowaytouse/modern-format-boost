@@ -836,7 +836,7 @@ pub enum VerifyFastImgMode {
     None,
     Delivery,
     PhotosCleanupRecovery(String),
-    Restore,
+    Restore { selected_file: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -876,8 +876,11 @@ pub fn run_unified_verification(
                     .arg("--fast-img-photos-cleanup-recovery")
                     .arg(checkpoint_digest);
             }
-            VerifyFastImgMode::Restore => {
+            VerifyFastImgMode::Restore { selected_file } => {
                 cmd.arg("--fast-img-restore");
+                if selected_file {
+                    cmd.arg("--restore-source-file");
+                }
             }
             VerifyFastImgMode::None => {}
         }

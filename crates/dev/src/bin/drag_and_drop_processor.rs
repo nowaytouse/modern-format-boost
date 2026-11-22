@@ -1896,6 +1896,7 @@ fn run_fast_img_restore_post_success(
     session: &AppSession,
     summary: &mut PipelineSummary,
     output_dir: &Path,
+    selected_file: bool,
 ) -> Result<()> {
     draw_separator("Auto Verification");
     println!(
@@ -1914,7 +1915,7 @@ fn run_fast_img_restore_post_success(
         dev::infra::drag_drop::VerificationFlags {
             include_logs: false,
             auto_mode: true,
-            fast_img: dev::infra::drag_drop::VerifyFastImgMode::Restore,
+            fast_img: dev::infra::drag_drop::VerifyFastImgMode::Restore { selected_file },
             strategy: args.strategy.clone(),
         },
     )?;
@@ -1930,6 +1931,11 @@ fn run_fast_img_restore_post_success(
     println!(
         "[VERIFY] restore inventory: {} restored, {} skipped, {} failed; processing counters unchanged",
         counts.optimized_count, counts.skipped_count, counts.failed_count
+    );
+    anyhow::ensure!(
+        !counts.has_warnings,
+        "JPEG restoration has {} unverified integrity issue(s); see the verification report",
+        counts.issue_count
     );
     Ok(())
 }
@@ -3097,6 +3103,7 @@ fn run_drag_drop_inner(
             let input = args.inputs.first().expect("input");
             let (output, is_photos_audit) =
                 resolve_restore_jpeg_launch_output(input, args.output.as_deref())?;
+            let selected_file = input.is_file();
             let command = restore_jpeg_launch_command(
                 &cli_binary(&root, "img"),
                 input,
@@ -3148,13 +3155,15 @@ fn run_drag_drop_inner(
                 );
             } else if first_error.is_none() {
                 if output.as_deref().is_some_and(Path::is_dir) {
-                    run_fast_img_restore_post_success(
+                    first_error = run_fast_img_restore_post_success(
                         args,
                         &root,
                         session.expect("session"),
                         &mut summary,
                         output.as_deref().expect("local restore output"),
-                    )?;
+                        selected_file,
+                    )
+                    .err();
                 } else if summary.img.succeeded == 0 && summary.img.failed == 0 {
                     summary.integrity_state = Some("CLEAN");
                     println!(
@@ -6268,6 +6277,7 @@ mod tests {
         };
         let payload = serde_json::json!({
             "schema_version":1,"succeeded":0,"failed":1,"skipped":0,"ignored":0,"unprocessed":3,
+            "photos_verified":3,"original_delivery":{"photos_verified":2,"source_cleanup_confirmed":0},
             "photos_delivery_deferred":true,"source_directory":"/fixture/source","output_directory":"/fixture/output"
         });
         let line = format!("MFB_FAST_IMG_RESULT={payload}");
@@ -6281,10 +6291,13 @@ mod tests {
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0]["run_id"].as_str(), session.run_id());
         assert_eq!(receipts[0]["photos_delivery_deferred"], true);
+        let mut wrong_original = payload.clone();
+        wrong_original["original_delivery"]["source_cleanup_confirmed"] = serde_json::json!(1);
         let mut wrong = payload;
         wrong["unprocessed"] = serde_json::json!(4);
         for invalid in [
             format!("MFB_FAST_IMG_RESULT={wrong}"),
+            format!("MFB_FAST_IMG_RESULT={wrong_original}"),
             format!("{line}\n{line}"),
             "MFB_FAST_IMG_RESULT={}".into(),
             format!("ERR: {line}"),

@@ -811,6 +811,7 @@
   "result.independent_delivery_facts": "独立した記録：エンコード済み %@ · ローカル Photos 確認済み %@ · 保持した元ファイル %@",
   "result.integrity_issues": "整合性チェックで %@ 件の問題 · 処理履歴を確認してください",
   "result.invalid": "バッチ結果の形式が無効または未対応のため、件数を確認できません。",
+  "result.original_delivery_counts": "元の形式 · 写真で確認済み %@ 件 · 元ファイルの整理を確認済み %@ 件 · 整理未確認 %@ 件",
   "result.partially_completed": "一部成功、失敗したファイルがあります",
   "result.pending_count": "%@ 件未完了",
   "result.photos_local_count": "ローカル Photos で %@ 件確認済み。",

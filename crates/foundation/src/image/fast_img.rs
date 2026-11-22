@@ -1516,7 +1516,7 @@ fn tier2_cleanup_source_present(source: &Path, targets: &BTreeSet<PathBuf>) -> R
     }
 }
 
-fn check_absent_tier2_source_xmp(source: &Path) -> Result<()> {
+pub(crate) fn check_absent_tier2_source_xmp(source: &Path) -> Result<()> {
     let parent = crate::media_conversion_gate::path_parent_or_dot(source);
     match std::fs::symlink_metadata(parent) {
         Ok(metadata) if metadata.is_dir() => {
@@ -1653,7 +1653,7 @@ fn reverify_modern_lossy_static_photos_custody_with(
                         probe.path.display()
                     ))
                 })?;
-            let expected_library_blake3 = asset.library_blake3.as_deref().unwrap_or(&asset.blake3);
+            let expected_library_blake3 = crate::fast_img_store::tier2_library_hash(asset)?;
             if library_blake3 != expected_library_blake3 {
                 return Err(ImgQualityError::AnalysisError(format!(
                     "tier-2 delete gate Photos BLAKE3 drift for {} (uuid={uuid}): expected={expected_library_blake3} library={library_blake3}",
@@ -11074,8 +11074,8 @@ mod tests {
                 let hash = crate::common_utils::calculate_blake3_hash(&path)?;
                 assets.push(LibraryAssetRecord {
                     rel_path: format!("{name}.webp"),
-                    blake3: "source-before-XMP".into(),
-                    library_blake3: Some(hash),
+                    blake3: hash,
+
                     photos_uuid: Some(format!("UUID-{name}")),
                     ..Default::default()
                 });

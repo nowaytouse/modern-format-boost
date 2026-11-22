@@ -637,7 +637,7 @@ pub fn find_all_box_data_recursive(data: &[u8], box_type: [u8; 4]) -> Vec<&[u8]>
     }
 }
 
-fn parse_isobmff_box(data: &[u8], pos: usize) -> Option<([u8; 4], &[u8], usize)> {
+pub(crate) fn parse_isobmff_box(data: &[u8], pos: usize) -> Option<([u8; 4], &[u8], usize)> {
     if data.len().checked_sub(pos)? < 8 {
         return None;
     }

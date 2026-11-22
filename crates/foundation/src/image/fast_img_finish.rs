@@ -278,11 +278,7 @@ fn verify_output_photos_custody_with(
                 .insert(
                     uuid(asset)?.to_owned(),
                     (
-                        asset
-                            .library_blake3
-                            .as_ref()
-                            .unwrap_or(&asset.blake3)
-                            .clone(),
+                        crate::fast_img_store::tier2_library_hash(asset)?.to_owned(),
                         super::tier2_receipt_allows_photos_provenance(asset),
                     )
                 )
@@ -689,7 +685,7 @@ fn verify_with(
                 );
             }
             for asset in &marker.tier2_imported_assets {
-                let expected = asset.library_blake3.as_deref().unwrap_or(&asset.blake3);
+                let expected = crate::fast_img_store::tier2_library_hash(asset)?;
                 ensure!(
                     targets
                         .insert(uuid(asset)?.to_owned(), (asset, expected, None))
@@ -1220,6 +1216,22 @@ mod tests {
                 photos_uuid: Some(tier2.uuid.clone()),
                 ..Default::default()
             });
+        fixture.marker.tier2_imported_assets[0].library_blake3 = Some("0".repeat(64));
+        let error = verify_output_photos_custody_with(
+            &fixture.marker,
+            &mut |_, _| panic!("byte-different original without XMP proof is inadmissible"),
+            &mut |_| Ok(()),
+            &mut |_, _| Ok(false),
+            &mut |_, _| panic!("no admitted denominator"),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not prove the exact Photos original")
+        );
+        fixture.marker.tier2_imported_assets[0].library_blake3 = None;
+
         matches.clear();
         let error = verify_output_photos_custody_with(
             &fixture.marker,

@@ -68,8 +68,17 @@ pub use retry_admission::{
     verify_failed_retry_retained_companions,
 };
 pub use source_evidence::{SourceEvidence, read_source_evidence};
+pub(crate) fn tier2_library_hash(asset: &LibraryAssetRecord) -> Result<&str> {
+    match (asset.library_blake3.as_deref(), &asset.xmp_sidecar_blake3) {
+        (Some(hash), Some(_)) => Ok(hash),
+        (Some(hash), None) if hash == asset.blake3 => Ok(hash),
+        (None, None) => Ok(&asset.blake3),
+        _ => bail!("Tier-2 cleanup receipt does not prove the exact Photos original"),
+    }
+}
 pub use tier2_cleanup::{
-    Tier2CleanupJournal, validate_tier2_cleanup_resume, verify_tier2_cleanup_complete,
+    Tier2CleanupJournal, count_recorded_tier2_unlinks, validate_tier2_cleanup_resume,
+    verify_tier2_cleanup_complete, verify_tier2_cleanup_completion_count,
 };
 #[cfg(test)]
 mod tests;

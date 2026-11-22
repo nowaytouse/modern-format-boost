@@ -219,7 +219,7 @@ pub fn classify_heic_compression(
                 // If it is 1, it only PERMITS per-CU lossless coding. A PPS flag
                 // cannot prove that every CU/slice used bypass, regardless of
                 // sign-data-hiding or encoder profile.
-                let pps_flags = check_heic_pps_transquant_bypass_flag(data);
+                let pps_flags = parse_pps_for_transquant_bypass_flag(hvcc_data);
                 if let Some((transquant_bypass_enabled, sign_data_hiding_enabled)) = pps_flags {
                     if transquant_bypass_enabled {
                         crate::log_debug!(
@@ -346,118 +346,39 @@ fn try_heif_info_validation(path: &Path) -> Option<bool> {
     }
 }
 
-fn check_heic_pps_transquant_bypass_flag(data: &[u8]) -> Option<(bool, bool)> {
-    let hvcc_data = find_box_data_recursive(data, *b"hvcC")?;
-    parse_pps_for_transquant_bypass_flag(hvcc_data)
-}
-
 fn parse_pps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<(bool, bool)> {
-    if hvcc_data.len() < 23 {
-        return None;
-    }
-    let num_nalu_arrays = if let Some(b) = hvcc_data.get(22) {
-        crate::numeric_cast::u8_to_usize_strict(*b, "num_nalu_arrays")?
-    } else {
-        crate::log_corruption!(
-            crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-            "hvcC box too short to read num_nalu_arrays"
-        );
-        return None;
-    };
-    let mut pos = 23;
-    for _ in 0..num_nalu_arrays {
-        if pos + 3 > hvcc_data.len() {
-            return None;
-        }
-        let nal_unit_type = if let Some(b) = hvcc_data.get(pos) {
-            b & 0x3F
-        } else {
-            crate::log_corruption!(
-                crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-                &format!("hvcC box truncated at NAL unit type byte at {pos}")
-            );
-            return None;
-        };
-        let b1 = if let Some(b) = hvcc_data.get(pos + 1) {
-            *b
-        } else {
-            crate::log_corruption!(
-                crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-                &format!(
-                    "hvcC box truncated at NAL unit length high byte at position {} (Forensic \
-                     Scan Aborted)",
-                    pos + 1
-                )
-            );
-            return None;
-        };
-        let b2 = if let Some(b) = hvcc_data.get(pos + 2) {
-            *b
-        } else {
-            crate::log_corruption!(
-                crate::infra::static_logs::messages::LABEL_HEIC_AUDIT,
-                &format!(
-                    "hvcC box truncated at NAL unit length low byte at {}",
-                    pos + 2
-                )
-            );
-            return None;
-        };
-        let num_nalus = crate::numeric_cast::u16_to_usize_strict(
-            u16::from_be_bytes([b1, b2]),
-            "heic_nalu_count",
-        )?;
-        pos += 3;
-        if nal_unit_type == crate::constants::HEIC_NAL_UNIT_TYPE_PPS {
-            for _ in 0..num_nalus {
-                if pos + 2 > hvcc_data.len() {
-                    return None;
-                }
-                let b1 = *hvcc_data.get(pos)?;
-                let b2 = *hvcc_data.get(pos + 1)?;
-                let Some(nal_unit_length) = crate::numeric_cast::u16_to_usize_strict(
-                    u16::from_be_bytes([b1, b2]),
-                    "nal_unit_length",
-                ) else {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        "HEIC NAL unit length overflow! Refusing to forge data.",
-                    );
-                    return None;
-                };
-                pos += 2;
-                if pos + nal_unit_length > hvcc_data.len() {
-                    return None;
-                }
-                let pps_payload = hvcc_data.get(pos..pos + nal_unit_length)?;
-                pos += nal_unit_length;
-                if pps_payload.len() < 3 {
-                    continue;
-                }
-                return parse_pps_rbsp_for_transquant_bypass(pps_payload);
+    let (array_count, mut arrays) = hvcc_data.get(22..)?.split_first()?;
+    let mut agreed_flags = None;
+    for _ in 0..*array_count {
+        let header = arrays.split_off(..3)?;
+        let array_type = header[0] & 0x3f;
+        let nal_count = u16::from_be_bytes([header[1], header[2]]);
+        for _ in 0..nal_count {
+            let length = u16::from_be_bytes(arrays.split_off(..2)?.try_into().ok()?);
+            let payload = arrays.split_off(..usize::from(length))?;
+            if array_type != crate::constants::HEIC_NAL_UNIT_TYPE_PPS {
+                continue;
             }
-        } else {
-            for _ in 0..num_nalus {
-                if pos + 2 > hvcc_data.len() {
-                    return None;
-                }
-                let b1 = *hvcc_data.get(pos)?;
-                let b2 = *hvcc_data.get(pos + 1)?;
-                let Some(nal_unit_length) = crate::numeric_cast::u16_to_usize_strict(
-                    u16::from_be_bytes([b1, b2]),
-                    "nal_unit_length",
-                ) else {
-                    crate::media_conversion_gate::probe_image_format_batch_audit(
-                        "probe_heic",
-                        "HEIC NAL unit length overflow! Refusing to forge data.",
-                    );
-                    return None;
-                };
-                pos += 2 + nal_unit_length;
+            let nal_header = payload.get(..2)?;
+            if header[0] & 0x80 == 0
+                || nal_header[0] >> 1 != crate::constants::HEIC_NAL_UNIT_TYPE_PPS
+                || nal_header[1].trailing_zeros() >= 3
+            {
+                return None;
+            }
+            let flags = parse_pps_rbsp_for_transquant_bypass(payload)?;
+            if agreed_flags
+                .replace(flags)
+                .is_some_and(|prior| prior != flags)
+            {
+                return None;
             }
         }
     }
-    None
+    if !arrays.is_empty() {
+        return None;
+    }
+    agreed_flags
 }
 
 pub struct BitReader<'a> {

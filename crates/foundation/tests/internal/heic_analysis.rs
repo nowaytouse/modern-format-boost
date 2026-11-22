@@ -235,6 +235,31 @@ fn classify_heic_compression_reserved_profile_is_unknown_not_lossy() {
 }
 
 #[test]
+fn heic_pps_evidence_requires_complete_agreeing_records() {
+    // Minimal fields through transquant_bypass_enabled_flag.
+    const BYPASS_DISABLED: [u8; 5] = [0x44, 0x01, 0xc0, 0x71, 0x84];
+    const BYPASS_ENABLED: [u8; 5] = [0x44, 0x01, 0xc0, 0x71, 0x8c];
+
+    let mut config = vec![0; 23];
+    config[22] = 1;
+    config.extend_from_slice(&[0xa2, 0, 2]);
+    for pps in [BYPASS_DISABLED, BYPASS_DISABLED] {
+        config.extend_from_slice(&[0, 5]);
+        config.extend_from_slice(&pps);
+    }
+    assert_eq!(
+        parse_pps_for_transquant_bypass_flag(&config),
+        Some((false, false))
+    );
+
+    let end = config.len();
+    config[end - 5..].copy_from_slice(&BYPASS_ENABLED);
+    assert_eq!(parse_pps_for_transquant_bypass_flag(&config), None);
+    config.pop();
+    assert_eq!(parse_pps_for_transquant_bypass_flag(&config), None);
+}
+
+#[test]
 fn classify_heic_compression_rext_444_without_pps_is_unknown() {
     // RExt + 4:4:4 but no parsable PPS arrays inside hvcC: insufficient
     // evidence — Unknown, previously an error/lossy fabrication.

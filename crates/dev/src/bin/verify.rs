@@ -61,6 +61,8 @@ struct Args {
         help = "Verify fast-img restore-jpeg invariant."
     )]
     fast_img_restore: bool,
+    #[arg(long, hide = true, requires = "fast_img_restore")]
+    restore_source_file: bool,
 
     #[arg(
         long = "fast-img-marker-json",
@@ -335,6 +337,7 @@ struct IntegrityStats {
     count_status_label: Option<String>,
     tier2_recorded: usize,
     tier2_verified_deleted: usize,
+    tier2_verified_absent_without_unlink: usize,
     verified_local_aae: usize,
     photos_local_aae_retention: bool,
 }
@@ -345,6 +348,17 @@ fn integrity_count_status(stats: &IntegrityStats) -> String {
         + stats.reconstruction_probe_errors;
     if unresolved > 0 {
         return format!("UNCONFIRMED ({unresolved} file classifications unresolved)");
+    }
+    if stats.scope == "fast_img_restore" {
+        if stats.has_warnings {
+            return format!(
+                "MISMATCH ({} restoration integrity issue(s))",
+                stats.integrity_failures
+            );
+        }
+        if stats.matched == 0 {
+            return "NO JPEG OUTPUTS".to_owned();
+        }
     }
     let delta = stats.count_delta;
     let mut delta_text = "MATCH".to_string();
@@ -1002,7 +1016,7 @@ fn run_fast_img_delivery_check_for_scope(
     let mut failed_sources = HashMap::new();
 
     let mut tier2_recorded = 0;
-    let mut tier2_verified_deleted = 0;
+    let mut tier2_pending = false;
     let mut tier2_unexpected_remaining = Vec::new();
     let mut tier2_missing_proof = Vec::new();
     let mut tier2_unresolved = Vec::new();
@@ -1029,22 +1043,46 @@ fn run_fast_img_delivery_check_for_scope(
         if let Some(encoded) = m.get("blake3_log").and_then(|v| v.as_object()) {
             successful_source_rels.extend(encoded.keys().cloned());
         }
+        tier2_pending = m
+            .get("tier2_in_progress")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
         if let Some(arr) = m.get("tier2_imported_assets").and_then(|v| v.as_array()) {
             tier2_recorded = arr.len();
             for item in arr {
                 let Some(rel) = item.get("rel_path").and_then(|v| v.as_str()) else {
                     continue;
                 };
-                let photos_uuid = item.get("photos_uuid").and_then(|v| v.as_str());
-                let source_path = source_dir.join(rel);
-                let exists = source_path.exists();
-
-                if exists {
-                    tier2_unexpected_remaining.push(rel.to_string());
-                } else if photos_uuid.is_some() && !photos_uuid.unwrap().is_empty() {
-                    tier2_verified_deleted += 1;
-                } else {
-                    tier2_missing_proof.push(rel.to_string());
+                let has_uuid = item
+                    .get("photos_uuid")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|uuid| !uuid.trim().is_empty());
+                let source_status = (|| -> Result<bool> {
+                    let path = source_dir.join(rel);
+                    let key = foundation::pipeline::verification::fast_img_relative_key(
+                        &path,
+                        &source_dir,
+                        "Tier-2 source",
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    anyhow::ensure!(key == rel, "Tier-2 source path is not exact");
+                    foundation::pipeline::verification::validate_no_symlink_components(
+                        &source_dir,
+                        Path::new(rel),
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    match fs::symlink_metadata(path) {
+                        Ok(metadata) if metadata.is_file() => Ok(true),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                        Err(error) => Err(error).context("inspect Tier-2 source"),
+                        Ok(_) => anyhow::bail!("recorded Tier-2 source is not a regular file"),
+                    }
+                })();
+                match source_status {
+                    Ok(true) => tier2_unexpected_remaining.push(rel.to_string()),
+                    Ok(false) if !has_uuid => tier2_missing_proof.push(rel.to_string()),
+                    Ok(false) => {}
+                    Err(error) => tier2_unresolved.push((rel, format!("{error:#}"))),
                 }
             }
         }
@@ -1244,7 +1282,8 @@ fn run_fast_img_delivery_check_for_scope(
     stats.optimized_files = optimized_outputs.len();
     stats.skipped_sources = skipped_source_rels.len();
     stats.failed_sources = failed_source_rels.len() + tier2_failed_count;
-    stats.source_remaining_files = source_true_jpegs.len() + tier2_retained;
+    stats.source_remaining_files =
+        source_true_jpegs.len() + tier2_retained + tier2_unexpected_remaining.len();
     stats.source_probe_errors = source_probe_errors.len();
     stats.optimized_probe_errors = optimized_probe_errors.len();
     stats.extra = unexpected_outputs.len() + optimized_probe_errors.len();
@@ -1257,7 +1296,6 @@ fn run_fast_img_delivery_check_for_scope(
     stats.explained_gaps = skipped_source_rels.len() + failed_source_rels.len() + tier2_retained;
     stats.optimized_total_size = optimized_size;
     stats.tier2_recorded = tier2_recorded;
-    stats.tier2_verified_deleted = tier2_verified_deleted;
 
     let mut integrity_failures = 0;
     if !marker_ok {
@@ -1288,7 +1326,7 @@ fn run_fast_img_delivery_check_for_scope(
     if !tier2_unexpected_remaining.is_empty() {
         integrity_failures += tier2_unexpected_remaining.len();
     }
-    integrity_failures += tier2_unresolved.len();
+    integrity_failures += tier2_unresolved.len() + usize::from(tier2_pending);
     if routed_child
         .as_ref()
         .is_some_and(|marker| !marker.is_terminal())
@@ -1324,6 +1362,7 @@ fn run_fast_img_delivery_check_for_scope(
         && unexpected_source_true_jpegs.is_empty()
         && skipped_sources_missing.is_empty()
         && failed_sources_missing.is_empty()
+        && !tier2_pending
         && tier2_missing_proof.is_empty()
         && tier2_unexpected_remaining.is_empty()
         && tier2_unresolved.is_empty()
@@ -1401,10 +1440,6 @@ fn run_fast_img_delivery_check_for_scope(
         report.push_str(&format!(
             "Recorded tier-2 lossy files: {}\n",
             tier2_recorded
-        ));
-        report.push_str(&format!(
-            "Verified tier-2 deleted:     {}\n",
-            tier2_verified_deleted
         ));
     }
     if tier2_failed_count > 0 || routed_child.is_some() {
@@ -1509,9 +1544,12 @@ fn run_fast_img_delivery_check_for_scope(
                 ));
             }
         }
+        if tier2_pending {
+            report.push_str("  - Tier-2 original delivery or source cleanup remains pending\n");
+        }
         if !tier2_missing_proof.is_empty() {
             report.push_str(&format!(
-                "  - {} tier-2 modern lossy files deleted without Photos/iCloud proof:\n",
+                "  - {} tier-2 modern lossy files are absent without a Photos UUID receipt:\n",
                 tier2_missing_proof.len()
             ));
             for rel in &tier2_missing_proof {
@@ -1558,8 +1596,11 @@ fn run_fast_img_delivery_check_for_scope(
             foundation::batch_control::checkpoint()?;
             report.push_str("  - Current Photos UUIDs and complete original-resource bytes were freshly verified\n");
         }
-        foundation::fast_img_store::verify_tier2_cleanup_complete(&typed)
-            .context(IntegrityUnavailableReason::Checkpoint)?;
+        stats.tier2_verified_deleted =
+            foundation::fast_img_store::verify_tier2_cleanup_completion_count(&typed)
+                .context(IntegrityUnavailableReason::Checkpoint)?;
+        stats.tier2_verified_absent_without_unlink =
+            tier2_recorded.saturating_sub(stats.tier2_verified_deleted);
         report.push_str(&format!(
             "{} FAST-IMG DELIVERY INVARIANTS PASS\n",
             pick_symbol("✓", "[OK]")
@@ -1571,14 +1612,19 @@ fn run_fast_img_delivery_check_for_scope(
             ));
         } else {
             report.push_str(&format!(
-                "  - All non-skipped/non-failed source {source_kind} were successfully deleted\n"
+                "  - All non-skipped/non-failed primary source {source_kind} were successfully deleted\n"
             ));
         }
         report.push_str(&format!("  - Verified {ext_name} delivery inventory\n"));
-        if tier2_recorded > 0 && recovery_marker.is_none() {
-            report.push_str(
-                "  - All tier-2 modern lossy files were successfully deleted after verification\n",
-            );
+        if tier2_recorded > 0 {
+            report.push_str(&format!(
+                "  - Tier-2 sources with recorded unlink: {}\n",
+                stats.tier2_verified_deleted,
+            ));
+            report.push_str(&format!(
+                "  - Tier-2 sources with verified absence and no recorded unlink: {}\n",
+                stats.tier2_verified_absent_without_unlink,
+            ));
         }
     }
 
@@ -1625,45 +1671,83 @@ fn is_restore_jpeg_audit_marker(restored_dir: &Path, path: &Path) -> bool {
 }
 
 fn run_fast_img_restore_check(
-    source_dir: &Path,
+    source_selection: &Path,
     restored_dir: &Path,
     report: &mut String,
     strategy: &str,
+    selected_file: bool,
 ) -> Result<IntegrityStats> {
-    let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_dir)?;
+    use foundation::pipeline::verification::{
+        validate_no_symlink_components, verify_regular_file_blake3,
+    };
+
+    let _uncached = foundation::common_utils::UncachedVerificationScope::new()
+        .context(IntegrityUnavailableReason::UncachedVerification)?;
+    let selected_name = (selected_file || source_selection.is_file())
+        .then(|| {
+            source_selection
+                .file_name()
+                .context("restore source file name is missing")
+        })
+        .transpose()?;
+    let source_root = match selected_name {
+        Some(_) => foundation::media_conversion_gate::path_parent_or_dot(source_selection),
+        None => source_selection,
+    };
+    let selected_key = selected_name.map(|name| integrity_stem_key(Path::new(name)));
+    let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_root)?;
     let restored_dir = restored_dir
         .canonicalize()
         .context("canonicalize restored_dir")?;
 
     report.push_str("── FAST-IMG RESTORE VERIFICATION ───────────────────────────────\n");
-    report.push_str(&format!("Source:    {}\n", source_dir.display()));
+    let selected_source = selected_name.map(|name| source_dir.join(name));
+    let displayed_source = selected_source.as_deref().unwrap_or(&source_dir);
+    report.push_str(&format!("Source:    {}\n", displayed_source.display()));
     report.push_str(&format!("Restored:  {}\n\n", restored_dir.display()));
 
     let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
     let mut stats = IntegrityStats {
-        source: source_dir.to_string_lossy().to_string(),
+        source: displayed_source.to_string_lossy().into_owned(),
         optimized: restored_dir.to_string_lossy().to_string(),
-        scope: "images_only".to_string(),
+        scope: "fast_img_restore".to_string(),
         optimized_path_label: "Restored".to_string(),
         source_files_label: format!("Source {ext_name} files"),
-        optimized_files_label: "Restored JPEG files".to_string(),
+        optimized_files_label: "Verified restored JPEG files".to_string(),
         ..Default::default()
     };
 
     let mut source_outputs = BTreeMap::new();
     let mut source_probe_errors = Vec::new();
-    let source_files = if source_dir_exists {
-        collect_regular_files(&source_dir)?
-    } else {
-        Vec::new()
+    let source_files = match selected_name {
+        Some(name) => {
+            let path = source_dir.join(name);
+            match path.symlink_metadata() {
+                Ok(_) => vec![path],
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error).context("inspect selected restore source file"),
+            }
+        }
+        None if source_dir_exists => collect_regular_files(&source_dir)?,
+        None => Vec::new(),
     };
+    let selected_source_missing = selected_name.is_some() && source_files.is_empty();
     for path in source_files {
         foundation::batch_control::checkpoint()?;
         if let Some(name) = path.file_name().and_then(|f| f.to_str()) {
-            if name.starts_with('.') || name == "fastmode_img_marker.json" || name == ".mfb_wc" {
+            if selected_name.is_none()
+                && (name.starts_with('.')
+                    || name == "fastmode_img_marker.json"
+                    || name == ".mfb_wc")
+            {
                 continue;
             }
         } else {
+            continue;
+        }
+        let rel = path.strip_prefix(&source_dir)?;
+        if let Err(error) = validate_no_symlink_components(&source_dir, rel) {
+            source_probe_errors.push((path, anyhow::anyhow!("{error}")));
             continue;
         }
         match detect_true_format(&path) {
@@ -1682,6 +1766,15 @@ fn run_fast_img_restore_check(
                             ),
                         )),
                     }
+                } else if selected_name.is_some()
+                    || path
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case(strategy))
+                {
+                    source_probe_errors.push((
+                        path,
+                        anyhow::anyhow!("expected source {ext_name}, found {true_format}"),
+                    ));
                 }
             }
             Err(e) => {
@@ -1699,11 +1792,22 @@ fn run_fast_img_restore_check(
         if path
             .file_name()
             .and_then(|f| f.to_str())
-            .is_none_or(|s| s.starts_with('.'))
+            .is_none_or(|name| selected_key.is_none() && name.starts_with('.'))
         {
             continue;
         }
         if path.file_name().and_then(|f| f.to_str()) == Some(".mfb_restore_jpeg_manifest.tsv") {
+            continue;
+        }
+        let rel = path.strip_prefix(&restored_dir)?;
+        if selected_key
+            .as_ref()
+            .is_some_and(|key| integrity_stem_key(rel) != *key)
+        {
+            continue;
+        }
+        if let Err(error) = validate_no_symlink_components(&restored_dir, rel) {
+            restored_probe_errors.push((path, anyhow::anyhow!("{error}")));
             continue;
         }
         if is_restore_jpeg_audit_marker(&restored_dir, &path) {
@@ -1754,7 +1858,14 @@ fn run_fast_img_restore_check(
             non_jpeg_outputs.push((path, format!("invalid_xmp: {error}")));
             continue;
         }
-        restored_xmp_sidecars.insert(key, path);
+        match restored_xmp_sidecars.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(path);
+            }
+            Entry::Occupied(entry) => {
+                non_jpeg_outputs.push((path, format!("ambiguous XMP sidecar for {}", entry.key())))
+            }
+        }
     }
 
     let (manifest_records, mut restore_manifest_errors) = load_restore_jpeg_manifest(&restored_dir);
@@ -1765,11 +1876,13 @@ fn run_fast_img_restore_check(
         );
     }
     let mut manifest_sources = HashMap::new();
-    let mut manifest_deleted_sources = HashSet::new();
     let mut seen_manifest_keys = HashSet::new();
     for record in manifest_records {
         foundation::batch_control::checkpoint()?;
         let source_rel = &record.source_rel;
+        if selected_name.is_some_and(|name| Path::new(source_rel).as_os_str() != name) {
+            continue;
+        }
         let output_rel = &record.output_rel;
         let source_key = integrity_stem_key(Path::new(source_rel));
         let output_key = integrity_stem_key(Path::new(output_rel));
@@ -1784,73 +1897,47 @@ fn run_fast_img_restore_check(
             continue;
         }
         let source_path = source_dir.join(source_rel);
-        if let Some(xmp_rel) = record.xmp_rel.as_deref() {
-            if integrity_stem_key(Path::new(xmp_rel)) != output_key {
-                restore_manifest_errors.push(format!(
-                    "manifest XMP key mismatch: output={output_rel} xmp={xmp_rel}"
-                ));
-            } else {
-                let xmp_path = restored_dir.join(xmp_rel);
-                if !xmp_path.is_file() {
-                    restore_manifest_errors
-                        .push(format!("manifest XMP sidecar is missing: {xmp_rel}"));
-                } else if let Err(error) = foundation::metadata::validate_xmp_sidecar(&xmp_path) {
-                    restore_manifest_errors.push(format!(
-                        "manifest XMP sidecar is invalid: {xmp_rel}: {error}"
-                    ));
-                } else {
-                    match calculate_blake3_hash(&xmp_path) {
-                        Ok(actual_hash)
-                            if record.xmp_blake3.as_deref() == Some(actual_hash.as_str()) => {}
-                        Ok(_) => restore_manifest_errors
-                            .push(format!("manifest XMP BLAKE3 mismatch: {xmp_rel}")),
-                        Err(error) => restore_manifest_errors.push(format!(
-                            "failed to hash manifest XMP sidecar {xmp_rel}: {error}"
-                        )),
-                    }
-                }
-            }
+        if let Err(error) = validate_no_symlink_components(&source_dir, Path::new(source_rel)) {
+            restore_manifest_errors.push(format!(
+                "manifest source path could not be verified: {source_rel}: {error}"
+            ));
+            continue;
         }
         if record.source_deleted {
-            if source_path.exists() {
+            if !source_path
+                .symlink_metadata()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            {
                 restore_manifest_errors.push(format!(
-                    "manifest claims deleted source still exists: {source_rel}"
+                    "manifest claims deleted source still exists or is uninspectable: {source_rel}"
                 ));
                 continue;
             }
             let extension_sidecar = source_path.with_extension("xmp");
             let appended_sidecar = source_dir.join(format!("{source_rel}.xmp"));
-            if extension_sidecar.exists() || appended_sidecar.exists() {
+            if [extension_sidecar, appended_sidecar].iter().any(|sidecar| {
+                !sidecar
+                    .symlink_metadata()
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            }) {
                 restore_manifest_errors.push(format!(
-                    "manifest deleted source left XMP sidecar: {source_rel}"
+                    "manifest deleted source left XMP sidecar or its absence could not be proven: {source_rel}"
                 ));
                 continue;
             }
-            manifest_deleted_sources.insert(source_key.clone());
-        } else {
-            if !source_path.is_file() {
-                restore_manifest_errors
-                    .push(format!("manifest retained source is missing: {source_rel}"));
-                continue;
-            }
-            match calculate_blake3_hash(&source_path) {
-                Ok(actual) if actual == record.source_blake3 => {}
-                Ok(actual) => {
-                    restore_manifest_errors.push(format!(
-                        "retained source BLAKE3 mismatch: {source_rel}; expected={} actual={actual}",
-                        record.source_blake3
-                    ));
-                    continue;
-                }
-                Err(err) => {
-                    restore_manifest_errors.push(format!(
-                        "failed to hash retained source {source_rel}: {err}"
-                    ));
-                    continue;
-                }
-            }
+        } else if let Err(error) = verify_regular_file_blake3(&source_path, &record.source_blake3) {
+            restore_manifest_errors.push(format!(
+                "manifest retained source could not be verified: {source_rel}: {error}"
+            ));
+            continue;
         }
         manifest_sources.insert(source_key, record);
+    }
+
+    if selected_source_missing && manifest_sources.is_empty() {
+        restore_manifest_errors.push(
+            "selected restore source is missing without a matching manifest proof".to_owned(),
+        );
     }
 
     for (key, path) in &restored_jpeg {
@@ -1899,7 +1986,11 @@ fn run_fast_img_restore_check(
 
     let mut missing_keys = Vec::new();
     for k in &expected_keys {
-        if !restored_jpeg.contains_key(k) {
+        if restored_jpeg.get(k).is_none_or(|path| {
+            manifest_sources
+                .get(k)
+                .is_some_and(|record| restored_dir.join(&record.output_rel) != *path)
+        }) {
             missing_keys.push(k.clone());
         }
     }
@@ -1913,26 +2004,53 @@ fn run_fast_img_restore_check(
     }
     extra_keys.sort();
 
-    let mut hash_mismatched_restored_jpegs = Vec::new();
+    let mut matched = 0;
+    let mut verified_deleted_sources = 0;
     for (key, record) in &manifest_sources {
         foundation::batch_control::checkpoint()?;
-        let output_rel = &record.output_rel;
-        let expected_output = restored_dir.join(output_rel);
-        if expected_output.is_file() {
-            let output_hash = match calculate_blake3_hash(&expected_output) {
-                Ok(hash) => hash,
-                Err(err) => {
-                    restore_manifest_errors.push(format!(
-                        "failed to hash restored JPEG {}: {err}",
-                        expected_output.display()
-                    ));
-                    continue;
-                }
-            };
-            if output_hash != record.output_blake3 {
-                hash_mismatched_restored_jpegs.push((key.clone(), record.clone(), output_hash));
-            }
+        let output_rel = Path::new(&record.output_rel);
+        let Some(observed) = restored_jpeg.get(key) else {
+            continue;
+        };
+        if *observed != restored_dir.join(output_rel) {
+            continue;
         }
+        let proof = (|| -> Result<()> {
+            validate_no_symlink_components(&restored_dir, output_rel)
+                .map_err(anyhow::Error::msg)?;
+            verify_regular_file_blake3(observed, &record.output_blake3)
+                .context("restored JPEG failed its current BLAKE3 proof")?;
+            if let Some(xmp_rel) = record.xmp_rel.as_deref() {
+                let xmp_rel = Path::new(xmp_rel);
+                anyhow::ensure!(
+                    integrity_stem_key(xmp_rel) == *key,
+                    "manifest XMP key mismatch"
+                );
+                validate_no_symlink_components(&restored_dir, xmp_rel)
+                    .map_err(anyhow::Error::msg)?;
+                let xmp_path = restored_dir.join(xmp_rel);
+                anyhow::ensure!(
+                    restored_xmp_sidecars.get(key) == Some(&xmp_path),
+                    "manifest XMP sidecar is missing, invalid, or ambiguous"
+                );
+                let expected = record
+                    .xmp_blake3
+                    .as_deref()
+                    .context("missing manifest XMP digest")?;
+                verify_regular_file_blake3(&xmp_path, expected)
+                    .context("restored XMP failed its current BLAKE3 proof")?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = proof {
+            restore_manifest_errors.push(format!(
+                "restoration proof failed for {}: {error:#}",
+                output_rel.display()
+            ));
+            continue;
+        }
+        matched += 1;
+        verified_deleted_sources += usize::from(record.source_deleted);
     }
 
     let source_candidate_count = expected_keys.len()
@@ -1941,13 +2059,14 @@ fn run_fast_img_restore_check(
         + source_probe_errors.len();
     stats.source_files = source_candidate_count;
     stats.source_remaining_files = source_outputs.len() + source_probe_errors.len();
-    stats.verified_deleted_sources = manifest_deleted_sources.len();
-    stats.optimized_files = restored_jpeg.len();
+    stats.verified_deleted_sources = verified_deleted_sources;
+    stats.optimized_files = matched;
+    stats.skipped_sources = retained_ineligible.len();
     stats.source_probe_errors = source_probe_errors.len();
     stats.optimized_probe_errors = restored_probe_errors.len();
     stats.reconstruction_probe_errors = reconstruction_probe_errors.len();
     stats.restore_manifest_errors = restore_manifest_errors.len();
-    stats.matched = restored_jpeg.len();
+    stats.matched = matched;
     stats.missing = missing_keys.len();
     stats.extra = extra_keys.len() + restored_probe_errors.len();
     stats.mismatched_types = non_jpeg_outputs.len();
@@ -1959,16 +2078,12 @@ fn run_fast_img_restore_check(
     let integrity_failures = restore_manifest_errors.len()
         + missing_keys.len()
         + extra_keys.len()
-        + hash_mismatched_restored_jpegs.len()
         + non_jpeg_outputs.len()
         + source_probe_errors.len()
         + reconstruction_probe_errors.len()
         + restored_probe_errors.len();
 
-    let count_matches = stats.count_delta == 0
-        && missing_keys.is_empty()
-        && extra_keys.is_empty()
-        && non_jpeg_outputs.is_empty();
+    let count_matches = matched > 0 && stats.count_delta == 0 && integrity_failures == 0;
     stats.count_matches_with_handoff = count_matches;
     stats.count_fully_explained = count_matches;
     stats.count_status_label = if count_matches {
@@ -1990,16 +2105,19 @@ fn run_fast_img_restore_check(
     ));
     report.push_str(&format!(
         "Manifest verified deleted source JXLs: {}\n",
-        manifest_deleted_sources.len()
+        verified_deleted_sources
     ));
     report.push_str(&format!(
         "Manifest verified retained source JXLs: {}\n",
-        manifest_sources.len() - manifest_deleted_sources.len()
+        matched - verified_deleted_sources
     ));
-    report.push_str(&format!(
-        "Restored JPEG files:        {}\n",
-        restored_jpeg.len()
-    ));
+    report.push_str(&format!("Verified restored JPEGs:    {matched}\n"));
+    if restored_jpeg.len() != matched {
+        report.push_str(&format!(
+            "Observed JPEGs on disk:     {}\n",
+            restored_jpeg.len()
+        ));
+    }
     report.push_str(&format!(
         "Restored XMP sidecars:      {}\n",
         restored_xmp_sidecars.len()
@@ -2117,17 +2235,6 @@ fn run_fast_img_restore_check(
             }
             report.push('\n');
         }
-        if !hash_mismatched_restored_jpegs.is_empty() {
-            report.push_str("--- Content hash mismatches ---\n");
-            for (_k, record, actual) in &hash_mismatched_restored_jpegs {
-                report.push_str(&format!(
-                    "  - Content hash mismatch for restored JPEG: {}\n      Expected (manifest): \
-                     {}\n      Actual (file):     {}\n",
-                    record.output_rel, record.output_blake3, actual
-                ));
-            }
-            report.push('\n');
-        }
         if !source_probe_errors.is_empty() {
             report.push_str(&format!(
                 "--- Source JXL format probe errors ({}) ---\n",
@@ -2169,6 +2276,8 @@ fn run_fast_img_restore_check(
             }
             report.push('\n');
         }
+    } else if matched == 0 {
+        report.push_str("NO JPEG OUTPUTS — no exact JPEG restoration was verified.\n");
     } else {
         report.push_str(&format!(
             "{} RESTORE INVARIANTS PASS\n",
@@ -3135,7 +3244,13 @@ fn main() -> Result<()> {
                 )?);
             } else if args.fast_img_restore {
                 integrity_stats = Some(report_integrity_unavailable(
-                    run_fast_img_restore_check(&src, &opt, &mut report, &args.strategy),
+                    run_fast_img_restore_check(
+                        &src,
+                        &opt,
+                        &mut report,
+                        &args.strategy,
+                        args.restore_source_file,
+                    ),
                     args.print_integrity_json,
                 )?);
             } else {
@@ -3221,7 +3336,11 @@ fn main() -> Result<()> {
                 );
                 println!(
                     "   {:<34}{}",
-                    "Verified tier-2 deleted:", stats.tier2_verified_deleted
+                    "Tier-2 recorded unlinks:", stats.tier2_verified_deleted
+                );
+                println!(
+                    "   {:<34}{}",
+                    "Tier-2 verified absent only:", stats.tier2_verified_absent_without_unlink
                 );
             }
             if stats.skipped_sources > 0 {
@@ -3760,6 +3879,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\txmp_rel_hex\txmp_b
     }
 
     #[test]
+    #[serial]
     fn test_fast_img_restore_check_reports_metadata_attention_without_count_mismatch() {
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
@@ -3783,12 +3903,14 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\txmp_rel_hex\txmp_b
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats =
+            run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
         assert_eq!(stats.integrity_failures, 1, "{report}");
         assert!(stats.has_warnings);
         assert_eq!(stats.missing, 0);
         assert_eq!(stats.extra, 0);
-        assert_eq!(integrity_count_status(&stats), "MATCH");
+        assert_eq!(stats.matched, 1);
+        assert!(integrity_count_status(&stats).starts_with("MISMATCH"));
         assert!(report.contains("camera.JXL: XMP conflict"));
         assert!(!report.contains("RESTORE INVARIANTS PASS"));
     }
@@ -4977,15 +5099,16 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats =
+            run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert_eq!(stats.source_files, 1);
-        assert_eq!(stats.optimized_files, 1);
-        assert_eq!(stats.matched, 1);
+        assert_eq!(stats.optimized_files, 0);
+        assert_eq!(stats.matched, 0);
         assert_eq!(stats.count_delta, 0);
         assert_eq!(stats.integrity_failures, 1);
         assert!(stats.has_warnings);
-        assert_eq!(integrity_count_status(&stats), "MATCH");
+        assert!(integrity_count_status(&stats).starts_with("MISMATCH"));
         assert!(report.contains(
             "restored JPEG has no valid reconstruction manifest proof: nested/camera.jpeg"
         ));
@@ -5002,8 +5125,11 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         )
         .unwrap();
         report.clear();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
-        assert_eq!(stats.integrity_failures, 1);
+        let stats =
+            run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
+        assert_eq!(stats.integrity_failures, 2);
+        assert_eq!(stats.missing, 1);
+        assert_eq!(stats.matched, 0);
         assert!(stats.has_warnings);
         assert!(report.contains(
             "restored JPEG has no valid reconstruction manifest proof: nested/camera.jpeg"
@@ -5036,7 +5162,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.source_remaining_files, 0);
@@ -5050,6 +5176,53 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
     #[test]
     #[serial]
+    fn test_fast_img_restore_check_rechecks_selected_deleted_source_and_current_jpeg_bytes()
+    -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("source");
+        let selected = source.join("a.JXL");
+        let restored = temp.path().join("restored");
+        fs::create_dir(&source)?;
+        fs::create_dir(&restored)?;
+        fs::write(source.join("sibling.JXL"), b"\xff\x0aother-source")?;
+        fs::write(
+            restored.join("sibling.jpg"),
+            b"\xff\xd8\xff\xe0other-output",
+        )?;
+
+        let output = restored.join("a.jpg");
+        fs::write(&output, b"\xff\xd8\xff\xe0expected")?;
+        let digest = calculate_blake3_hash(&output)?;
+        fs::write(
+            restored.join(".mfb_restore_jpeg_manifest.tsv"),
+            format!(
+                "source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n\
+                 612e4a584c\t612e6a7067\tsource-hash\t{digest}\ttrue\n"
+            ),
+        )?;
+
+        let mut report = String::new();
+        let stats = run_fast_img_restore_check(&selected, &restored, &mut report, "jxl", true)?;
+        assert!(!stats.has_warnings, "{report}");
+        assert_eq!(stats.source_files, 1);
+        assert_eq!(stats.verified_deleted_sources, 1);
+        assert_eq!(stats.optimized_files, 1);
+        assert_eq!(integrity_count_status(&stats), "MATCH");
+
+        fs::write(&output, b"\xff\xd8\xff\xe0tampered")?;
+        report.clear();
+        let stats = run_fast_img_restore_check(&selected, &restored, &mut report, "jxl", true)?;
+        assert!(stats.has_warnings, "{report}");
+        assert_eq!(stats.verified_deleted_sources, 0);
+        assert_eq!(stats.optimized_files, 0);
+        assert_eq!(stats.matched, 0);
+        assert!(integrity_count_status(&stats).starts_with("MISMATCH"));
+        assert!(report.contains("restored JPEG failed its current BLAKE3 proof"));
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
     fn test_fast_img_restore_check_rejects_removed_source_without_manifest() {
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album_optimized");
@@ -5059,7 +5232,8 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert!(!source.exists());
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats =
+            run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert!(stats.has_warnings);
         assert_eq!(stats.restore_manifest_errors, 2);
@@ -5081,7 +5255,8 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         fs::write(restored.join("camera.jpeg"), b"\xff\xd8\xff\xe0true-jpeg").unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats =
+            run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
         assert!(stats.has_warnings);
         assert_eq!(stats.source_probe_errors, 1, "{report}");
         assert_eq!(stats.optimized_probe_errors, 1, "{report}");
@@ -5123,7 +5298,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert_eq!(stats.source_remaining_files, 1);
@@ -5182,7 +5357,8 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats =
+            run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert_eq!(stats.source_files, 2);
         assert_eq!(stats.optimized_files, 1);
@@ -5190,6 +5366,19 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.integrity_failures, 0, "{report}");
         assert!(!stats.has_warnings);
         assert!(report.contains("Safely retained JXLs without exact JPEG reconstruction (1)"));
+        assert_eq!(stats.skipped_sources, 1);
+
+        fs::remove_file(restored_jpeg).unwrap();
+        fs::remove_file(restored.join(".mfb_restore_jpeg_manifest.tsv")).unwrap();
+        report.clear();
+        let stats =
+            run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
+        assert_eq!(stats.optimized_files, 0);
+        assert_eq!(stats.matched, 0);
+        assert_eq!(stats.skipped_sources, 1);
+        assert!(!stats.has_warnings, "{report}");
+        assert_eq!(integrity_count_status(&stats), "NO JPEG OUTPUTS");
+        assert!(!report.contains("RESTORE INVARIANTS PASS"));
     }
 
     #[test]
@@ -5225,7 +5414,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert_eq!(stats.source_files, 1);
         assert!(stats.integrity_failures >= 1);
@@ -5265,7 +5454,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert!(stats.integrity_failures >= 1);
         assert!(stats.has_warnings);
@@ -5299,7 +5488,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         .unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert!(stats.integrity_failures >= 1);
         assert!(stats.has_warnings);
@@ -5319,7 +5508,8 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         fs::write(restored.join("wrong.png"), b"\x89PNG\r\n\x1a\nnot-jpeg").unwrap();
 
         let mut report = String::new();
-        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        let stats =
+            run_fast_img_restore_check(&source, &restored, &mut report, "jxl", false).unwrap();
 
         assert_eq!(stats.source_files, 2);
         assert_eq!(stats.optimized_files, 0);
@@ -5482,11 +5672,17 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             fs::remove_file(&xmp)?;
             journal.observe(&asset, Removed, Xmp, &xmp, &xmp_hash)?;
         }
+        assert_eq!(
+            foundation::fast_img_store::count_recorded_tier2_unlinks(&marker)?,
+            1
+        );
         marker.tier2_in_progress = false;
         write_marker_atomic(&marker)?;
         let clean =
             delivery_inventory_fixture(&source, &output, &mut String::new(), "images_only", "jxl")?;
         assert!(!clean.has_warnings);
+        assert_eq!(clean.tier2_verified_deleted, 1);
+        assert_eq!(clean.tier2_verified_absent_without_unlink, 0);
 
         let mut report = String::new();
         let error = run_fast_img_delivery_check_with(
@@ -5511,7 +5707,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
     #[test]
     #[serial]
-    fn test_fast_img_delivery_check_accepts_tier2_modern_lossy_assets() {
+    fn test_fast_img_delivery_check_distinguishes_legacy_absence_from_recorded_tier2_unlinks() {
         if isolated_marker_test() {
             return;
         }
@@ -5525,6 +5721,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         let marker_data = serde_json::json!({
             "working_copy": optimized.to_string_lossy().to_string(),
             "src_jpeg_count": 0,
+            "stage": "cleanup_complete",
             "skipped_sources": {},
             "failed_sources": {},
             "tier2_imported_assets": [
@@ -5545,11 +5742,59 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 .unwrap();
 
         assert_eq!(stats.tier2_recorded, 1);
-        assert_eq!(stats.tier2_verified_deleted, 1);
+        assert_eq!(stats.tier2_verified_deleted, 0);
+        assert_eq!(stats.tier2_verified_absent_without_unlink, 1);
         assert_eq!(stats.integrity_failures, 0);
         assert!(!stats.has_warnings);
         assert!(report.contains("Recorded tier-2 lossy files: 1"));
-        assert!(report.contains("Verified tier-2 deleted:     1"));
+        assert!(report.contains("Tier-2 sources with verified absence and no recorded unlink: 1"));
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("missing.webp", source.join("photo.webp")).unwrap();
+            let stats = delivery_inventory_fixture(
+                &source,
+                &optimized,
+                &mut String::new(),
+                "images_only",
+                "jxl",
+            )
+            .unwrap();
+            assert!(stats.has_warnings);
+            assert!(!stats.count_matches_with_handoff);
+            assert_eq!(
+                (
+                    stats.tier2_verified_deleted,
+                    stats.tier2_verified_absent_without_unlink
+                ),
+                (0, 0)
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_fast_img_delivery_check_refuses_pending_tier2_with_no_receipts() {
+        if isolated_marker_test() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input");
+        let output = root.path().join("output");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&output).unwrap();
+        let _state = write_marker_fixture(
+            &output.join("fastmode_img_marker.json"),
+            &source,
+            &serde_json::json!({"stage": "cleanup_complete", "tier2_in_progress": true}),
+        );
+
+        let mut report = String::new();
+        let stats = delivery_inventory_fixture(&source, &output, &mut report, "images_only", "jxl")
+            .unwrap();
+        assert!(stats.has_warnings);
+        assert!(!stats.count_matches_with_handoff);
+        assert!(report.contains("Tier-2 original delivery or source cleanup remains pending"));
     }
 
     #[test]
@@ -5591,7 +5836,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.tier2_verified_deleted, 0);
         assert!(stats.integrity_failures >= 1);
         assert!(stats.has_warnings);
-        assert!(report.contains("deleted without Photos/iCloud proof"));
+        assert!(report.contains("absent without a Photos UUID receipt"));
     }
 
     #[test]

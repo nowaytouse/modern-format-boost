@@ -5,7 +5,7 @@ use super::{
     FastImgAdmissionPlan, FastImgAdmissionRoute, FastImgAdmissionSidecar, Path, Result, Serialize,
     TransactionBehavior, WorkingCopyMarker, bail, canonical_bytes, canonical_text, cleanup, ensure,
     in_snapshot, inspect_store_schema_version, io, key_for_canonical, open_readonly,
-    open_store_connection, params, read_snapshot, retry,
+    open_store_connection, params, read_snapshot, retry, tier2_library_hash,
 };
 use crate::batch::{DiscoveredSource, planned_source::PlannedSource};
 use crate::image::fast_img::{SourceUnlinkEvent, SourceUnlinkKind, Tier2CleanupObserver};
@@ -43,7 +43,7 @@ fn asset_digest(marker: &WorkingCopyMarker, asset: &LibraryAssetRecord) -> Resul
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .context("Tier-2 cleanup receipt has no Photos UUID")?;
-    let hash = library_hash(asset)?;
+    let hash = tier2_library_hash(asset)?;
     ensure!(
         !asset.quarantined
             && cleanup::hash_is_valid(&asset.blake3)
@@ -64,15 +64,6 @@ fn asset_digest(marker: &WorkingCopyMarker, asset: &LibraryAssetRecord) -> Resul
     ))?)
     .to_hex()
     .to_string())
-}
-
-fn library_hash(asset: &LibraryAssetRecord) -> Result<&str> {
-    match (asset.library_blake3.as_deref(), &asset.xmp_sidecar_blake3) {
-        (Some(hash), Some(_)) => Ok(hash),
-        (Some(hash), None) if hash == asset.blake3 => Ok(hash),
-        (None, None) => Ok(&asset.blake3),
-        _ => bail!("Tier-2 cleanup receipt does not prove the exact Photos original"),
-    }
 }
 
 fn entry_digest(key: &str, source: &str, rel: &str, entry: &Entry) -> Result<blake3::Hash> {
@@ -99,7 +90,7 @@ fn validate_entries(
         "Tier-2 media intent differs from Photos receipt"
     );
     let digest = asset_digest(marker, asset)?;
-    let library = library_hash(asset)?;
+    let library = tier2_library_hash(asset)?;
     let mut companions = source_entries.iter().filter(|(rel, _)| *rel != source);
     let companion = companions.next();
     ensure!(
@@ -395,18 +386,59 @@ pub fn validate_tier2_cleanup_resume(marker: &WorkingCopyMarker) -> Result<BTree
     Ok(absent)
 }
 
-/// Recheck source and companion absence for completed journaled original delivery.
+/// Count Tier-2 media whose unlink and any companion unlink were recorded.
 ///
 /// # Errors
-/// Rejects changed checkpoints, missing intents, remaining originals or XMP, and inspection errors.
+/// Rejects a changed marker, invalid journal, or inaccessible or reappeared cleanup paths.
+pub fn count_recorded_tier2_unlinks(marker: &WorkingCopyMarker) -> Result<usize> {
+    if !marker.tier2_cleanup_journal {
+        return Ok(0);
+    }
+    inspect_tier2_cleanup(marker, false)
+}
+
+/// Recheck source and companion absence for completed original delivery.
+///
+/// # Errors
+/// Rejects changed checkpoints, missing intents, remaining originals or `XMP`, and inspection errors.
 pub fn verify_tier2_cleanup_complete(marker: &WorkingCopyMarker) -> Result<()> {
-    if !marker.tier2_cleanup_journal || marker.tier2_imported_assets.is_empty() {
-        return Ok(());
+    verify_tier2_cleanup_completion_count(marker).map(|_| ())
+}
+
+/// Verify completed Tier-2 cleanup and count original media with recorded unlinks.
+///
+/// Recovery can prove current absence when a crash interrupted unlink recording.
+/// Legacy receipts have no unlink journal. Neither case adds to the unlink count.
+///
+/// # Errors
+/// Returns the same completion errors as [`verify_tier2_cleanup_complete`].
+pub fn verify_tier2_cleanup_completion_count(marker: &WorkingCopyMarker) -> Result<usize> {
+    if marker.tier2_imported_assets.is_empty() {
+        return Ok(0);
     }
     ensure!(
         marker.is_terminal(),
         "Tier-2 original cleanup is still pending"
     );
+    if !marker.tier2_cleanup_journal {
+        for asset in &marker.tier2_imported_assets {
+            ensure!(
+                !cleanup::exists(&marker.src_dir, &asset.rel_path)?,
+                "Tier-2 source remains under its recorded path"
+            );
+            crate::image::fast_img::check_absent_tier2_source_xmp(
+                &marker.src_dir.join(&asset.rel_path),
+            )?;
+        }
+        return Ok(0);
+    }
+    inspect_tier2_cleanup(marker, true)
+}
+
+fn inspect_tier2_cleanup(marker: &WorkingCopyMarker, require_complete: bool) -> Result<usize> {
+    if marker.tier2_imported_assets.is_empty() {
+        return Ok(0);
+    }
     let conn = open_readonly()?.context("Tier-2 cleanup store is unavailable")?;
     let key = key_for_canonical(&canonical_text(&marker.working_copy)?);
     in_snapshot(&conn, |conn| {
@@ -416,15 +448,24 @@ pub fn verify_tier2_cleanup_complete(marker: &WorkingCopyMarker) -> Result<()> {
             "Tier-2 cleanup checkpoint changed during verification"
         );
         let entries = read_entries(conn, &key, marker)?;
+        let mut count = 0;
         for asset in &marker.tier2_imported_assets {
             let rel = &asset.rel_path;
-            let intent = entries
-                .get(rel)
-                .context("Tier-2 source has no durable cleanup intent")?;
-            let (_, xmp_remaining) = inspect_absence(&marker.src_dir, rel, intent)?;
-            ensure!(!xmp_remaining, "Tier-2 XMP still awaits cleanup: {rel}");
+            let Some(intent) = entries.get(rel) else {
+                ensure!(
+                    !require_complete,
+                    "Tier-2 source has no durable cleanup intent"
+                );
+                continue;
+            };
+            let recorded = intent.values().all(|entry| entry.removed);
+            if require_complete || recorded {
+                let (_, xmp_remaining) = inspect_absence(&marker.src_dir, rel, intent)?;
+                ensure!(!xmp_remaining, "Tier-2 XMP still awaits cleanup: {rel}");
+            }
+            count += usize::from(recorded);
         }
-        Ok(())
+        Ok(count)
     })
 }
 
@@ -673,7 +714,7 @@ impl Tier2CleanupObserver for Tier2CleanupJournal<'_> {
                     let observed = DiscoveredSource::from_metadata(path, &fs::symlink_metadata(path)?)?;
                     ensure!(observed.content_blake3() == hash, "Tier-2 entry changed before recording intent");
                     let entry = Entry { kind: entry_kind.into(), source: asset.blake3.clone(), asset: asset_digest(self.marker, asset)?,
-                        library: library_hash(asset)?.to_owned(), hash: hash.to_owned(), claim: PlannedSource::encode(&observed)?, removed: false };
+                        library: tier2_library_hash(asset)?.to_owned(), hash: hash.to_owned(), claim: PlannedSource::encode(&observed)?, removed: false };
                     ensure!(self.pending.insert(rel, entry).is_none(), "Tier-2 cleanup repeated an entry intent");
                     self.pending_source = Some(source.clone());
                 }
@@ -772,6 +813,7 @@ mod tests {
             // Simulate losing power before recording the successful media unlink.
         }
         let saved = read_marker(&marker.working_copy)?;
+        assert_eq!(count_recorded_tier2_unlinks(&saved)?, 0);
         assert_eq!(
             validate_tier2_cleanup_resume(&saved)?,
             BTreeSet::from([rel.to_owned()])
@@ -793,7 +835,7 @@ mod tests {
         );
         assert!(finish_digest(&conn, &key, &saved)?.unwrap().1);
         write_marker(&terminal)?;
-        verify_tier2_cleanup_complete(&terminal)?;
+        assert_eq!(verify_tier2_cleanup_completion_count(&terminal)?, 0);
         fs::write(&sidecar, b"<xmp/>")?;
         assert!(validate_tier2_cleanup_resume(&terminal).is_err());
         assert!(verify_tier2_cleanup_complete(&terminal).is_err());

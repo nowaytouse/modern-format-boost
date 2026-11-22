@@ -220,19 +220,21 @@ fn avif_compression_evidence_from_real_avifenc_output() -> anyhow::Result<()> {
         CompressionType::Lossy,
         "subsampled AVIF must classify as ConfirmedLossy"
     );
-    let tier2_scan =
-        scan_modern_lossy_static_candidates(dir.path(), std::slice::from_ref(&lossy420))?;
-    assert_eq!(tier2_scan.probe_failures, []);
-    assert_eq!(tier2_scan.candidates.len(), 1);
-    let imports = foundation::fast_img::build_modern_lossy_static_import_candidates(
-        dir.path(),
-        &tier2_scan.candidates,
-    );
-    assert_eq!(imports[0].path, lossy420);
-    assert_eq!(
-        imports[0].blake3,
-        foundation::common_utils::calculate_blake3_hash(&lossy420)?
-    );
+    if tool_available("avifdec") {
+        let tier2_scan =
+            scan_modern_lossy_static_candidates(dir.path(), std::slice::from_ref(&lossy420))?;
+        assert_eq!(tier2_scan.probe_failures, []);
+        assert_eq!(tier2_scan.candidates.len(), 1);
+        let imports = foundation::fast_img::build_modern_lossy_static_import_candidates(
+            dir.path(),
+            &tier2_scan.candidates,
+        );
+        assert_eq!(imports[0].path, lossy420);
+        assert_eq!(
+            imports[0].blake3,
+            foundation::common_utils::calculate_blake3_hash(&lossy420)?
+        );
+    }
 
     // 4:4:4 (even at max quality): pixel format is not quantization proof.
     let y444 = run_encoder(
@@ -255,5 +257,35 @@ fn avif_compression_evidence_from_real_avifenc_output() -> anyhow::Result<()> {
         CompressionType::Unknown,
         "4:4:4 AVIF has no container-level lossless/lossy proof; must stay Unknown"
     );
+    let gray = dir.path().join("grayscale.png");
+    image::GrayImage::from_raw(16, 16, (0..=u8::MAX).collect())
+        .ok_or_else(|| anyhow::anyhow!("invalid grayscale fixture dimensions"))?
+        .save(&gray)?;
+    let mono = run_encoder(
+        &dir,
+        "avifenc",
+        &[
+            "--lossless",
+            "-s",
+            "8",
+            "-y",
+            "400",
+            utf8(&gray)?,
+            utf8(&dir.path().join("mono.avif"))?,
+        ],
+        "mono.avif",
+    )?;
+    assert_eq!(
+        detect_compression(&DetectedFormat::AVIF, &mono)?,
+        CompressionType::Unknown,
+        "monochrome AV1 has no chroma plane to discard"
+    );
+    if tool_available("avifdec") {
+        let scan = scan_modern_lossy_static_candidates(dir.path(), &[mono])?;
+        anyhow::ensure!(
+            scan.is_empty(),
+            "monochrome AVIF must be retained outside the destructive lossy route"
+        );
+    }
     Ok(())
 }

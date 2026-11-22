@@ -811,6 +811,7 @@
   "result.independent_delivery_facts": "Independent receipt: encoded %@ · Verified in local Photos %@ · Source files retained %@",
   "result.integrity_issues": "Integrity check found %@ issues · Review processing history",
   "result.invalid": "Batch result is malformed or unsupported; counts are unavailable.",
+  "result.original_delivery_counts": "Original formats · Photos verified %@ · Source cleanup confirmed %@ · Cleanup unconfirmed %@",
   "result.partially_completed": "Partially completed; some files failed",
   "result.pending_count": "%@ unfinished",
   "result.photos_local_count": "%@ verified in local Photos.",

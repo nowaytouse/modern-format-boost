@@ -342,15 +342,14 @@ fn detect_modern_compression_authoritative(
         return detect_compression(detected, path);
     }
 
-    // The internal JP2 parser proves the effective first-tile wavelet but is
-    // intentionally not a full codestream decoder. Require the existing
-    // ImageMagick/OpenJPEG-backed structural validation before its positive
-    // result can reach the destructive tier; absence of the tool is a retain.
-    if format == FormatKind::Jp2 && !tool_available {
+    // A codec configuration can describe subsampling without proving that
+    // the image payload is decodable. Require forensic validation for AVIF and JP2.
+    if matches!(format, FormatKind::Avif | FormatKind::Jp2) && !tool_available {
         tracing::debug!(
             target: "modern_lossy_static",
             path = %path.display(),
-            "retaining JP2 because authoritative structural validation is unavailable"
+            format = ?format,
+            "retaining image because authoritative decode validation is unavailable"
         );
         return Ok(CompressionType::Unknown);
     }

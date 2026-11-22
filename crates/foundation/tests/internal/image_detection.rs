@@ -768,7 +768,7 @@ fn static_by_spec_formats_are_confirmed_static_only() {
     );
 }
 
-/// Synthetic still AVIF: `ftyp` (major brand avif) + `av1C` with `flags`.
+/// Minimal AVIF property association with one primary image.
 fn synthetic_avif_with_av1c(av1c_flags: u8) -> Vec<u8> {
     fn push_box(out: &mut Vec<u8>, box_type: [u8; 4], payload: &[u8]) {
         let size = u32::try_from(payload.len() + 8).expect("box size fits u32");
@@ -779,8 +779,19 @@ fn synthetic_avif_with_av1c(av1c_flags: u8) -> Vec<u8> {
 
     let mut data = Vec::new();
     push_box(&mut data, *b"ftyp", b"avif\0\0\0\0");
-    // av1C: marker/version byte, seq_profile/level byte, flags byte.
-    push_box(&mut data, *b"av1C", &[0x81, 0x00, av1c_flags]);
+    let mut meta = vec![0; 4];
+    push_box(&mut meta, *b"pitm", &[0, 0, 0, 0, 0, 1]);
+    let mut ipco = Vec::new();
+    push_box(&mut ipco, *b"av1C", &[0x81, 0, av1c_flags, 0]);
+    let mut iprp = Vec::new();
+    push_box(&mut iprp, *b"ipco", &ipco);
+    push_box(
+        &mut iprp,
+        *b"ipma",
+        &[0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0x81],
+    );
+    push_box(&mut meta, *b"iprp", &iprp);
+    push_box(&mut data, *b"meta", &meta);
     data
 }
 
@@ -832,8 +843,8 @@ fn avif_compression_requires_positive_evidence() {
         "4:4:4 12-bit can still be a lossy AVIF; must stay Unknown"
     );
 
-    // Monochrome without subsampling: no proof either way.
-    let path = write("avif_mono.avif", &synthetic_avif_with_av1c(0x10));
+    // AV1 monochrome sets both subsampling bits, with no chroma plane.
+    let path = write("avif_mono.avif", &synthetic_avif_with_av1c(0x1c));
     assert_eq!(
         detect_compression(&DetectedFormat::AVIF, &path).expect("monochrome avif"),
         CompressionType::Unknown
@@ -863,13 +874,13 @@ fn avif_compression_identity_colr_is_not_lossless_proof() {
 }
 
 #[test]
-fn avif_compression_requires_every_codec_configuration_to_be_lossy() {
-    let mut data = synthetic_avif_with_av1c(0x0C); // 4:2:0 auxiliary/thumbnail
-    let av1c_444 = [0x81, 0x00, 0x00];
-    let size = u32::try_from(av1c_444.len() + 8).expect("av1C size fits u32");
+fn avif_compression_ignores_unassociated_codec_configuration() {
+    let mut data = synthetic_avif_with_av1c(0x1c); // monochrome primary
+    let unassociated_av1c = [0x81, 0x00, 0x0c, 0];
+    let size = u32::try_from(unassociated_av1c.len() + 8).expect("av1C size fits u32");
     data.extend_from_slice(&size.to_be_bytes());
     data.extend_from_slice(b"av1C");
-    data.extend_from_slice(&av1c_444);
+    data.extend_from_slice(&unassociated_av1c);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mixed_path = dir.path().join("mixed-config.avif");
@@ -879,6 +890,12 @@ fn avif_compression_requires_every_codec_configuration_to_be_lossy() {
         CompressionType::Unknown,
         "one lossy auxiliary av1C must not classify an ambiguous primary item"
     );
+
+    let truncated = dir.path().join("truncated-config.avif");
+    let mut malformed = synthetic_avif_with_av1c(0x00);
+    malformed.extend_from_slice(&[0, 0, 0, 11, b'a', b'v', b'1', b'C', 0x81, 0, 0x0c]);
+    std::fs::write(&truncated, malformed).expect("write truncated codec record");
+    assert!(detect_compression(&DetectedFormat::AVIF, &truncated).is_err());
 
     let invalid_path = dir.path().join("invalid-config.avif");
     std::fs::write(&invalid_path, synthetic_avif_with_av1c(0x04))
