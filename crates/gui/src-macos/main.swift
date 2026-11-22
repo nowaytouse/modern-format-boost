@@ -11528,7 +11528,6 @@ private final class AppController: NSObject, NSWindowDelegate {
         let receipt: [String: Any] = ["schema_version": 1, "succeeded": 1829, "skipped": 0,
             "ignored": 2693, "failed": 1, "unprocessed": 0, "encoded": 1163,
             "photos_verified": 1829, "source_retained": 1, "failed_sources_retained": 1,
-            "original_delivery": ["photos_verified": 666, "source_cleanup_confirmed": 666],
             "failed_sources_verified": 1, "failed_source_verification_error": NSNull(),
             "retention_unknown_reason": NSNull(),
             "primary_cleanup_complete": true, "finalization_error": NSNull()]
@@ -11663,7 +11662,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"decode","completed":6,"total":6,"state":"file_failures","file_progress":{"processed":2,"total":2}}"#)
         appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"remaining-verified","gate":"local","check":"decode","completed":6,"total":6,"state":"passed"}"#)
         appendLog("[FAIL] sample.jpeg: decoder failed")
-        appendLog(try line(receipt))
+        var originalReceipt = receipt
+        originalReceipt["original_delivery"] = ["photos_verified": 666, "source_cleanup_confirmed": 666]
+        appendLog(try line(originalReceipt))
         appendLog(batch)
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
         refreshBatchOverview(processExit: 1, exitedNormally: true)
@@ -11673,6 +11674,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               batchOverviewTitle.textColor == .systemOrange, batchOverviewCounts.textColor == .labelColor,
               batchOverviewDelivery.textColor == .labelColor,
               batchOverviewDelivery.stringValue.contains("1829"), !batchOverviewDelivery.stringValue.contains("1163"),
+              batchOverviewDelivery.stringValue.contains(localized("result.original_delivery_counts", "666", "666", "0")),
               batchOverviewCleanup.stringValue == localized("cleanup.outcome.removed"),
               batchOverviewCleanup.isHidden, logScroll.isHidden, latestDiagnosticsRow.isHidden,
               !logView.string.contains("MFB_FAST_IMG_RESULT="),
