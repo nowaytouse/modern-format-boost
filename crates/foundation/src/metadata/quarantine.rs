@@ -9,7 +9,6 @@ pub(crate) const ATTRIBUTE: &str = "com.apple.quarantine";
 
 #[cfg(target_os = "macos")]
 use std::{
-    borrow::Cow,
     fs::{File, Metadata},
     io,
     os::unix::fs::MetadataExt as _,
@@ -17,24 +16,7 @@ use std::{
 };
 
 #[cfg(target_os = "macos")]
-pub(crate) fn open_regular_quarantine_file(path: &Path) -> io::Result<File> {
-    crate::io_utils::open_regular_nofollow(&native_metadata_path(path)?)
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn native_metadata_path(path: &Path) -> io::Result<Cow<'_, Path>> {
-    for (alias, target) in [("/var", "/private/var"), ("/tmp", "/private/tmp")] {
-        let Ok(rest) = path.strip_prefix(alias) else {
-            continue;
-        };
-        let link = std::fs::read_link(alias)?;
-        if link != Path::new(target) && link != Path::new(target.trim_start_matches('/')) {
-            return Err(io::Error::other("unexpected Darwin root directory alias"));
-        }
-        return Ok(Cow::Owned(Path::new(target).join(rest)));
-    }
-    Ok(Cow::Borrowed(path))
-}
+pub(crate) use crate::io_utils::open_regular_nofollow as open_regular_quarantine_file;
 
 #[cfg(target_os = "macos")]
 pub(crate) fn read_quarantine(file: &File) -> io::Result<Option<Vec<u8>>> {

@@ -580,7 +580,28 @@ pub fn is_finder_metadata(path: &Path) -> std::io::Result<bool> {
     }
 }
 
+/// Resolve only the two OS-owned aliases before Darwin's `O_NOFOLLOW_ANY` open.
+#[cfg(target_os = "macos")]
+pub(crate) fn darwin_nofollow_path(path: &Path) -> std::io::Result<std::borrow::Cow<'_, Path>> {
+    use std::borrow::Cow;
+    for (alias, target) in [("/var", "/private/var"), ("/tmp", "/private/tmp")] {
+        let Ok(rest) = path.strip_prefix(alias) else {
+            continue;
+        };
+        let link = fs::read_link(alias)?;
+        if link != Path::new(target) && link != Path::new(target.trim_start_matches('/')) {
+            return Err(std::io::Error::other(
+                "unexpected Darwin root directory alias",
+            ));
+        }
+        return Ok(Cow::Owned(Path::new(target).join(rest)));
+    }
+    Ok(Cow::Borrowed(path))
+}
+
 pub(crate) fn open_regular_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    #[cfg(target_os = "macos")]
+    let path = darwin_nofollow_path(path)?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]

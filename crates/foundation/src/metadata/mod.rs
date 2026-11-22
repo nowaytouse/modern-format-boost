@@ -1892,12 +1892,36 @@ pub(crate) fn verify_jxl_xmp_digest_custody(
 ///
 /// Returns `Ok(false)` when the same overlay is already the last `xml ` box.
 pub(crate) fn append_xmp_overlay_to_jxl(xmp_path: &Path, dst: &Path) -> io::Result<bool> {
+    append_xmp_overlay(xmp_path, dst, None)
+}
+
+/// A disposable effort candidate has no delivery receipt. Bind its embedded
+/// packet to the search digest and leave durable publication to the winner.
+pub(crate) fn append_effort_xmp_overlay(
+    xmp_path: &Path,
+    dst: &Path,
+    expected_hash: &str,
+) -> io::Result<bool> {
+    append_xmp_overlay(xmp_path, dst, Some(expected_hash))
+}
+
+fn append_xmp_overlay(xmp_path: &Path, dst: &Path, effort_hash: Option<&str>) -> io::Result<bool> {
     let xmp_path = require_regular_sidecar(xmp_path.to_path_buf(), "XMP")?;
     let source_identity = jxl_file_identity(dst)?;
     let container = validate_appendable_jxl_container(dst)?;
     let mut xmp = std::fs::File::open(&xmp_path)?;
     let payload_size = validate_xmp_document(&mut xmp, &xmp_path)?;
     if jxl_last_xml_payload_matches(dst, &container, &mut xmp, payload_size)? {
+        if let Some(expected) = effort_hash {
+            let packet = container
+                .last_xml
+                .ok_or_else(|| io::Error::other("Missing XMP overlay"))?;
+            if blake3_file_span(dst, packet.payload_offset, packet.payload_size)? != expected {
+                return Err(io::Error::other(
+                    "Existing XMP overlay differs from the search packet",
+                ));
+            }
+        }
         return Ok(false);
     }
     if container.xml_box_count >= JXL_APPEND_MAX_XML_BOXES {
@@ -1920,6 +1944,11 @@ pub(crate) fn append_xmp_overlay_to_jxl(xmp_path: &Path, dst: &Path) -> io::Resu
     // sidecar is concurrently replaced, the audit hash still describes the
     // exact bytes copied into the committed overlay.
     let overlay_hash = blake3_open_file_hash(&mut xmp)?;
+    if effort_hash.is_some_and(|expected| expected != overlay_hash) {
+        return Err(io::Error::other(
+            "XMP sidecar changed during JPEG effort search",
+        ));
+    }
 
     // JBRD can reference the exact bytes of an earlier `xml `/`brob` box. Keep
     // every existing box frozen and add the effective XMP as a later overlay;
@@ -1980,7 +2009,9 @@ pub(crate) fn append_xmp_overlay_to_jxl(xmp_path: &Path, dst: &Path) -> io::Resu
         ));
     }
     staged.as_file_mut().flush()?;
-    staged.as_file().sync_all()?;
+    if effort_hash.is_none() {
+        staged.as_file().sync_all()?;
+    }
     let expected_size = original_size
         .checked_add(box_size)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "JXL output size overflow"))?;
@@ -2042,7 +2073,9 @@ pub(crate) fn append_xmp_overlay_to_jxl(xmp_path: &Path, dst: &Path) -> io::Resu
         )));
     }
     staged.persist(dst).map_err(|error| error.error)?;
-    crate::io_utils::sync_committed_file_and_parent(dst)?;
+    if effort_hash.is_none() {
+        crate::io_utils::sync_committed_file_and_parent(dst)?;
+    }
     let overlay_chain_hash = blake3::hash(
         format!(
             "v1:{original_container_hash}:{}:{overlay_hash}:{final_container_hash}",

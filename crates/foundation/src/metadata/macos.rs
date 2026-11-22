@@ -5,7 +5,7 @@
 //! paths come from Rust `Path`.
 
 use super::quarantine::{
-    native_metadata_path, open_regular_quarantine_file, preserving_quarantine, unverified_copy,
+    open_regular_quarantine_file, preserving_quarantine, unverified_copy,
     verify_quarantine_file_identity,
 };
 use crate::builder_base::ToolBuilder;
@@ -52,7 +52,7 @@ fn open_directory_for_acl(path: &Path) -> io::Result<File> {
     std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK)
-        .open(native_metadata_path(path)?)
+        .open(crate::io_utils::darwin_nofollow_path(path)?)
 }
 
 const ACL_TYPE_EXTENDED: u32 = 0x100;

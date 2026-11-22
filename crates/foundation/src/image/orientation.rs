@@ -2256,6 +2256,10 @@ mod tests {
 
     #[test]
     fn zero_orientation_identity_requires_jpeg_contents_and_complete_metadata() {
+        // Keep the system alias in the path even when the test runner sets a canonical TMPDIR.
+        #[cfg(target_os = "macos")]
+        let root = tempfile::tempdir_in("/var/tmp").unwrap();
+        #[cfg(not(target_os = "macos"))]
         let root = tempfile::tempdir().unwrap();
         let jpeg = root.path().join("extensionless");
         let png = root.path().join("misleading.jpeg");

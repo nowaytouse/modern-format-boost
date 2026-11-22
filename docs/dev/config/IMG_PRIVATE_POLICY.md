@@ -189,10 +189,13 @@ published merely because they have a final extension.
 
 Within one full reversible JPEG effort search, the complete source BLAKE3
 binds a single gain-map preparation. UltraHDR gain-map encoding and semantic
-verification run once. Each E1–E11 candidate still receives and reads back the
-exact gain-map box, runs its normal roundtrip, and verifies current filesystem
-and XMP metadata. Publication keeps its fresh complete integrity proof. The
-prepared bundle is discarded with the attempt.
+verification run once. All eleven candidates include the gain-map and XMP bytes
+used in the size comparison. Each embedded sidecar is checked against the
+digest observed at the start of the search. Before accepting the winner the
+worker scans the source directory again and checks the current sidecar bytes.
+Only the delivered file needs Finder metadata, permissions, timestamps and
+durable publication. Its filesystem and complete reconstruction checks run on
+the final staging file. Search observations expire with the attempt.
 
 Fast AVIF Meme Mode deliberately clears removable embedded metadata. It is not
 the maximal-preservation archival route. Filesystem precision/policy exclusions

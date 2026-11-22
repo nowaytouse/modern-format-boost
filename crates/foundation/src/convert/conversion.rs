@@ -1820,40 +1820,61 @@ pub fn commit_reconstructible_jxl_to_output_with_metadata(
 /// # Errors
 /// Returns an error if gain-map or filesystem/XMP metadata enrichment fails.
 pub fn enrich_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
-    enrich_jxl_candidate(source, output, || {
-        crate::image::gain_map::attach_jpeg_gain_map(source, output)
-    })
+    validate_jpeg_metadata_candidate(source, output)?;
+    crate::image::gain_map::attach_jpeg_gain_map(source, output).map_err(std::io::Error::other)?;
+    prepare_output_metadata(output, Some(source), true, true)
 }
 
-/// The gain-map bundle prepared from the original bytes admitted by one exact effort search.
-/// Candidate filesystem and XMP metadata are still read and verified for each output.
+/// Container metadata used for ranking temporary files in one exact effort search.
 pub struct JpegEffortMetadata<'a> {
     source: &'a Path,
     gain_map: crate::image::gain_map::PreparedJpegGainMap,
+    sidecar: Option<(PathBuf, String)>,
 }
 
 impl<'a> JpegEffortMetadata<'a> {
+    fn read_sidecar(source: &Path) -> anyhow::Result<Option<(PathBuf, String)>> {
+        crate::metadata::find_xmp_sidecar(source)?
+            .map(|path| crate::common_utils::calculate_blake3_hash(&path).map(|hash| (path, hash)))
+            .transpose()
+    }
+
     /// # Errors
     /// Rejects changed source bytes or a gain-map bundle that cannot be proved.
     pub fn prepare(source: &'a Path, input_blake3: &str) -> anyhow::Result<Self> {
         Ok(Self {
             source,
             gain_map: crate::image::gain_map::PreparedJpegGainMap::new(source, input_blake3)?,
+            sidecar: Self::read_sidecar(source)?,
         })
     }
 
     /// # Errors
-    /// Rejects failed attachment, readback, or per-candidate metadata validation.
+    /// Rejects changed sidecar bytes, failed attachment or a candidate alias.
     pub fn enrich(&self, output: &Path) -> std::io::Result<()> {
-        enrich_jxl_candidate(self.source, output, || self.gain_map.attach(output))
+        validate_jpeg_metadata_candidate(self.source, output)?;
+        self.gain_map
+            .attach(output)
+            .map_err(std::io::Error::other)?;
+        if let Some((path, hash)) = &self.sidecar {
+            crate::metadata::append_effort_xmp_overlay(path, output, hash)?;
+        }
+        Ok(())
+    }
+
+    /// Rediscover the live sidecar, including an initially absent or now ambiguous name.
+    /// # Errors
+    /// Rejects any change in the selected name or bytes before accepting a winner.
+    pub fn verify_sidecar_unchanged(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            Self::read_sidecar(self.source)? == self.sidecar,
+            "JPEG full effort search incomplete: XMP sidecar changed"
+        );
+        Ok(())
     }
 }
 
-fn enrich_jxl_candidate(
-    source: &Path,
-    output: &Path,
-    attach_gain_map: impl FnOnce() -> anyhow::Result<bool>,
-) -> std::io::Result<()> {
+fn validate_jpeg_metadata_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
     if !fs::symlink_metadata(output)?.file_type().is_file()
         || crate::checkpoint::files_alias_same_inode(source, output)?
     {
@@ -1862,10 +1883,7 @@ fn enrich_jxl_candidate(
             "JPEG metadata candidate must be a regular file distinct from its source",
         ));
     }
-    attach_gain_map().map_err(|error| {
-        std::io::Error::other(format!("Native gain-map preservation failed: {error:#}"))
-    })?;
-    prepare_output_metadata(output, Some(source), true, true)
+    Ok(())
 }
 
 fn prepare_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
@@ -3735,6 +3753,38 @@ mod tests {
     use proptest::test_runner::FileFailurePersistence;
     use std::process::Command;
     use tempfile::{NamedTempFile, tempdir_in};
+
+    #[test]
+    fn jpeg_effort_search_binds_xmp_bytes_and_rechecks_the_directory() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source.jpg");
+        let xmp = source.with_extension("xmp");
+        fs::write(&source, [0xff, 0xd8, 0xff, 0xd9])?;
+        let hash = crate::common_utils::calculate_blake3_hash(&source)?;
+        let absent = JpegEffortMetadata::prepare(&source, &hash)?;
+        fs::write(&xmp, b"<first/>")?;
+        assert!(absent.verify_sidecar_unchanged().is_err());
+        let prepared = JpegEffortMetadata::prepare(&source, &hash)?;
+        let output = root.path().join("candidate.jxl");
+        let mut container = crate::constants::JXL_CONTAINER_MAGIC.to_vec();
+        container.extend_from_slice(b"\x00\x00\x00\x0ajxlc\xff\x0a");
+        fs::write(&output, &container)?;
+        fs::write(&xmp, b"<other/>")?;
+        assert!(prepared.enrich(&output).is_err());
+        assert_eq!(fs::read(&output)?, container);
+        crate::metadata::append_xmp_overlay_to_jxl(&xmp, &output)?;
+        assert!(
+            prepared.enrich(&output).is_err(),
+            "even an existing overlay must match the search digest"
+        );
+        assert!(prepared.verify_sidecar_unchanged().is_err());
+        fs::write(&xmp, b"<first/>")?;
+        prepared.enrich(&output)?;
+        prepared.verify_sidecar_unchanged()?;
+        fs::write(root.path().join("source.jpg.XMP"), b"<first/>")?;
+        assert!(prepared.verify_sidecar_unchanged().is_err());
+        Ok(())
+    }
 
     #[test]
     fn jpeg_metadata_enrichment_rejects_source_aliases_before_writing() -> std::io::Result<()> {

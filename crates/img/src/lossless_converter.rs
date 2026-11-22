@@ -1806,14 +1806,6 @@ fn jpeg_full_effort_search_enabled() -> bool {
     })
 }
 
-fn jpeg_search_sidecar_identity(input: &Path) -> anyhow::Result<Option<(PathBuf, String)>> {
-    foundation::metadata::find_xmp_sidecar(input)?
-        .map(|sidecar| {
-            foundation::common_utils::calculate_blake3_hash(&sidecar).map(|hash| (sidecar, hash))
-        })
-        .transpose()
-}
-
 struct JpegEncodeOutput {
     process: ProcessOutput,
     invocation: Option<JpegEncoderInvocation>,
@@ -1891,7 +1883,7 @@ fn run_cjxl_jpeg_encode_with_effort(
             })
             .transpose()?;
         let process = foundation::process_runner::ManagedProcess::spawn(&mut command)?
-            .wait_liveness_timeout(idle, hard, "cjxl JPEG lossless transcode")?;
+            .wait_liveness_timeout_for_short_task(idle, hard, "cjxl JPEG lossless transcode")?;
         let invocation = if let (Some(executable_blake3), Some(argv)) = (digest, argv)
             && process.status.success()
         {
@@ -1951,7 +1943,6 @@ fn run_cjxl_jpeg_full_effort_search(
     let tool = foundation::common_utils::resolve_tool_path("cjxl")
         .context("JPEG full effort search requires cjxl")?;
     let tool_hash = foundation::common_utils::calculate_blake3_hash(&tool)?;
-    let sidecar = jpeg_search_sidecar_identity(input)?;
     let invocation_observation = if record_invocation {
         JpegInvocationObservation::SearchExecutable {
             path: &tool,
@@ -1987,57 +1978,53 @@ fn run_cjxl_jpeg_full_effort_search(
         None
     };
     let mut metadata = None;
-    foundation::jxl_effort_policy::run_jpeg_full_effort_search_for_worker_observed(
-        input,
-        temp_output,
-        attempt.as_ref(),
-        |effort, candidate, input_blake3| {
-            anyhow::ensure!(
-                jpeg_search_sidecar_identity(input)? == sidecar,
-                "JPEG full effort search incomplete: XMP sidecar changed"
-            );
-            let observation = run_cjxl_jpeg_encode_with_effort(
-                input,
-                candidate,
-                options,
-                max_threads,
-                None,
-                effort,
-                invocation_observation,
-            )?;
-            anyhow::ensure!(
-                observation.process.status.success(),
-                "JPEG full effort search incomplete at E{effort}: {}",
-                cjxl_failure_summary("full effort candidate", &observation.process)
-            );
-            if metadata.is_none() {
-                metadata = Some(foundation::conversion::JpegEffortMetadata::prepare(
+    let (winner, _, digests) =
+        foundation::jxl_effort_policy::run_jpeg_full_effort_search_for_worker_observed(
+            input,
+            temp_output,
+            attempt.as_ref(),
+            |effort, candidate, input_blake3| {
+                if metadata.is_none() {
+                    metadata = Some(foundation::conversion::JpegEffortMetadata::prepare(
+                        input,
+                        input_blake3,
+                    )?);
+                }
+                let observation = run_cjxl_jpeg_encode_with_effort(
                     input,
-                    input_blake3,
-                )?);
-            }
-            metadata
-                .as_ref()
-                .context("JPEG full effort metadata preparation")?
-                .enrich(candidate)?;
-            anyhow::ensure!(
-                jpeg_search_sidecar_identity(input)? == sidecar,
-                "JPEG full effort search incomplete: XMP sidecar changed during metadata delivery"
-            );
-            anyhow::ensure!(
-                foundation::common_utils::resolve_tool_path("cjxl").as_ref() == Some(&tool)
-                    && foundation::common_utils::calculate_blake3_hash(&tool)? == tool_hash,
-                "JPEG full effort search incomplete: cjxl executable changed"
-            );
-            Ok(observation)
-        },
-        |observation| observation.process.status.success(),
-        |candidate| {
-            foundation::fast_img::verify_jxl_roundtrip_integrity(input, candidate)?;
-            Ok(())
-        },
-    )
-    .map(|(observation, _, digests)| (observation, digests))
+                    candidate,
+                    options,
+                    max_threads,
+                    None,
+                    effort,
+                    invocation_observation,
+                )?;
+                anyhow::ensure!(
+                    observation.process.status.success(),
+                    "JPEG full effort search incomplete at E{effort}: {}",
+                    cjxl_failure_summary("full effort candidate", &observation.process)
+                );
+                metadata
+                    .as_ref()
+                    .context("JPEG full effort metadata preparation")?
+                    .enrich(candidate)?;
+                anyhow::ensure!(
+                    foundation::common_utils::resolve_tool_path("cjxl").as_ref() == Some(&tool)
+                        && foundation::common_utils::calculate_blake3_hash(&tool)? == tool_hash,
+                    "JPEG full effort search incomplete: cjxl executable changed"
+                );
+                Ok(observation)
+            },
+            |observation| observation.process.status.success(),
+            |candidate| {
+                foundation::fast_img::verify_jxl_roundtrip_integrity(input, candidate)?;
+                Ok(())
+            },
+        )?;
+    metadata
+        .context("JPEG full effort search has no metadata observation")?
+        .verify_sidecar_unchanged()?;
+    Ok((winner, digests))
 }
 
 /// The result of comparing an existing JPEG-reconstructible JXL to the full effort winner.
