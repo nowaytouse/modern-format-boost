@@ -13052,10 +13052,31 @@ fn fast_img_deliver_modern_lossy_static_tier(
     foundation::fast_img::bind_marker_to_selected_photos_library(marker)?;
     marker.tier2_in_progress = true;
     write_marker_atomic(marker)?;
-    println!(
-        "[TIER 2  ] reconciling/importing {} modern lossy static source(s) with Photos",
-        candidates.len()
-    );
+    let exact_failures = marker.tier2_cleanup_journal;
+    if exact_failures {
+        let refreshed = foundation::fast_img::refresh_tier2_quarantine_receipts(marker)
+            .context("recheck original-format Photos quarantine before source cleanup")?;
+        if refreshed != 0 {
+            write_marker_atomic(marker)
+                .context("persist refreshed original-format Photos custody")?;
+            println!("[TIER 2  ] independently reverified {refreshed} prior quarantine receipt(s)");
+        }
+    }
+    let cleanup_first = exact_failures
+        && marker
+            .tier2_imported_assets
+            .iter()
+            .any(|asset| asset.quarantined);
+    if cleanup_first {
+        println!(
+            "[TIER 2  ] Checking cleanup for previously imported originals before resuming imports"
+        );
+    } else {
+        println!(
+            "[TIER 2  ] reconciling/importing {} modern lossy static source(s) with Photos",
+            candidates.len()
+        );
+    }
     let retry = if marker.failed_retry_primary_source_count.is_some() {
         Some(
             foundation::fast_img_store::failed_retry_context(&marker.working_copy)?
@@ -13064,10 +13085,9 @@ fn fast_img_deliver_modern_lossy_static_tier(
     } else {
         None
     };
-    let exact_failures = marker.tier2_cleanup_journal;
-    let library_handle = if exact_failures {
+    let library_handle = if exact_failures && !cleanup_first {
         fast_img_import_originals_with_failures(marker, src_dir, candidates, retry.as_ref())?
-    } else if candidates.is_empty() {
+    } else if cleanup_first || candidates.is_empty() {
         foundation::pipeline::verification::LibraryHandle {
             photos_library_path: marker.photos_library_path.clone(),
             ..Default::default()
@@ -13088,6 +13108,11 @@ fn fast_img_deliver_modern_lossy_static_tier(
             "fast-img tier-2 recovery has no persisted Photos custody proof; source files retained"
         );
     }
+    let quarantine_pending = marker
+        .tier2_imported_assets
+        .iter()
+        .filter(|asset| asset.quarantined)
+        .count();
     let complete_library_handle = foundation::pipeline::verification::LibraryHandle {
         imported_assets: marker.tier2_imported_assets.clone(),
         import_error_count: 0,
@@ -13111,6 +13136,14 @@ fn fast_img_deliver_modern_lossy_static_tier(
         )
     }
     .map_err(|err| anyhow::anyhow!("fast-img modern lossy source delete gate failed: {err}"))?;
+    if quarantine_pending != 0 {
+        println!(
+            "[WARN] Original-format Photos cleanup pending for {quarantine_pending} marked receipt(s); independently verified sources cleaned={deleted}"
+        );
+        anyhow::bail!(
+            "original-format Photos custody remains quarantined or unconfirmed for {quarantine_pending} item(s); those sources retained"
+        );
+    }
     let prune = |complete| {
         if complete {
             return if remove_selected_root {

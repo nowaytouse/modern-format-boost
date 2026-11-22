@@ -636,7 +636,9 @@ fn jpeg_orientation_matrix_and_encoding_variants_are_fail_closed() -> Result<()>
 
     let baseline = input_root.join("orientation-base.jpg");
     write_jpeg_variant(&baseline, "baseline")?;
-    for orientation in 1..=8 {
+    // Include the unset JPEG sentinel alongside the eight defined transforms.
+    // Zero displays without a transform but must survive exact reconstruction.
+    for orientation in 0..=8 {
         let source = input_root.join(format!("orientation-{orientation}.jpg"));
         fs::copy(&baseline, &source)?;
         set_orientation(&source, orientation)?;
@@ -671,7 +673,7 @@ fn jpeg_orientation_matrix_and_encoding_variants_are_fail_closed() -> Result<()>
         let exiftool = tool_path("exiftool")?;
         let orientation_output = Command::new(exiftool)
             .arg("-s3")
-            .arg("-Orientation#")
+            .arg("-IFD0:Orientation#")
             .arg(&reconstructed)
             .output()?;
         ensure!(orientation_output.status.success());

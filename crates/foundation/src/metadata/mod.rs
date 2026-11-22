@@ -26,6 +26,7 @@ mod macos;
 #[cfg(target_os = "macos")]
 mod network;
 mod output_audit;
+pub(crate) mod quarantine;
 mod source_cleanup;
 #[cfg(target_os = "windows")]
 mod windows;
@@ -102,7 +103,7 @@ pub enum AaeSidecarAction {
 
 /// CONTRACT: xattrs never copied (security / APFS-specific / iCloud import
 /// safety).
-pub(crate) const XATTR_PRESERVE_SKIP_KEYS: &[&str] = &["com.apple.quarantine", "com.apple.decmpfs"];
+pub(crate) const XATTR_PRESERVE_SKIP_KEYS: &[&str] = &[quarantine::ATTRIBUTE, "com.apple.decmpfs"];
 
 /// CONTRACT: minimum macOS keys verified after Spotlight-style copy (M23).
 #[cfg(target_os = "macos")]
@@ -718,12 +719,15 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
         if let Err(e) = macos::copy_native_acl_and_stat(src, dst) {
+            if quarantine::is_unverified_copy(&e) {
+                return Err(e);
+            }
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata",
                 crate::infra::static_logs::messages::MSG_METADATA_MACOS_COPY_FAIL
                     .replace("{}", &e.to_string()),
             );
-            // Fallback: manual xattr copy if copyfile failed
+            // Fallback: manual xattr copy after native ACL or stat failure.
             copy_preservable_xattrs(src, dst)?;
         }
         // ExifTool: EXIF/IPTC/XMP internal tags
@@ -746,7 +750,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
         // byte-for-byte source metadata instead of post-rewrite generated values.
         copy_macos_exact_copy_xattrs(src, dst)?;
 
-        // Unix permission bits (copyfile covers STAT but be explicit)
+        // Reapply Unix permission bits after embedded metadata work.
         let meta = std::fs::metadata(src).map_err(|e| {
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata",
@@ -1164,6 +1168,9 @@ pub(super) fn preserve_pro_for_delivery(
     #[cfg(target_os = "macos")]
     {
         if let Err(e) = macos::copy_native_acl_and_stat(src, dst) {
+            if quarantine::is_unverified_copy(&e) {
+                return Err(e);
+            }
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata",
                 crate::infra::static_logs::messages::MSG_METADATA_MACOS_COPY_FAIL

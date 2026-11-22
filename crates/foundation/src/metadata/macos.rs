@@ -1,79 +1,234 @@
 //! macOS native metadata preservation
 //!
-//! Uses `unsafe` only for FFI to system C APIs (`copyfile`, `getattrlist`).
+//! Uses `unsafe` only for FFI to Darwin filesystem APIs.
 //! Invariants: `CStrings` and pointers are valid for the duration of each call;
 //! paths come from Rust `Path`.
 
+use super::quarantine::{
+    native_metadata_path, open_regular_quarantine_file, preserving_quarantine, unverified_copy,
+    verify_quarantine_file_identity,
+};
 use crate::builder_base::ToolBuilder;
-use std::ffi::CString;
+use std::ffi::{CString, c_void};
+use std::fs::{File, Metadata};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-// copyfile.h constants
-const COPYFILE_ACL: u32 = 1 << 0; // 0x1
-const COPYFILE_STAT: u32 = 1 << 1; // 0x2
-const QUARANTINE: &str = "com.apple.quarantine";
-
 pub(super) fn copy_native_acl_and_stat(src: &Path, dst: &Path) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    use xattr::FileExt;
+    use std::os::unix::fs::MetadataExt as _;
 
-    let source = std::fs::File::open(src)?;
-    let destination = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(dst)?;
-    let before = destination.get_xattr(QUARANTINE)?;
-    let source_marked = source.get_xattr(QUARANTINE)?.is_some();
-    let metadata = destination.metadata()?;
-    if !metadata.is_file() || metadata.nlink() != 1 {
-        return Err(io::Error::new(
+    let source = open_regular_quarantine_file(src)?;
+    let destination = open_regular_quarantine_file(dst).map_err(unverified_copy)?;
+    let metadata = destination.metadata().map_err(unverified_copy)?;
+    if metadata.nlink() != 1 {
+        return Err(unverified_copy(io::Error::new(
             io::ErrorKind::InvalidInput,
             "metadata destination must be a standalone file",
-        ));
+        )));
     }
-    // SAFETY: Both owned descriptors are valid for the call. No data or general xattrs are copied.
-    let status = unsafe {
-        libc::fcopyfile(
-            source.as_raw_fd(),
-            destination.as_raw_fd(),
-            std::ptr::null_mut(),
-            COPYFILE_STAT | COPYFILE_ACL,
-        )
-    };
-    let result = if status == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    };
-    // Darwin can apply quarantine separately from COPYFILE_XATTR.
-    let after = destination.get_xattr(QUARANTINE)?;
-    if after != before {
-        if !source_marked {
-            return Err(io::Error::other(
-                "destination quarantine changed during native metadata copy",
-            ));
-        }
-        if let Some(mark) = &before {
-            destination.set_xattr(QUARANTINE, mark)?;
-        } else {
-            destination.remove_xattr(QUARANTINE)?;
-        }
-        if destination.get_xattr(QUARANTINE)? != before {
-            return Err(io::Error::other(
-                "could not preserve the destination quarantine state",
-            ));
-        }
-    }
+    verify_quarantine_file_identity(dst, &destination, &metadata).map_err(unverified_copy)?;
+    let result = preserving_quarantine(&destination, || {
+        let source_metadata = source.metadata()?;
+        copy_acl(&source, &destination)?;
+        copy_stat(&source, &source_metadata, &destination, &metadata)
+    });
+    verify_quarantine_file_identity(dst, &destination, &metadata).map_err(unverified_copy)?;
     result
 }
 
 pub(super) fn copy_directory_acl(src: &Path, dst: &Path) -> io::Result<()> {
-    const COPYFILE_NOFOLLOW: u32 = (1 << 18) | (1 << 19);
-    copy_native_metadata_flags(src, dst, COPYFILE_ACL | COPYFILE_NOFOLLOW)
+    let source = open_directory_for_acl(src)?;
+    let destination = open_directory_for_acl(dst)?;
+    let before = destination.metadata()?;
+    let result = preserving_quarantine(&destination, || copy_acl(&source, &destination));
+    crate::io_utils::check_open_file_identity(&before, &open_directory_for_acl(dst)?.metadata()?)?;
+    result
+}
+
+fn open_directory_for_acl(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK)
+        .open(native_metadata_path(path)?)
+}
+
+const ACL_TYPE_EXTENDED: u32 = 0x100;
+
+unsafe extern "C" {
+    fn acl_get_fd_np(fd: libc::c_int, kind: u32) -> *mut c_void;
+    fn acl_set_fd_np(fd: libc::c_int, acl: *mut c_void, kind: u32) -> libc::c_int;
+    fn acl_init(count: libc::c_int) -> *mut c_void;
+    fn acl_free(acl: *mut c_void) -> libc::c_int;
+    fn acl_get_entry(acl: *mut c_void, index: libc::c_int, entry: *mut *mut c_void) -> libc::c_int;
+    fn acl_get_flagset_np(entry: *mut c_void, flags: *mut *mut c_void) -> libc::c_int;
+    fn acl_get_flag_np(flags: *mut c_void, flag: u32) -> libc::c_int;
+    fn acl_create_entry(acl: *mut *mut c_void, entry: *mut *mut c_void) -> libc::c_int;
+    fn acl_copy_entry(destination: *mut c_void, source: *mut c_void) -> libc::c_int;
+}
+
+struct NativeAcl(*mut c_void);
+
+impl Drop for NativeAcl {
+    fn drop(&mut self) {
+        // SAFETY: This is the only owner of the allocated Darwin ACL.
+        if unsafe { acl_free(self.0) } != 0 {
+            tracing::debug!(error = %io::Error::last_os_error(), "could not free native ACL");
+        }
+    }
+}
+
+fn read_acl(file: &File) -> io::Result<Option<NativeAcl>> {
+    // SAFETY: The descriptor is open through the call.
+    let acl = unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) };
+    if acl.is_null() {
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
+    Ok(Some(NativeAcl(acl)))
+}
+
+fn append_acl_entries(
+    destination: &mut NativeAcl,
+    source: Option<&NativeAcl>,
+    inherited: bool,
+) -> io::Result<()> {
+    const ACL_FIRST_ENTRY: libc::c_int = 0;
+    const ACL_NEXT_ENTRY: libc::c_int = -1;
+    const ACL_ENTRY_INHERITED: u32 = 1 << 4;
+
+    let Some(source) = source else {
+        return Ok(());
+    };
+    let mut index = ACL_FIRST_ENTRY;
+    loop {
+        let mut from = std::ptr::null_mut();
+        // SAFETY: The source ACL stays live and separate from the one
+        // being grown. The entry is borrowed for only this iteration.
+        if unsafe { acl_get_entry(source.0, index, &raw mut from) } != 0 {
+            let error = io::Error::last_os_error();
+            return if error.raw_os_error() == Some(libc::EINVAL) {
+                Ok(())
+            } else {
+                Err(error)
+            };
+        }
+        index = ACL_NEXT_ENTRY;
+        let mut flags = std::ptr::null_mut();
+        // SAFETY: The entry belongs to the retained source ACL.
+        if unsafe { acl_get_flagset_np(from, &raw mut flags) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: The flags are borrowed from the live source ACL entry.
+        let actual = unsafe { acl_get_flag_np(flags, ACL_ENTRY_INHERITED) };
+        if actual < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if (actual != 0) != inherited {
+            continue;
+        }
+        let mut to = std::ptr::null_mut();
+        // SAFETY: acl_create_entry may update the owning pointer, and both
+        // entries are valid for the copy after creation succeeds.
+        if unsafe { acl_create_entry(&raw mut destination.0, &raw mut to) } != 0
+            || unsafe { acl_copy_entry(to, from) } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+}
+
+fn copy_acl(source: &File, destination: &File) -> io::Result<()> {
+    let source_acl = read_acl(source)?;
+    let destination_acl = read_acl(destination)?;
+    if source_acl.is_none() && destination_acl.is_none() {
+        return Ok(());
+    }
+    // SAFETY: Zero entries creates a valid empty extended ACL.
+    let empty = unsafe { acl_init(0) };
+    if empty.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let mut merged = NativeAcl(empty);
+    // Keep the source's explicit rules and the destination's inherited rules.
+    append_acl_entries(&mut merged, source_acl.as_ref(), false)?;
+    append_acl_entries(&mut merged, destination_acl.as_ref(), true)?;
+    // SAFETY: Both the destination descriptor and the ACL remain live
+    // through the kernel call. Setting an ACL cannot copy quarantine.
+    if unsafe { acl_set_fd_np(destination.as_raw_fd(), merged.0, ACL_TYPE_EXTENDED) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn copy_stat(
+    source: &File,
+    input: &Metadata,
+    destination: &File,
+    output: &Metadata,
+) -> io::Result<()> {
+    use std::os::macos::fs::MetadataExt;
+    // Darwin sys/stat.h flags for destination-specific kernel state.
+    const UF_DATAVAULT: u32 = 0x0000_0080;
+    const SF_RESTRICTED: u32 = 0x0008_0000;
+    const SF_NOUNLINK: u32 = 0x0010_0000;
+    const PRESERVE_FLAGS: u32 = UF_DATAVAULT | SF_RESTRICTED | SF_NOUNLINK | libc::UF_COMPRESSED;
+    const OMIT_FLAGS: u32 = PRESERVE_FLAGS | libc::UF_TRACKED;
+
+    let fd = destination.as_raw_fd();
+    let times = [
+        libc::timespec {
+            tv_sec: input.st_atime(),
+            tv_nsec: input.st_atime_nsec(),
+        },
+        libc::timespec {
+            tv_sec: input.st_mtime(),
+            tv_nsec: input.st_mtime_nsec(),
+        },
+    ];
+    let mut mode =
+        libc::mode_t::try_from(input.st_mode()).map_err(io::Error::other)? & !libc::S_IFMT;
+    if volume_disallows_set_id(source) || volume_disallows_set_id(destination) {
+        mode &= !(libc::S_ISUID | libc::S_ISGID);
+    }
+    // SAFETY: The descriptor is owned through all native operations. The
+    // timestamps array has the two times expected by futimens.
+    unsafe {
+        if libc::futimens(fd, times.as_ptr()) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Like Darwin's copyfile, ownership and filesystem-specific flags
+        // remain best effort when the current user or volume cannot set them.
+        if (input.st_uid() != output.st_uid() || input.st_gid() != output.st_gid())
+            && libc::fchown(fd, input.st_uid(), input.st_gid()) != 0
+        {
+            tracing::debug!(error = %io::Error::last_os_error(), "could not copy native ownership");
+        }
+        if libc::fchmod(fd, mode) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let flags = (input.st_flags() & !OMIT_FLAGS) | (output.st_flags() & PRESERVE_FLAGS);
+        if flags != output.st_flags() && libc::fchflags(fd, flags) != 0 {
+            tracing::debug!(error = %io::Error::last_os_error(), "could not copy native file flags");
+        }
+    }
+    Ok(())
+}
+
+fn volume_disallows_set_id(file: &File) -> bool {
+    let mut volume = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: A successful fstatfs initializes the buffer.
+    unsafe {
+        libc::fstatfs(file.as_raw_fd(), volume.as_mut_ptr()) == 0
+            && volume.assume_init().f_flags & libc::MNT_NOSUID.cast_unsigned() != 0
+    }
 }
 
 pub(super) fn verify_directory_acl(src: &Path, dst: &Path) -> io::Result<()> {
@@ -87,9 +242,10 @@ pub(super) fn verify_directory_acl(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 fn directory_acl(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::OpenOptionsExt;
+    acl_bytes(&open_directory_for_acl(path)?)
+}
 
+fn acl_bytes(handle: &File) -> io::Result<Option<Vec<u8>>> {
     unsafe extern "C" {
         fn filesec_init() -> *mut std::ffi::c_void;
         fn filesec_free(security: *mut std::ffi::c_void);
@@ -114,11 +270,7 @@ fn directory_acl(path: &Path) -> io::Result<Option<Vec<u8>>> {
         fn acl_free(object: *mut std::ffi::c_void) -> i32;
     }
     const FILESEC_ACL: i32 = 5;
-    let handle = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(path)?;
-    // SAFETY: the open directory binds the native observation; every allocation is released below.
+    // SAFETY: The open descriptor binds the native observation; every allocation is released below.
     unsafe {
         let security = filesec_init();
         if security.is_null() {
@@ -171,26 +323,6 @@ fn directory_acl(path: &Path) -> io::Result<Option<Vec<u8>>> {
         filesec_free(security);
         result
     }
-}
-
-fn copy_native_metadata_flags(src: &Path, dst: &Path, flags: u32) -> io::Result<()> {
-    unsafe extern "C" {
-        fn copyfile(
-            from: *const i8,
-            to: *const i8,
-            state: *mut std::ffi::c_void,
-            flags: u32,
-        ) -> i32;
-    }
-    let src_c = CString::new(src.as_os_str().as_bytes())?;
-    let dst_c = CString::new(dst.as_os_str().as_bytes())?;
-    // SAFETY: CStrings are valid until the end of the block; copyfile does not
-    // capture pointers.
-    let ret = unsafe { copyfile(src_c.as_ptr(), dst_c.as_ptr(), std::ptr::null_mut(), flags) };
-    if ret < 0_i32 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 #[repr(C)]
@@ -668,6 +800,143 @@ mod tests {
         parse_spotlight_utc_date, set_added_time, source_content_creation_date,
     };
     use crate::builder_base::ToolBuilder;
+
+    #[test]
+    fn native_metadata_acl_matches_darwin_explicit_and_inherited_rules() -> std::io::Result<()> {
+        use std::fs;
+        use std::os::fd::AsRawFd as _;
+        use std::path::Path;
+
+        fn add_rule(path: &Path, rule: &str) -> std::io::Result<()> {
+            let status = std::process::Command::new("/bin/chmod")
+                .args(["+a", rule])
+                .arg(path)
+                .status()?;
+            assert!(status.success());
+            Ok(())
+        }
+
+        let root = tempfile::tempdir()?;
+        let from = root.path().join("from");
+        let to = root.path().join("to");
+        fs::create_dir(&from)?;
+        fs::create_dir(&to)?;
+        add_rule(
+            &from,
+            "everyone allow readattr,file_inherit,directory_inherit",
+        )?;
+        add_rule(
+            &to,
+            "everyone allow readextattr,file_inherit,directory_inherit",
+        )?;
+        for directory in [true, false] {
+            let kind = if directory { "directory" } else { "file" };
+            let source = from.join(kind);
+            let destination = to.join(kind);
+            let expected = to.join(format!("{kind}-darwin-copyfile"));
+            for path in [&source, &destination, &expected] {
+                if directory {
+                    fs::create_dir(path)?;
+                } else {
+                    fs::write(path, b"synthetic fixture")?;
+                }
+            }
+            add_rule(&source, "everyone allow readsecurity")?;
+            let input = fs::File::open(&source)?;
+            let actual = fs::File::open(&destination)?;
+            let reference = fs::File::open(&expected)?;
+            let inherited_before = super::acl_bytes(&actual)?;
+            let source_before = super::acl_bytes(&input)?;
+            assert!(inherited_before.is_some() && source_before.is_some());
+            // SAFETY: All descriptors are owned synthetic fixtures and remain
+            // open. This legacy call serves only as a behavioral reference.
+            let status = unsafe {
+                libc::fcopyfile(
+                    input.as_raw_fd(),
+                    reference.as_raw_fd(),
+                    std::ptr::null_mut(),
+                    if directory { 1 } else { 3 },
+                )
+            };
+            assert_eq!(status, 0);
+            if directory {
+                super::copy_directory_acl(&source, &destination)?;
+            } else {
+                super::copy_native_acl_and_stat(&source, &destination)?;
+            }
+            let copied = super::acl_bytes(&actual)?;
+            assert_eq!(copied, super::acl_bytes(&reference)?);
+            assert_ne!(copied, inherited_before);
+            assert_ne!(copied, source_before);
+            assert_eq!(super::acl_bytes(&input)?, source_before);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_metadata_copy_preserves_quarantine_on_files_and_directories() -> std::io::Result<()> {
+        use super::super::quarantine::ATTRIBUTE;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let destination = root.path().join("destination");
+        let source_mark = b"0081;66bb3311;SyntheticSource;";
+        let destination_mark = b"0081;66bb3301;SyntheticDestination;";
+        fs::write(&source, b"source fixture")?;
+        fs::write(&destination, b"destination fixture")?;
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o640))?;
+        xattr::set(&source, ATTRIBUTE, source_mark)?;
+        xattr::set(&destination, "org.mfb.synthetic-fixture", b"keep")?;
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::new(1_777_000_000, 123_000_000);
+        fs::File::open(&source)?.set_times(fs::FileTimes::new().set_modified(modified))?;
+        super::copy_native_acl_and_stat(&source, &destination)?;
+        assert_eq!(
+            xattr::get(&source, ATTRIBUTE)?.as_deref(),
+            Some(source_mark.as_slice())
+        );
+        assert_eq!(xattr::get(&destination, ATTRIBUTE)?, None);
+        assert_eq!(
+            xattr::get(&destination, "org.mfb.synthetic-fixture")?.as_deref(),
+            Some(b"keep".as_slice())
+        );
+        assert_eq!(
+            fs::metadata(&destination)?.permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(fs::metadata(&destination)?.modified()?, modified);
+
+        xattr::set(&destination, ATTRIBUTE, destination_mark)?;
+        super::copy_native_acl_and_stat(&source, &destination)?;
+        assert_eq!(
+            xattr::get(&destination, ATTRIBUTE)?.as_deref(),
+            Some(destination_mark.as_slice())
+        );
+
+        let source_dir = root.path().join("source-directory");
+        let destination_dir = root.path().join("destination-directory");
+        fs::create_dir(&source_dir)?;
+        fs::create_dir(&destination_dir)?;
+        let status = std::process::Command::new("/bin/chmod")
+            .args(["+a", "everyone allow readattr"])
+            .arg(&source_dir)
+            .status()?;
+        assert!(status.success());
+        xattr::set(&source_dir, ATTRIBUTE, source_mark)?;
+        xattr::set(&destination_dir, ATTRIBUTE, destination_mark)?;
+        super::copy_directory_acl(&source_dir, &destination_dir)?;
+        super::verify_directory_acl(&source_dir, &destination_dir)?;
+        assert_eq!(
+            xattr::get(&source_dir, ATTRIBUTE)?.as_deref(),
+            Some(source_mark.as_slice())
+        );
+        assert_eq!(
+            xattr::get(&destination_dir, ATTRIBUTE)?.as_deref(),
+            Some(destination_mark.as_slice())
+        );
+        Ok(())
+    }
 
     #[test]
     fn get_added_time_rejects_macos_unset_sentinel() {

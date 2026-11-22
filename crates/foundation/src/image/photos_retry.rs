@@ -290,7 +290,13 @@ where
         blake3: hash,
         sync_status: super::photos_sync_status(&probe).to_owned(),
         quarantined: if kind == PhotosSubmissionKind::Original {
-            super::tier2_import_quarantined(&entry.path, &probe.path, direct_library, quarantined)?
+            super::tier2_import_quarantined(
+                &entry.path,
+                &probe.path,
+                &entry.blake3_entry.out,
+                direct_library,
+                quarantined,
+            )?
         } else {
             quarantined(&entry.path)?
         },
@@ -352,9 +358,8 @@ where
                 PhotosSubmissionBackend::Applescript { .. } => discovered.clone(),
             };
             let mut matched = false;
-            let direct_library = library.filter(|_| !enriched.contains_key(&entry.rel_path));
             for id in ids {
-                match probe_candidate(entry, &id, query, quarantined, kind, direct_library)? {
+                match probe_candidate(entry, &id, query, quarantined, kind, library)? {
                     Some(asset) => {
                         let uuid = asset
                             .photos_uuid

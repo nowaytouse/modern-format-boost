@@ -4150,7 +4150,7 @@ mod tests {
             .expect("synthetic JPEG");
         command_status_success(
             Command::new(crate::constants::TOOL_EXIFTOOL)
-                .args(["-overwrite_original", "-IFD0:Orientation#=0"])
+                .args(["-overwrite_original", "-IFD0:Orientation#=9"])
                 .arg(&source),
             "create invalid source orientation",
         );

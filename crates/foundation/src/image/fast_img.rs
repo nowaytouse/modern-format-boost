@@ -1415,6 +1415,114 @@ pub fn reverify_modern_lossy_static_photos_custody(
     reverify_modern_lossy_static_photos_custody_excluding(library_handle, &BTreeSet::new())
 }
 
+/// Refresh legacy Tier-2 quarantine evidence against the bound Photos library.
+///
+/// Returns the number of refreshed receipts. The caller must persist them before
+/// opening a cleanup journal. This does not modify a file or extended attribute.
+#[cfg(target_os = "macos")]
+pub fn refresh_tier2_quarantine_receipts(marker: &mut WorkingCopyMarker) -> Result<usize> {
+    if !marker
+        .tier2_imported_assets
+        .iter()
+        .any(|asset| asset.quarantined)
+    {
+        return Ok(0);
+    }
+    let library =
+        selected_photos_library(marker.photos_library_path.as_deref())?.ok_or_else(|| {
+            ImgQualityError::AnalysisError(
+                "Tier-2 quarantine refresh requires the bound Photos library".into(),
+            )
+        })?;
+    if marker.photos_library_path.as_deref() != Some(library.as_path()) {
+        return Err(ImgQualityError::AnalysisError(
+            "Tier-2 quarantine refresh cannot change its Photos library binding".into(),
+        ));
+    }
+    let _uncached = crate::common_utils::UncachedVerificationScope::new()?;
+    refresh_tier2_quarantine_receipts_with(marker, &library, |ids| {
+        query_selected_photos_asset_probes(ids, Some(&library))
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub const fn refresh_tier2_quarantine_receipts(_marker: &mut WorkingCopyMarker) -> Result<usize> {
+    Ok(0)
+}
+
+#[cfg(target_os = "macos")]
+fn refresh_tier2_quarantine_receipts_with(
+    marker: &mut WorkingCopyMarker,
+    library: &Path,
+    query: impl FnOnce(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+) -> Result<usize> {
+    let uuids = marker
+        .tier2_imported_assets
+        .iter()
+        .filter(|asset| asset.quarantined)
+        .filter_map(|asset| asset.photos_uuid.clone())
+        .collect::<Vec<_>>();
+    if uuids.is_empty() {
+        return Ok(0);
+    }
+    let probes = index_photos_probes_by_uuid(&uuids, query(&uuids)?)?;
+    let require_icloud_upload = fast_img_require_icloud_upload_proof();
+    let mut refreshed = 0;
+    for asset in &mut marker.tier2_imported_assets {
+        if !asset.quarantined {
+            continue;
+        }
+        let Some(probe) = asset.photos_uuid.as_ref().and_then(|id| probes.get(id)) else {
+            continue;
+        };
+        let result = (|| {
+            let mut clean = asset.clone();
+            clean.quarantined = false;
+            let local = LibraryHandle {
+                imported_assets: vec![clean],
+                ..Default::default()
+            };
+            preflight_modern_lossy_static_source_deletion(&marker.src_dir, &local, |_, _| {
+                Err(ImgQualityError::AnalysisError(
+                    "Tier-2 quarantine refresh requires a present local source".into(),
+                ))
+            })?;
+            verified_tier2_sidecar_for_cleanup(
+                &marker.src_dir.join(&asset.rel_path),
+                asset.xmp_sidecar_blake3.as_deref(),
+            )?;
+            if !photos_probe_satisfies_policy(probe, require_icloud_upload) {
+                return Err(ImgQualityError::AnalysisError(
+                    "Tier-2 quarantine refresh requires an independent managed Photos original and the requested custody proof"
+                        .into(),
+                ));
+            }
+            if inspect_managed_photos_quarantine(
+                &probe.path,
+                library,
+                ManagedOriginalKind::Tier2Original,
+                crate::fast_img_store::tier2_library_hash(asset)?,
+                true,
+            )? {
+                return Err(ImgQualityError::AnalysisError(
+                    "Tier-2 quarantine refresh could not prove exact unblocked Photos bytes".into(),
+                ));
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                asset.quarantined = false;
+                refreshed += 1;
+            }
+            Err(error) => {
+                tracing::warn!(target: "fast_img_delete", %error, "Tier-2 quarantine receipt remains blocked");
+            }
+        }
+    }
+    Ok(refreshed)
+}
+
 fn reverify_modern_lossy_static_photos_custody_excluding(
     library_handle: &LibraryHandle,
     deletion_targets: &BTreeSet<PathBuf>,
@@ -1560,6 +1668,7 @@ fn reverify_modern_lossy_static_photos_custody_with(
     let mut verified = 0;
     let mut inventory_ready = false;
     let total = library_handle.imported_assets.len();
+    let require_icloud_upload = fast_img_require_icloud_upload_proof();
     let result = (|| {
         let mut paths = BTreeSet::new();
         let mut identifiers = BTreeSet::new();
@@ -1638,6 +1747,12 @@ fn reverify_modern_lossy_static_photos_custody_with(
                     "tier-2 delete gate Photos asset missing for {} (uuid={uuid})",
                     asset.rel_path
                 )));
+            }
+            if !photos_probe_satisfies_policy(probe, require_icloud_upload) {
+                return Err(ImgQualityError::AnalysisError(
+                    "Tier-2 cleanup requires current proof of the requested iCloud upload; source retained"
+                        .into(),
+                ));
             }
             if !probe.path.exists() {
                 return Err(ImgQualityError::AnalysisError(format!(
@@ -1848,7 +1963,8 @@ pub fn delete_verified_modern_lossy_static_sources_recorded(
     )
 }
 
-/// Clean up Tier-2 sources with durable intents and fresh Photos custody checks.
+/// Clean up eligible Tier-2 sources with durable intents and fresh Photos custody checks.
+/// Marked receipts remain pending and still participate in sidecar ownership checks.
 ///
 /// # Errors
 /// Returns an error if custody, filesystem identity, or cleanup evidence cannot be verified.
@@ -1880,7 +1996,26 @@ fn delete_verified_modern_lossy_static_sources_with(
     }
     let _uncached = crate::common_utils::UncachedVerificationScope::new()
         .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
-    preflight_modern_lossy_static_source_deletion(src_dir, library_handle, |asset, source| {
+    let eligible = (observer.is_some()
+        && library_handle
+            .imported_assets
+            .iter()
+            .any(|asset| asset.quarantined))
+    .then(|| LibraryHandle {
+        imported_assets: library_handle
+            .imported_assets
+            .iter()
+            .filter(|asset| !asset.quarantined)
+            .cloned()
+            .collect(),
+        import_error_count: library_handle.import_error_count,
+        photos_library_path: library_handle.photos_library_path.clone(),
+    });
+    let cleanup = eligible.as_ref().unwrap_or(library_handle);
+    if cleanup.imported_assets.is_empty() {
+        return Ok((0, 0));
+    }
+    preflight_modern_lossy_static_source_deletion(src_dir, cleanup, |asset, source| {
         if let Some(observer) = observer.as_deref_mut() {
             observer.observed_absent(asset, source)?;
             Ok(())
@@ -1891,14 +2026,24 @@ fn delete_verified_modern_lossy_static_sources_with(
     let sources = library_handle
         .imported_assets
         .iter()
-        .map(|asset| src_dir.join(&asset.rel_path))
-        .collect::<Vec<_>>();
+        .map(|asset| {
+            crate::pipeline::verification::validate_marker_relative_path(
+                "Tier-2 cleanup inventory",
+                &asset.rel_path,
+            )
+            .map_err(ImgQualityError::AnalysisError)?;
+            let relative = Path::new(&asset.rel_path);
+            crate::pipeline::verification::validate_no_symlink_components(src_dir, relative)
+                .map_err(ImgQualityError::AnalysisError)?;
+            Ok(src_dir.join(relative))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let targets = tier2_cleanup_targets(&sources)?;
-    reverify(library_handle, &targets)?;
+    reverify(cleanup, &targets)?;
 
     let mut deleted = 0usize;
     let mut already_deleted = 0usize;
-    for asset in &library_handle.imported_assets {
+    for asset in &cleanup.imported_assets {
         let source = src_dir.join(&asset.rel_path);
         let current = LibraryHandle {
             imported_assets: vec![asset.clone()],
@@ -1936,9 +2081,9 @@ fn delete_verified_modern_lossy_static_sources_with(
             );
         })?;
         if !present {
-            let observed = (|| {
+            let recorded_unlink = (|| {
                 if let Some(observer) = observer.as_deref_mut() {
-                    let (observed, pending) = observer.observed_absent(asset, &source)?;
+                    let (recorded_unlink, pending) = observer.observed_absent(asset, &source)?;
                     if pending {
                         delete_tier2_remaining_companion(
                             &source,
@@ -1950,7 +2095,7 @@ fn delete_verified_modern_lossy_static_sources_with(
                     } else {
                         check_absent_tier2_source_xmp(&source)?;
                     }
-                    Ok(observed)
+                    Ok(recorded_unlink)
                 } else {
                     check_absent_tier2_source_xmp(&source)?;
                     Ok(false)
@@ -1969,7 +2114,7 @@ fn delete_verified_modern_lossy_static_sources_with(
             tracing::info!(
                 target: "fast_img_delete",
                 source = %source.display(),
-                recorded_unlink = observed,
+                recorded_unlink,
                 "tier-2 source absent at verification"
             );
             continue;
@@ -2707,7 +2852,9 @@ pub fn reverify_media_outputs_in_library_with_quarantine(
             &report_pairs,
             |uuids| query_selected_photos_asset_probes(uuids, selected.as_deref()),
             quarantine_probe,
-            selected.as_deref(),
+            selected
+                .as_deref()
+                .map(|library| (library, ManagedOriginalKind::ConvertedOutput)),
             Some(SavedPhotosVerification {
                 assets: persisted_assets,
                 on_verified: &mut |processed| {
@@ -3643,9 +3790,7 @@ fn reconcile_uncertain_tier2_imports(
             continue;
         }
         let candidate = photos_import_candidate_from_pending(&entry);
-        let direct_library =
-            selected_library.filter(|_| !enriched.contains_key(&candidate.rel_path));
-        match reconcile_exact_original(&candidate, selected_library, direct_library) {
+        match reconcile_exact_original(&candidate, selected_library, selected_library) {
             Ok(Some(asset)) => {
                 let handle = LibraryHandle {
                     imported_assets: vec![asset],
@@ -4252,7 +4397,7 @@ fn import_or_reconcile_single_modern_lossy_candidate(
     enriched: &BTreeMap<String, (String, String, String)>,
     mut permit: Option<submission_checkpoint::AppleScriptSubmissionPermit>,
 ) -> Result<LibraryHandle> {
-    let direct_library = selected_library.filter(|_| !enriched.contains_key(&candidate.rel_path));
+    let direct_library = selected_library;
     if let Some(progress) = &mut progress {
         progress.phase(crate::progress::PhotosImportPhase::Reconciling)?;
     }
@@ -5843,6 +5988,7 @@ where
             quarantined: tier2_import_quarantined(
                 &entry.path,
                 &verified_probe.probe.path,
+                &entry.blake3_entry.out,
                 direct_library(&entry.rel_path),
                 is_quarantined,
             )?,
@@ -7373,7 +7519,7 @@ fn library_handle_from_original_probes(
         report_pairs,
         query_assets,
         is_quarantined,
-        direct_library,
+        direct_library.map(|library| (library, ManagedOriginalKind::Tier2Original)),
         None,
         |source, _, _, _| {
             Err(ImgQualityError::AnalysisError(format!(
@@ -7407,12 +7553,18 @@ struct SavedPhotosVerification<'a> {
     on_verified: &'a mut dyn FnMut(usize),
 }
 
+#[derive(Clone, Copy)]
+enum ManagedOriginalKind {
+    ConvertedOutput,
+    Tier2Original,
+}
+
 fn library_handle_from_media_output_probes_with_pixel_verifier(
     candidates: &[PhotosImportCandidate],
     report_pairs: &[(String, String)],
     mut query_assets: impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     mut is_quarantined: impl FnMut(&Path) -> Result<bool>,
-    managed_exact_library: Option<&Path>,
+    managed_exact_library: Option<(&Path, ManagedOriginalKind)>,
     mut saved: Option<SavedPhotosVerification<'_>>,
     mut verify_pixel_diff: impl FnMut(
         &Path,
@@ -7587,10 +7739,10 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
             }
         }
         let working_copy_marked = is_quarantined(&candidate.path)?;
-        let photos_original_marked = if let Some(library) =
+        let photos_original_marked = if let Some((library, kind)) =
             managed_exact_library.filter(|_| final_library_blake3.is_none() && !working_copy_marked)
         {
-            path_has_blocking_photos_original_quarantine(&probe.path, library)?
+            managed_photos_quarantine(&probe.path, library, kind, &candidate.blake3)?
         } else {
             is_quarantined(&probe.path)?
         };
@@ -8699,47 +8851,41 @@ fn prepare_generated_photos_import_entries(
 
 #[cfg(target_os = "macos")]
 fn clear_generated_import_quarantine(path: &Path, expected_hash: &str) -> Result<()> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use crate::metadata::quarantine::{
+        ATTRIBUTE, open_regular_quarantine_file, read_quarantine, verify_quarantine_file_identity,
+    };
+    use std::os::unix::fs::MetadataExt as _;
     use xattr::FileExt;
 
-    if !std::fs::symlink_metadata(path)?.is_file() {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "Photos quarantine preflight requires a regular generated file: {}",
-            path.display()
-        )));
-    }
-    if !path_has_quarantine_xattr(path)? {
+    let mut file = open_regular_quarantine_file(path)?;
+    let metadata = file.metadata()?;
+    let mark = read_quarantine(&file)?;
+    if mark.is_none() {
+        verify_quarantine_file_identity(path, &file, &metadata)?;
         return Ok(());
     }
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK)
-        .open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.nlink() != 1 {
+    if metadata.nlink() != 1 {
         return Err(ImgQualityError::AnalysisError(format!(
             "Photos quarantine preflight requires a standalone generated file: {}",
             path.display()
         )));
     }
-    const KEY: &str = "com.apple.quarantine";
-    if file.get_xattr(KEY)?.is_none() {
-        return Ok(());
-    }
     let mut hasher = blake3::Hasher::new();
     hasher.update_reader(&mut file)?;
-    if hasher.finalize().to_hex().as_str() != expected_hash {
+    verify_quarantine_file_identity(path, &file, &metadata)?;
+    let current = file.metadata()?;
+    if hasher.finalize().to_hex().as_str() != expected_hash
+        || !quarantine_observation_unchanged(&metadata, &current)
+        || read_quarantine(&file)? != mark
+    {
         return Err(ImgQualityError::AnalysisError(format!(
             "Photos quarantine preflight refused changed generated output: {}",
             path.display()
         )));
     }
-    if let Err(error) = file.remove_xattr(KEY)
-        && error.raw_os_error() != Some(libc::ENOATTR)
-    {
-        return Err(error.into());
-    }
-    if file.get_xattr(KEY)?.is_some() {
+    file.remove_xattr(ATTRIBUTE)?;
+    verify_quarantine_file_identity(path, &file, &metadata)?;
+    if read_quarantine(&file)?.is_some() {
         return Err(ImgQualityError::AnalysisError(format!(
             "Photos quarantine preflight could not confirm the mark was cleared: {}",
             path.display()
@@ -8777,20 +8923,18 @@ fn strict_photos_quarantine(path: &Path) -> Result<bool> {
     }
 }
 
-// A clean Tier-2 receipt previously required an unmarked submitted file and
-// original. New direct receipts allow only the documented Photos-local mark on
-// the exact original. Either receipt still attests to a clean submitted file.
-const fn tier2_receipt_allows_photos_provenance(asset: &LibraryAssetRecord) -> bool {
-    !asset.quarantined && asset.library_blake3.is_none() && asset.xmp_sidecar_blake3.is_none()
-}
-
 fn tier2_custody_quarantined(
     asset: &LibraryAssetRecord,
     path: &Path,
     bound_library: Option<&Path>,
 ) -> Result<bool> {
-    match bound_library.filter(|_| tier2_receipt_allows_photos_provenance(asset)) {
-        Some(library) => path_has_blocking_photos_original_quarantine(path, library),
+    match bound_library.filter(|_| !asset.quarantined) {
+        Some(library) => managed_photos_quarantine(
+            path,
+            library,
+            ManagedOriginalKind::Tier2Original,
+            crate::fast_img_store::tier2_library_hash(asset)?,
+        ),
         None => strict_photos_quarantine(path),
     }
 }
@@ -8799,30 +8943,73 @@ fn tier2_custody_quarantined(
 fn tier2_import_quarantined(
     submitted: &Path,
     original: &Path,
+    submitted_hash: &str,
     direct_library: Option<&Path>,
     is_quarantined: &mut impl FnMut(&Path) -> Result<bool>,
 ) -> Result<bool> {
     let submitted_marked = is_quarantined(submitted)?;
     let original_marked = match direct_library.filter(|_| !submitted_marked) {
-        Some(library) => path_has_blocking_photos_original_quarantine(original, library)?,
+        Some(library) => managed_photos_quarantine(
+            original,
+            library,
+            ManagedOriginalKind::Tier2Original,
+            submitted_hash,
+        )?,
         None => is_quarantined(original)?,
     };
     Ok(submitted_marked || original_marked)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", test))]
 fn read_quarantine_xattr(path: &Path) -> Result<Option<Vec<u8>>> {
-    xattr::get(path, "com.apple.quarantine").map_err(|error| {
+    observe_file_quarantine(path, |_, _, mark| Ok(mark.map(<[u8]>::to_vec)))
+}
+
+#[cfg(target_os = "macos")]
+fn observe_file_quarantine<T>(
+    path: &Path,
+    verify: impl FnOnce(&mut std::fs::File, &std::fs::Metadata, Option<&[u8]>) -> Result<T>,
+) -> Result<T> {
+    use crate::metadata::quarantine::{
+        open_regular_quarantine_file, read_quarantine, verify_quarantine_file_identity,
+    };
+
+    let mut file = open_regular_quarantine_file(path)?;
+    let metadata = file.metadata()?;
+    let mark = read_quarantine(&file).map_err(|error| {
         ImgQualityError::AnalysisError(format!(
             "quarantine probe failed for {}: {error}",
             path.display()
         ))
-    })
+    })?;
+    let result = verify(&mut file, &metadata, mark.as_deref())?;
+    verify_quarantine_file_identity(path, &file, &metadata)?;
+    if read_quarantine(&file)? != mark
+        || !quarantine_observation_unchanged(&metadata, &file.metadata()?)
+    {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "file or quarantine changed during verification: {}",
+            path.display()
+        )));
+    }
+    Ok(result)
+}
+
+#[cfg(target_os = "macos")]
+fn quarantine_observation_unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    before.len() == after.len()
+        && before.nlink() == after.nlink()
+        && before.ctime() == after.ctime()
+        && before.ctime_nsec() == after.ctime_nsec()
+        && before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
 }
 
 #[cfg(target_os = "macos")]
 fn path_has_quarantine_xattr(path: &Path) -> Result<bool> {
-    Ok(read_quarantine_xattr(path)?.is_some())
+    observe_file_quarantine(path, |_, _, mark| Ok(mark.is_some()))
 }
 
 #[cfg(target_os = "macos")]
@@ -8841,28 +9028,69 @@ fn is_photos_sandbox_provenance(value: &[u8]) -> bool {
         && fields.next().is_none()
 }
 
-// Only call for a byte-identical delivery matched to a verified Photos UUID.
 #[cfg(target_os = "macos")]
-fn path_has_blocking_photos_original_quarantine(path: &Path, library: &Path) -> Result<bool> {
-    let Some(value) = read_quarantine_xattr(path)? else {
-        return Ok(false);
-    };
-    if !is_photos_sandbox_provenance(&value)
-        || !path.starts_with(library.join("originals"))
-        || !path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl") || ext.eq_ignore_ascii_case("avif"))
-    {
-        return Ok(true);
-    }
+fn inspect_managed_photos_quarantine(
+    path: &Path,
+    library: &Path,
+    kind: ManagedOriginalKind,
+    expected: &str,
+    recovering: bool,
+) -> Result<bool> {
+    use std::io::Seek as _;
     use std::os::unix::fs::MetadataExt as _;
-    let metadata = std::fs::symlink_metadata(path)?;
-    Ok(!metadata.is_file() || metadata.nlink() != 1 || path.canonicalize()? != path)
+
+    observe_file_quarantine(path, |file, metadata, mark| {
+        if mark.is_none() && !recovering {
+            return Ok(false);
+        }
+        if mark.is_some_and(|value| !is_photos_sandbox_provenance(value))
+            || !path.starts_with(library.join("originals"))
+            || metadata.nlink() != 1
+            || path.canonicalize()? != path
+        {
+            return Ok(true);
+        }
+        let supported_format = match kind {
+            ManagedOriginalKind::ConvertedOutput => path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("jxl") || extension.eq_ignore_ascii_case("avif")
+                }),
+            ManagedOriginalKind::Tier2Original => {
+                let format = super::format_detect::detect_open_format(path, file)?;
+                super::modern_lossy_static::is_modern_static_image_format(format)
+                    && format.extension_matches_path(path)
+            }
+        };
+        if !supported_format {
+            return Ok(true);
+        }
+        file.rewind()?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update_reader(file)?;
+        Ok(hasher.finalize().to_hex().as_str() != expected)
+    })
+}
+
+// A UUID lookup and exact delivery digest bind this exception to the Photos original.
+#[cfg(target_os = "macos")]
+fn managed_photos_quarantine(
+    path: &Path,
+    library: &Path,
+    kind: ManagedOriginalKind,
+    expected: &str,
+) -> Result<bool> {
+    inspect_managed_photos_quarantine(path, library, kind, expected, false)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn path_has_blocking_photos_original_quarantine(path: &Path, _library: &Path) -> Result<bool> {
+fn managed_photos_quarantine(
+    path: &Path,
+    _library: &Path,
+    _kind: ManagedOriginalKind,
+    _expected: &str,
+) -> Result<bool> {
     Ok(path_has_quarantine_xattr(path))
 }
 
@@ -10822,20 +11050,26 @@ mod tests {
         std::fs::create_dir_all(original.parent().unwrap())?;
         std::fs::write(&original, b"synthetic")?;
         std::fs::write(&working, b"synthetic")?;
+        let digest = blake3::hash(b"synthetic").to_hex().to_string();
+        let blocked = |path: &Path, expected: &str| {
+            managed_photos_quarantine(
+                path,
+                &library,
+                ManagedOriginalKind::ConvertedOutput,
+                expected,
+            )
+        };
         for value in [
             b"0082;6af525b4;Photos;".as_slice(),
             b"0082;6af525c9;photolibraryd;".as_slice(),
         ] {
             xattr::set(&original, "com.apple.quarantine", value)?;
             xattr::set(&working, "com.apple.quarantine", value)?;
-            assert!(!path_has_blocking_photos_original_quarantine(
-                &original, &library
-            )?);
+            assert!(!blocked(&original, &digest)?);
+            assert!(blocked(&original, "incorrect digest")?);
             assert_eq!(read_quarantine_xattr(&original)?.as_deref(), Some(value));
             assert!(path_has_quarantine_xattr(&working)?);
-            assert!(path_has_blocking_photos_original_quarantine(
-                &working, &library
-            )?);
+            assert!(blocked(&working, &digest)?);
         }
         for value in [
             b"0081;6af525b4;Photos;".as_slice(),
@@ -10848,25 +11082,30 @@ mod tests {
         ] {
             assert!(!is_photos_sandbox_provenance(value));
             xattr::set(&original, "com.apple.quarantine", value)?;
-            assert!(path_has_blocking_photos_original_quarantine(
-                &original, &library
-            )?);
+            assert!(blocked(&original, &digest)?);
         }
+        let moved = original.with_file_name("moved.jxl");
+        let result = observe_file_quarantine(&original, |_, _, _| {
+            std::fs::rename(&original, &moved)?;
+            std::fs::write(&original, b"synthetic")?;
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(path_has_quarantine_xattr(&moved)?);
         Ok(())
     }
 
     #[test]
     #[cfg(target_os = "macos")]
-    fn tier2_quarantine_requires_clean_direct_input_and_fresh_exact_custody() -> anyhow::Result<()>
-    {
+    fn tier2_quarantine_requires_clean_submission_and_fresh_exact_custody() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let root_path = root.path().canonicalize()?;
         let library = root_path.join("Synthetic.photoslibrary");
         let original = library.join("originals/A/synthetic.jxl");
         let input = root_path.join("synthetic.jxl");
         std::fs::create_dir_all(original.parent().unwrap())?;
-        std::fs::write(&original, b"synthetic")?;
-        std::fs::write(&input, b"synthetic")?;
+        std::fs::write(&original, b"\xff\x0asynthetic")?;
+        std::fs::write(&input, b"\xff\x0asynthetic")?;
         let hash = crate::common_utils::calculate_blake3_hash(&input)?;
         let mut receipt = LibraryAssetRecord {
             rel_path: "synthetic.jxl".into(),
@@ -10904,12 +11143,14 @@ mod tests {
             assert!(!tier2_import_quarantined(
                 &input,
                 &original,
+                &receipt.blake3,
                 Some(&library),
                 &mut strict_photos_quarantine
             )?);
             assert!(tier2_import_quarantined(
                 &input,
                 &original,
+                &receipt.blake3,
                 None,
                 &mut strict_photos_quarantine
             )?);
@@ -10917,6 +11158,7 @@ mod tests {
             assert!(tier2_import_quarantined(
                 &input,
                 &original,
+                &receipt.blake3,
                 Some(&library),
                 &mut strict_photos_quarantine
             )?);
@@ -10930,7 +11172,7 @@ mod tests {
         receipt.quarantined = false;
         receipt.library_blake3 = Some(receipt.blake3.clone());
         receipt.xmp_sidecar_blake3 = Some("synthetic XMP".into());
-        assert!(reverify(&receipt, Some(&library)).is_err());
+        reverify(&receipt, Some(&library))?;
         receipt.library_blake3 = None;
         receipt.xmp_sidecar_blake3 = None;
         let hardlink = root_path.join("hardlink.jxl");
@@ -10945,6 +11187,131 @@ mod tests {
         std::fs::write(&original, b"changed bytes")?;
         let error = reverify(&receipt, Some(&library)).expect_err("fresh bytes must match");
         assert!(error.to_string().contains("BLAKE3 drift"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn tier2_quarantine_refresh_recovers_exact_enriched_originals_only() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let root = root.path().canonicalize()?;
+        let input = root.join("input");
+        let library = root.join("Synthetic.photoslibrary");
+        let originals = library.join("originals/A");
+        std::fs::create_dir(&input)?;
+        std::fs::create_dir_all(&originals)?;
+        let mut marker = WorkingCopyMarker::new(input.clone(), root.join("work"), 0);
+        marker.photos_library_path = Some(library.clone());
+        let quarantine = "com.apple.quarantine";
+        let provenance = b"0082;6af525b4;Photos;";
+        let download = b"0083;6af525b4;Browser;download-event";
+        let mut probes = Vec::new();
+        for (name, header) in [
+            (
+                "recover.heic",
+                b"\x00\x00\x00\x10ftypheic\x00\x00\x00\x00".as_slice(),
+            ),
+            ("recover.webp", b"RIFF\x00\x00\x00\x00WEBP"),
+            ("recover.avif", b"\x00\x00\x00\x10ftypavif\x00\x00\x00\x00"),
+            ("active.webp", b"RIFF\x00\x00\x00\x00WEBP"),
+            ("marked-input.webp", b"RIFF\x00\x00\x00\x00WEBP"),
+            ("drifted-xmp.webp", b"RIFF\x00\x00\x00\x00WEBP"),
+            ("changed-bytes.webp", b"RIFF\x00\x00\x00\x00WEBP"),
+            ("out-of-library.webp", b"RIFF\x00\x00\x00\x00WEBP"),
+        ] {
+            let source = input.join(name);
+            let original = if name.starts_with("out-of-library") {
+                root.join(name)
+            } else {
+                originals.join(name)
+            };
+            let xmp = b"synthetic XMP proof";
+            let delivered = [header, b"enriched"].concat();
+            std::fs::write(&source, header)?;
+            std::fs::write(source.with_extension("xmp"), xmp)?;
+            std::fs::write(&original, &delivered)?;
+            if name.starts_with("changed-bytes") {
+                std::fs::write(&original, [header, b"replacement"].concat())?;
+            }
+            if name.starts_with("drifted-xmp") {
+                std::fs::write(source.with_extension("xmp"), b"different XMP")?;
+            }
+            xattr::set(
+                &original,
+                quarantine,
+                if name.starts_with("active") {
+                    download.as_slice()
+                } else {
+                    provenance.as_slice()
+                },
+            )?;
+            if name.starts_with("marked-input") {
+                xattr::set(&source, quarantine, download)?;
+            }
+            let is_blocked_at_import = name.starts_with("active")
+                || name.starts_with("marked-input")
+                || name.starts_with("out-of-library")
+                || name.starts_with("changed-bytes");
+            let delivered_hash = blake3::hash(&delivered).to_hex().to_string();
+            assert_eq!(
+                tier2_import_quarantined(
+                    &source,
+                    &original,
+                    &delivered_hash,
+                    Some(&library),
+                    &mut strict_photos_quarantine
+                )?,
+                is_blocked_at_import,
+                "{name}",
+            );
+            marker.tier2_imported_assets.push(LibraryAssetRecord {
+                rel_path: name.into(),
+                photos_uuid: Some(name.into()),
+                blake3: blake3::hash(header).to_hex().to_string(),
+                library_blake3: Some(delivered_hash),
+                xmp_sidecar_blake3: Some(blake3::hash(xmp).to_hex().to_string()),
+                quarantined: true,
+                sync_status: "local".into(),
+            });
+            probes.push(FastImgLibraryAssetProbe {
+                uuid: name.into(),
+                path: original,
+                iscloudasset: false,
+                incloud: Some(false),
+                ismissing: false,
+            });
+        }
+        assert_eq!(
+            refresh_tier2_quarantine_receipts_with(&mut marker, &library, |_| Ok(probes))?,
+            3,
+        );
+        for asset in &marker.tier2_imported_assets {
+            assert_eq!(asset.quarantined, !asset.rel_path.starts_with("recover"));
+            assert!(input.join(&asset.rel_path).is_file());
+        }
+        assert_eq!(
+            xattr::get(originals.join("recover.heic"), quarantine)?.as_deref(),
+            Some(provenance.as_slice())
+        );
+        assert_eq!(
+            xattr::get(originals.join("active.webp"), quarantine)?.as_deref(),
+            Some(download.as_slice())
+        );
+        assert_eq!(
+            xattr::get(input.join("marked-input.webp"), quarantine)?.as_deref(),
+            Some(download.as_slice())
+        );
+        let recovered = marker
+            .tier2_imported_assets
+            .iter()
+            .find(|asset| asset.rel_path == "recover.heic")
+            .unwrap();
+        assert!(managed_photos_quarantine(
+            &originals.join("recover.heic"),
+            &library,
+            ManagedOriginalKind::ConvertedOutput,
+            crate::fast_img_store::tier2_library_hash(recovered)?,
+        )?);
         Ok(())
     }
 
@@ -15338,24 +15705,38 @@ end mfbResolveAlbumComponent
         let root = tempfile::tempdir()?;
         let source = root.path().join("photo.webp");
         let xmp = root.path().join("photo.xmp");
+        let retained = root.path().join("retained.heic");
+        let retained_xmp = root.path().join("retained.xmp");
         let xmp_bytes = b"<x:xmpmeta/>";
         std::fs::write(&source, b"synthetic source")?;
         std::fs::write(&xmp, xmp_bytes)?;
+        std::fs::write(&retained, b"synthetic marked source")?;
+        std::fs::write(&retained_xmp, xmp_bytes)?;
         let canonical_xmp = xmp.canonicalize()?;
+        let canonical_retained = retained.canonicalize()?;
+        let canonical_retained_xmp = retained_xmp.canonicalize()?;
         let handle = LibraryHandle {
-            imported_assets: vec![LibraryAssetRecord {
-                rel_path: "photo.webp".into(),
-                blake3: blake3::hash(b"synthetic source").to_hex().to_string(),
-                sync_status: "local".into(),
-                quarantined: false,
-                photos_uuid: Some("synthetic-uuid".into()),
-                library_blake3: Some(
-                    blake3::hash(b"synthetic Photos output")
-                        .to_hex()
-                        .to_string(),
-                ),
-                xmp_sidecar_blake3: Some(blake3::hash(xmp_bytes).to_hex().to_string()),
-            }],
+            imported_assets: vec![
+                LibraryAssetRecord {
+                    rel_path: "retained.heic".into(),
+                    quarantined: true,
+                    photos_uuid: Some("synthetic-marked-uuid".into()),
+                    ..Default::default()
+                },
+                LibraryAssetRecord {
+                    rel_path: "photo.webp".into(),
+                    blake3: blake3::hash(b"synthetic source").to_hex().to_string(),
+                    sync_status: "local".into(),
+                    quarantined: false,
+                    photos_uuid: Some("synthetic-uuid".into()),
+                    library_blake3: Some(
+                        blake3::hash(b"synthetic Photos output")
+                            .to_hex()
+                            .to_string(),
+                    ),
+                    xmp_sidecar_blake3: Some(blake3::hash(xmp_bytes).to_hex().to_string()),
+                },
+            ],
             ..Default::default()
         };
         let mut removed = Vec::new();
@@ -15367,8 +15748,10 @@ end mfbResolveAlbumComponent
                 removed,
                 Some(observer),
                 |proof, targets| {
-                    assert_eq!(proof.imported_assets, handle.imported_assets);
+                    assert_eq!(proof.imported_assets, handle.imported_assets[1..]);
                     assert!(targets.contains(&canonical_xmp));
+                    assert!(targets.contains(&canonical_retained));
+                    assert!(targets.contains(&canonical_retained_xmp));
                     custody_checks += 1;
                     Ok(())
                 },
@@ -15409,6 +15792,8 @@ end mfbResolveAlbumComponent
         assert_eq!(custody_checks, 8);
         assert_eq!(removed, [source, xmp.clone()]);
         assert!(!xmp.exists());
+        assert_eq!(std::fs::read(retained)?, b"synthetic marked source");
+        assert_eq!(std::fs::read(retained_xmp)?, xmp_bytes);
         Ok(())
     }
 

@@ -1,6 +1,8 @@
 //! Pipeline-agnostic orientation correction and pixel-diff verification.
 
-use crate::image::format_detect::{FormatKind, read_expected_raster_dimensions};
+use crate::image::format_detect::{
+    FormatKind, detect_regular_file_format, read_expected_raster_dimensions,
+};
 use crate::unified_error::{ImgQualityError, Result};
 use std::path::Path;
 
@@ -1025,7 +1027,8 @@ fn max_rgb_delta(ref_img: &image::DynamicImage, out_img: &image::DynamicImage) -
 /// Read the EXIF Orientation value (1–8) from a file.
 ///
 /// A missing tag means orientation 1 only after a complete orientation read.
-/// Known unrelated ICC/IPTC/UserComment/MakerNotes diagnostics remain recorded warnings.
+/// An explicit zero also uses identity for a content-confirmed JPEG, matching the decoder.
+/// Known unrelated metadata diagnostics remain recorded warnings.
 ///
 /// # Errors
 /// Rejects unreadable, conflicting or invalid orientation evidence.
@@ -1124,6 +1127,14 @@ fn parse_exif_orientation_evidence(
     // Report an explicit invalid direction before unrelated metadata diagnostics.
     // A valid direction still cannot override a structural or unknown warning.
     let orientation = match orientation {
+        // libjxl displays a JPEG with this unset sentinel at its stored geometry.
+        // The JPEG reconstruction proof still requires the original metadata bytes.
+        Some(value)
+            if value.as_u64() == Some(0)
+                && matches!(detect_regular_file_format(path), Ok(FormatKind::Jpeg)) =>
+        {
+            1
+        }
         Some(value) if value.is_u64() => {
             parse_exif_orientation_stdout(path, value.to_string().as_bytes())?
         }
@@ -1164,14 +1175,14 @@ fn orientation_evidence_key(key: &str, group: &str, tag: &str) -> bool {
 }
 
 fn unrelated_orientation_warning(warning: &str) -> bool {
-    // These exact diagnostics concern a separate ICC payload, a stale IPTC
-    // digest, decoding UserComment text, or an opaque MakerNotes payload.
-    // They cannot hide an unread IFD0 entry. Structural/unknown diagnostics reject.
+    // These exact diagnostics concern fields outside the IFD0 orientation entry.
+    // Structural and unknown diagnostics still reject the orientation evidence.
     matches!(
         warning,
         "IPTCDigest is not current. XMP may be out of sync"
             | "Invalid EXIF text encoding for UserComment"
             | "[minor] Unrecognized MakerNotes"
+            | "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto"
     ) || warning
         .strip_prefix("Bad length ICC_Profile (length ")
         .and_then(|length| length.strip_suffix(')'))
@@ -2190,7 +2201,8 @@ mod tests {
             "ExifTool:Warning": "Bad length ICC_Profile (length 548)",
             "ExifTool:Copy1:Warning": "Invalid EXIF text encoding for UserComment",
             "ExifTool:Copy2:Warning": "IPTCDigest is not current. XMP may be out of sync",
-            "ExifTool:Copy3:Warning": "[minor] Unrecognized MakerNotes"
+            "ExifTool:Copy3:Warning": "[minor] Unrecognized MakerNotes",
+            "ExifTool:Copy5:Warning": "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto"
         }]);
         let parse = |record: &serde_json::Value| {
             super::parse_exif_orientation_evidence(
@@ -2211,6 +2223,7 @@ mod tests {
             "Unknown future metadata warning",
             "Bad length ICC_Profile (length 548) trailing diagnostic",
             "[minor] Unrecognized MakerNotes trailing diagnostic",
+            "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto truncated IFD0",
         ] {
             for evidence in [&accepted, &explicit] {
                 let mut record = evidence.clone();
@@ -2239,6 +2252,38 @@ mod tests {
         let mut error = accepted;
         error[0]["ExifTool:Error"] = serde_json::json!("read failed");
         assert!(parse(&error).is_err());
+    }
+
+    #[test]
+    fn zero_orientation_identity_requires_jpeg_contents_and_complete_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let jpeg = root.path().join("extensionless");
+        let png = root.path().join("misleading.jpeg");
+        let image = patterned_image(19, 11);
+        image
+            .save_with_format(&jpeg, image::ImageFormat::Jpeg)
+            .unwrap();
+        image
+            .save_with_format(&png, image::ImageFormat::Png)
+            .unwrap();
+        let parse = |source: &std::path::Path, warning: Option<&str>| {
+            let mut record = serde_json::json!([{
+                "SourceFile": source,
+                "IFD0:Orientation": 0
+            }]);
+            if let Some(warning) = warning {
+                record[0]["ExifTool:Warning"] = serde_json::json!(warning);
+            }
+            super::parse_exif_orientation_evidence(
+                source,
+                true,
+                &serde_json::to_vec(&record).unwrap(),
+                b"",
+            )
+        };
+        assert_eq!(parse(&jpeg, None).unwrap(), 1);
+        assert!(parse(&jpeg, Some("Bad IFD0 directory")).is_err());
+        assert!(parse(&png, None).is_err());
     }
 
     #[test]

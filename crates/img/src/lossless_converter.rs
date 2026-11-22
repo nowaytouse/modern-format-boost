@@ -8592,6 +8592,45 @@ exit 1
     }
 
     #[test]
+    fn jpeg_zero_orientation_preserves_exact_reconstruction() -> anyhow::Result<()> {
+        for tool in ["cjxl", "djxl", "jxlinfo", "exiftool"] {
+            if !test_tool_available(tool) {
+                eprintln!("JPEG orientation-zero regression requires {tool}");
+                return Ok(());
+            }
+        }
+        let root = tempdir()?;
+        let source = root.path().join("unset-orientation.jpeg");
+        image::RgbImage::from_pixel(19, 11, image::Rgb([23, 47, 89])).save(&source)?;
+        let exiftool = foundation::common_utils::resolve_tool_path("exiftool")
+            .ok_or_else(|| anyhow::anyhow!("exiftool unavailable"))?;
+        anyhow::ensure!(
+            Command::new(exiftool)
+                .args(["-overwrite_original", "-IFD0:Orientation#=0"])
+                .arg(&source)
+                .status()?
+                .success(),
+            "cannot write synthetic orientation 0"
+        );
+        let original = fs::read(&source)?;
+        let mut options = ConvertOptions {
+            output_dir: Some(root.path().to_path_buf()),
+            child_threads: 1,
+            ..ConvertOptions::default()
+        };
+        options.flags = ConvertFlags::FORCE
+            | ConvertFlags::REQUIRE_OUTPUT_DELIVERY
+            | ConvertFlags::REQUIRE_JPEG_RECONSTRUCTION;
+        let result = convert_jpeg_to_jxl(&source, &options, None)?;
+        assert!(result.success, "{}", result.message);
+        let output = result.output_path.expect("verified JPEG conversion output");
+        foundation::fast_img::verify_final_jxl_delivery_integrity(&source, Path::new(&output))?;
+        foundation::fast_img::verify_jxl_roundtrip_integrity(&source, Path::new(&output))?;
+        assert_eq!(fs::read(&source)?, original);
+        Ok(())
+    }
+
+    #[test]
     fn invalid_jpeg_orientation_is_rejected_before_effort_search() -> anyhow::Result<()> {
         foundation::tools::require(&["exiftool"]).map_err(anyhow::Error::msg)?;
         let root = tempdir()?;
@@ -8600,10 +8639,10 @@ exit 1
         let exiftool = foundation::common_utils::resolve_tool_path("exiftool")
             .ok_or_else(|| anyhow::anyhow!("exiftool unavailable"))?;
         let status = Command::new(exiftool)
-            .args(["-overwrite_original", "-Orientation#=0"])
+            .args(["-overwrite_original", "-Orientation#=9"])
             .arg(&source)
             .status()?;
-        anyhow::ensure!(status.success(), "cannot write synthetic orientation 0");
+        anyhow::ensure!(status.success(), "cannot write synthetic orientation 9");
         let original = fs::read(&source)?;
         // No encoder can write this candidate: its parent does not exist.
         let candidate = root.path().join("not-created/candidate.jxl");
@@ -8614,7 +8653,7 @@ exit 1
         let detail = format!("{error:#}");
         assert!(detail.contains("encoding was not started"), "{detail}");
         assert!(detail.contains("EXIF orientation out of range"), "{detail}");
-        assert!(detail.ends_with(": 0"), "{detail}");
+        assert!(detail.ends_with(": 9"), "{detail}");
         assert_eq!(fs::read(&source)?, original);
         assert!(!candidate.parent().unwrap().exists());
         Ok(())

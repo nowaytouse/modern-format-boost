@@ -1,7 +1,7 @@
 //! `PhotoKit` transactions reuse the existing UUID/original-byte custody gates.
 use super::{
-    BTreeMap, BTreeSet, Duration, FastImgLibraryAssetProbe, ImgQualityError, LibraryHandle, Path,
-    PathBuf, PhotosImportCheckpointPlan, PhotosImportPendingEntry, Result, WorkingCopyMarker,
+    BTreeMap, Duration, FastImgLibraryAssetProbe, ImgQualityError, LibraryHandle, Path, PathBuf,
+    PhotosImportCheckpointPlan, PhotosImportPendingEntry, Result, WorkingCopyMarker,
     checkpoint_photos_import_window, library_records_from_pending_import,
     osxphotos_uuid_from_photos_import_identifier, require_active_photos_library,
     resolve_osascript_command, run_photos_import_applescript_session_mode_in_library,
@@ -254,7 +254,6 @@ struct ImportTask {
     identity: String,
     expected: usize,
     relocated_originals: bool,
-    enriched_originals: BTreeSet<String>,
 }
 
 fn import_task(marker: &WorkingCopyMarker, library: Option<&Path>) -> anyhow::Result<ImportTask> {
@@ -268,7 +267,6 @@ fn import_task(marker: &WorkingCopyMarker, library: Option<&Path>) -> anyhow::Re
         .to_string(),
         expected: marker.expected_output_count(),
         relocated_originals: false,
-        enriched_originals: BTreeSet::new(),
     })
 }
 
@@ -300,7 +298,6 @@ pub(super) fn try_import_originals(
         task.identity.push_str("-originals");
         task.expected = plan.proven_assets.len() + plan.pending_entries.len();
         task.relocated_originals = true;
-        task.enriched_originals.extend(enriched.keys().cloned());
         let result = try_import_inner(
             &task,
             &plan,
@@ -617,9 +614,7 @@ where
     P: FnMut(&Path) -> Result<bool>,
     C: for<'a> FnMut(&[PhotosImportPendingEntry], PhotosImportCheckpointUpdate<'a>) -> Result<()>,
 {
-    let direct_library = |rel: &str| {
-        library.filter(|_| task.relocated_originals && !task.enriched_originals.contains(rel))
-    };
+    let direct_library = |_: &str| library.filter(|_| task.relocated_originals);
     let backend = if let Some(config) = crate::infra::runtime_config::active() {
         match config.photos.backend {
             crate::infra::runtime_config::PhotosBackend::Auto => "auto".to_string(),
@@ -1266,7 +1261,6 @@ mod tests {
                 identity: "cancelled-test".into(),
                 expected: 1,
                 relocated_originals: false,
-                enriched_originals: BTreeSet::new(),
             },
             &PhotosImportCheckpointPlan {
                 pending_entries: vec![entry],
