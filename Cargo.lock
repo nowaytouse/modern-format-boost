@@ -111,8 +111,8 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.104"
-source = "git+https://github.com/dtolnay/anyhow#dd0c0a655a214add8fc986df34ea3823468fa4fb"
+version = "1.0.105"
+source = "git+https://github.com/dtolnay/anyhow#c89c9b82b155f701a20eb4a9d3609ad09df5a62f"
 
 [[package]]
 name = "arbitrary"
@@ -872,7 +872,7 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 [[package]]
 name = "flate2"
 version = "1.1.11"
-source = "git+https://github.com/rust-lang/flate2-rs#bda759ec690f52cb954a029dcf35749f6fcc8a59"
+source = "git+https://github.com/rust-lang/flate2-rs#94d6150fb896472d176618db50230571082ac7f3"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -1071,9 +1071,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.17.1"
+version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+checksum = "735eaa21a6a5ffb2e84362faaeb90c05ba8e19797ca30428478cb6ea3a4921bc"
 dependencies = [
  "foldhash",
 ]
@@ -1311,8 +1311,8 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 
 [[package]]
 name = "jpegxl-rs"
-version = "0.16.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#625d8fbba9f3d8d3b1346ff762a195209541f9a7"
+version = "0.17.0+libjxl-0.13.0"
+source = "git+https://github.com/inflation/jpegxl-rs#314b4f4268a8bcd2b514740e5593853f41603d90"
 dependencies = [
  "bon",
  "byteorder",
@@ -1323,16 +1323,16 @@ dependencies = [
 
 [[package]]
 name = "jpegxl-src"
-version = "0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#625d8fbba9f3d8d3b1346ff762a195209541f9a7"
+version = "0.13.0"
+source = "git+https://github.com/inflation/jpegxl-rs#314b4f4268a8bcd2b514740e5593853f41603d90"
 dependencies = [
  "cmake",
 ]
 
 [[package]]
 name = "jpegxl-sys"
-version = "0.13.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#625d8fbba9f3d8d3b1346ff762a195209541f9a7"
+version = "0.14.0+libjxl-0.13.0"
+source = "git+https://github.com/inflation/jpegxl-rs#314b4f4268a8bcd2b514740e5593853f41603d90"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -1575,9 +1575,9 @@ dependencies = [
 
 [[package]]
 name = "libheif-sys"
-version = "5.3.1+1.23.1"
+version = "5.3.2+1.23.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f554864c5f34c7f285ff6acdcadb64bcc2a3de1609e9135cec702c5edc703864"
+checksum = "dca804ade472040762aaf6fb27ee772a15c1fa9a8e19c46f92d8e024a44b280a"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1803,9 +1803,9 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "notify"
-version = "8.2.2"
+version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c41a04a5f59df9322cc657286dd2d79f90816119b22c5f847607c850110205ab"
+checksum = "5482d5bd11b91a337521980e5d52fe115bdccfb4c217099daaf0abd69159dc4e"
 dependencies = [
  "bitflags",
  "inotify",
@@ -1818,6 +1818,7 @@ dependencies = [
  "objc2-core-services",
  "walkdir",
  "windows-sys",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -2250,7 +2251,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.42.0"
-source = "git+https://github.com/tafia/quick-xml#7768b284a5d7947cf3c2a987112a8f116f67a7d2"
+source = "git+https://github.com/tafia/quick-xml#fc13927c04f7b0672cc323c44edc3227cf81c7ac"
 dependencies = [
  "memchr",
 ]
@@ -2780,9 +2781,9 @@ dependencies = [
 
 [[package]]
 name = "system-deps"
-version = "8.0.0"
+version = "9.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83779a5c956bcb6ba627a4ecf0a9d7625db47d7537e0892d97f712ac995648a3"
+checksum = "db551ad38aac61d5e0343e0eeeb0163be3115c4e23b6a025959570ee0c03c67d"
 dependencies = [
  "cfg-expr",
  "heck",
@@ -2806,7 +2807,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 [[package]]
 name = "tempfile"
 version = "3.27.0"
-source = "git+https://github.com/Stebalien/tempfile#5fe9b1280fba8421203ab49b421dae009dd0b7b7"
+source = "git+https://github.com/Stebalien/tempfile#57a1a347d710c6a36f6abc1f355bdcc86b561e2e"
 dependencies = [
  "fastrand",
  "getrandom 0.4.3",
@@ -2818,7 +2819,7 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.21"
-source = "git+https://github.com/dtolnay/thiserror#ba2784aadbe2015b879a129a9f53727258275aa8"
+source = "git+https://github.com/dtolnay/thiserror#aa7e8161d55acd7792f4e3d1d9b1b3052134dfaf"
 dependencies = [
  "thiserror-impl",
 ]
@@ -2826,7 +2827,7 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.21"
-source = "git+https://github.com/dtolnay/thiserror#ba2784aadbe2015b879a129a9f53727258275aa8"
+source = "git+https://github.com/dtolnay/thiserror#aa7e8161d55acd7792f4e3d1d9b1b3052134dfaf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2948,9 +2949,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.2.1+spec-1.1.0"
+version = "1.2.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5755c51863cdac711f1956baf8eb9588e060755f7d3c4c979e70ea1e1f32cd7"
+checksum = "5426cb1b964690d913f6c5c1a1ae0b42f428ec506bb4d452876d7a209c9bca3b"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -2972,9 +2973,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.25.19+spec-1.1.0"
+version = "0.25.20+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd43688c4858d7264ae1cf9a9f874a67c3feb74a883b1cd7bebd6a4ea8307218"
+checksum = "e76360e201d6dbd6583e17795ba71a88f47365a9139c8450a7979c32303b8e73"
 dependencies = [
  "indexmap",
  "toml_datetime",
@@ -2984,9 +2985,9 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.1.5+spec-1.1.0"
+version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
+checksum = "e6769c452d71ba30696c6b37770c439a9cc9110f47f7d5cdbeda79840ef5ea31"
 dependencies = [
  "winnow",
 ]
@@ -3198,8 +3199,8 @@ dependencies = [
 
 [[package]]
 name = "walkdir"
-version = "2.5.0"
-source = "git+https://github.com/BurntSushi/walkdir#6fd031c82ba5a4204b4ce6eae73dacb00dc072ec"
+version = "2.5.1"
+source = "git+https://github.com/BurntSushi/walkdir#c00aa730c3e58ebe9677052c5f123f80d53fc9ff"
 dependencies = [
  "same-file",
  "winapi-util",
@@ -3514,6 +3515,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "xxhash-rust"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40de123dbb523ebcc00d61ec01840ad192578afc378d859f3429caa38308fad5"
+
+[[package]]
 name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3521,16 +3528,16 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.63"
-source = "git+https://github.com/google/zerocopy#1962a9c0e3eda8a3a58387f61c70ddd2c396b118"
+version = "0.8.64"
+source = "git+https://github.com/google/zerocopy#a68641199cdfa99f96cb62f0cde921c9d36bfb22"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.63"
-source = "git+https://github.com/google/zerocopy#1962a9c0e3eda8a3a58387f61c70ddd2c396b118"
+version = "0.8.64"
+source = "git+https://github.com/google/zerocopy#a68641199cdfa99f96cb62f0cde921c9d36bfb22"
 dependencies = [
  "proc-macro2",
  "quote",
