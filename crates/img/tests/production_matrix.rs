@@ -440,6 +440,13 @@ fn provenance_png_and_cursor_use_byte_preserving_archive_delivery() -> Result<()
         foundation::image_detection::open_image_with_limits(&png).is_ok(),
         "provenance fixture must still decode"
     );
+    let scan =
+        foundation::scan_fast_img_static_candidates(root.path(), std::slice::from_ref(&png))?;
+    ensure!(scan.lossless_sources.is_empty() && scan.candidates.is_empty());
+    ensure!(
+        scan.probe_failures.is_empty(),
+        "protected PNG must be retained at admission"
+    );
     verify_original_archive_cli(&png, root.path())?;
 
     if tool_available("magick") && magick_supports_format("CUR") {

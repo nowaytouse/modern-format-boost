@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Fast IMG metadata verification (2026-11-24)
+
+- PNG text or XMP after the image data can now pass orientation verification.
+  The metadata audit reads PNG text keywords and checks their values during
+  delivery. Missing text or damaged orientation data still retains the source.
+  Mismatch reports identify the field and difference without printing its value.
+- JPEGs with a long Photoshop document history can proceed when the original
+  XMP packets are proved intact. The verification covers entries beyond the
+  metadata reader's 1000-item display limit.
+- Fast IMG retains lossless containers with protected provenance at initial
+  inspection. They no longer reach the pixel encoder and count as encode failures.
+
 ### Fast IMG lossless static pixels (2026-11-23)
 
 - Fast JXL now explores compression effort at d=0 for static PNG, VP8L WebP and AVIF with positive lossless evidence. Candidates must reproduce the original samples and color. The metadata-complete JXL wins a size tie. Larger results leave the original in place.

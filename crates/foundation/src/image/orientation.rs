@@ -1274,6 +1274,8 @@ fn unrelated_orientation_warning(warning: &str) -> bool {
             | "Invalid EXIF text encoding for UserComment"
             | "[minor] Unrecognized MakerNotes"
             | crate::metadata::MICROSOFT_PHOTO_URI_WARNING
+            | crate::metadata::PNG_AFTER_IDAT_WARNING
+            | crate::metadata::DOCUMENT_ANCESTORS_LIMIT_WARNING
     ) || warning
         .strip_prefix("Bad length ICC_Profile (length ")
         .and_then(|length| length.strip_suffix(')'))
@@ -2308,7 +2310,9 @@ mod tests {
             "ExifTool:Copy1:Warning": "Invalid EXIF text encoding for UserComment",
             "ExifTool:Copy2:Warning": "IPTCDigest is not current. XMP may be out of sync",
             "ExifTool:Copy3:Warning": "[minor] Unrecognized MakerNotes",
-            "ExifTool:Copy5:Warning": "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto [x2]"
+            "ExifTool:Copy5:Warning": "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto [x2]",
+            "ExifTool:Copy6:Warning": format!("{} [x3]", crate::metadata::PNG_AFTER_IDAT_WARNING),
+            "ExifTool:Copy7:Warning": crate::metadata::DOCUMENT_ANCESTORS_LIMIT_WARNING
         }]);
         let parse = |record: &serde_json::Value| {
             super::parse_exif_orientation_evidence(

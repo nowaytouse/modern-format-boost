@@ -41,6 +41,10 @@ pub use exif::preserve_internal;
 pub(crate) const MICROSOFT_PHOTO_URI_WARNING: &str =
     "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto";
 
+pub(crate) const PNG_AFTER_IDAT_WARNING: &str =
+    "[minor] Text/EXIF chunk(s) found after PNG IDAT (may be ignored by some readers)";
+pub(crate) const DOCUMENT_ANCESTORS_LIMIT_WARNING: &str = "[Minor] Extracted only 1000 photoshop:DocumentAncestors items. Ignore minor errors to extract all";
+
 /// `ExifTool` coalesces identical diagnostics by appending an occurrence count.
 pub(crate) fn exiftool_warning_text(warning: &str) -> &str {
     if let Some((message, suffix)) = warning.rsplit_once(" [x")

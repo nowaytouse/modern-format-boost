@@ -167,6 +167,14 @@ fn probe_static(
         _ => return Ok(None),
     }
 
+    if compression == CompressionType::Lossless
+        && let Some(reason) = crate::image_formats::original_archive_reason(path)?
+    {
+        tracing::info!(target: "modern_lossy_static", path = %path.display(), reason,
+            "retaining original container outside lossless pixel encoding");
+        return Ok(None);
+    }
+
     let after_blake3 = crate::common_utils::calculate_blake3_hash(path).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
             "modern lossy static post-probe BLAKE3 failed for {}: {err}",

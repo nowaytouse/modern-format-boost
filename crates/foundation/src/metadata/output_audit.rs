@@ -532,9 +532,9 @@ fn preserve_mismatches(
 ) -> Vec<String> {
     let (missing, unexpected) = unmatched_metadata_instances(src, dst);
     let mut mismatches = source_instance_mismatches(&missing, &unexpected);
-    for (key, actual) in unexpected {
+    for (key, _) in unexpected {
         mismatches.push(format!(
-            "metadata {key} unexpected on output actual={actual:?} (possible cross-product metadata)"
+            "metadata {key} unexpected on output (possible cross-product metadata)"
         ));
     }
     mismatches
@@ -651,18 +651,15 @@ fn source_instance_mismatches(
 ) -> Vec<String> {
     missing
         .iter()
-        .map(|(key, expected)| {
+        .map(|(key, _)| {
             let canonical = metadata_comparison_key(key);
-            match unexpected
+            if unexpected
                 .iter()
-                .find(|(actual, _)| metadata_comparison_key(actual) == canonical)
+                .any(|(actual, _)| metadata_comparison_key(actual) == canonical)
             {
-                Some((_, actual)) => format!(
-                    "metadata {key} expected={expected:?} actual={actual:?} (possible wrong-source metadata)"
-                ),
-                None => format!(
-                    "metadata {key} missing from output (expected={expected:?})"
-                ),
+                format!("metadata {key} differs from source (possible wrong-source metadata)")
+            } else {
+                format!("metadata {key} missing from output")
             }
         })
         .collect()
@@ -673,7 +670,7 @@ fn metadata_values_equivalent(key: &str, expected: &str, actual: &str) -> bool {
         return true;
     }
     let tag = key.rsplit(':').next().unwrap_or(key);
-    if !matches!(tag, "WhitePoint" | "PrimaryChromaticities") {
+    if key.starts_with("PNG:") || !matches!(tag, "WhitePoint" | "PrimaryChromaticities") {
         return false;
     }
     let parse = |value: &str| {
@@ -705,7 +702,7 @@ fn preserve_source_mismatches(
                 .iter()
                 .any(|(_, source)| metadata_values_equivalent(&canonical, source, value))
         {
-            mismatches.push(format!("metadata {key} introduces conflicting duplicate value={value:?} (possible wrong-source metadata)"));
+            mismatches.push(format!("metadata {key} introduces conflicting duplicate value (possible wrong-source metadata)"));
         }
     }
     mismatches
@@ -716,9 +713,9 @@ fn clear_mismatches(dst: &Path, output_payload_bytes: u64) -> io::Result<Vec<Str
     let mut mismatches = Vec::new();
     if !remaining.is_empty() {
         let preview = remaining
-            .iter()
+            .keys()
             .take(8)
-            .map(|(k, v)| format!("{k}={v:?}"))
+            .map(String::as_str)
             .collect::<Vec<_>>()
             .join(", ");
         mismatches.push(format!(
@@ -770,12 +767,6 @@ fn preservable_delivery_tag_maps(
         });
     }
     Ok(maps)
-}
-
-fn has_no_portable_embedded_metadata_channel(path: &Path) -> io::Result<bool> {
-    crate::image::format_detect::detect_true_format(path)
-        .map(|format| matches!(format, crate::image::format_detect::FormatKind::Pnm))
-        .map_err(|error| io::Error::other(error.to_string()))
 }
 
 /// Verify a native container merge against an explicitly supplied XMP sidecar.
@@ -861,8 +852,11 @@ fn metadata_tag_maps_with_exif_custody<const N: usize>(
 ) -> io::Result<[BTreeMap<String, String>; N]> {
     let mut requested = BTreeMap::<std::path::PathBuf, Vec<usize>>::new();
     let mut maps = std::array::from_fn(|_| BTreeMap::new());
+    let mut has_png = false;
     for (index, path) in paths.iter().enumerate() {
-        if !has_no_portable_embedded_metadata_channel(path)? {
+        let format = detect_true_format(path).map_err(io::Error::other)?;
+        has_png |= format == FormatKind::Png;
+        if format != FormatKind::Pnm {
             requested
                 .entry(std::path::PathBuf::from(exiftool_path_arg(path).as_ref()))
                 .or_default()
@@ -885,6 +879,14 @@ fn metadata_tag_maps_with_exif_custody<const N: usize>(
         .arg("-Error");
     if include_binary_payloads || pair.is_some() {
         builder.arg("-b");
+    }
+    if has_png && (tag_args == PRESERVABLE_TAG_ARGS || tag_args == CLEARABLE_TAG_ARGS) {
+        // Include arbitrary PNG text keywords, including chunks after IDAT.
+        // Family 5 distinguishes textual data from codec header fields.
+        builder
+            .arg("-api")
+            .arg("SavePath=1")
+            .arg("-5PNG-TextualData:all");
     }
     for arg in tag_args {
         builder.arg(*arg);
@@ -938,6 +940,10 @@ fn metadata_tag_maps_with_exif_custody<const N: usize>(
 fn preserve_audit_excludes_tag(key: &str) -> bool {
     let canonical = metadata_comparison_key(key);
     let key = canonical.as_str();
+    if key.starts_with("PNG:") {
+        // A text keyword can share a name with a structural EXIF tag.
+        return false;
+    }
     let tag = key.rsplit(':').next().unwrap_or(key);
     tag.eq_ignore_ascii_case("Orientation")
         || tag.eq_ignore_ascii_case("XMPToolkit")
@@ -993,7 +999,7 @@ fn removable_payload_bytes_with_discovery(
 }
 
 fn reclaimable_embedded_metadata_bytes(path: &Path) -> io::Result<u64> {
-    if has_no_portable_embedded_metadata_channel(path)? {
+    if detect_true_format(path).map_err(io::Error::other)? == FormatKind::Pnm {
         return Ok(0);
     }
     let original_bytes = std::fs::metadata(path)?.len();
@@ -1129,7 +1135,8 @@ fn parse_metadata_records_for_requested_paths(
                 let payload = match message {
                     "[minor] Unrecognized MakerNotes"
                     | "Invalid EXIF text encoding for UserComment" => "EXIF:EXIF",
-                    super::MICROSOFT_PHOTO_URI_WARNING => "XMP:XMP",
+                    super::MICROSOFT_PHOTO_URI_WARNING
+                    | super::DOCUMENT_ANCESTORS_LIMIT_WARNING => "XMP:XMP",
                     _ => continue,
                 };
                 let matched = matching_raw_metadata_payload(source, output, payload, [src, dst])?;
@@ -1161,6 +1168,15 @@ fn parse_metadata_records_for_requested_paths(
                 })
             {
                 tracing::info!(target: "mfb.metadata", source = path, payload, "{diagnostic}; original metadata payload preserved");
+                continue;
+            }
+            // In read mode ExifTool continues past IDAT and reads these chunks.
+            // Preserve/clear still compare the extracted text and other metadata.
+            if file_warning
+                && diagnostic.as_str().map(super::exiftool_warning_text)
+                    == Some(super::PNG_AFTER_IDAT_WARNING)
+            {
+                tracing::info!(target: "mfb.metadata", source = path, "{diagnostic}");
                 continue;
             }
             // A stale digest warns about source consistency, not an unreadable
@@ -1198,13 +1214,23 @@ fn parse_metadata_records_for_requested_paths(
                      reconstruction does not prove color-profile renderability; the profile has not \
                      been repaired or discarded"
                 } else if pair.is_some_and(|paths| paths.contains(&Path::new(path)))
-                    && diagnostic.as_str().map(super::exiftool_warning_text)
-                        == Some(super::MICROSOFT_PHOTO_URI_WARNING)
+                    && diagnostic
+                        .as_str()
+                        .map(super::exiftool_warning_text)
+                        .is_some_and(|warning| {
+                            matches!(
+                                warning,
+                                super::MICROSOFT_PHOTO_URI_WARNING
+                                    | super::DOCUMENT_ANCESTORS_LIMIT_WARNING
+                            )
+                        })
                 {
-                    if source_warning_custody.contains_key(super::MICROSOFT_PHOTO_URI_WARNING) {
-                        "XMP namespace warning: complete matching original XMP packets could not be verified"
+                    if diagnostic.as_str().is_some_and(|message| {
+                        source_warning_custody.contains_key(super::exiftool_warning_text(message))
+                    }) {
+                        "XMP extraction warning: complete matching original XMP packets could not be verified"
                     } else {
-                        "XMP namespace warning: the paired source did not report this warning"
+                        "XMP extraction warning: the paired source did not report this warning"
                     }
                 } else {
                     "metadata extraction warning prevented complete preservation proof; \
@@ -1307,7 +1333,7 @@ fn metadata_object_map(obj: &serde_json::Map<String, Value>) -> BTreeMap<String,
         }
         let rendered = match value {
             Value::Null => continue,
-            Value::String(s) if s.trim().is_empty() => continue,
+            Value::String(s) if s.trim().is_empty() && !key.starts_with("PNG:") => continue,
             Value::String(s) => s.clone(),
             other => other.to_string(),
         };
@@ -1352,6 +1378,42 @@ mod tests {
         proof = Some(hashes());
         std::fs::remove_file(&dst).unwrap();
         assert!(verify_current_jpeg_reconstruction(&src, &dst, &mut proof).is_err());
+    }
+
+    #[test]
+    fn png_text_after_idat_requires_matching_metadata() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("late.png");
+        let output = temp.path().join("plain.png");
+        image::RgbImage::from_pixel(8, 4, image::Rgb([8, 12, 32])).save(&output)?;
+        let mut bytes = std::fs::read(&output)?;
+        let end = bytes.len() - 12;
+        assert_eq!(&bytes[end + 4..end + 8], b"IEND");
+        let text = b"Example\0synthetic value";
+        let mut chunk = u32::try_from(text.len())?.to_be_bytes().to_vec();
+        chunk.extend_from_slice(b"tEXt");
+        chunk.extend_from_slice(text);
+        chunk.extend_from_slice(&crc32fast::hash(&chunk[4..]).to_be_bytes());
+        bytes.splice(end..end, chunk);
+        std::fs::write(&source, &bytes)?;
+
+        let [late, plain] = preservable_tag_maps([source.as_path(), output.as_path()])?;
+        assert_eq!(
+            late.get("PNG:Example").map(String::as_str),
+            Some("synthetic value")
+        );
+        let diagnostics = preserve_source_mismatches(&late, &plain).join(", ");
+        assert!(diagnostics.contains("PNG:Example"));
+        assert!(!diagnostics.contains("synthetic value"));
+        assert!(!metadata_values_equivalent(
+            "PNG:WhitePoint",
+            "1.0",
+            "1.000000001"
+        ));
+        std::fs::write(&output, bytes)?;
+        let [late, preserved] = preservable_tag_maps([source.as_path(), output.as_path()])?;
+        assert!(preserve_source_mismatches(&late, &preserved).is_empty());
+        Ok(())
     }
 
     #[test]
@@ -1675,6 +1737,7 @@ mod tests {
                 "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto [x2]",
                 "XMP:XMP",
             ),
+            (crate::metadata::DOCUMENT_ANCESTORS_LIMIT_WARNING, "XMP:XMP"),
             ("[minor] Unrecognized MakerNotes [x2]", "EXIF:EXIF"),
         ] {
             let pair = [Path::new("source.jxl"), Path::new("output.jxl")];
