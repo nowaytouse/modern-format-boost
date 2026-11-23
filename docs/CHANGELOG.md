@@ -31,6 +31,13 @@ areas of change are:
 - Fast IMG records modern-format inspection failures by relative path and
   checks the retained originals against hashes observed during the same run.
   Gate 1 records each file's own metadata mismatch in its failure details.
+- The final retained-source total includes files rejected during format inspection
+  when their paths are distinct and their original bytes are freshly verified.
+  Files outside the saved retry inventory remain ineligible for checkpoint-based cleanup.
+- The macOS result and processing history show confirmed Photos deliveries and
+  failures with verified originals together, even when the working copy is retained.
+- Gate 1 can verify an existing JXL against a JXL output carrying the same known
+  XMP or EXIF diagnostic when the corresponding raw metadata is preserved.
 
 - Corrected a cleanup preflight that could leave an entire original-format
   batch pending after Photos verified its private XMP-enriched submissions.

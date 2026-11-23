@@ -361,22 +361,7 @@ impl Report {
             }
             _ => None,
         };
-        let retention_inspected = retention.is_ok();
-        let (mut source_retained, mut retention_unknown_reason) = match retention {
-            Err(error) => (
-                None,
-                Some(format!("source existence inspection failed: {error}")),
-            ),
-            Ok(_) if probe_failures.total > 0 => (
-                None,
-                Some("source inventory has unclassified entries outside the saved admission inventory".into()),
-            ),
-            Ok(_) if routed.is_none() && !marker.source_disposition_is_complete() => (
-                None,
-                Some("source inventory has unclassified or unaccounted entries".into()),
-            ),
-            Ok((count, _)) => (Some(count), None),
-        };
+
         let mut verified_relative_paths = Vec::new();
         let failed_verification = (|| -> anyhow::Result<usize> {
             anyhow::ensure!(
@@ -426,10 +411,29 @@ impl Report {
         };
         if failed_sources_verified == Some(failed)
             && anonymous_original_failures == 0
-            && retention_inspected
+            && retention.is_ok()
         {
             failed_sources_retained = Some(failed);
         }
+        // Probe failures live outside the retry checkpoint. Count their originals only
+        // after the disjoint paths and their current bytes have all been verified.
+        let (mut source_retained, mut retention_unknown_reason) = match retention {
+            Err(error) => (
+                None,
+                Some(format!("source existence inspection failed: {error}")),
+            ),
+            Ok(_) if probe_failures.total > 0
+                && (routed.is_some() || failed_sources_verified != Some(failed)) => (
+                None,
+                Some("source inventory includes probe failures without complete retention evidence".into()),
+            ),
+            Ok(_) if anonymous_original_failures > 0
+                || (routed.is_none() && !marker.source_disposition_is_complete()) => (
+                None,
+                Some("source inventory has unclassified or unaccounted entries".into()),
+            ),
+            Ok((count, _)) => (Some(checked_add(count, unbound_failures, "retained source")?), None),
+        };
         let failed_source_proof = if probe_failures.total > 0 || verified_relative_paths.is_empty()
         {
             None
@@ -758,17 +762,15 @@ mod tests {
         assert_eq!(report.failed_sources_retained, Some(1));
         assert_eq!(report.failures_outside_retry_inventory, Some(1));
         assert!(report.failed_source_proof.is_none());
-        assert!(
-            build(&marker, 2, &hashes)?
-                .failed_sources_verified
-                .is_none()
-        );
+        assert_eq!(report.source_retained, Some(1));
+        assert!(report.retention_unknown_reason.is_none());
+        let incomplete = build(&marker, 2, &hashes)?;
+        assert!(incomplete.failed_sources_verified.is_none());
+        assert!(incomplete.source_retained.is_none());
         std::fs::write(&path, b"changed")?;
-        assert!(
-            build(&marker, 1, &hashes)?
-                .failed_sources_verified
-                .is_none()
-        );
+        let changed = build(&marker, 1, &hashes)?;
+        assert!(changed.failed_sources_verified.is_none());
+        assert!(changed.source_retained.is_none());
         std::fs::write(&path, b"original")?;
         marker.src_jpeg_count = 1;
         marker.failed_sources.insert(
@@ -778,11 +780,24 @@ mod tests {
                 reason: "old failure".into(),
             },
         );
-        assert!(
-            build(&marker, 1, &hashes)?
-                .failed_sources_verified
-                .is_none()
-        );
+        let overlap = build(&marker, 1, &hashes)?;
+        assert!(overlap.failed_sources_verified.is_none());
+        assert!(overlap.source_retained.is_none());
+
+        let recorded = marker
+            .failed_sources
+            .remove("broken.avif")
+            .context("recorded failure")?;
+        std::fs::write(marker.src_dir.join("another.avif"), b"original")?;
+        marker
+            .failed_sources
+            .insert("another.avif".into(), recorded);
+        let disjoint = build(&marker, 1, &hashes)?;
+        assert_eq!(disjoint.failed_sources_verified, Some(2));
+        assert_eq!(disjoint.source_retained, Some(2));
+        assert_eq!(disjoint.failures_outside_retry_inventory, Some(1));
+        marker.src_jpeg_count += 1;
+        assert!(build(&marker, 1, &hashes)?.source_retained.is_none());
         Ok(())
     }
 

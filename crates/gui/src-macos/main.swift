@@ -6185,7 +6185,8 @@ private struct BatchResults {
               totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
               let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
               pending == 0, pending == fastDeliveryCount(\.unprocessed),
-              fastDeliveries.allSatisfy({ $0.finalizationError == nil && $0.failedSourcesRetained == $0.failed
+              fastDeliveries.allSatisfy({ (!photos || ($0.failuresOutsideRetryInventory ?? 0) == 0)
+                  && $0.finalizationError == nil && $0.failedSourcesRetained == $0.failed
                   && $0.failedSourcesVerified == $0.failed && $0.failedSourceVerificationError == nil
                   && ($0.failed == 0 || $0.primaryCleanupComplete || $0.isRetainedOnly) }),
               workerExitCodes.count == fastDeliveries.count,
@@ -6208,6 +6209,19 @@ private struct BatchResults {
         if photos, fastDeliveryCount(\.photosVerified) != successes { return false }
         // A file-failure exit is expected; a crash or another exit must not inherit its safe verdict.
         if processExit != (failures > 0 ? 1 : 0) { return false }
+        return true
+    }
+
+    // A display-only verdict. Keep the stricter delivery confirmation for operational decisions.
+    func mixedDeliveryFacts(photos: Bool, source: String?, processExit: Int32?, exitedNormally: Bool) -> Bool {
+        guard photos, processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
+              unavailableVerification == nil, photosQuarantineBlocked == nil, !isIncomplete,
+              !fastDeliveryInvalid, !outputCleanupInvalid, fastDeliveries.count == 1,
+              let receipt = fastDeliveries.first, receipt.hasMixedDeliveryFacts,
+              FastDelivery.samePath(receipt.sourceDirectory, source), outputCleanups.count == 1,
+              receipt.hasBlockedOutputCleanup(outputCleanups), totals.count == 1, let img = totals["img"], img == receipt.counts,
+              (pendingTotals["img"] ?? nil) == 0, workerExitCodes == [1],
+              completedFileErrors == nil || completedFileErrors == receipt.failed else { return false }
         return true
     }
 
@@ -10628,30 +10642,37 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
             let deliveryConfirmed = batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
                 processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
+            let mixedFacts = host.controlState != "cancelled" && batchResults.mixedDeliveryFacts(
+                photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
+                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
             let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(
                 photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
                 processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
             let quarantineBlocked = host.controlState != "cancelled" && lastRequest?.shortestPath == true
                 && batchResults.confirmedPhotosQuarantine(source: lastRequest?.targetPath,
                     processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal) != nil
-            if !deliveryConfirmed && !deferred {
+            if !deliveryConfirmed && !mixedFacts && !deferred {
                 photosDiagnostics.markFailed()
             }
             refreshDiagnostics()
             let interrupted = interruptedWithoutFileSummary
-            let failureMessage = quarantineBlocked ? localized("result.final_photos_quarantine_title")
+            let failureMessage = mixedFacts && batchResults.fastDeliveries.count == 1
+                ? localized("result.mixed_delivery_facts", String(batchResults.fastDeliveries[0].photosVerified),
+                            String(batchResults.fastDeliveries[0].failed))
+                : quarantineBlocked ? localized("result.final_photos_quarantine_title")
                 : interrupted
                 ? localized("result.process_terminated") + " · " + localized("result.files_not_summarized")
                     + "\n" + error.localizedDescription
                 : batchResults.hasPartialSuccess
                 ? localized("result.partially_completed") + " · " + error.localizedDescription
                 : error.localizedDescription
-            let tag = interrupted || deferred || quarantineBlocked
+            let tag = interrupted || deferred || quarantineBlocked || mixedFacts
                 || (deliveryConfirmed && batchResults.hasFileFailures) ? "WARN" : "FAIL"
             appendLog("[\(tag)] \(failureMessage)" + countSummary,
-                      captureDiagnostics: !quarantineBlocked && latestDiagnostics.failure == nil)
+                      captureDiagnostics: !mixedFacts && !quarantineBlocked && latestDiagnostics.failure == nil)
             setProcessing(false)
             if interrupted { setLocalizedStatus("result.process_terminated") }
+            else if mixedFacts { setStatus(failureMessage) }
             else if batchResults.hasPartialSuccess { setLocalizedStatus("result.partially_completed") }
             else if batchResults.hasFileFailures { setLocalizedStatus("result.finished_with_failures") }
             else { setStatus(error.localizedDescription) }
@@ -10793,6 +10814,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: terminalExit,
             exitedNormally: normalExit)
+        let mixedFacts = host.controlState != "cancelled" && batchResults.mixedDeliveryFacts(photos: photos,
+            source: lastRequest?.targetPath, processExit: terminalExit, exitedNormally: normalExit)
         let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(photos: photos,
             source: lastRequest?.targetPath, processExit: terminalExit, exitedNormally: normalExit)
         let quarantineBlocked = host.controlState != "cancelled" && photos
@@ -10814,9 +10837,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             || unavailableVerification != nil || !originalDelivery.isEmpty ? 0 : 2
         let retainedOnly = confirmed && batchResults.fastDeliveries.allSatisfy(\.isRetainedOnly)
         let quarantineChanged = hasConfirmedPhotosQuarantine != quarantineBlocked
-        let presentationChanged = hasConfirmedFileFailures != (confirmed && batchResults.hasFileFailures)
+        let presentationChanged = hasConfirmedFileFailures != ((confirmed || mixedFacts) && batchResults.hasFileFailures)
             || quarantineChanged
-        hasConfirmedFileFailures = confirmed && batchResults.hasFileFailures
+        hasConfirmedFileFailures = (confirmed || mixedFacts) && batchResults.hasFileFailures
         hasConfirmedPhotosQuarantine = quarantineBlocked
         if quarantineChanged { refreshQuarantineResumeControls() }
         if presentationChanged {
@@ -10825,7 +10848,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             logView.textStorage?.setAttributedString(privacyEnabled ? privateLogPresentation : fullLogPresentation)
         }
         let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
-            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !deferred && !quarantineBlocked)
+            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !mixedFacts && !deferred && !quarantineBlocked)
             || (processEndedWithError && batchResults.totals.isEmpty)
         let countsNeedReview = normalExit && !batchResults.hasCompleteCountReport
             && !batchResults.fastDeliveryInvalid
@@ -10846,6 +10869,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if deferred { title = localized("result.delivery_deferred") }
         else if quarantineBlocked { title = localized("result.final_photos_quarantine_title") }
         else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
+        else if mixedFacts, let receipt = batchResults.fastDeliveries.first {
+            title = localized("result.mixed_delivery_facts", String(receipt.photosVerified), String(receipt.failed))
+        }
         else if batchResults.hasPartialSuccess || retainedOnly { title = localized("result.attention_count", String(failures ?? 0)) }
         else if batchResults.hasFileFailures { title = localized("result.finished_with_failures") }
         else if batchResults.hasFailure { title = localized("result.stopped_with_error") }
@@ -10857,7 +10883,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             : interrupted ? .systemOrange
             : countsNeedReview ? .systemOrange
             : uncertain ? .systemRed : deferred || quarantineBlocked ? .systemOrange
-            : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
+            : batchResults.hasFailure ? (hasConfirmedFileFailures || mixedFacts ? .systemOrange : .systemRed) : .labelColor
         batchOverviewCounts.stringValue = interrupted ? localized("result.files_not_summarized")
             : logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
             : batchResults.compactSummary
@@ -10886,7 +10912,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                     batchOverviewDelivery.stringValue += "\n" + localized("result.final_photos_quarantine_resume")
                 }
             }
-            if retainedOnly {
+            if mixedFacts {
+                batchOverviewDelivery.isHidden = true
+            } else if retainedOnly {
                 batchOverviewDelivery.stringValue = localized("result.retained_only_facts",
                     value(processingCountTotal(batchResults.fastDeliveries.map(\.sourceRetained))))
             } else if !logDetailsExpanded && !uncertain && !countsNeedReview && !quarantineBlocked {
@@ -10905,6 +10933,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             let primary = logDetailsExpanded && photos && cleanup ? localized("result.cleanup_primary") + "\n" : ""
             batchOverviewCleanup.stringValue = primary
                 + batchResults.outputCleanupText(detailed: logDetailsExpanded, privacy: privacyEnabled)
+            if mixedFacts, let text = batchResults.fastDeliveries.first?.workingCopyRetentionText {
+                batchOverviewCleanup.stringValue = logDetailsExpanded ? text + "\n" + batchOverviewCleanup.stringValue : text
+            }
             batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .labelColor
             if retainedOnly && !cleanupNeedsAttention { batchOverviewCleanup.isHidden = true }
             if deferred {
@@ -10940,6 +10971,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if uncertain { setLocalizedStatus("result.unconfirmed") }
         else if deferred { setLocalizedStatus("result.delivery_deferred") }
         else if quarantineBlocked { setLocalizedStatus("result.final_photos_quarantine_title") }
+        else if mixedFacts { setStatus(title) }
         else if batchResults.hasPartialSuccess || retainedOnly { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
         updateLogPresentation()
     }
@@ -11619,6 +11651,84 @@ private final class AppController: NSObject, NSWindowDelegate {
         var blockedVerification = cleanup
         blockedVerification["outcome"] = "verification_blocked"
         for key in ["removed_files", "already_absent_files", "pruned_directories"] { blockedVerification[key] = NSNull() }
+        var mixedReceipt = receipt
+        mixedReceipt.merge(["succeeded": 2, "failed": 69, "ignored": 0, "encoded": 2, "photos_verified": 2,
+            "source_retained": NSNull(), "failed_sources_retained": 69, "failed_sources_verified": 69,
+            "failures_outside_retry_inventory": 3, "retention_unknown_reason": "incomplete retry inventory",
+            "primary_verification_complete": true, "source_directory": "/synthetic/results",
+            "output_directory": "/synthetic/results_optimized"] as [String: Any]) { _, new in new }
+        let mixedBatch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":2,"skipped":0,"failed":69,"ignored":0,"unprocessed":0,"exit_code":1}"#
+        clearBatchLog()
+        appendLog(mixedBatch)
+        appendLog(try line(mixedReceipt))
+        appendLog(try cleanupLine(blockedVerification))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.mixed_delivery_facts", "2", "69"),
+              batchOverviewCleanup.stringValue == localized("cleanup.retained_outside_retry_list", "3"),
+              !batchResults.fastDeliveryIsConfirmed(photos: true, processExit: 1),
+              batchResults.fastDeliveries.first?.allFailedSourcesEligibleForRetry == false else {
+            throw HostError(message: "Mixed delivery display lost verified facts or authorized cleanup or retry")
+        }
+        var badEncoding = mixedReceipt
+        badEncoding["encoded"] = 1
+        clearBatchLog()
+        appendLog(mixedBatch)
+        appendLog(try line(badEncoding))
+        appendLog(try cleanupLine(blockedVerification))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue != localized("result.mixed_delivery_facts", "2", "69") else {
+            throw HostError(message: "Mixed delivery display accepted an incomplete encoded count")
+        }
+        var originalMixed = mixedReceipt
+        originalMixed["source_retained"] = 69
+        originalMixed["retention_unknown_reason"] = NSNull()
+        originalMixed["encoded"] = 1
+        originalMixed["original_delivery"] = ["photos_verified": 1, "source_cleanup_confirmed": 1]
+        clearBatchLog()
+        appendLog("[GATE 1  ] count:✅ size:✅ blake3:✅ metadata:❌ orient:✅ decode:✅ → FILE_FAILURES")
+        appendLog("[GATE 1  ] retained 40 failed source(s); fully verifying 2 remaining output(s)")
+        appendLog("[GATE 1  ] count:✅ size:✅ blake3:✅ metadata:✅ orient:✅ decode:✅ → PASS")
+        appendLog("[GATE 2 local] count:✅ size:✅ blake3:✅ metadata:✅ orient:✅ decode:✅ → PASS")
+        appendLog("[GATE 2  ] count:✅ photos:✅ → PASS")
+        appendLog(mixedBatch)
+        appendLog(try line(originalMixed))
+        appendLog(try cleanupLine(blockedVerification))
+        appendLog(#"MFB_FILE_FAILURE={"schema_version":1,"pipeline":"img","source_path":"/synthetic/bad.jpg","message":"decoder rejected image","run_id":"synthetic-run","invocation_id":"synthetic-call"}"#)
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.mixed_delivery_facts", "2", "69"),
+              !batchResults.mandatoryEvidenceConflict,
+              !batchResults.fastDeliveryIsConfirmed(photos: true, processExit: 1),
+              latestDiagnostics.failure?.contains("decoder rejected image") == true else {
+            throw HostError(message: "Mixed delivery original or per-file failure evidence was lost")
+        }
+        appendLog("[FATAL] synthetic infrastructure failure")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchResults.mandatoryEvidenceConflict, batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Mixed delivery concealed a serious infrastructure failure")
+        }
+        for gate in ["[GATE 1  ] metadata:❌ → FAIL", "[GATE 2  ] photos:❌ → FAIL"] {
+            clearBatchLog()
+            appendLog(gate)
+            appendLog("[GATE 1  ] count:✅ → PASS")
+            appendLog("[GATE 2  ] photos:✅ → PASS")
+            appendLog(mixedBatch)
+            appendLog(try line(mixedReceipt))
+            appendLog(try cleanupLine(blockedVerification))
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchResults.mandatoryEvidenceConflict, batchOverviewTitle.textColor == .systemRed else {
+                throw HostError(message: "A later pass cleared a genuine gate failure")
+            }
+        }
+        mixedReceipt["failed_sources_verified"] = 68
+        clearBatchLog()
+        appendLog(mixedBatch)
+        appendLog(try line(mixedReceipt))
+        appendLog(try cleanupLine(blockedVerification))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue != localized("result.mixed_delivery_facts", "2", "69") else {
+            throw HostError(message: "Mixed delivery display overstated retained originals")
+        }
+        clearBatchLog()
         let unavailableMarker = #"MFB_BATCH_VERIFICATION_UNAVAILABLE={"schema_version":1,"run_id":"synthetic-cleanup-run","reason":"checkpoint"}"#
         func independentVerificationFixture() throws -> BatchResults {
             var fixture = BatchResults()

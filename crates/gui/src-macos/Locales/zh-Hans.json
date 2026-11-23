@@ -71,6 +71,8 @@
   "cleanup.recovery.already_absent": "工作副本已不存在",
   "cleanup.recovery.residual": "工作副本仍有保留项",
   "cleanup.recovery.failed": "工作副本清理未完成",
+  "cleanup.retained_outside_retry_list": "工作副本已保留。%@ 项失败原件未列入本次重试清单。",
+  "result.mixed_delivery_facts": "%@ 项已交付到照片，%@ 项失败且已核验保留原件",
   "cleanup.recovery.verification_blocked": "工作副本清理受核验阻止",
   "cleanup.recovery.unconfirmed": "无法确认清理结果",
   "cleanup.recovery.stopped": "已停止清理恢复",

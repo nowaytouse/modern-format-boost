@@ -3462,6 +3462,99 @@ mod tests {
     }
 
     #[test]
+    fn gate1_preserves_repeated_namespace_warning_in_jpeg_archive_and_managed_jxl() {
+        if !crate::CjxlBuilder::check_available() || !crate::DjxlBuilder::check_available() {
+            eprintln!("SKIP: cjxl/djxl unavailable for Gate 1 metadata regression");
+            return;
+        }
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("working");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("image.jpg");
+        let out = wc.join("image.jxl");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
+            .save_with_format(&src, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = std::fs::read(&src).unwrap();
+        let xmp = b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:MicrosoftPhoto=\"http://ns.microsoft.com/photo/1.0/\"><MicrosoftPhoto:Rating>1</MicrosoftPhoto:Rating></rdf:Description></rdf:RDF></x:xmpmeta>";
+        let mut segment = b"\xff\xe1".to_vec();
+        segment.extend_from_slice(&u16::try_from(xmp.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(xmp);
+        std::fs::write(&src, [&jpeg[..2], &segment, &segment, &jpeg[2..]].concat()).unwrap();
+        let encoded = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&out)
+            .lossless_jpeg(true)
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        for path in [&src, &out] {
+            let diagnostic = crate::ExiftoolBuilder::new()
+                .arg("-j")
+                .arg("-a")
+                .arg("-Warning")
+                .build()
+                .arg(path)
+                .output()
+                .unwrap();
+            assert!(diagnostic.status.success());
+            assert!(
+                String::from_utf8_lossy(&diagnostic.stdout)
+                    .contains("Fixed incorrect URI for xmlns:MicrosoftPhoto")
+            );
+        }
+        let mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+        for path in [&src, &out] {
+            std::fs::set_times(path, std::fs::FileTimes::new().set_modified(mtime.into())).unwrap();
+        }
+        let mut ctx = PipelineCtx {
+            working_copy: wc.clone(),
+            src_dir: src_dir.clone(),
+            blake3_log: BTreeMap::from([(
+                "image.jpg".into(),
+                Blake3Entry {
+                    out_rel: Some("image.jxl".into()),
+                    src: calculate_blake3_hash(&src).unwrap(),
+                    out: calculate_blake3_hash(&out).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+        };
+        let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
+        assert!(result.passed, "{}", result.actual);
+
+        let managed = src_dir.join("managed.jxl");
+        let copied = wc.join("managed.jxl");
+        std::fs::copy(&out, &managed).unwrap();
+        std::fs::copy(&out, &copied).unwrap();
+        for path in [&managed, &copied] {
+            std::fs::set_times(path, std::fs::FileTimes::new().set_modified(mtime.into())).unwrap();
+        }
+        ctx.blake3_log = BTreeMap::from([(
+            "managed.jxl".into(),
+            Blake3Entry {
+                out_rel: Some("managed.jxl".into()),
+                src: calculate_blake3_hash(&managed).unwrap(),
+                out: calculate_blake3_hash(&copied).unwrap(),
+                library_asset: None,
+            },
+        )]);
+        let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
+        assert!(result.passed, "{}", result.actual);
+    }
+
+    #[test]
     fn gate1_metadata_rejects_wrong_source_embedded_metadata() {
         let root = tempfile::TempDir::new().unwrap();
         let src_dir = root.path().join("src");

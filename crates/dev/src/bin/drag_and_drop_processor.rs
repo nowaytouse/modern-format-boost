@@ -14,9 +14,9 @@ use dev::infra::drag_drop::{
     adjacent_output_for_target, build_size_comparison_summary, confirm_in_place,
     create_directory_structure, delete_fast_img_shortest_path_output_dir,
     exact_fast_img_photos_cleanup_recovery, fast_img_cleanup_checkpoint_digest,
-    fast_img_partial_cleanup_verified, fast_img_reported_output_bytes,
-    fast_img_retained_file_names, fast_img_retained_only_verified, fast_img_session_size_metrics,
-    fast_img_unverified_failure_presentation, observe_historical_fast_img_outputs,
+    fast_img_partial_cleanup_verified, fast_img_partial_delivery_presentation,
+    fast_img_reported_output_bytes, fast_img_retained_file_names, fast_img_retained_only_verified,
+    fast_img_session_size_metrics, observe_historical_fast_img_outputs,
     recover_fast_img_shortest_path_output_dir, run_unified_verification, safety_check,
     scan_content, sync_non_media_files,
 };
@@ -1087,17 +1087,17 @@ fn fast_img_file_only_completion(
 
 // Presentation evidence does not authorize cleanup or retry. Those use their own stricter proof.
 #[derive(Debug)]
-struct FastImgDeliveryWithUnverifiedFailures {
+struct FastImgPartialDelivery {
     delivered: usize,
     failed: usize,
 }
 
-impl std::fmt::Display for FastImgDeliveryWithUnverifiedFailures {
+impl std::fmt::Display for FastImgPartialDelivery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "fast-img exited with code 1")
     }
 }
-impl std::error::Error for FastImgDeliveryWithUnverifiedFailures {}
+impl std::error::Error for FastImgPartialDelivery {}
 
 fn print_batch_result(command: &LaunchCommand, stats: &ProcessorStats, dry_run: bool) {
     if !dry_run && matches!(command.pipeline_label(), "IMG" | "VID") {
@@ -3240,7 +3240,7 @@ fn run_drag_drop_inner(
                                 }
                                 Ok(report) => {
                                     evidence_available = true;
-                                    presentation = fast_img_unverified_failure_presentation(
+                                    presentation = fast_img_partial_delivery_presentation(
                                         &text,
                                         &stats,
                                         &source_root,
@@ -3248,7 +3248,7 @@ fn run_drag_drop_inner(
                                         args.shortest_path,
                                     )
                                     .then_some(
-                                        FastImgDeliveryWithUnverifiedFailures {
+                                        FastImgPartialDelivery {
                                             delivered: stats.succeeded,
                                             failed: stats.failed,
                                         },
@@ -4873,10 +4873,7 @@ fn main() -> Result<std::process::ExitCode> {
         report_drag_drop_failure(&run_result);
     }
     match run_result {
-        Err(error)
-            if error.chain().count() == 1
-                && error.is::<FastImgDeliveryWithUnverifiedFailures>() =>
-        {
+        Err(error) if error.chain().count() == 1 && error.is::<FastImgPartialDelivery>() => {
             Ok(std::process::ExitCode::FAILURE)
         }
         Err(error) if dev::infra::rich_panel::completed_file_failure_count(&error).is_some() => {
@@ -4893,7 +4890,7 @@ fn report_drag_drop_failure(result: &Result<()>) {
         }
         let completed_failures = dev::infra::rich_panel::completed_file_failure_count(err);
         if err.chain().count() == 1
-            && let Some(outcome) = err.downcast_ref::<FastImgDeliveryWithUnverifiedFailures>()
+            && let Some(outcome) = err.downcast_ref::<FastImgPartialDelivery>()
         {
             eprintln!(
                 "[PARTIAL DELIVERY] {} file(s) delivered; {} file(s) failed. See the individual failure records and source cleanup receipts.",
@@ -4955,7 +4952,7 @@ mod tests {
             "failed_sources_retained": null, "failed_sources_verified": null,
             "retention_unknown_reason": "inspection failed", "failed_source_verification_error": null});
         let classify = |value: &serde_json::Value| {
-            fast_img_unverified_failure_presentation(
+            fast_img_partial_delivery_presentation(
                 &format!("MFB_FAST_IMG_RESULT={value}"),
                 &stats,
                 std::path::Path::new("/source"),
@@ -4991,6 +4988,23 @@ mod tests {
         complete_proof["failed_sources_verified"] = 2.into();
         complete_proof["retention_unknown_reason"] = serde_json::Value::Null;
         assert!(!classify(&complete_proof));
+        complete_proof["source_retained"] = 2.into();
+        complete_proof["failures_outside_retry_inventory"] = 1.into();
+        assert!(classify(&complete_proof));
+        assert_eq!(
+            fast_img_partial_cleanup_verified(
+                &format!("MFB_FAST_IMG_RESULT={complete_proof}"),
+                &stats,
+                Path::new("/source"),
+                Path::new("/output"),
+                true,
+            ),
+            None
+        );
+        for bad_count in [3.into(), "unknown".into()] {
+            complete_proof["failures_outside_retry_inventory"] = bad_count;
+            assert!(!classify(&complete_proof));
+        }
         let mut missing = receipt.clone();
         missing
             .as_object_mut()
@@ -5002,7 +5016,7 @@ mod tests {
         assert!(!classify(&wrong_total));
         let mut wrong_exit = stats.clone();
         wrong_exit.exit_code = 2;
-        assert!(!fast_img_unverified_failure_presentation(
+        assert!(!fast_img_partial_delivery_presentation(
             &format!("MFB_FAST_IMG_RESULT={receipt}"),
             &wrong_exit,
             std::path::Path::new("/source"),

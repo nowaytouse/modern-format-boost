@@ -71,6 +71,8 @@
   "cleanup.recovery.already_absent": "Working copy already absent",
   "cleanup.recovery.residual": "Some items remain in the working copy",
   "cleanup.recovery.failed": "Working-copy cleanup incomplete",
+  "cleanup.retained_outside_retry_list": "Working copy retained. The saved retry list excludes %@ failed originals.",
+  "result.mixed_delivery_facts": "%@ delivered to Photos. Originals verified for all %@ failed items.",
   "cleanup.recovery.verification_blocked": "Verification blocked working-copy cleanup",
   "cleanup.recovery.unconfirmed": "Cleanup result could not be confirmed",
   "cleanup.recovery.stopped": "Cleanup recovery stopped",

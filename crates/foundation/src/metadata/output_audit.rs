@@ -7,6 +7,7 @@
 //!   an explicit source→output reclaimable-byte delta.
 
 use crate::builder_base::ToolBuilder;
+use crate::image::format_detect::{FormatKind, detect_true_format};
 use crate::path_safety::exiftool_path_arg;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -175,7 +176,9 @@ fn verify_output_embedded_metadata_with_discovery(
         MetadataOutputPolicy::Preserve | MetadataOutputPolicy::PreserveSource => {
             let src_sidecar = find_sidecar(src)?;
             let dst_sidecar = find_sidecar(dst)?;
-            let jpeg_archive = is_jpeg_archive_pair(src, dst)?;
+            let source_format = detect_true_format(src).map_err(io::Error::other)?;
+            let paired_jxl_custody = matches!(source_format, FormatKind::Jpeg | FormatKind::Jxl)
+                && detect_true_format(dst).map_err(io::Error::other)? == FormatKind::Jxl;
             let [mut src_tags, mut dst_tags, mut source_xmp, output_xmp] =
                 preservable_delivery_tag_maps(
                     [
@@ -184,7 +187,7 @@ fn verify_output_embedded_metadata_with_discovery(
                         src_sidecar.as_deref().unwrap_or(src),
                         dst_sidecar.as_deref().unwrap_or(dst),
                     ],
-                    jpeg_archive,
+                    paired_jxl_custody,
                 )?;
             if src_sidecar.is_some() {
                 overlay_metadata(&mut src_tags, &source_xmp);
@@ -192,7 +195,7 @@ fn verify_output_embedded_metadata_with_discovery(
                 source_xmp.clear();
             }
             let mut reconstruction = None;
-            if jpeg_archive {
+            if paired_jxl_custody && source_format == FormatKind::Jpeg {
                 verify_jpeg_xmp_layers(
                     src,
                     dst,
@@ -284,14 +287,6 @@ fn verify_output_embedded_metadata_with_discovery(
             ),
         ))
     }
-}
-
-fn is_jpeg_archive_pair(src: &Path, dst: &Path) -> io::Result<bool> {
-    use crate::image::format_detect::{FormatKind, detect_true_format};
-    Ok(
-        detect_true_format(src).map_err(io::Error::other)? == FormatKind::Jpeg
-            && detect_true_format(dst).map_err(io::Error::other)? == FormatKind::Jxl,
-    )
 }
 
 fn verify_jpeg_xmp_layers(
@@ -752,9 +747,9 @@ fn preservable_tag_maps<const N: usize>(
 
 fn preservable_delivery_tag_maps(
     paths: [&Path; 4],
-    jpeg_archive: bool,
+    paired_jxl_custody: bool,
 ) -> io::Result<[BTreeMap<String, String>; 4]> {
-    if !jpeg_archive {
+    if !paired_jxl_custody {
         return preservable_tag_maps(paths);
     }
     let mut maps = metadata_tag_maps_with_exif_custody(
@@ -1110,7 +1105,7 @@ fn parse_metadata_records_for_requested_paths(
             "metadata response paths do not exactly match requested files",
         ));
     }
-    let mut allowed_warnings = BTreeMap::new();
+    let mut source_warning_custody = BTreeMap::new();
     if let Some([src, dst]) = pair {
         let record = |path: &Path| {
             records
@@ -1137,9 +1132,8 @@ fn parse_metadata_records_for_requested_paths(
                     super::MICROSOFT_PHOTO_URI_WARNING => "XMP:XMP",
                     _ => continue,
                 };
-                if matching_raw_metadata_payload(source, output, payload, [src, dst])? {
-                    allowed_warnings.insert(message.to_owned(), payload);
-                }
+                let matched = matching_raw_metadata_payload(source, output, payload, [src, dst])?;
+                source_warning_custody.insert(message.to_owned(), (payload, matched));
             }
         }
     }
@@ -1162,9 +1156,9 @@ fn parse_metadata_records_for_requested_paths(
                     .is_some_and(|text| !text.trim().is_empty());
             if file_warning
                 && pair.is_some_and(|pair| pair.contains(&Path::new(path)))
-                && let Some(payload) = diagnostic
-                    .as_str()
-                    .and_then(|message| allowed_warnings.get(super::exiftool_warning_text(message)))
+                && let Some((payload, true)) = diagnostic.as_str().and_then(|message| {
+                    source_warning_custody.get(super::exiftool_warning_text(message))
+                })
             {
                 tracing::info!(target: "mfb.metadata", source = path, payload, "{diagnostic}; original metadata payload preserved");
                 continue;
@@ -1203,6 +1197,15 @@ fn parse_metadata_records_for_requested_paths(
                     "embedded ICC profile has an invalid declared length. Byte-exact JPEG \
                      reconstruction does not prove color-profile renderability; the profile has not \
                      been repaired or discarded"
+                } else if pair.is_some_and(|paths| paths.contains(&Path::new(path)))
+                    && diagnostic.as_str().map(super::exiftool_warning_text)
+                        == Some(super::MICROSOFT_PHOTO_URI_WARNING)
+                {
+                    if source_warning_custody.contains_key(super::MICROSOFT_PHOTO_URI_WARNING) {
+                        "XMP namespace warning: complete matching original XMP packets could not be verified"
+                    } else {
+                        "XMP namespace warning: the paired source did not report this warning"
+                    }
                 } else {
                     "metadata extraction warning prevented complete preservation proof; \
                      metadata has not been repaired or discarded"
@@ -1662,6 +1665,53 @@ mod tests {
                 .is_err(),
                 "{index} {key}"
             );
+        }
+    }
+
+    #[test]
+    fn repeated_known_warning_on_managed_output_requires_exact_original_payload() {
+        for (warning, tag) in [
+            (
+                "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto [x2]",
+                "XMP:XMP",
+            ),
+            ("[minor] Unrecognized MakerNotes [x2]", "EXIF:EXIF"),
+        ] {
+            let pair = [Path::new("source.jxl"), Path::new("output.jxl")];
+            let mut records = serde_json::json!([
+                {"SourceFile":"source.jxl", "ExifTool:Warning":warning},
+                {"SourceFile":"output.jxl", "ExifTool:Warning":warning}
+            ]);
+            records[0][tag] = Value::from("base64:YWJj");
+            records[1][tag] = Value::from("base64:YWJj");
+            let parse = |records: &Value| {
+                parse_metadata_records_with_exif_custody(
+                    &serde_json::to_vec(records).unwrap(),
+                    Some(pair),
+                )
+            };
+            assert!(parse(&records).is_ok());
+            records[1][tag] = Value::from("base64:YWJk");
+            let error = parse(&records).unwrap_err();
+            if tag == "XMP:XMP" {
+                assert!(error.to_string().contains("matching original XMP packets"));
+                let mut output_only = records.clone();
+                output_only[0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("ExifTool:Warning");
+                assert!(
+                    parse(&output_only)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("paired source did not report")
+                );
+            }
+            records[1][tag] = Value::Null;
+            assert!(parse(&records).is_err());
+            records[1][tag] = Value::from("base64:YWJj");
+            records[1]["ExifTool:Copy1:Warning"] = Value::from("Unrelated extraction warning");
+            assert!(parse(&records).is_err());
         }
     }
 

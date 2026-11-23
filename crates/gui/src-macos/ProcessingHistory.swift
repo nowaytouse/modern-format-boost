@@ -614,6 +614,19 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
         }
         return true
     }
+    // Presentation evidence only; this does not authorize cleanup or retry.
+    var hasMixedDeliveryFacts: Bool {
+        succeeded > 0 && failed > 0 && unprocessed == 0 && photosVerified == succeeded
+            && processingCountTotal([encoded, originalDelivery?.photosVerified ?? 0]) == succeeded
+            && failedSourcesRetained == failed && failedSourcesVerified == failed
+            && failedSourceVerificationError == nil && primaryVerificationComplete == true
+            && primaryCleanupComplete && finalizationError == nil && !isDeferred && !isRetainedOnly
+    }
+    var workingCopyRetentionText: String? {
+        guard let count = failuresOutsideRetryInventory, count > 0, hasMixedDeliveryFacts else { return nil }
+        return localized("cleanup.retained_outside_retry_list", String(count))
+    }
+
     var allFailedSourcesEligibleForRetry: Bool {
         (failuresOutsideRetryInventory ?? 0) == 0 && failedSourcesRetained == failed
             && failedSourcesVerified == failed && failedSourceVerificationError == nil
@@ -1546,6 +1559,25 @@ private struct HistoryEntry {
         }) else { return nil }
         return processingCountTotal(fastDeliveries.map(\.sourceRetained))
     }
+    var hasMixedDeliveryFacts: Bool {
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure,
+              !fastDeliveryInvalid, !outputCleanupInvalid, !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
+              context?.mode == "fast-img", context?.dry_run == false, context?.shortest_path == true,
+              context?.inputs.count == 1, let summary, summary.valid, summary.img.complete, !summary.vid.active,
+              summary.img.exit_code == 1, summary.img.unprocessed == 0,
+              summary.integrity.state.map({ ["CLEAN", "WARNINGS"].contains($0) }) ?? true,
+              let finished, finished.outcome == "failed", finished.verification_unavailable == nil,
+              finished.photos_quarantine_blocked == nil,
+              finished.completed_with_file_errors == true || finished.error == "fast-img exited with code 1",
+              fastDeliveries.count == 1, let receipt = fastDeliveries.first, receipt.hasMixedDeliveryFacts,
+              FastImgDeliveryReceipt.samePath(receipt.sourceDirectory, context?.inputs.first),
+              context?.output.map({ FastImgDeliveryReceipt.samePath($0, receipt.outputDirectory) }) ?? true,
+              outputCleanups.count == 1, receipt.hasBlockedOutputCleanup(outputCleanups),
+              workerExecutions.values.allSatisfy({ $0.last?.state == "exited" && $0.last?.signal == nil && $0.last?.exit_code == 1 }),
+              [summary.img.succeeded, summary.img.skipped, summary.img.failed, summary.img.ignored] == receipt.counts
+        else { return false }
+        return true
+    }
     var hasPartialSuccess: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure, context?.dry_run == false,
               let summary, summary.valid, summary.img.complete, summary.vid.complete, !hasPending,
@@ -1588,7 +1620,7 @@ private struct HistoryEntry {
         if hasValidRetryReuse { return "retry.reused.title" }
         if confirmedPhotosQuarantine != nil { return "result.final_photos_quarantine_title" }
         if deliveryIsDeferred { return "result.delivery_deferred" }
-        if hasPartialSuccess { return "history.status.partial" }
+        if hasPartialSuccess || hasMixedDeliveryFacts { return "history.status.partial" }
         if retainedOnlySourceCount != nil { return "history.status.file_failures" }
         if finished?.outcome == "failed", context?.shortest_path == true,
            !fastDeliveryInvalid, fastDeliveries.contains(where: { $0.finalPhotosQuarantineCount != nil }) {
@@ -1622,7 +1654,10 @@ private struct HistoryEntry {
             .compactMap { $0 }.joined(separator: " · ")
     }
     var statusLabel: String {
-        localized(statusKey) + (auxiliaryAttention.isEmpty ? "" : " · " + auxiliaryAttention)
+        let label = hasMixedDeliveryFacts && fastDeliveries.count == 1
+            ? localized("result.mixed_delivery_facts", String(fastDeliveries[0].photosVerified), String(fastDeliveries[0].failed))
+            : localized(statusKey)
+        return label + (auxiliaryAttention.isEmpty ? "" : " · " + auxiliaryAttention)
     }
     var needsAttention: Bool {
         !["history.status.completed", "history.status.preview", "retry.reused.title", "retry.finalized.title",
@@ -1636,7 +1671,7 @@ private struct HistoryEntry {
         if cleanupRecovery != nil || cleanupRecoveryInvalid { return .systemOrange }
         if hasVerificationFailure { return .systemRed }
         if deliveryIsDeferred || confirmedPhotosQuarantine != nil || independentVerificationUnavailable != nil { return .systemOrange }
-        if hasPartialSuccess || retainedOnlySourceCount != nil { return .systemOrange }
+        if hasPartialSuccess || hasMixedDeliveryFacts || retainedOnlySourceCount != nil { return .systemOrange }
         if finished?.outcome == "failed" || hasFailures { return .systemRed }
         return needsAttention ? .systemOrange : .labelColor
     }
@@ -4447,6 +4482,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         if let error = entry.finished?.error { lines += ["", row("error", error)] }
         lines += entry.issues
         if let summary = entry.summary, !summary.failed_files.isEmpty { lines += ["", localized("history.failed_files")] + summary.failed_files }
+        if entry.hasMixedDeliveryFacts, let text = entry.fastDeliveries.first?.workingCopyRetentionText { lines += ["", text] }
         for receipt in entry.outputCleanups where receipt.needsAttention { lines += ["", receipt.detailText(privacy: true)] }
         if entry.historicalOutputCleanupInvalid { lines += ["", localized("cleanup.historical.invalid")] }
         else if let historical = entry.historicalOutputCleanup, historical.needsAttention { lines += ["", historical.detail(privacy: true)] }
@@ -7135,6 +7171,27 @@ func runProcessingHistorySelfTests() throws {
     let quarantineCounts = try payload("MFB_HISTORY_SUMMARY", quarantineSummary)
     let quarantineCleanup = try payload("MFB_HISTORY_OUTPUT_CLEANUP", ["schema_version": 1, "run_id": deferredRun,
         "output_path": "/synthetic/output", "outcome": "verification_blocked", "error": NSNull()])
+    var mixedReceipt = deferredReceipt
+    mixedReceipt.merge(["succeeded": 2, "failed": 69, "unprocessed": 0, "encoded": 2,
+        "photos_verified": 2, "source_retained": NSNull(), "failed_sources_retained": 69,
+        "failed_sources_verified": 69, "failures_outside_retry_inventory": 3,
+        "retention_unknown_reason": "incomplete retry inventory", "primary_cleanup_complete": true,
+        "photos_delivery_deferred": false, "finalization_error": NSNull()] as [String: Any]) { _, new in new }
+    var exactMixedSummary = deferredSummary
+    exactMixedSummary["img"] = ["active": true, "succeeded": 2, "skipped": 0, "ignored": 0,
+                                "failed": 69, "unprocessed": 0, "exit_code": 1]
+    let exactMixedEnd = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "run_id": deferredRun,
+        "outcome": "failed", "error": "fast-img exited with code 1"])
+    let exactMixed = try parsed([deferredContext, quarantineCleanup,
+        payload("MFB_HISTORY_FAST_IMG_RESULT", mixedReceipt), payload("MFB_HISTORY_SUMMARY", exactMixedSummary), exactMixedEnd]).entries[0]
+    try require(exactMixed.hasMixedDeliveryFacts && exactMixed.statusColor == .systemOrange
+        && exactMixed.statusLabel.contains(localized("result.mixed_delivery_facts", "2", "69"))
+        && exactMixed.fastDeliveries.first?.allFailedSourcesEligibleForRetry == false,
+        "History lost mixed delivery evidence or granted retry eligibility")
+    mixedReceipt["failed_sources_verified"] = 68
+    let unprovenMixed = try parsed([deferredContext, quarantineCleanup,
+        payload("MFB_HISTORY_FAST_IMG_RESULT", mixedReceipt), payload("MFB_HISTORY_SUMMARY", exactMixedSummary), exactMixedEnd]).entries[0]
+    try require(!unprovenMixed.hasMixedDeliveryFacts, "History overstated unverified retained originals")
     let quarantineEnd = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "run_id": deferredRun,
         "outcome": "failed", "error": "synthetic blocked delivery", "photos_quarantine_blocked": 4])
     let blocked = try parsed([deferredContext, quarantineCleanup, quarantinedDelivery, quarantineCounts, quarantineEnd]).entries[0]

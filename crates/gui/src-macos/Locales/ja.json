@@ -71,6 +71,8 @@
   "cleanup.recovery.already_absent": "作業コピーはすでにありません",
   "cleanup.recovery.residual": "作業コピーに保持された項目があります",
   "cleanup.recovery.failed": "作業コピーの整理は未完了です",
+  "cleanup.retained_outside_retry_list": "作業コピーを保持しました。失敗した元ファイル %@ 件は保存済みの再試行リストに含まれていません。",
+  "result.mixed_delivery_facts": "%@ 件を写真に取り込み済み。失敗した %@ 件は元ファイルの保持を確認済み",
   "cleanup.recovery.verification_blocked": "検証により作業コピーの整理を停止しました",
   "cleanup.recovery.unconfirmed": "整理結果を確認できませんでした",
   "cleanup.recovery.stopped": "整理の再開を中止しました",

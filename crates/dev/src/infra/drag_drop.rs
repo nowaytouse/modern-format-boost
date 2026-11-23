@@ -1498,13 +1498,24 @@ fn fast_img_counted_failure_receipt(
     Some(report)
 }
 
+// Older workers omit this optional count. A malformed count is never evidence for cleanup.
+fn failures_outside_checkpoint(report: &Value, failed: usize) -> Option<usize> {
+    match report.get("failures_outside_retry_inventory") {
+        None | Some(Value::Null) => Some(0),
+        Some(value) => usize::try_from(value.as_u64()?)
+            .ok()
+            .filter(|n| *n <= failed),
+    }
+}
+
 fn fast_img_file_failure_receipt(
     text: &str,
     stats: &crate::infra::process_stream::ProcessorStats,
 ) -> Option<Value> {
     let report = fast_img_counted_failure_receipt(text, stats)?;
     let count = |key| usize::try_from(report.get(key)?.as_u64()?).ok();
-    if count("failed_sources_retained") != Some(stats.failed)
+    if failures_outside_checkpoint(&report, stats.failed)? != 0
+        || count("failed_sources_retained") != Some(stats.failed)
         || count("failed_sources_verified") != Some(stats.failed)
         || !report.get("finalization_error")?.is_null()
         || !report.get("retention_unknown_reason")?.is_null()
@@ -1559,7 +1570,7 @@ fn fast_img_delivery_matches(
 }
 
 /// Display evidence only; does not authorize output cleanup or retry.
-pub fn fast_img_unverified_failure_presentation(
+pub fn fast_img_partial_delivery_presentation(
     text: &str,
     stats: &crate::infra::process_stream::ProcessorStats,
     source: &Path,
@@ -1613,6 +1624,9 @@ pub fn fast_img_unverified_failure_presentation(
     {
         return false;
     }
+    let Some(outside_checkpoint) = failures_outside_checkpoint(&report, stats.failed) else {
+        return false;
+    };
     let retention_unverified = retained.as_u64() != Some(failed)
         || verified.as_u64() != Some(failed)
         || !reason.is_null()
@@ -1625,7 +1639,7 @@ pub fn fast_img_unverified_failure_presentation(
             == Some(succeeded)
         && report["photos_delivery_deferred"].as_bool() == Some(false)
         && finalization.is_null()
-        && retention_unverified
+        && (retention_unverified || outside_checkpoint > 0)
 }
 
 pub fn fast_img_retained_only_verified(
