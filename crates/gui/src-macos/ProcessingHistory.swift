@@ -553,11 +553,15 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
 
     func confirmsEmptyDiscovery(counts: [Int?], pending: Int?, selection: String?, runID: String?,
                                 cleanups: [OutputCleanupReceipt]) -> Bool {
-        guard hasEmptyDiscovery, counts == self.counts, pending == 0, let runID, let selection,
-              let sourceDirectory, let outputDirectory, Self.absolute(selection),
-              Self.absolute(sourceDirectory), Self.absolute(outputDirectory),
-              cleanups.count == 1, let cleanup = cleanups.first, cleanup.run_id == runID,
-              cleanup.outcome == "not_requested", Self.samePath(cleanup.output_path, outputDirectory) else { return false }
+        guard matchesEmptySelection(selection), counts == self.counts, pending == 0, let runID,
+              let outputDirectory, Self.absolute(outputDirectory), cleanups.count == 1,
+              let cleanup = cleanups.first, cleanup.run_id == runID else { return false }
+        return cleanup.outcome == "not_requested" && Self.samePath(cleanup.output_path, outputDirectory)
+    }
+
+    func matchesEmptySelection(_ selection: String?) -> Bool {
+        guard hasEmptyDiscovery, let selection, Self.absolute(selection),
+              let sourceDirectory, Self.absolute(sourceDirectory) else { return false }
         return Self.samePath(selection, sourceDirectory)
             || (ignored == 1 && Self.samePath((selection as NSString).deletingLastPathComponent, sourceDirectory))
     }
@@ -1631,6 +1635,28 @@ private struct HistoryEntry {
         return finished?.verification_unavailable
     }
 
+    // A single file worker reports its containing directory. Bind it to the selected file
+    // through this run's independent verifier and child invocation before accepting the receipt.
+    func verifiedSingleFileDelivery(_ receipt: FastImgDeliveryReceipt) -> Bool {
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, inputPlan == nil, inputVerifications.isEmpty,
+              let context, let runID = context.run_id, context.mode == "fast-img", !context.dry_run,
+              context.inputs.count == 1, let selected = context.inputs.first, FastImgDeliveryReceipt.absolute(selected),
+              FastImgDeliveryReceipt.samePath((selected as NSString).deletingLastPathComponent, receipt.sourceDirectory),
+              !invocationEvidenceInvalid, !workerExecutionEvidenceInvalid, invocations.count == 1,
+              let launch = invocations.first, launch.run_id == runID, launch.pipeline == "img",
+              launch.arguments.first == "fast-img", FastImgDeliveryReceipt.samePath(launch.arguments.dropFirst().first, selected),
+              workerExecutions.count == 1, let exit = workerExecutions[launch.invocation_id]?.last,
+              exit.state == "exited", exit.exit_code == 0, exit.signal == nil,
+              let proof = verification, proof.valid, !proof.has_warnings, proof.issue_count == 0,
+              proof.count_status == "MATCH", proof.source_count == 1, proof.failed_count == 0,
+              FastImgDeliveryReceipt.samePath(proof.source_path, selected),
+              FastImgDeliveryReceipt.samePath(proof.output_path, receipt.outputDirectory),
+              receipt.primaryVerificationComplete == true, receipt.primaryCleanupComplete,
+              receipt.unprocessed == 0, receipt.failed == 0, receipt.ignored == 0,
+              proof.optimized_count == receipt.succeeded, proof.skipped_count == receipt.skipped else { return false }
+        return processingCountTotal([receipt.succeeded, receipt.skipped]) == 1
+    }
+
     var hasConfirmedEmptyDiscovery: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty,
               let context, context.mode == "fast-img", !context.dry_run, context.inputs.count == 1,
@@ -2310,7 +2336,9 @@ private enum HistoryStore {
                         && FastImgDeliveryReceipt.samePath($0.output, output) })
                 }
                 return entry.context?.inputs.count != 1
-                    || !FastImgDeliveryReceipt.samePath(entry.context?.inputs.first, source)
+                    || !(FastImgDeliveryReceipt.samePath(entry.context?.inputs.first, source)
+                        || receipt.matchesEmptySelection(entry.context?.inputs.first)
+                        || entry.verifiedSingleFileDelivery(receipt))
                     || entry.context?.output.map({ !FastImgDeliveryReceipt.samePath($0, output) }) == true
             }) {
                 entries[index].fastDeliveries.removeAll()
@@ -2321,7 +2349,8 @@ private enum HistoryStore {
             let contextOutput = entries[index].context?.output
             let verifiedOutput = entries[index].verification?.output_path
             let outputs = planOutputs ?? [verifiedOutput ?? contextOutput].compactMap { $0 }
-            let retainedOnlyOutputs = entries[index].fastDeliveries.filter(\.isRetainedOnly).compactMap(\.outputDirectory)
+            let noCleanupOutputs = entries[index].fastDeliveries
+                .filter { $0.isRetainedOnly || $0.hasEmptyDiscovery }.compactMap(\.outputDirectory)
             let conflictingOutputs: Bool
             if planOutputs == nil, let contextOutput, let verifiedOutput {
                 conflictingOutputs = Data(contextOutput.utf8) != Data(verifiedOutput.utf8)
@@ -2329,7 +2358,7 @@ private enum HistoryStore {
             if entries[index].outputCleanups.contains(where: { receipt in
                 if conflictingOutputs { return true }
                 if receipt.outcome == "not_requested",
-                   retainedOnlyOutputs.contains(where: { FastImgDeliveryReceipt.samePath($0, receipt.output_path) }) {
+                   noCleanupOutputs.contains(where: { FastImgDeliveryReceipt.samePath($0, receipt.output_path) }) {
                     return false
                 }
                 return entry.context?.shortest_path != (receipt.outcome != "not_requested")
@@ -7773,14 +7802,54 @@ func runProcessingHistorySelfTests() throws {
         let ordinaryInvocation = try bound("MFB_HISTORY_INVOCATION", launchValue.merging(["arguments": [
             "fast-img", source.path, "--output", output.path, "--shortest-path", "--strategy", "jxl",
         ]]) { _, new in new })
-        let ordinaryDelivery = try bound("MFB_HISTORY_FAST_IMG_RESULT", [
+        let noEligibleDelivery = try bound("MFB_HISTORY_FAST_IMG_RESULT", [
+            "schema_version": 1, "source_directory": source.deletingLastPathComponent().path, "output_directory": output.path,
+            "discovery_outcome": "no_eligible_sources", "succeeded": 0, "skipped": 0, "ignored": 1, "failed": 0,
+            "unprocessed": 0, "encoded": 0, "photos_verified": 0, "source_retained": 0, "failed_sources_retained": 0,
+            "failed_sources_verified": 0, "failed_source_verification_error": NSNull(), "retention_unknown_reason": NSNull(),
+            "primary_cleanup_complete": false, "primary_verification_complete": false, "retained_only_complete": false,
+            "photos_delivery_deferred": false, "finalization_error": NSNull(),
+        ])
+        let noCleanupEvent = try bound("MFB_HISTORY_OUTPUT_CLEANUP", verificationBlocked.merging([
+            "output_path": output.path, "outcome": "not_requested",
+        ]) { _, new in new })
+        let noEligibleSummary = try bound("MFB_HISTORY_SUMMARY", summaryValue.merging(["img": [
+            "active": true, "succeeded": 0, "skipped": 0, "ignored": 1, "failed": 0, "unprocessed": 0, "exit_code": 0,
+        ]]) { _, new in new })
+        let discoveryEvents = try [ordinaryContext, ordinaryInvocation, bound("MFB_HISTORY_WORKER_EXECUTION", spawnValue),
+            bound("MFB_HISTORY_WORKER_EXECUTION", exitValue.merging(["exit_code": 0]) { _, new in new }),
+            noEligibleDelivery]
+        let noEligible = try parsed(discoveryEvents + [noCleanupEvent, noEligibleSummary, end]).entries[0]
+        let missingCleanup = try parsed(discoveryEvents + [noEligibleSummary, end]).entries[0]
+        try require(noEligible.statusKey == "result.no_eligible_sources" && !noEligible.needsAttention
+                    && noEligible.cleanupRecoverySelection == nil && missingCleanup.statusKey == "result.unconfirmed",
+                    "A no-op single-file scan lost its parent-scoped receipt or claimed unobserved cleanup")
+        let ordinaryDeliveryFields: [String: Any] = [
             "schema_version": 1, "source_directory": source.path, "output_directory": output.path,
             "succeeded": 2, "skipped": 0, "ignored": 1, "failed": 0, "unprocessed": 0, "encoded": 2,
             "photos_verified": 2, "source_retained": 0, "primary_cleanup_complete": true,
             "primary_verification_complete": true, "photos_delivery_deferred": false,
             "failed_sources_retained": 0, "failed_sources_verified": 0, "failed_source_verification_error": NSNull(),
             "retention_unknown_reason": NSNull(), "finalization_error": NSNull(),
-        ])
+        ]
+        let ordinaryDelivery = try bound("MFB_HISTORY_FAST_IMG_RESULT", ordinaryDeliveryFields)
+        let oneFile = try bound("MFB_HISTORY_FAST_IMG_RESULT", ordinaryDeliveryFields.merging([
+            "source_directory": source.deletingLastPathComponent().path, "succeeded": 1, "ignored": 0,
+            "encoded": 1, "photos_verified": 1,
+        ]) { _, new in new })
+        let oneProof = preservedReceipt.merging(["source_path": source.path, "output_path": output.path,
+            "source_count": 1, "optimized_count": 1, "failed_count": 0, "skipped_count": 0,
+            "source_remaining_count": 0, "failed_sources_verified": NSNull(), "count_status": "MATCH",
+            "has_warnings": false, "issue_count": 0]) { _, new in new }
+        let oneEvents = Array(discoveryEvents.dropLast()) + [oneFile]
+        for (replacement, accepts): ([String: Any], Bool) in [([:], true),
+            (["source_path": source.deletingLastPathComponent().appendingPathComponent("sibling.png").path], false),
+            (["output_path": output.path + "-other"], false), (["issue_count": 1], false)] {
+            let proof = try bound("MFB_HISTORY_VERIFICATION", oneProof.merging(replacement) { _, new in new })
+            let entry = try parsed(oneEvents + [proof, end]).entries[0]
+            try require(entry.fastDeliveryInvalid != accepts && entry.fastDeliveries.count == (accepts ? 1 : 0),
+                        "Single-file history failed to bind the selected source and output to the independent verifier")
+        }
         let ordinary = try parsed([ordinaryContext, ordinaryInvocation, ordinaryDelivery, recoveryVerification,
                                    recoveryOutput, end]).entries[0]
         try require(ordinary.cleanupRecoverySelection == recoveryEntry.cleanupRecoverySelection,
