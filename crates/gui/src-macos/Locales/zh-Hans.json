@@ -825,6 +825,7 @@
   "result.review_details": "请查看处理详情或历史记录。",
   "result.skipped_count": "跳过 %@ 项",
   "result.stopped_with_error": "因错误停止",
+  "result.no_eligible_sources": "没有符合条件的文件",
   "result.unconfirmed": "结果无法完整确认 · 请查看处理记录",
   "result.unfinished": "处理已结束，仍有未完成项目",
   "result.unknown": "未知",

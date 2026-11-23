@@ -6185,11 +6185,21 @@ private struct BatchResults {
         return true
     }
 
+    func emptyDiscoveryIsConfirmed(selection: String?, runID: String?, processExit: Int32?, exitedNormally: Bool) -> Bool {
+        guard exitedNormally, processExit == 0, workerExitCodes == [0], !hasFailure, !isIncomplete,
+              !mandatoryEvidenceConflict, integrityIssueCount == nil, unavailableVerification == nil,
+              photosQuarantineBlocked == nil, completedFileErrors == nil, !fastDeliveryInvalid,
+              !outputCleanupInvalid, fastDeliveries.count == 1, let receipt = fastDeliveries.first,
+              totals.count == 1, let img = totals["img"], pendingTotals.count == 1 else { return false }
+        return receipt.confirmsEmptyDiscovery(counts: img, pending: pendingTotals["img"] ?? nil,
+            selection: selection, runID: runID, cleanups: outputCleanups)
+    }
+
     func fastDeliveryIsConfirmed(photos: Bool, processExit: Int32?, exitedNormally: Bool = true) -> Bool {
         guard let processExit, exitedNormally, !mandatoryEvidenceConflict,
               photosQuarantineBlocked == nil, unavailableVerification == nil,
               !isIncomplete, !fastDeliveryInvalid, !fastDeliveries.isEmpty,
-              totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
+              !fastDeliveries.contains(where: \.hasEmptyDiscovery), totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
               let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
               pending == 0, pending == fastDeliveryCount(\.unprocessed),
               fastDeliveries.allSatisfy({ (!photos || ($0.failuresOutsideRetryInventory ?? 0) == 0)
@@ -10821,6 +10831,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             updateLogPresentation()
             return
         }
+        let emptyDiscovery = expectsFastDelivery && host.controlState != "cancelled"
+            && batchResults.emptyDiscoveryIsConfirmed(selection: lastRequest?.targetPath,
+                runID: workerExecution.singleSuccessfulImageRunID, processExit: terminalExit, exitedNormally: normalExit)
         let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: terminalExit,
             exitedNormally: normalExit)
         let mixedFacts = host.controlState != "cancelled" && batchResults.mixedDeliveryFacts(photos: photos,
@@ -10857,7 +10870,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             logView.textStorage?.setAttributedString(privacyEnabled ? privateLogPresentation : fullLogPresentation)
         }
         let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
-            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !mixedFacts && !deferred && !quarantineBlocked)
+            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !emptyDiscovery && !mixedFacts && !deferred && !quarantineBlocked)
             || (processEndedWithError && batchResults.totals.isEmpty)
         let countsNeedReview = normalExit && !batchResults.hasCompleteCountReport
             && !batchResults.fastDeliveryInvalid
@@ -10875,6 +10888,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if countsNeedReview { title = localized("result.counts_need_review") }
         else if preparationStopped { title = localized("result.photos_preparation_stopped") }
         else if uncertain { title = localized("result.unconfirmed") }
+        else if emptyDiscovery { title = localized("result.no_eligible_sources") }
         else if deferred { title = localized("result.delivery_deferred") }
         else if quarantineBlocked { title = localized("result.final_photos_quarantine_title") }
         else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
@@ -10953,6 +10967,10 @@ private final class AppController: NSObject, NSWindowDelegate {
                 batchOverviewCleanup.isHidden = !logDetailsExpanded
             }
         }
+        if emptyDiscovery {
+            batchOverviewDelivery.isHidden = true
+            batchOverviewCleanup.isHidden = true
+        }
         if !originalDelivery.isEmpty {
             batchOverviewDelivery.stringValue += "\n" + originalDelivery.map(\.summary).joined(separator: "\n")
             batchOverviewDelivery.isHidden = false
@@ -10978,6 +10996,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if countsNeedReview { setLocalizedStatus("result.counts_need_review") }
         else if preparationStopped { setLocalizedStatus("result.photos_preparation_stopped") }
         else if uncertain { setLocalizedStatus("result.unconfirmed") }
+        else if emptyDiscovery { setLocalizedStatus("result.no_eligible_sources") }
         else if deferred { setLocalizedStatus("result.delivery_deferred") }
         else if quarantineBlocked { setLocalizedStatus("result.final_photos_quarantine_title") }
         else if mixedFacts { setStatus(title) }
@@ -11576,6 +11595,33 @@ private final class AppController: NSObject, NSWindowDelegate {
         func line(_ fields: [String: Any]) throws -> String {
             "MFB_FAST_IMG_RESULT=" + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
         }
+        let emptySource = "/synthetic/discovery"
+        let emptyBatch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":1,"unprocessed":0,"exit_code":0}"#
+        let emptyCleanup = #"MFB_OUTPUT_CLEANUP={"schema_version":1,"run_id":"empty-run","output_path":"/synthetic/discovery_optimized","outcome":"not_requested","removed_files":null,"already_absent_files":null,"pruned_directories":null,"error":null}"#
+        var emptyReceipt: [String: Any] = ["schema_version": 1, "discovery_outcome": "no_eligible_sources",
+            "source_directory": emptySource, "output_directory": emptySource + "_optimized",
+            "succeeded": 0, "skipped": 0, "ignored": 1, "failed": 0, "unprocessed": 0, "encoded": 0,
+            "photos_verified": 0, "source_retained": 0, "failed_sources_retained": 0, "failed_sources_verified": 0,
+            "failed_source_verification_error": NSNull(), "finalization_error": NSNull(), "retention_unknown_reason": NSNull(),
+            "primary_verification_complete": false, "primary_cleanup_complete": false, "retained_only_complete": false,
+            "photos_delivery_deferred": false]
+        var empty = BatchResults()
+        _ = empty.ingest(emptyBatch)
+        _ = try empty.ingestFastDelivery(line(emptyReceipt))
+        func confirms(_ result: BatchResults, selection: String = "/synthetic/discovery/animation.png",
+                      runID: String = "empty-run", normal: Bool = true) -> Bool {
+            result.emptyDiscoveryIsConfirmed(selection: selection, runID: runID, processExit: 0, exitedNormally: normal)
+        }
+        guard !confirms(empty) else { throw HostError(message: "Empty discovery accepted missing cleanup scope") }
+        _ = empty.ingestOutputCleanup(emptyCleanup)
+        guard confirms(empty), !confirms(empty, selection: "/synthetic/elsewhere/animation.png"),
+              !confirms(empty, runID: "different-run"), !confirms(empty, normal: false),
+              !empty.fastDeliveryIsConfirmed(photos: true, processExit: 0) else {
+            throw HostError(message: "Empty discovery did not distinguish its attributed scan from delivery")
+        }
+        emptyReceipt["primary_cleanup_complete"] = true
+        _ = try empty.ingestFastDelivery(line(emptyReceipt))
+        guard !confirms(empty) else { throw HostError(message: "Contradictory cleanup accepted as an empty scan") }
         var reports = BatchResults()
         _ = reports.ingest(batch)
         guard try reports.ingestFastDelivery("ERR: " + line(receipt)),

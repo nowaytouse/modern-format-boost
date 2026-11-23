@@ -825,6 +825,7 @@
   "result.review_details": "Review processing details or history.",
   "result.skipped_count": "%@ skipped",
   "result.stopped_with_error": "Stopped with an error",
+  "result.no_eligible_sources": "No eligible files",
   "result.unconfirmed": "Results not fully confirmed · Review processing history",
   "result.unfinished": "Processing ended with unfinished items",
   "result.unknown": "unknown",

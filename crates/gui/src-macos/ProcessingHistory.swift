@@ -537,6 +537,7 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
     let failedSourceVerificationError: String?
     let failedSourceProof: FailedSourceProof?
     let retentionUnknownReason: String?
+    let discoveryOutcome: String?
     let primaryCleanupComplete: Bool
     let finalizationError: String?
     let photosDeliveryDeferred: Bool?
@@ -548,6 +549,19 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
     let outputDirectory: String?
 
     var counts: [Int?] { [succeeded, skipped, failed, ignored] }
+    var hasEmptyDiscovery: Bool { discoveryOutcome == "no_eligible_sources" }
+
+    func confirmsEmptyDiscovery(counts: [Int?], pending: Int?, selection: String?, runID: String?,
+                                cleanups: [OutputCleanupReceipt]) -> Bool {
+        guard hasEmptyDiscovery, counts == self.counts, pending == 0, let runID, let selection,
+              let sourceDirectory, let outputDirectory, Self.absolute(selection),
+              Self.absolute(sourceDirectory), Self.absolute(outputDirectory),
+              cleanups.count == 1, let cleanup = cleanups.first, cleanup.run_id == runID,
+              cleanup.outcome == "not_requested", Self.samePath(cleanup.output_path, outputDirectory) else { return false }
+        return Self.samePath(selection, sourceDirectory)
+            || (ignored == 1 && Self.samePath((selection as NSString).deletingLastPathComponent, sourceDirectory))
+    }
+
     var isDeferred: Bool { photosDeliveryDeferred == true }
     var isRetainedOnly: Bool { retainedOnlyComplete == true }
     var isValid: Bool {
@@ -555,6 +569,15 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
               let total = processingCountTotal(counts + [unprocessed]),
               let capacity = processingCountTotal([succeeded, unprocessed]),
               encoded >= 0, encoded <= capacity, photosVerified >= 0, photosVerified <= capacity else { return false }
+        if discoveryOutcome != nil {
+            guard hasEmptyDiscovery, succeeded == 0, failed == 0, skipped == 0, unprocessed == 0,
+                  encoded == 0, photosVerified == 0, sourceRetained == 0,
+                  primaryVerificationComplete == false, !primaryCleanupComplete,
+                  photosDeliveryDeferred == false, retainedOnlyComplete == false,
+                  finalizationError == nil, retentionUnknownReason == nil, photosQuarantineBlocked == nil,
+                  originalDelivery == nil, failedSourcesRetained == 0, failedSourcesVerified == 0,
+                  failedSourceProof == nil, failedSourceVerificationError == nil else { return false }
+        }
         if let original = originalDelivery {
             guard original.photosVerified > 0, original.photosVerified <= photosVerified,
                   (0...original.photosVerified).contains(original.sourceCleanupConfirmed),
@@ -1608,6 +1631,23 @@ private struct HistoryEntry {
         return finished?.verification_unavailable
     }
 
+    var hasConfirmedEmptyDiscovery: Bool {
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty,
+              let context, context.mode == "fast-img", !context.dry_run, context.inputs.count == 1,
+              finished?.outcome == "completed", finished?.error == nil, let runID = context.run_id,
+              let summary, summary.valid, summary.img.complete, summary.img.exit_code == 0, !summary.vid.active,
+              summary.integrity.state == nil, summary.integrity.issue_count == nil,
+              verification == nil, inputVerifications.isEmpty, !outputCleanupInvalid,
+              !fastDeliveryInvalid, fastDeliveries.count == 1, let receipt = fastDeliveries.first,
+              !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
+              invocations.count == 1, let invocation = invocations.first, invocation.pipeline == "img",
+              invocation.run_id == runID, workerExecutions.count == 1,
+              let exit = workerExecutions[invocation.invocation_id]?.last, exit.state == "exited",
+              exit.run_id == runID, exit.exit_code == 0, exit.signal == nil else { return false }
+        return receipt.confirmsEmptyDiscovery(counts: [summary.img.succeeded, summary.img.skipped, summary.img.failed, summary.img.ignored],
+            pending: summary.img.unprocessed, selection: context.inputs.first, runID: runID, cleanups: outputCleanups)
+    }
+
     var statusKey: String {
         if let receipt = recoveryCleanupReceipt { return "cleanup.recovery.\(receipt.outcome)" }
         if cleanupRecovery != nil || cleanupRecoveryInvalid {
@@ -1616,6 +1656,8 @@ private struct HistoryEntry {
         if hasVerificationFailure { return "result.unconfirmed" }
         if finished?.outcome == "cancelled" { return "history.status.cancelled" }
         if independentVerificationUnavailable != nil { return "result.independent_verification.title" }
+        if hasConfirmedEmptyDiscovery { return "result.no_eligible_sources" }
+        if fastDeliveries.contains(where: \.hasEmptyDiscovery) { return "result.unconfirmed" }
         if hasValidRetryFinalization { return "retry.finalized.title" }
         if hasValidRetryReuse { return "retry.reused.title" }
         if confirmedPhotosQuarantine != nil { return "result.final_photos_quarantine_title" }
@@ -1660,7 +1702,7 @@ private struct HistoryEntry {
         return label + (auxiliaryAttention.isEmpty ? "" : " · " + auxiliaryAttention)
     }
     var needsAttention: Bool {
-        !["history.status.completed", "history.status.preview", "retry.reused.title", "retry.finalized.title",
+        !["history.status.completed", "history.status.preview", "result.no_eligible_sources", "retry.reused.title", "retry.finalized.title",
           "cleanup.recovery.removed", "cleanup.recovery.already_absent"].contains(statusKey)
             || hasVerificationWarnings || hasCleanupAttention || hasOutputStorageAttention
     }

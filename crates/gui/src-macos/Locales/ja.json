@@ -825,6 +825,7 @@
   "result.review_details": "処理の詳細または履歴を確認してください。",
   "result.skipped_count": "%@ 件スキップ",
   "result.stopped_with_error": "エラーにより停止",
+  "result.no_eligible_sources": "対象ファイルはありません",
   "result.unconfirmed": "結果を完全に確認できません · 処理履歴を確認してください",
   "result.unfinished": "処理終了、未完了の項目があります",
   "result.unknown": "不明",
