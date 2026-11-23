@@ -1412,7 +1412,10 @@ mod tests {
         ));
         std::fs::write(&output, bytes)?;
         let [late, preserved] = preservable_tag_maps([source.as_path(), output.as_path()])?;
-        assert!(preserve_source_mismatches(&late, &preserved).is_empty());
+        assert_eq!(
+            preserve_source_mismatches(&late, &preserved),
+            Vec::<String>::new()
+        );
         Ok(())
     }
 

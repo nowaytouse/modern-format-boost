@@ -320,8 +320,8 @@ fn fast_img_avif_requires_lossless_color_and_alpha_frames() -> anyhow::Result<()
     }
     let dir = tempfile::tempdir()?;
     let image = image::RgbaImage::from_fn(16, 16, |x, y| {
-        let x = u8::try_from(x * 15).unwrap();
-        let y = u8::try_from(y * 15).unwrap();
+        let x = u8::try_from(x * 15).expect("16-pixel fixture width");
+        let y = u8::try_from(y * 15).expect("16-pixel fixture height");
         image::Rgba([x, y, x ^ y, x.wrapping_add(y)])
     });
     let rgba = dir.path().join("alpha-pattern.png");

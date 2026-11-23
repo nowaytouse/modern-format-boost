@@ -538,7 +538,7 @@ mod tests {
             directory.path(),
             &[lossy_path.clone(), lossless_path.clone()],
         )?;
-        assert!(scan.probe_failures.is_empty());
+        assert_eq!(scan.probe_failures, Vec::<(PathBuf, String)>::new());
         assert_eq!(scan.candidates.len(), 1);
         assert_eq!(scan.candidates[0].path, lossy_path);
         assert_eq!(scan.lossless_sources.len(), 1);
