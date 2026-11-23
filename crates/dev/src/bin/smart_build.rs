@@ -531,7 +531,13 @@ fn get_newest_binary_source_mtime(
         &project_root.join("vendor/jxl-jbr"),
         RUST_SOURCE_EXTENSIONS,
     ));
-    for config in ["Cargo.toml", "Cargo.lock", RUST_TOOLCHAIN_FILE] {
+    for config in [
+        "Cargo.toml",
+        "Cargo.lock",
+        RUST_TOOLCHAIN_FILE,
+        ".cargo/config.toml",
+        ".cargo/config",
+    ] {
         newest = newest.max(get_mtime(&project_root.join(config)));
     }
     newest
@@ -2214,6 +2220,101 @@ fn app_bundle_source_baseline(project_root: &Path) -> Result<Vec<f64>> {
         .collect()
 }
 
+// Cargo's top-level .d is a single Make rule for this exact output. Cargo
+// escapes spaces in prerequisites. An unexpected rule format yields no proof.
+fn cargo_rule_paths(rule: &str, artifact: &Path) -> Option<Vec<PathBuf>> {
+    let target = artifact.to_str()?;
+    let rule = rule
+        .strip_suffix('\n')
+        .unwrap_or(rule)
+        .trim_end_matches('\r');
+    if rule.contains(['\r', '\n']) {
+        return None;
+    }
+    let rhs = rule
+        .strip_prefix(&format!("{target}: "))
+        .or_else(|| rule.strip_prefix(&format!("{}: ", target.replace(' ', "\\ "))))?;
+    let mut paths = Vec::new();
+    let mut word = String::new();
+    let mut chars = rhs.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&' ') => {
+                chars.next();
+                word.push(' ');
+            }
+            ' ' | '\t' if !word.is_empty() => paths.push(PathBuf::from(std::mem::take(&mut word))),
+            ' ' | '\t' => {}
+            _ => word.push(c),
+        }
+    }
+    if !word.is_empty() {
+        paths.push(PathBuf::from(word));
+    }
+    Some(paths)
+}
+
+// The broad scan includes other executables in path dependencies. For GUI
+// publication Cargo has just checked every bundled target. Its freshly emitted
+// .d can identify the actual inputs without waiving any source or manifest check.
+fn cargo_inputs_current(root: &Path, project: &str, binary: &str) -> Option<bool> {
+    let root = root.canonicalize().ok()?;
+    let artifact = get_binary_path(&root, binary);
+    let binary_meta = artifact.symlink_metadata().ok()?;
+    let built = binary_meta.modified().ok()?;
+    let depfile = artifact.with_extension("d");
+    let dep_meta = depfile.symlink_metadata().ok()?;
+    if !binary_meta.is_file() || !dep_meta.is_file() || dep_meta.modified().ok()? < built {
+        return None;
+    }
+    let rule = fs::read_to_string(depfile).ok()?;
+    let mut paths = cargo_rule_paths(&rule, &artifact)?;
+    let entry = if project == "crates/dev" {
+        root.join(project)
+            .join("src/bin")
+            .join(format!("{binary}.rs"))
+    } else {
+        root.join(project).join("src/main.rs")
+    };
+    if !paths.contains(&entry) {
+        return None;
+    }
+    // Cargo omits manifests and configuration files from exported dep-info.
+    paths.extend([root.join("Cargo.toml"), root.join("Cargo.lock")]);
+    for dir in std::iter::once(project)
+        .chain(direct_workspace_dependencies(project).iter().copied())
+        .chain(std::iter::once("vendor/jxl-jbr"))
+    {
+        paths.push(root.join(dir).join("Cargo.toml"));
+        let script = root.join(dir).join("build.rs");
+        if script.try_exists().ok()? {
+            paths.push(script);
+        }
+    }
+    for config in [RUST_TOOLCHAIN_FILE, ".cargo/config.toml", ".cargo/config"] {
+        let config = root.join(config);
+        if config.try_exists().ok()? {
+            paths.push(config);
+        }
+    }
+    for input in paths {
+        // Never accept a different checkout's same-name target or a missing
+        // prerequisite; only make a narrower claim for files in this workspace.
+        if !input.is_absolute() {
+            return None;
+        }
+        let input = input.canonicalize().ok()?;
+        if !input.starts_with(&root) {
+            return None;
+        }
+        let meta = fs::metadata(input).ok()?;
+        if !meta.is_file() || meta.modified().ok()? > built {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
 fn require_current_app_bundle_targets(project_root: &Path, baseline: &[f64]) -> Result<()> {
     let current = app_bundle_source_baseline(project_root)?;
     anyhow::ensure!(
@@ -2223,7 +2324,10 @@ fn require_current_app_bundle_targets(project_root: &Path, baseline: &[f64]) -> 
     for (&binary, source_mtime) in APP_BUNDLE_RESOURCE_BINARIES.iter().zip(current) {
         let artifact = get_binary_path(project_root, binary);
         anyhow::ensure!(
-            artifact.is_file() && get_mtime(&artifact) >= source_mtime,
+            artifact.is_file()
+                && (get_mtime(&artifact) >= source_mtime
+                    || cargo_inputs_current(project_root, bin_name_to_crate_dir(binary)?, binary)
+                        == Some(true)),
             "App publication requires a current {binary} binary; run Smart Build again"
         );
     }
@@ -2766,6 +2870,84 @@ mod tests {
                 .to_string()
                 .contains("sources changed during this build")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn app_dep_info_distinguishes_sibling_binary_from_actual_release_inputs() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?.join("synthetic workspace");
+        let write = |rel: &str, contents: &str, age: u64| -> Result<PathBuf> {
+            let path = root.join(rel);
+            fs::create_dir_all(path.parent().context("fixture directory")?)?;
+            fs::write(&path, contents)?;
+            fs::File::options().write(true).open(&path)?.set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(age)),
+            )?;
+            Ok(path)
+        };
+        for manifest in [
+            "Cargo.toml",
+            "Cargo.lock",
+            "crates/dev/Cargo.toml",
+            "crates/foundation/Cargo.toml",
+            "crates/img/Cargo.toml",
+            "crates/vid/Cargo.toml",
+            "vendor/jxl-jbr/Cargo.toml",
+        ] {
+            write(manifest, "", 100)?;
+        }
+        let entry = write("crates/dev/src/bin/cache_cleaner.rs", "fn main() {}", 100)?;
+        let shared = write("crates/img/src/shared file.rs", "", 100)?;
+        write("crates/img/src/fast_img_result.rs", "", 300)?;
+        let artifact = write("target/release/cache_cleaner", "binary", 200)?;
+        let dep = "target/release/cache_cleaner.d";
+        let escape = |path: &Path| path.display().to_string().replace(' ', "\\ ");
+        let rule = format!(
+            "{}: {} {}\n",
+            escape(&artifact),
+            escape(&entry),
+            escape(&shared)
+        );
+        let current = || cargo_inputs_current(&root, "crates/dev", "cache_cleaner") == Some(true);
+        assert!(!current(), "missing dep-info");
+        write(dep, &rule, 199)?;
+        assert!(!current(), "old dep-info");
+        write(dep, &rule, 400)?;
+        assert!(
+            get_newest_binary_source_mtime(&root, "crates/dev", "cache_cleaner")
+                > get_mtime(&artifact)
+        );
+        assert!(
+            current(),
+            "the newer source belongs only to a sibling binary"
+        );
+        write("Cargo.lock", "", 301)?;
+        assert!(!current(), "lockfile newer than executable");
+        write("Cargo.lock", "", 100)?;
+        write("crates/img/src/shared file.rs", "", 302)?;
+        assert!(!current(), "true compiled input is newer");
+        fs::remove_file(&shared)?;
+        assert!(!current(), "a prerequisite disappeared");
+        write("crates/img/src/shared file.rs", "", 100)?;
+        write(
+            dep,
+            &rule.replace(
+                &escape(&artifact),
+                "/another/workspace/target/release/cache_cleaner",
+            ),
+            400,
+        )?;
+        assert!(
+            !current(),
+            "dep-info for another checkout with the same binary name"
+        );
+        write(
+            dep,
+            &format!("{}: {}\n", escape(&artifact), escape(&shared)),
+            400,
+        )?;
+        assert!(!current(), "missing the target's own source");
         Ok(())
     }
 
