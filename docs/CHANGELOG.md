@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Photos source cleanup and JPEG metadata verification (2026-11-23)
+
+- Corrected a cleanup preflight that could leave an entire original-format
+  batch pending after Photos verified its private XMP-enriched submissions.
+  A download mark on the input is checked in the context of the actual
+  submission. Direct submissions and managed library originals retain their
+  quarantine checks.
+- Recognize repeated ExifTool namespace diagnostics during JPEG orientation
+  verification. Accept the MicrosoftPhoto URI correction in JPEG-to-JXL
+  metadata verification only with matching native XMP and byte-exact JPEG
+  reconstruction for any packets held solely in the archive.
+
 ### Media Exploration and Batch Reporting (2026-11-21)
 
 - Choose full or adaptive reversible JPEG comparison. Pixel JXL and Fast AVIF

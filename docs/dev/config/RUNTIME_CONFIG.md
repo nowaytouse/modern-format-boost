@@ -430,8 +430,12 @@ For a Tier-2 JXL or AVIF submitted directly, the same local record is accepted
 only with a clean submitted file, an exact match of the complete managed
 original, and the saved library and UUID. The verifier reads the current
 original again before cleanup, and the worker checks the source attribute
-again before unlink. Existing blocking receipts, XMP-enriched submissions,
-and rewritten originals keep the strict quarantine check.
+again before unlink. With an XMP sidecar, Fast IMG submits a verified private
+copy. A download mark on the source alone permits cleanup only with a clean
+submission receipt, fresh custody of the exact managed Photos original, and
+unchanged source and sidecar proofs. A marked direct submission, an active
+mark on the Photos original, or an unresolved historical receipt retains the
+source. The input and Photos attributes are read-only throughout cleanup.
 The final result receipt carries both location counts when quarantine is the
 sole blocker. One asset can count in both locations. Continue an existing
 Photos task to recheck its saved resource UUIDs. Starting a fresh task can

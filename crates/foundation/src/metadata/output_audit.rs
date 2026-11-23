@@ -767,7 +767,11 @@ fn preservable_delivery_tag_maps(
     )?;
     for map in &mut maps {
         map.retain(|key, _| {
-            !preserve_audit_excludes_tag(key) && metadata_comparison_key(key) != "EXIF:EXIF"
+            !preserve_audit_excludes_tag(key)
+                && !matches!(
+                    metadata_comparison_key(key).as_str(),
+                    "EXIF:EXIF" | "XMP:XMP"
+                )
         });
     }
     Ok(maps)
@@ -884,14 +888,19 @@ fn metadata_tag_maps_with_exif_custody<const N: usize>(
         .arg("-s")
         .arg("-Warning")
         .arg("-Error");
-    if include_binary_payloads {
+    if include_binary_payloads || pair.is_some() {
         builder.arg("-b");
     }
     for arg in tag_args {
         builder.arg(*arg);
     }
     if pair.is_some() {
+        // Raw packets in the same observation prove custody when ExifTool
+        // normalizes a field while reading the descriptive tags.
         builder.arg("-EXIF");
+        if !tag_args.contains(&"-XMP") {
+            builder.arg("-XMP");
+        }
     }
     let mut command = builder.build();
     command.args(requested.keys());
@@ -1101,7 +1110,8 @@ fn parse_metadata_records_for_requested_paths(
             "metadata response paths do not exactly match requested files",
         ));
     }
-    let allowed_warnings = pair.and_then(|[src, dst]| {
+    let mut allowed_warnings = BTreeMap::new();
+    if let Some([src, dst]) = pair {
         let record = |path: &Path| {
             records
                 .iter()
@@ -1115,38 +1125,24 @@ fn parse_metadata_records_for_requested_paths(
                 })
                 .map(|record| &record.0)
         };
-        let source = record(src)?;
-        let output = record(dst)?;
-        let exif = |record: &serde_json::Map<String, Value>| {
-            metadata_object_map(record)
-                .into_iter()
-                .filter(|(key, _)| metadata_comparison_key(key) == "EXIF:EXIF")
-                .collect::<BTreeMap<_, _>>()
-        };
-        let source_exif = exif(source);
-        let output_exif = exif(output);
-        if source_exif.is_empty()
-            || source_exif.get("EXIF:EXIF") != output_exif.get("EXIF:EXIF")
-            || !preserve_mismatches(&source_exif, &output_exif).is_empty()
-        {
-            return None;
-        }
-        Some(
-            source
+        if let (Some(source), Some(output)) = (record(src), record(dst)) {
+            for message in source
                 .iter()
-                .filter(|(key, _)| key.starts_with("ExifTool:") && key.ends_with(":Warning"))
-                .filter_map(|(_, value)| value.as_str())
-                .filter(|message| {
-                    matches!(
-                        *message,
-                        "[minor] Unrecognized MakerNotes"
-                            | "Invalid EXIF text encoding for UserComment"
-                    )
-                })
-                .map(str::to_owned)
-                .collect::<BTreeSet<_>>(),
-        )
-    });
+                .filter(|(key, _)| exiftool_file_warning_key(key))
+                .filter_map(|(_, value)| value.as_str().map(super::exiftool_warning_text))
+            {
+                let payload = match message {
+                    "[minor] Unrecognized MakerNotes"
+                    | "Invalid EXIF text encoding for UserComment" => "EXIF:EXIF",
+                    super::MICROSOFT_PHOTO_URI_WARNING => "XMP:XMP",
+                    _ => continue,
+                };
+                if matching_raw_metadata_payload(source, output, payload, [src, dst])? {
+                    allowed_warnings.insert(message.to_owned(), payload);
+                }
+            }
+        }
+    }
     let mut maps = BTreeMap::new();
     let mut file_failure = None;
     for UniqueRecord(object) in records {
@@ -1166,13 +1162,11 @@ fn parse_metadata_records_for_requested_paths(
                     .is_some_and(|text| !text.trim().is_empty());
             if file_warning
                 && pair.is_some_and(|pair| pair.contains(&Path::new(path)))
-                && diagnostic.as_str().is_some_and(|message| {
-                    allowed_warnings
-                        .as_ref()
-                        .is_some_and(|allowed| allowed.contains(message))
-                })
+                && let Some(payload) = diagnostic
+                    .as_str()
+                    .and_then(|message| allowed_warnings.get(super::exiftool_warning_text(message)))
             {
-                tracing::info!(target: "mfb.metadata", source = path, "{diagnostic}; original EXIF payload preserved byte-for-byte");
+                tracing::info!(target: "mfb.metadata", source = path, payload, "{diagnostic}; original metadata payload preserved");
                 continue;
             }
             // A stale digest warns about source consistency, not an unreadable
@@ -1180,16 +1174,7 @@ fn parse_metadata_records_for_requested_paths(
             if file_warning
                 && diagnostic.as_str().is_some_and(|message| {
                     const STALE_DIGEST: &str = "IPTCDigest is not current. XMP may be out of sync";
-                    message == STALE_DIGEST
-                        || message.strip_prefix(STALE_DIGEST).is_some_and(|suffix| {
-                            suffix
-                                .strip_prefix(" [x")
-                                .and_then(|s| s.strip_suffix(']'))
-                                .is_some_and(|number| {
-                                    !number.is_empty()
-                                        && number.bytes().all(|byte| byte.is_ascii_digit())
-                                })
-                        })
+                    super::exiftool_warning_text(message) == STALE_DIGEST
                 })
             {
                 tracing::warn!(target: "mfb.metadata", source = path, "{diagnostic}");
@@ -1243,6 +1228,51 @@ fn parse_metadata_records_for_requested_paths(
         Some(error) => Err(error),
         None => Ok(maps),
     }
+}
+
+fn matching_raw_metadata_payload(
+    source: &serde_json::Map<String, Value>,
+    output: &serde_json::Map<String, Value>,
+    tag: &str,
+    [src, dst]: [&Path; 2],
+) -> io::Result<bool> {
+    let packets = |record: &serde_json::Map<String, Value>| {
+        record
+            .iter()
+            .filter(|(key, _)| metadata_comparison_key(key) == tag)
+            .map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+            .collect::<Option<BTreeMap<_, _>>>()
+    };
+    let (Some(source), Some(output)) = (packets(source), packets(output)) else {
+        return Ok(false);
+    };
+    if !source.contains_key(tag)
+        || source.get(tag) != output.get(tag)
+        || source.values().any(String::is_empty)
+    {
+        return Ok(false);
+    }
+    if tag != "XMP:XMP" {
+        return Ok(preserve_mismatches(&source, &output).is_empty());
+    }
+    if source == output {
+        return Ok(true);
+    }
+    // libjxl can store secondary APP1 packets only in JPEG reconstruction.
+    // Every visible packet must still match the original at that instance.
+    if source.len() > output.len()
+        && output
+            .iter()
+            .all(|(key, value)| source.get(key) == Some(value))
+    {
+        verify_current_jpeg_reconstruction(src, dst, &mut None).map_err(|error| {
+            io::Error::other(format!(
+                "original XMP packets require exact JPEG reconstruction: {error}"
+            ))
+        })?;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn exiftool_file_warning_key(key: &str) -> bool {
@@ -1633,6 +1663,50 @@ mod tests {
                 "{index} {key}"
             );
         }
+    }
+
+    #[test]
+    fn jpeg_namespace_warning_requires_the_same_original_xmp_in_jxl() {
+        if !crate::CjxlBuilder::check_available() || !crate::DjxlBuilder::check_available() {
+            eprintln!("SKIP: cjxl/djxl unavailable for XMP namespace regression");
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("source.jpg");
+        let dst = temp.path().join("output.jxl");
+        write_minimal_jpeg(&src);
+        let jpeg = std::fs::read(&src).unwrap();
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:MicrosoftPhoto="http://ns.microsoft.com/photo/1.0/"><MicrosoftPhoto:Rating>1</MicrosoftPhoto:Rating></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let app1 = [b"http://ns.adobe.com/xap/1.0/\0".as_slice(), xmp].concat();
+        let length = u16::try_from(app1.len() + 2).unwrap().to_be_bytes();
+        let segment = [b"\xff\xe1".as_slice(), &length, &app1].concat();
+        let mut source = [&jpeg[..2], &segment, &segment, &jpeg[2..]].concat();
+        std::fs::write(&src, &source).unwrap();
+        assert_eq!(
+            crate::image::orientation::read_exif_orientation(&src).unwrap(),
+            1
+        );
+        let encoded = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&dst)
+            .lossless_jpeg(true)
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).unwrap();
+        verify_current_jpeg_reconstruction(&src, &dst, &mut None).unwrap();
+        // Alter only the raw packet, leaving the extracted field value intact.
+        let offset = source.windows(6).position(|w| w == b" xmlns").unwrap();
+        source[offset] = b'\t';
+        std::fs::write(&src, source).unwrap();
+        assert!(
+            verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).is_err()
+        );
     }
 
     #[test]

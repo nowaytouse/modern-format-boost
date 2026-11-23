@@ -1215,6 +1215,7 @@ fn orientation_evidence_key(key: &str, group: &str, tag: &str) -> bool {
 }
 
 fn unrelated_orientation_warning(warning: &str) -> bool {
+    let warning = crate::metadata::exiftool_warning_text(warning);
     // These exact diagnostics concern fields outside the IFD0 orientation entry.
     // Structural and unknown diagnostics still reject the orientation evidence.
     matches!(
@@ -1222,7 +1223,7 @@ fn unrelated_orientation_warning(warning: &str) -> bool {
         "IPTCDigest is not current. XMP may be out of sync"
             | "Invalid EXIF text encoding for UserComment"
             | "[minor] Unrecognized MakerNotes"
-            | "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto"
+            | crate::metadata::MICROSOFT_PHOTO_URI_WARNING
     ) || warning
         .strip_prefix("Bad length ICC_Profile (length ")
         .and_then(|length| length.strip_suffix(')'))
@@ -2257,7 +2258,7 @@ mod tests {
             "ExifTool:Copy1:Warning": "Invalid EXIF text encoding for UserComment",
             "ExifTool:Copy2:Warning": "IPTCDigest is not current. XMP may be out of sync",
             "ExifTool:Copy3:Warning": "[minor] Unrecognized MakerNotes",
-            "ExifTool:Copy5:Warning": "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto"
+            "ExifTool:Copy5:Warning": "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto [x2]"
         }]);
         let parse = |record: &serde_json::Value| {
             super::parse_exif_orientation_evidence(
@@ -2279,6 +2280,9 @@ mod tests {
             "Bad length ICC_Profile (length 548) trailing diagnostic",
             "[minor] Unrecognized MakerNotes trailing diagnostic",
             "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto truncated IFD0",
+            "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto [x02]",
+            "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto [x2] [x3]",
+            "Bad IFD0 directory [x2]",
         ] {
             for evidence in [&accepted, &explicit] {
                 let mut record = evidence.clone();

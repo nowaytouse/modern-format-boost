@@ -37,6 +37,24 @@ pub use delivery_policy::{
     preserve_filesystem_for_delivery, preserve_for_delivery,
 };
 pub use exif::preserve_internal;
+
+pub(crate) const MICROSOFT_PHOTO_URI_WARNING: &str =
+    "[minor] Fixed incorrect URI for xmlns:MicrosoftPhoto";
+
+/// `ExifTool` coalesces identical diagnostics by appending an occurrence count.
+pub(crate) fn exiftool_warning_text(warning: &str) -> &str {
+    if let Some((message, suffix)) = warning.rsplit_once(" [x")
+        && let Some(count) = suffix.strip_suffix(']')
+        && !count.starts_with('0')
+        && count.bytes().all(|byte| byte.is_ascii_digit())
+        && count.parse::<u32>().is_ok_and(|n| n >= 2)
+    {
+        message
+    } else {
+        warning
+    }
+}
+
 pub use source_cleanup::SourceDirectoryCleanupSnapshot;
 
 /// A phase-scoped namespace observation; file contents still require fresh proof.
