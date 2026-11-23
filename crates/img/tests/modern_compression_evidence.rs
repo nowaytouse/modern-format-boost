@@ -289,3 +289,106 @@ fn avif_compression_evidence_from_real_avifenc_output() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn fast_img_retains_animation_even_when_png_only_contains_one_timed_frame() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    for frames in [1, 2] {
+        let path = dir.path().join(format!("synthetic-{frames}.png"));
+        let mut encoder = png::Encoder::new(std::fs::File::create(&path)?, 1, 1);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_animated(frames, 1)?;
+        let mut writer = encoder.write_header()?;
+        for _ in 0..frames {
+            writer.write_image_data(&[12, 34, 56, 78])?;
+        }
+        writer.finish()?;
+        assert!(!foundation::probe_fast_img_lossless_static(&path)?);
+    }
+    Ok(())
+}
+
+#[test]
+fn fast_img_avif_requires_lossless_color_and_alpha_frames() -> anyhow::Result<()> {
+    if ["avifenc", "avifdec", "ffmpeg", "ffprobe"]
+        .iter()
+        .any(|tool| foundation::common_utils::resolve_tool_path(tool).is_none())
+    {
+        eprintln!("Skipping AVIF frame-evidence test: AVIF/FFmpeg toolchain unavailable");
+        return Ok(());
+    }
+    let dir = tempfile::tempdir()?;
+    let image = image::RgbaImage::from_fn(16, 16, |x, y| {
+        let x = u8::try_from(x * 15).unwrap();
+        let y = u8::try_from(y * 15).unwrap();
+        image::Rgba([x, y, x ^ y, x.wrapping_add(y)])
+    });
+    let rgba = dir.path().join("alpha-pattern.png");
+    let rgb = dir.path().join("color-pattern.png");
+    image.save(&rgba)?;
+    image::DynamicImage::ImageRgba8(image)
+        .to_rgb8()
+        .save(&rgb)?;
+    for (name, input, q, qa, expect_lossless) in [
+        ("color.avif", &rgb, "100", "100", true),
+        ("color-alpha.avif", &rgba, "100", "100", true),
+        ("quantized-color.avif", &rgb, "45", "100", false),
+        ("quantized-alpha.avif", &rgba, "100", "45", false),
+    ] {
+        let encoded = run_encoder(
+            &dir,
+            "avifenc",
+            &[
+                "-s",
+                "8",
+                "-y",
+                "444",
+                "--cicp",
+                "1/13/0",
+                "-q",
+                q,
+                "--qalpha",
+                qa,
+                utf8(input)?,
+                utf8(&dir.path().join(name))?,
+            ],
+            name,
+        )?;
+        // Some older demuxers expose only the primary item. A lossless
+        // fixture must remain original whenever its alpha cannot be inspected.
+        let streams = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v",
+                "-show_entries",
+                "stream=id",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(&encoded)
+            .output()?;
+        anyhow::ensure!(streams.status.success(), "fixture stream inventory failed");
+        let ids = String::from_utf8(streams.stdout)?;
+        let complete = ids.lines().any(|id| id == "0x1")
+            && (input == &rgb || ids.lines().any(|id| id == "0x2"));
+        assert_eq!(
+            foundation::probe_fast_img_lossless_static(&encoded)?,
+            expect_lossless && complete,
+            "{name}, item IDs {ids:?}"
+        );
+    }
+    // Contradict the lossless frame's RGB matrix only in the container profile.
+    let mut mismatched = std::fs::read(dir.path().join("color.avif"))?;
+    let nclx = mismatched
+        .windows(4)
+        .position(|prefix| prefix == b"nclx")
+        .ok_or_else(|| anyhow::anyhow!("expected synthetic nclx profile"))?;
+    mismatched[nclx + 8..nclx + 10].copy_from_slice(&1u16.to_be_bytes());
+    let changed = dir.path().join("matrix-conflict.avif");
+    std::fs::write(&changed, mismatched)?;
+    assert!(!foundation::probe_fast_img_lossless_static(&changed)?);
+    Ok(())
+}

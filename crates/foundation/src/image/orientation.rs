@@ -405,6 +405,39 @@ fn verify_reconstruction_geometry(
     Ok(())
 }
 
+/// Pixel JXL display orientation belongs to its codestream. A second rotation
+/// in portable metadata could make different readers display different images.
+///
+/// # Errors
+/// Rejects incomplete tag reads and EXIF/XMP orientations other than identity.
+pub fn verify_pixel_jxl_orientation_metadata(path: &Path) -> Result<()> {
+    use crate::ToolBuilder;
+    let mut command = crate::ExiftoolBuilder::new()
+        .arg("-a")
+        .arg("-n")
+        .arg("-s3")
+        .arg("-EXIF:Orientation")
+        .arg("-XMP:Orientation")
+        .input(path)
+        .build();
+    let result = crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(30),
+        crate::process_runner::image_process_hard_timeout(),
+        "pixel JXL orientation metadata",
+    )?;
+    if !result.status.success()
+        || !result.stderr.is_empty()
+        || !std::str::from_utf8(&result.stdout)
+            .is_ok_and(|tags| tags.lines().all(|value| value.trim() == "1"))
+    {
+        return Err(ImgQualityError::AnalysisError(
+            "pixel JXL contains conflicting or unreadable orientation metadata".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn read_jxl_codestream_info(path: &Path) -> Result<JxlCodestreamInfo> {
     use crate::builder_base::ToolBuilder;
 
@@ -635,6 +668,23 @@ fn decode_source_with_official_tool(
             "pixel-diff: cannot open official {tool} decoded source image: {e}"
         ))
     })
+}
+
+/// Compare full integer samples in losslessly decoded PNG intermediates, including hidden RGB.
+/// Orientation belongs to the original container and may be absent from its decoded PNG.
+/// # Errors
+/// Returns an error if either raster or its orientation evidence cannot be read.
+pub fn verify_lossless_png_rasters(
+    original: &Path,
+    decoded_source: &Path,
+    decoded_output: &Path,
+) -> Result<PixelDiffResult> {
+    let source = crate::image_detection::open_image_with_limits(decoded_source)
+        .map_err(|e| ImgQualityError::AnalysisError(format!("cannot open source raster: {e}")))?;
+    let output = crate::image_detection::open_image_with_limits(decoded_output)
+        .map_err(|e| ImgQualityError::AnalysisError(format!("cannot open JXL raster: {e}")))?;
+    let reference = apply_orientation_transform(source, read_exif_orientation(original)?);
+    diff_dynamic_images(&reference, &output, DiffTolerance::Exact, decoded_output)
 }
 
 fn verify_pixel_diff_against_decoded_image(

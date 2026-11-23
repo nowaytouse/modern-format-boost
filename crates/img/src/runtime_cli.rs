@@ -199,7 +199,7 @@ pub(super) struct RuntimeArgs {
     /// Maximum lossy JXL distance where the policy permits it. Zero allows only exact output.
     #[arg(long, global = true, value_parser = runtime_config::parse_jxl_distance)]
     jxl_distance: Option<f32>,
-    /// Upper effort (E2..E11) for direct JXL exploration.
+    /// Upper effort (E2..E11) for direct JXL exploration. Fast IMG lossless stills cap the search at E10.
     #[arg(long, global = true, value_parser = runtime_config::parse_direct_jxl_effort)]
     jxl_effort: Option<u8>,
     /// Compare verified direct JXL encodes within the effort ceiling.
@@ -245,11 +245,11 @@ impl RuntimeArgs {
     pub(crate) fn validate_fast_strategy(&self, strategy: &str) -> Result<()> {
         anyhow::ensure!(
             self.jxl_distance.is_none(),
-            "Fast IMG does not use JXL pixel distance; JPEG reconstruction is a separate primitive"
+            "Fast IMG JXL uses reversible JPEG reconstruction or lossless pixels at distance zero"
         );
         anyhow::ensure!(
-            self.jxl_effort.is_none() && self.jxl_effort_search.is_none(),
-            "Fast IMG does not directly encode JXL pixels; use JPEG effort for JXL strategy"
+            strategy == "jxl" || (self.jxl_effort.is_none() && self.jxl_effort_search.is_none()),
+            "JXL pixel effort settings require the Fast IMG JXL strategy"
         );
         anyhow::ensure!(
             strategy != "avif" || (self.jpeg_effort.is_none() && self.jpeg_effort_search.is_none()),
@@ -257,7 +257,7 @@ impl RuntimeArgs {
         );
         anyhow::ensure!(
             strategy != "jxl" || self.quality_search.is_none(),
-            "Fast IMG JXL reconstructs exact JPEG bytes and has no quality search"
+            "Fast IMG JXL uses lossless encoding and has no lossy quality search"
         );
         anyhow::ensure!(
             strategy != "jxl" || (self.avif_speed.is_none() && self.avif_metadata_policy.is_none()),
@@ -629,10 +629,13 @@ mod tests {
             "img",
             "fast-img",
             "/unused",
+            "--jxl-effort",
+            "8",
             "--jxl-effort-search",
             "adaptive",
         ])?;
-        assert!(fast.policy.validate_fast_strategy("jxl").is_err());
+        fast.policy.validate_fast_strategy("jxl")?;
+        assert!(fast.policy.validate_fast_strategy("avif").is_err());
         let fast = crate::Cli::try_parse_from([
             "img",
             "fast-img",

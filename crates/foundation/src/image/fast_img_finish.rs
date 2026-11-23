@@ -838,6 +838,7 @@ mod tests {
             tool_policy: crate::runtime_config::ToolPolicy::Single,
             fallback_policy: crate::runtime_config::FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: crate::runtime_config::JpegEffortSearch::Full,
                 archive: false,
@@ -996,6 +997,7 @@ mod tests {
             tool_policy: crate::runtime_config::ToolPolicy::Single,
             fallback_policy: crate::runtime_config::FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: crate::runtime_config::JpegEffortSearch::Full,
                 archive: false,

@@ -23,6 +23,11 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Fast IMG lossless static pixels (2026-11-23)
+
+- Fast JXL now explores compression effort at d=0 for static PNG, VP8L WebP and AVIF with positive lossless evidence. Candidates must reproduce the original samples and color. The metadata-complete JXL wins a size tie. Larger results leave the original in place.
+- The pixel route caps effort at E10. In a two-thread synthetic trial with cjxl 0.14.0, a 512×384 textured frame encoded at E10 in 3.33 seconds while E11 had written no output at 90 seconds. JPEG byte-reconstruction effort uses its existing policy.
+
 ### Photos source cleanup and JPEG metadata verification (2026-11-23)
 
 - A cleanup-only resume includes previously recorded file failures in the new

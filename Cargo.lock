@@ -1184,6 +1184,7 @@ dependencies = [
  "foundation",
  "gmp-mpfr-sys",
  "image",
+ "png",
  "rayon",
  "rug",
  "serde",

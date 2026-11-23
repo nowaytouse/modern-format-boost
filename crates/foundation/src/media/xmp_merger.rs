@@ -209,36 +209,10 @@ fn jpeg_has_protected_app11(path: &Path) -> Result<bool> {
 }
 
 fn png_has_c2pa_chunk(path: &Path) -> Result<bool> {
-    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-    let total_len = std::fs::metadata(path)?.len();
-    let mut file = std::fs::File::open(path)?;
-    let mut signature = [0_u8; 8];
-    file.read_exact(&mut signature)?;
-    if &signature != PNG_SIGNATURE {
-        bail!("invalid PNG signature while probing protected provenance");
-    }
-
-    loop {
-        let mut header = [0_u8; 8];
-        file.read_exact(&mut header)?;
-        let payload_len = u64::from(u32::from_be_bytes([
-            header[0], header[1], header[2], header[3],
-        ]));
-        let chunk_type = &header[4..8];
-        let end = file
-            .stream_position()?
-            .checked_add(payload_len)
-            .and_then(|value| value.checked_add(4))
-            .filter(|end| *end <= total_len)
-            .ok_or_else(|| anyhow::anyhow!("truncated PNG provenance chunk"))?;
-        if chunk_type == b"caBX" {
-            return Ok(true);
-        }
-        if chunk_type == b"IEND" {
-            return Ok(false);
-        }
-        file.seek(SeekFrom::Start(end))?;
-    }
+    Ok(crate::image::png_validation::has_matching_chunk(
+        path,
+        |kind| kind == b"caBX",
+    )?)
 }
 
 const C2PA_BMFF_UUID: [u8; 16] = [

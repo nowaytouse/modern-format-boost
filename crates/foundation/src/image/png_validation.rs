@@ -20,6 +20,39 @@ pub const PNG_LOSSLESS_JXL_EFFORT: u8 = 10;
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 
+/// Inspect physical PNG chunk headers without reading compressed pixels.
+/// # Errors
+/// Returns an error for invalid signatures, truncated chunks or file access failures.
+pub fn has_matching_chunk(path: &Path, mut matches: impl FnMut(&[u8]) -> bool) -> Result<bool> {
+    use std::io::Read;
+    let mut file = BufReader::new(std::fs::File::open(path)?);
+    let total_len = file.get_ref().metadata()?.len();
+    let mut signature = [0_u8; 8];
+    file.read_exact(&mut signature)?;
+    if &signature != PNG_SIGNATURE {
+        return Err(invalid_png("invalid PNG signature while inspecting chunks"));
+    }
+
+    let mut consumed = 8u64;
+    loop {
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header)?;
+        let payload_len = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        let chunk_type = &header[4..8];
+        consumed = consumed
+            .checked_add(12 + u64::from(payload_len))
+            .filter(|end| *end <= total_len)
+            .ok_or_else(|| invalid_png("truncated PNG chunk"))?;
+        if matches(chunk_type) {
+            return Ok(true);
+        }
+        if chunk_type == b"IEND" {
+            return Ok(false);
+        }
+        file.seek_relative(i64::from(payload_len) + 4)?;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ApngAnimationInfo {
     /// Number of `fcTL` frames validated against `acTL`.
@@ -385,12 +418,14 @@ fn try_pngcheck_validation(path: &Path) -> PngValidationOutcome {
 /// Structural decode probe: `Ok(())` when the PNG decodes, `Err` with the
 /// decoder failure otherwise. There is no "decoded but invalid" middle state.
 fn png_libpng_decode_probe(path: &Path) -> Result<()> {
-    image::open(path).map(|_| ()).map_err(|err| {
-        ImgQualityError::AnalysisError(format!(
-            "PNG decode probe failed for {}: {err}",
-            path.display()
-        ))
-    })
+    super::image_detection::open_image_with_limits_without_png_heuristic(path)
+        .map(|_| ())
+        .map_err(|err| {
+            ImgQualityError::AnalysisError(format!(
+                "PNG decode probe failed for {}: {err}",
+                path.display()
+            ))
+        })
 }
 
 #[cfg(test)]

@@ -138,7 +138,7 @@ pub fn open_image_with_limits(path: &Path) -> Result<DynamicImage> {
     Ok(img)
 }
 
-fn open_image_with_limits_without_png_heuristic(path: &Path) -> Result<DynamicImage> {
+pub(super) fn open_image_with_limits_without_png_heuristic(path: &Path) -> Result<DynamicImage> {
     decode_image_with_limits(path).map(|(img, _)| img)
 }
 

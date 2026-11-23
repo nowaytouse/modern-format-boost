@@ -1602,9 +1602,26 @@ fn check_orientation_policy_with_resume(
             if detect_true_format(output).map_err(std::io::Error::other)? != FormatKind::Jxl {
                 return Ok(false);
             }
-            let reconstructed = if detect_true_format(source).map_err(std::io::Error::other)?
-                == FormatKind::Jxl
-            {
+            let source_format = detect_true_format(source).map_err(std::io::Error::other)?;
+            if !matches!(source_format, FormatKind::Jpeg | FormatKind::Jxl) {
+                use crate::image::orientation::{
+                    DiffTolerance, PixelDiffResult, verify_orientation_pixel_diff,
+                    verify_pixel_jxl_orientation_metadata,
+                };
+                if !crate::probe_fast_img_lossless_static(source).map_err(std::io::Error::other)? {
+                    return Ok(false);
+                }
+                verify_pixel_jxl_orientation_metadata(output).map_err(std::io::Error::other)?;
+                return verify_orientation_pixel_diff(
+                    source,
+                    output,
+                    FormatKind::Jxl,
+                    DiffTolerance::Exact,
+                )
+                .map(|result| matches!(result, PixelDiffResult::Match))
+                .map_err(std::io::Error::other);
+            }
+            let reconstructed = if source_format == FormatKind::Jxl {
                 let jpeg = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
                     "fast_img_gate1_reconstruct_source",
                     Some("mfb_gate1_source"),
@@ -1686,7 +1703,7 @@ where
     let mut failures = Vec::new();
     let mut file_local = true;
     let mut tagged_count = 0usize;
-    let mut reconstructible_count = 0usize;
+    let mut verified_orientation_count = 0usize;
     let mut probe_errors = Vec::new();
     let total = files.len();
     let report_progress = total > 0 && total == ctx.expected_count;
@@ -1714,7 +1731,7 @@ where
                             } else {
                                 Err(std::io::Error::new(
                                     std::io::ErrorKind::InvalidData,
-                                    "Orientation lacks exact JPEG reconstruction proof",
+                                    "Orientation lacks the required source-specific proof",
                                 ))
                             }
                         })
@@ -1723,14 +1740,16 @@ where
                     reconstruction_probe(source, path)
                 };
                 match reconstructed {
-                    Ok(true) => reconstructible_count += 1,
+                    Ok(true) => verified_orientation_count += 1,
                     Ok(false) => failures.push(path.clone()),
                     Err(err) => {
                         file_local &= err.kind() == std::io::ErrorKind::InvalidData;
                         crate::media_conversion_gate::delivery_pipeline_path_audit(
                             "fast_img_gate1_orientation_reconstruction",
                             path,
-                            format!("Orientation tag lacks exact JPEG reconstruction proof: {err}"),
+                            format!(
+                                "Orientation tag lacks the required source-specific proof: {err}"
+                            ),
                         );
                         probe_errors.push(format!("{}: {err}", path.display()));
                         failures.push(path.clone());
@@ -1755,18 +1774,18 @@ where
     }
     let actual = if let Some(first_error) = probe_errors.first() {
         format!(
-            "{tagged_count} tagged, {reconstructible_count} exact-reconstructible; {} orientation \
+            "{tagged_count} tagged, {verified_orientation_count} orientation-verified; {} orientation \
              proof errors; first {first_error}",
             probe_errors.len()
         )
     } else {
-        format!("{tagged_count} tagged, {reconstructible_count} exact-reconstructible")
+        format!("{tagged_count} tagged, {verified_orientation_count} orientation-verified")
     };
     file_failures(
         detail(
             "orient",
             failures.is_empty(),
-            "Orientation absent unless required by exact JPEG reconstruction".to_string(),
+            "Orientation absent or verified against the source".to_string(),
             actual,
             failures,
         ),
@@ -3140,7 +3159,7 @@ mod tests {
 
         assert!(check.passed);
         assert_eq!(check.affected_files, [] as [std::path::PathBuf; 0]);
-        assert!(check.actual.contains("1 exact-reconstructible"));
+        assert!(check.actual.contains("1 orientation-verified"));
 
         let second_output = PathBuf::from("/tmp/unoriented.JXL");
         let mut mixed_log = ctx.blake3_log.clone();
@@ -4251,6 +4270,9 @@ pub enum FastImgEncodingParameters {
     Jxl {
         jpeg_effort: u8,
         jpeg_effort_search: crate::runtime_config::JpegEffortSearch,
+        // An absent field identifies the historical JPEG-only source admission policy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pixel_effort_ceiling: Option<u8>,
         archive: bool,
         allow_expert_options: bool,
     },
@@ -4264,6 +4286,38 @@ pub enum FastImgEncodingParameters {
 }
 
 impl FastImgProcessingContract {
+    #[must_use]
+    pub const fn admits_lossless_pixels(&self) -> bool {
+        matches!(
+            self.encoding,
+            FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: Some(_),
+                ..
+            }
+        )
+    }
+
+    /// Compare only settings used by the saved task. Jobs created before pixel
+    /// encoding continue to scan their original JPEG-only primary inventory.
+    #[must_use]
+    pub fn matches_current_settings(&self, current: &Self) -> bool {
+        let mut effective = current.clone();
+        if let (
+            FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
+                ..
+            },
+            FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling,
+                ..
+            },
+        ) = (&self.encoding, &mut effective.encoding)
+        {
+            *pixel_effort_ceiling = None;
+        }
+        self == &effective
+    }
+
     /// Validate persisted processing intent without assigning missing historical
     /// evidence the settings of the current attempt.
     ///
@@ -4277,8 +4331,13 @@ impl FastImgProcessingContract {
             ));
         }
         match &self.encoding {
-            FastImgEncodingParameters::Jxl { jpeg_effort, .. }
-                if strategy == "jxl" && (1..=11).contains(jpeg_effort) =>
+            FastImgEncodingParameters::Jxl {
+                jpeg_effort,
+                pixel_effort_ceiling,
+                ..
+            } if strategy == "jxl"
+                && (1..=11).contains(jpeg_effort)
+                && pixel_effort_ceiling.is_none_or(|effort| (2..=10).contains(&effort)) =>
             {
                 Ok(())
             }
@@ -6154,6 +6213,7 @@ mod working_copy_tests {
             tool_policy: crate::runtime_config::ToolPolicy::Fallback,
             fallback_policy: crate::runtime_config::FallbackPolicy::Strict,
             encoding: super::FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: crate::runtime_config::JpegEffortSearch::Full,
                 archive: false,

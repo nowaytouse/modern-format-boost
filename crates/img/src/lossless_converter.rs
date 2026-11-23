@@ -9,6 +9,10 @@
 //! Covered paths: `convert_to_jxl`, `convert_jpeg_to_jxl` (including fallback),
 //! `convert_to_avif`, `convert_to_avif_lossless`, `convert_to_jxl_matched`.
 
+mod fast_lossless_jxl;
+pub use fast_lossless_jxl::{
+    encode_fast_lossless_jxl, fast_lossless_jxl_fits, verify_fast_lossless_jxl_pixels,
+};
 mod jxl_probe_cache;
 mod jxl_probe_identity;
 

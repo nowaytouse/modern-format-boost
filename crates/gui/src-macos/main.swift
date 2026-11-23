@@ -733,7 +733,7 @@ private struct FastImgConflictPreview: Decodable {
 private enum MediaSetting: String, CaseIterable {
     case imgConfig, imgFallback, imgJxlDistance, imgJxlEffort, imgJpegEffort, imgJpegSearch, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
-    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy, fastErrorMode
+    case fastConfig, fastFallback, fastLosslessPixelEffort, fastJpegEffort, fastJpegSearch, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy, fastErrorMode
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
@@ -746,7 +746,7 @@ private enum MediaSetting: String, CaseIterable {
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
     var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode || self == .fastErrorMode }
     var isJpegSearch: Bool { self == .imgJpegSearch || self == .fastJpegSearch }
-    var isEffort: Bool { self == .imgJxlEffort || self == .imgJpegEffort || self == .fastJpegEffort }
+    var isEffort: Bool { self == .imgJxlEffort || self == .fastLosslessPixelEffort || self == .imgJpegEffort || self == .fastJpegEffort }
     var isDistance: Bool { self == .imgJxlDistance }
     var usesInheritedChoice: Bool { isFailurePolicy || isEffort || isJpegSearch || self == .fastAvifSpeed }
     private static let lossyJxlDistanceBounds: ClosedRange<Float> = 0.001...25
@@ -762,7 +762,7 @@ private enum MediaSetting: String, CaseIterable {
         return localized("settings.value.\(value)")
     }
     func appliesToFast(avif: Bool) -> Bool {
-        if self == .fastJpegEffort || self == .fastJpegSearch { return !avif }
+        if self == .fastLosslessPixelEffort || self == .fastJpegEffort || self == .fastJpegSearch { return !avif }
         return self != .fastAvifSpeed || avif
     }
     var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
@@ -786,7 +786,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgFallback, .fastFallback: "--img-fallback-policy"
         case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
         case .imgJxlDistance: "--img-jxl-distance"
-        case .imgJxlEffort: "--img-jxl-effort"
+        case .imgJxlEffort, .fastLosslessPixelEffort: "--img-jxl-effort"
         case .imgJpegSearch, .fastJpegSearch: "--img-jpeg-effort-search"
         case .fastAvifSpeed: "--img-avif-speed"
         case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
@@ -820,6 +820,7 @@ private enum MediaSetting: String, CaseIterable {
              .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong, .externalToolSnapshot: ["true", "false"]
         case .imgErrorMode, .vidErrorMode, .fastErrorMode: ["log-and-continue", "fail-fast"]
         case .imgJxlEffort, .imgJpegEffort, .fastJpegEffort: (2...11).map(String.init)
+        case .fastLosslessPixelEffort: (2...10).map(String.init)
         case .imgJpegSearch, .fastJpegSearch: ["full", "adaptive"]
         case .fastAvifSpeed: (0...10).map(String.init)
         case .vidCodec: ["hevc", "av1"]
@@ -847,7 +848,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgFallback, .fastFallback: "img.fallback_policy"
         case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
         case .imgJxlDistance: "img.jxl_distance"
-        case .imgJxlEffort: "img.jxl_effort"
+        case .imgJxlEffort, .fastLosslessPixelEffort: "img.jxl_effort"
         case .imgJpegSearch, .fastJpegSearch: "img.jpeg_effort_search"
         case .fastAvifSpeed: "img.avif_speed"
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
@@ -976,6 +977,7 @@ private struct MediaSettings {
                 .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
                 .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
                 .fastJpegSearch: fastImage.jpegEffortSearch?.rawValue,
+                .fastLosslessPixelEffort: fastImage.jxlEffort.map(String.init),
                 .fastAvifSpeed: fastImage.avifSpeed.map(String.init),
                 .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
                 .fastErrorMode: fastImageFailure?.rawValue,
@@ -1029,6 +1031,7 @@ private struct MediaSettings {
                 case .fastFallback: fastImage.fallback = ImageFallback(rawValue: value)
                 case .fastJpegEffort: fastImage.jpegEffort = Int(value)
                 case .fastJpegSearch: fastImage.jpegEffortSearch = JpegEffortSearchMode(rawValue: value)
+                case .fastLosslessPixelEffort: fastImage.jxlEffort = Int(value)
                 case .fastAvifSpeed: fastImage.avifSpeed = Int(value)
                 case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
                 case .fastDatabase: fastImage.allowDatabase = Bool(value)
@@ -3403,7 +3406,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let effective = field == .externalToolSnapshot ? (self.fast ? fast : standard)
                 : field.isShared ? (self.fast ? fast : (videos ? video : standard))
                 : (field.isFastImage || field.isPhotos ? fast : (field.isVideo ? video : standard))
-            inherited[field] = effective?[key]
+            let value = effective?[key]
+            inherited[field] = field == .fastLosslessPixelEffort && value == "11" ? "10" : value
             inheritedSources[field] = effective?.sourceChain[key]?.joined(separator: " → ")
         }
         for field in MediaSetting.allCases where field.isShared && !self.fast && !videos {
@@ -3849,12 +3853,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             }
         }
         var pixelEffort = MediaSettings()
-        pixelEffort.values = [.imgJxlEffort: "8"]
+        pixelEffort.values = [.imgJxlEffort: "8", .fastLosslessPixelEffort: "7"]
         try pixelEffort.validate()
         let imageArguments = try pixelEffort.arguments(operation: .adjacent, processing: .imagesOnly)
         let fastArguments = try pixelEffort.arguments(operation: .fastImgJxl, processing: .imagesOnly)
         guard imageArguments.contains("8"), imageArguments.contains("--img-jxl-effort"),
-              !fastArguments.contains("--img-jxl-effort"), !fastArguments.contains("8"),
+              fastArguments == ["--img-jxl-effort", "7"],
+              pixelEffort.runtimeArguments(fast: true, inheritedOnly: false) == ["--jxl-effort", "7"],
+              (try pixelEffort.arguments(operation: .fastImgAvif, processing: .imagesOnly)).isEmpty,
               !pixelEffort.runtimeArguments(fast: false, inheritedOnly: true).contains("--jxl-effort"),
               pixelEffort.runtimeArguments(fast: false, inheritedOnly: false).contains("--jxl-effort"),
               !(try pixelEffort.arguments(operation: .adjacent, processing: .videosOnly)).contains("--img-jxl-effort") else {
@@ -3882,7 +3888,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let key = "img.jxl_effort"
             let standard = EffectiveRuntimeSettings(values: [key: "8"], sources: [key: "/synthetic/img.json"],
                 sourceChain: [key: ["default", "/synthetic/img.json"]])
-            let fastImage = EffectiveRuntimeSettings(values: [key: "10"], sources: [key: "/synthetic/fast.json"],
+            let fastImage = EffectiveRuntimeSettings(values: [key: "11"], sources: [key: "/synthetic/fast.json"],
                 sourceChain: [key: ["default", "/synthetic/fast.json"]])
             setInheritedValues(standard: standard, fast: fastImage, video: standard)
             restore(MediaSettings())
@@ -3890,7 +3896,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let field = MediaSetting.imgJxlEffort
             guard let popup = popups[field], popup.numberOfItems == field.choices.count + 1, popup.indexOfSelectedItem == 0,
                   (sourceButtons[field] != nil) == developer, fieldSections[field] == "img",
-                  inherited[field] == "8", draft().values[field] == nil else {
+                  inherited[field] == "8", inherited[.fastLosslessPixelEffort] == "10", draft().values[field] == nil else {
                 throw HostError(message: "JXL pixel effort inheritance used the wrong pipeline or fabricated an override")
             }
             popup.select(popup.itemArray.first { ($0.representedObject as? String) == "8" })
@@ -4285,7 +4291,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             }
         }
         if fast {
-            guard (popups[.fastJpegEffort] != nil) == !avif, (popups[.fastJpegSearch] != nil) == !avif,
+            guard (popups[.fastLosslessPixelEffort] != nil) == !avif,
+                  (popups[.fastJpegEffort] != nil) == !avif, (popups[.fastJpegSearch] != nil) == !avif,
                   (popups[.fastAvifSpeed] != nil) == avif else {
                 throw HostError(message: "Fast IMG displayed a setting for the wrong encoder")
             }
@@ -9171,7 +9178,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func updateMetadataSafetyNotice() {
         let key: String?
         switch selectedOperation {
-        case .adjacent, .fastImgJxl, .mergeXmp:
+        case .fastImgJxl:
+            key = "metadata.fast_jxl"
+        case .adjacent, .mergeXmp:
             key = "metadata.jxl_overlay"
         case .restoreJpeg:
             key = isPhotosRestoreAudit ? "metadata.restore_audit" : "metadata.restore_auto"
@@ -13849,7 +13858,7 @@ private func runSelfTest() -> Int32 {
         var configured = request
         configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11", .imgJpegSearch: "adaptive",
                                             .imgJxlDistance: "0.25", .imgJxlEffort: "8",
-                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastJpegSearch: "adaptive", .fastDatabase: "false", .fastErrorMode: "fail-fast",
+                                            .fastFallback: "strict", .fastLosslessPixelEffort: "7", .fastJpegEffort: "9", .fastJpegSearch: "adaptive", .fastDatabase: "false", .fastErrorMode: "fail-fast",
                                            .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
                                            .imgDatabase: "false", .imgSizeTolerance: "true", .imgSizeToleranceBytes: "4096", .imgErrorMode: "log-and-continue",
                                            .vidCodec: "av1", .vidErrorMode: "fail-fast", .vidForceMsSsimLong: "false"]
@@ -13871,7 +13880,8 @@ private func runSelfTest() -> Int32 {
         else { throw HostError(message: "Media settings leaked across processing modes") }
         let effective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
-        guard effective["img.jpeg_effort"] == "9", effective["img.allow_database"] == "false",
+        guard effective["img.jpeg_effort"] == "9", effective["img.jxl_effort"] == "7",
+              effective.sourceChain["img.jxl_effort"]?.last == "CLI", effective["img.allow_database"] == "false",
               effective["execution.error_mode"] == "fail-fast",
               effective.sourceChain["execution.error_mode"]?.last == "CLI",
               effective["photos.native_batch_size"] == "200", effective["photos.backend"] == "native",
@@ -14563,6 +14573,7 @@ private func runSelfTest() -> Int32 {
             preferences.set("fixed", forKey: MediaSetting.imgJpegSearch.preferenceKey)
             preferences.set("adaptive", forKey: MediaSetting.fastJpegSearch.preferenceKey)
             preferences.set("fixed", forKey: "MFBGuiMediaSettings.imgJxlSearch")
+            preferences.set("11", forKey: "MFBGuiMediaSettings.fastJxlEffort")
             preferences.set("fixed", forKey: "MFBGuiMediaSettings.imgQualitySearch")
             preferences.set("85", forKey: "MFBGuiMediaSettings.fastAvifQuality")
             preferences.set("9", forKey: MediaSetting.imgJxlEffort.preferenceKey)
@@ -14576,6 +14587,7 @@ private func runSelfTest() -> Int32 {
             }
             try legacy.save(to: preferences)
             guard preferences.object(forKey: "MFBGuiMediaSettings.fastAvifQuality") == nil,
+                  preferences.object(forKey: "MFBGuiMediaSettings.fastJxlEffort") == nil,
                   preferences.object(forKey: MediaSetting.imgJpegEffort.preferenceKey) == nil,
                   MediaSettings(preferences: preferences).values == legacy.values else {
                 throw HostError(message: "Saving migrated preferences kept retired encoding settings")

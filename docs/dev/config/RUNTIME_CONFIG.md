@@ -94,7 +94,9 @@ evidence remain available through settings, run details and history.
 
 - **Pixel JXL effort.** `img.jxl_effort` is an optional search ceiling from E2
   through E11. With no ceiling override, Normal explores up to E7 and
-  Ultimate/archive or PNG up to E10. Effort comparison evaluates verified
+  Ultimate/archive or PNG up to E10. Fast JXL uses this ceiling for verified
+  lossless pixel encodes at D0, with a maximum of E10 even if the shared
+  configuration requests E11. Effort comparison evaluates verified
   pure-media payloads at the same quality. Equal sizes prefer lower E.
 - **Pixel JXL distance.** `img.jxl_distance` is an optional fidelity bound.
   Zero requires exact output and effort still adapts. Positive values from
@@ -102,7 +104,7 @@ evidence remain available through settings, run details and history.
   confirmed-lossless inputs keep D0, and JPEG uses reversible reconstruction.
   Without a bound, the source policy determines the search domain.
 
-Fast JXL performs reversible JPEG comparison. Ordinary IMG and Fast JXL share
+Fast JXL also performs reversible JPEG comparison. Ordinary IMG and Fast JXL share
 `jpeg_effort_search`:
 
 - `adaptive`: bounded comparison up to `jpeg_effort` (E2–E11).
@@ -580,7 +582,7 @@ remain subject to macOS behavior.
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
 | `img.jpeg_effort` | `11` | Upper E2–E11 bound for adaptive reversible JPEG comparison. |
 | `img.jxl_distance` | `null` | Optional maximum D for policy-eligible pixel exploration. |
-| `img.jxl_effort` | `null` | Optional E2–E11 ceiling for pixel effort exploration. |
+| `img.jxl_effort` | `null` | Optional E2–E11 ceiling for pixel effort exploration. Fast JXL lossless stills explore up to E10. |
 | `img.jxl_effort_search` | `adaptive` | Verified E comparison at a common quality. |
 | `img.jpeg_effort_search` | `full` | `adaptive` compares a bounded effort set. `full` compares all E1–E11. |
 | `img.quality_search` | `adaptive` | Guarded standard D or Fast AVIF Q exploration. |

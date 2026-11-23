@@ -56,7 +56,7 @@ use foundation::quality_matcher::SourceCodec;
 use foundation::{
     ModernLossyStaticCandidate, PauseController, Summary, check_dangerous_directory,
     disk_full_pause_reason, log_detail, log_failure, log_fatal, log_hint, log_skip, log_stat,
-    log_success, log_summary_header, print_summary, scan_modern_lossy_static_candidates,
+    log_success, log_summary_header, print_summary, scan_fast_img_static_candidates,
 };
 use img::{
     ConfigFlags, calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
@@ -2386,6 +2386,109 @@ mod conversion_result_adapter_tests {
     }
 
     #[test]
+    fn fast_lossless_pixel_delivery_rechecks_a_disguised_png_before_cleanup() -> anyhow::Result<()>
+    {
+        let _lock = super::FAST_IMG_TEST_ENV_LOCK
+            .lock()
+            .expect("shared CLI environment");
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let source = root.join("fixture.jpeg");
+        let working = root.join("output");
+        {
+            let mut encoder = png::Encoder::new(std::fs::File::create(&source)?, 48, 32);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Sixteen);
+            encoder.set_compression(png::Compression::NoCompression);
+            let rgb: Vec<_> = (0..48u16 * 32)
+                .flat_map(|n| [n, n + 1, n + 2].into_iter().flat_map(u16::to_be_bytes))
+                .collect();
+            encoder.write_header()?.write_image_data(&rgb)?;
+        }
+        let plan = super::scan_fast_img_sources(vec![source.clone()], &root, "jxl")?;
+        assert_eq!(plan.source_files.as_slice(), std::slice::from_ref(&source));
+        let job = super::FastImgTranscodeJob {
+            source: source.clone(),
+            src_hash: plan.source_hashes["fixture.jpeg"].clone(),
+            rel_key: "fixture.jpeg".into(),
+            out_rel_key: "nested/fixture.JXL".into(),
+            shortest_path: super::ShortestPathFlag(true),
+        };
+        let super::FastImgTranscodeOutcome::Converted(proof) =
+            super::fast_img_run_encode_job_inner(&job, &root, &working, 1, false, false, "jxl")?
+        else {
+            anyhow::bail!("expected a smaller lossless pixel output");
+        };
+        let output = working.join(&proof.out_rel);
+        assert!(proof.jpeg_invocation.is_none());
+        let _uncached = foundation::common_utils::UncachedVerificationScope::new()?;
+        assert_eq!(
+            super::fast_img_refresh_reused_jxl_delivery(&source, &output)?,
+            proof.out_hash
+        );
+        let exact = super::fast_img_verify_jxl_output(&source, &output)?;
+
+        use foundation::fast_img::{FastImgLibraryAssetProbe, library_handle_from_probes};
+        use foundation::pipeline::verification::{Gate2Final, VerificationGate};
+        let mut marker = super::WorkingCopyMarker::new(root.clone(), working, 1);
+        marker.encoded_count = 1;
+        marker.blake3_log.insert(
+            proof.rel_key,
+            super::Blake3Entry {
+                out_rel: Some(proof.out_rel.clone()),
+                src: proof.src_hash,
+                out: proof.out_hash,
+                library_asset: None,
+            },
+        );
+        let format = Some(super::FormatKind::Jxl);
+        let (local, _) = super::fast_img_fresh_final_local_checks(
+            &marker,
+            1,
+            format,
+            &plan.source_hashes,
+            false,
+        )?;
+        anyhow::ensure!(local.passed, "lossless pixel Gate 1: {local:?}");
+        marker.apply_gate1(&local);
+        assert!(
+            !Gate2Final
+                .run(&super::fast_img_pipeline_ctx(&marker, 1, None, format))
+                .passed
+        );
+        let library_original = root.join("simulated-library.jxl");
+        std::fs::copy(&output, &library_original)?;
+        let library = library_handle_from_probes(
+            &marker,
+            &[(proof.out_rel, "fixture-uuid".into())],
+            |uuid| {
+                Ok(FastImgLibraryAssetProbe {
+                    uuid: uuid.into(),
+                    path: library_original.clone(),
+                    iscloudasset: true,
+                    incloud: Some(true),
+                    ismissing: false,
+                })
+            },
+            |_| Ok(false),
+        )?;
+        super::apply_library_assets_to_marker(&mut marker, &library)?;
+        let gate = Gate2Final.run(&super::fast_img_pipeline_ctx(
+            &marker,
+            1,
+            Some(library),
+            format,
+        ));
+        anyhow::ensure!(gate.passed, "lossless pixel Gate 2: {gate:?}");
+
+        std::fs::write(&output, b"changed after verification")?;
+        assert!(super::fast_img_verify_jxl_output(&source, &output).is_err());
+        assert!(super::safe_delete_jpeg_source(&source, &output, &exact).is_err());
+        assert_eq!(super::calculate_blake3_hash(&source)?, job.src_hash);
+        Ok(())
+    }
+
+    #[test]
     fn existing_reconstructible_jxl_delivers_smaller_verified_candidate_without_clobber()
     -> anyhow::Result<()> {
         let _env_lock = super::FAST_IMG_TEST_ENV_LOCK
@@ -3937,6 +4040,9 @@ fn fast_img_processing_contract(
 
     let encoding = match strategy {
         "jxl" => FastImgEncodingParameters::Jxl {
+            pixel_effort_ceiling: Some(foundation::jxl_effort_policy::fast_lossless_pixel_ceiling(
+                config.img.jxl_effort,
+            )),
             // Full comparison ignores the saved manual E, just like the actual
             // effort candidate generator. Do not invalidate it for an inactive value.
             jpeg_effort: if config.img.jpeg_effort_search == JpegEffortSearch::Full {
@@ -4495,10 +4601,16 @@ fn fast_img_capture_routed_retry_admissions(
             )?)
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let inventory =
-        scan_fast_img_sources_with(observed, &marker.src_dir, &marker.strategy, |paths| {
-            Ok(foundation::image::format_identity::resolve_format_identities(paths)?)
-        })?;
+    let inventory = scan_fast_img_sources_with_policy(
+        &observed,
+        &marker.src_dir,
+        &marker.strategy,
+        marker
+            .processing_contract
+            .as_ref()
+            .is_some_and(FastImgProcessingContract::admits_lossless_pixels),
+        |paths| Ok(foundation::image::format_identity::resolve_format_identities(paths)?),
+    )?;
     let routes = inventory.failed_retry_routes();
     let mut issues = BTreeMap::new();
     for admission in &mut admissions {
@@ -4752,7 +4864,7 @@ fn fast_img_validate_processing_contract(
     current
         .validate(current_strategy)
         .map_err(anyhow::Error::msg)?;
-    if saved != current {
+    if !saved.matches_current_settings(current) {
         return Err(resume_admission::SettingsError::Changed(format!(
             "Fast IMG processing settings differ from the saved task. The saved results are preserved. Resume with the saved settings in a compatible version, or use --no-resume for an isolated new task. Saved: {saved:?}. Current: {current:?}"
         ))
@@ -5252,21 +5364,23 @@ fn scan_fast_img_sources(
     src_dir: &Path,
     strategy: &str,
 ) -> anyhow::Result<FastImgSourceInventory> {
-    scan_fast_img_sources_with(
-        candidates
+    scan_fast_img_sources_with_policy(
+        &candidates
             .iter()
             .map(|path| AdmittedImageFile::from_metadata(path, &std::fs::symlink_metadata(path)?))
             .collect::<std::io::Result<Vec<_>>>()?,
         src_dir,
         strategy,
+        true,
         |paths| Ok(foundation::image::format_identity::resolve_format_identities(paths)?),
     )
 }
 
-fn scan_fast_img_sources_with(
-    observed: Vec<AdmittedImageFile>,
+fn scan_fast_img_sources_with_policy(
+    observed: &[AdmittedImageFile],
     src_dir: &Path,
     strategy: &str,
+    include_lossless: bool,
     resolve_formats: impl FnOnce(
         &[PathBuf],
     ) -> anyhow::Result<
@@ -5279,10 +5393,12 @@ fn scan_fast_img_sources_with(
             src_dir.display()
         );
     } else {
-        println!(
-            "[FASTIMG ] selecting JPEG and JPEG-reconstructible JXL in {}",
-            src_dir.display()
-        );
+        let scope = if include_lossless {
+            "reversible JPEG and proven lossless stills"
+        } else {
+            "reversible JPEG inputs"
+        };
+        println!("[FASTIMG ] selecting {scope} in {}", src_dir.display());
     }
 
     let candidates = observed
@@ -5317,7 +5433,8 @@ fn scan_fast_img_sources_with(
         .iter()
         .zip(&format_identities)
         .filter(|(path, identity)| {
-            fast_img_tier2_source_format(strategy, identity.family)
+            (fast_img_tier2_source_format(strategy, identity.family)
+                || (include_lossless && strategy == "jxl" && identity.family == FormatKind::Png))
                 && !reconstructible_jxl.contains(*path)
         })
         .map(|(path, _)| path.clone())
@@ -5326,9 +5443,13 @@ fn scan_fast_img_sources_with(
         foundation::ModernLossyStaticScan::default()
     } else {
         println!(
-            "[TIER 2  ] inspecting modern lossy static sources for byte-preserving verified Photos delivery"
+            "[FASTIMG ] inspecting still-image compression for lossless encoding or original-format delivery"
         );
-        scan_modern_lossy_static_candidates(src_dir, &tier2_paths)?
+        if include_lossless {
+            scan_fast_img_static_candidates(src_dir, &tier2_paths)?
+        } else {
+            foundation::scan_modern_lossy_static_candidates(src_dir, &tier2_paths)?
+        }
     };
     let mut modern_probe_failures =
         fast_img_result::ProbeFailures::new(modern_lossy_scan.probe_failures.len());
@@ -5359,9 +5480,7 @@ fn scan_fast_img_sources_with(
                 "probe failure",
             ) {
                 Ok(rel) => {
-                    if !observed_probe_paths.insert(rel.clone()) {
-                        modern_probe_failures.hashes.remove(&rel);
-                    } else {
+                    if observed_probe_paths.insert(rel.clone()) {
                         match source.content_blake3() {
                             Ok(hash) => {
                                 modern_probe_failures.hashes.insert(rel.clone(), hash);
@@ -5373,6 +5492,8 @@ fn scan_fast_img_sources_with(
                             ),
                         }
                         println!("{}", fast_img_file_failure_line(&rel, reason));
+                    } else {
+                        modern_probe_failures.hashes.remove(&rel);
                     }
                 }
                 Err(error) => eprintln!(
@@ -5435,9 +5556,17 @@ fn scan_fast_img_sources_with(
                     }
                 }
             }
+        } else if let Some(proof_hash) = modern_lossy_scan.lossless_sources.get(path) {
+            anyhow::ensure!(
+                source.content_blake3()? == *proof_hash,
+                "lossless source changed after classification"
+            );
+            source_files.push(source);
         } else if identity.family == FormatKind::Jpeg || reconstructible_jxl.contains(path) {
             source_files.push(source);
-        } else if fast_img_tier2_source_format(strategy, identity.family) {
+        } else if fast_img_tier2_source_format(strategy, identity.family)
+            || modern_probe_failure_paths.contains_key(path)
+        {
             let admitted = modern_candidate_paths.contains(path);
             let probe_failed = modern_probe_failure_paths.contains_key(path);
             if !admitted && !probe_failed {
@@ -5465,7 +5594,7 @@ fn scan_fast_img_sources_with(
         expected_ignored_count,
     )?;
     let source_hashes = fast_img_observed_source_hashes(src_dir, source_files.iter().copied())?;
-    for source in &observed {
+    for source in observed {
         source.verify_regular_file_unchanged()?;
     }
     live_photos.verify_unchanged()?;
@@ -5482,7 +5611,7 @@ fn scan_fast_img_sources_with(
         );
     } else {
         println!(
-            "[FASTIMG ] selected {} JPEG or JPEG-reconstructible inputs in {}",
+            "[FASTIMG ] selected {} reversible JPEG or lossless pixel inputs in {}",
             source_files.len(),
             src_dir.display()
         );
@@ -6044,6 +6173,15 @@ fn run_fast_img_with_format_resolver(
         );
         retry_requested = true;
     }
+    if let Some(marker) = &existing_marker
+        && let Some(selected) = FastImgInputScope::observe_selected_file(input)?
+    {
+        foundation::fast_img_store::verify_single_source_scope(
+            marker,
+            selected.path(),
+            &selected.content_blake3(),
+        )?;
+    }
     let (candidates, remove_selected_root, directory_witness) = if let Some(context) =
         &failed_retry_context
     {
@@ -6091,8 +6229,19 @@ fn run_fast_img_with_format_resolver(
                 .collect::<anyhow::Result<BTreeSet<_>>>()
         })
         .transpose()?;
-    let mut inventory =
-        scan_fast_img_sources_with(candidates, &src_dir, strategy, resolve_formats)?;
+    let admitted_pixels = existing_marker
+        .as_ref()
+        .map_or(Some(&processing_contract), |marker| {
+            marker.processing_contract.as_ref()
+        })
+        .is_some_and(FastImgProcessingContract::admits_lossless_pixels);
+    let mut inventory = scan_fast_img_sources_with_policy(
+        &candidates,
+        &src_dir,
+        strategy,
+        admitted_pixels,
+        resolve_formats,
+    )?;
     if let (Some(context), Some(marker), Some(observed)) = (
         &failed_retry_context,
         &existing_marker,
@@ -6207,6 +6356,7 @@ fn run_fast_img_with_format_resolver(
                 .context("snapshot fast-img source directory cleanup boundary")?,
         )
     };
+    let mut discovery_outcome = None;
     let mut removed_source_files = Vec::new();
     let execution = (|| -> anyhow::Result<()> {
         fast_img_reconcile_saved_marker(
@@ -6260,6 +6410,7 @@ fn run_fast_img_with_format_resolver(
                 );
                 return Ok(());
             }
+            discovery_outcome = Some(fast_img_result::DiscoveryOutcome::NoEligibleSources);
             println!(
                 "[DONE    ] no eligible {output_format_name} input media found; no files, Photos assets, or directories were changed"
             );
@@ -6301,21 +6452,11 @@ fn run_fast_img_with_format_resolver(
             );
         }
         if dry_run.0 {
-            if strategy == "avif" {
-                println!(
-                    "[DRY-RUN ] would encode {} static images from {} into AVIF-only output {}",
-                    planned_encode_count,
-                    src_dir.display(),
-                    working_copy.display()
-                );
-            } else {
-                println!(
-                    "[DRY-RUN ] would encode {} JPEGs from {} into JXL-only output {}",
-                    source_jpegs.len(),
-                    src_dir.display(),
-                    working_copy.display()
-                );
-            }
+            println!(
+                "[DRY-RUN ] would evaluate {planned_encode_count} static images from {} for {output_format_name} output {}",
+                src_dir.display(),
+                working_copy.display()
+            );
             if !modern_lossy_candidates.is_empty() {
                 println!(
                     "[DRY-RUN ] would reconcile/import and custody-verify {} byte-preserved Tier 2 source(s) in Photos",
@@ -6567,6 +6708,7 @@ fn run_fast_img_with_format_resolver(
         &modern_lossy_candidates,
         &modern_probe_failures,
         ignored_count,
+        discovery_outcome,
         execution,
     )
 }
@@ -6657,7 +6799,7 @@ fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool
 }
 
 fn fast_img_delete_notice_message(
-    jpeg_count: usize,
+    primary_count: usize,
     modern_lossy_count: usize,
     src_dir: &Path,
     strategy: &str,
@@ -6667,15 +6809,10 @@ fn fast_img_delete_notice_message(
     } else {
         "JXL-only"
     };
-    let source_type_plural = if strategy == "avif" {
+    let source_types = if strategy == "avif" {
         "static images"
     } else {
-        "JPEG and reconstructible JXL inputs"
-    };
-    let source_type_singular = if strategy == "avif" {
-        "static image"
-    } else {
-        "JPEG-derived"
+        "eligible JPEG, JXL and confirmed-lossless static PNG, WebP or AVIF inputs"
     };
 
     let tier2_notice = if modern_lossy_count > 0 {
@@ -6686,8 +6823,8 @@ fn fast_img_delete_notice_message(
         String::new()
     };
     format!(
-        "[NOTICE  ] fast-img {mode_name} delivery for {jpeg_count} {source_type_plural} from {}. \
-         This workflow will directly delete original {source_type_singular} files after strict verification.{tier2_notice} \
+        "[NOTICE  ] fast-img {mode_name} delivery for {primary_count} {source_types} from {}. \
+         Original files accepted for delivery will be deleted after final verification.{tier2_notice} \
          Back up the source folder first if you need to keep them.",
         src_dir.display()
     )
@@ -8128,11 +8265,16 @@ fn fast_img_run_encode_job_inner(
             }
         }
     } else {
+        let source_format = foundation::image::format_detect::detect_true_format(&job.source)?;
         let options = LosslessConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
             base_dir: Some(src_dir.to_path_buf()),
             flags: LosslessConvertFlags::APPLE_COMPAT
-                | LosslessConvertFlags::REQUIRE_JPEG_RECONSTRUCTION
+                | if matches!(source_format, FormatKind::Jpeg | FormatKind::Jxl) {
+                    LosslessConvertFlags::REQUIRE_JPEG_RECONSTRUCTION
+                } else {
+                    LosslessConvertFlags::empty()
+                }
                 | LosslessConvertFlags::REQUIRE_OUTPUT_DELIVERY
                 | LosslessConvertFlags::ULTIMATE
                 | if archive {
@@ -8146,12 +8288,15 @@ fn fast_img_run_encode_job_inner(
                     LosslessConvertFlags::empty()
                 },
             child_threads,
-            input_format: Some("JPEG".to_string()),
+            input_format: match source_format {
+                FormatKind::Jpeg | FormatKind::Jxl => Some("JPEG".to_owned()),
+                format => format.canonical_extension().map(str::to_owned),
+            },
             quality_label: None,
             codec: foundation::conversion_types::SelectedCodec::default(),
             size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
         };
-        if foundation::image::format_detect::detect_true_format(&job.source)? == FormatKind::Jxl {
+        if source_format == FormatKind::Jxl {
             use img::lossless_converter::{ExistingJxlCandidate, prepare_existing_jxl};
             if foundation::metadata::find_xmp_sidecar(&job.source)?.is_some()
                 || foundation::metadata::find_aae_sidecar(&job.source)?.is_some()
@@ -8239,13 +8384,15 @@ fn fast_img_run_encode_job_inner(
                 }),
                 None,
             )
-        } else {
+        } else if source_format == FormatKind::Jpeg {
             convert_jpeg_to_jxl_at_observed(
                 &job.source,
                 &options,
                 Some(&output),
                 Some(&mut jpeg_invocation),
             )?
+        } else {
+            fast_img_publish_lossless_pixels(job, &output, &options)?
         }
     };
     anyhow::ensure!(
@@ -8312,6 +8459,96 @@ fn fast_img_run_encode_job_inner(
     )))
 }
 
+fn fast_img_publish_lossless_pixels(
+    job: &FastImgTranscodeJob,
+    output: &Path,
+    options: &LosslessConvertOptions,
+) -> anyhow::Result<foundation::TaskResult> {
+    use img::lossless_converter::{encode_fast_lossless_jxl, fast_lossless_jxl_fits};
+
+    let source_bytes = std::fs::metadata(&job.source)?.len();
+    let candidate = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "fast_img_lossless_pixels",
+        None,
+        Some(".JXL"),
+    )?
+    .into_temp_path();
+    encode_fast_lossless_jxl(&job.source, &candidate, options)?;
+    foundation::ensure_parent_dir_exists(output)?;
+    let mut final_bytes = None;
+    let committed = foundation::conversion::commit_temp_to_output_with_metadata_checked(
+        &candidate,
+        output,
+        false,
+        Some(&job.source),
+        true,
+        false,
+        |staged| {
+            let size = std::fs::metadata(staged)?.len();
+            final_bytes = Some(size);
+            if !fast_lossless_jxl_fits(source_bytes, size) {
+                return Ok(false);
+            }
+            img::lossless_converter::verify_fast_lossless_jxl_pixels(&job.source, staged)
+                .map_err(std::io::Error::other)?;
+            fast_img_verify_source_hash_unchanged(&job.source, &job.src_hash)
+                .map_err(std::io::Error::other)?;
+            Ok(true)
+        },
+    )?;
+    match final_bytes {
+        Some(bytes) if committed => Ok(foundation::TaskResult::success(
+            &job.source,
+            output,
+            source_bytes,
+            bytes,
+            "JXL",
+            Some("verified lossless pixels (d=0)"),
+            None,
+        )),
+        Some(bytes) if !fast_lossless_jxl_fits(source_bytes, bytes) => Ok(
+            foundation::TaskResult::skipped_size_increase(&job.source, source_bytes, bytes),
+        ),
+        _ => anyhow::bail!("Fast IMG JXL output destination is already occupied; source retained"),
+    }
+}
+
+fn fast_img_verify_lossless_pixel_delivery(
+    source: &Path,
+    output: &Path,
+) -> anyhow::Result<IntegrityResult> {
+    anyhow::ensure!(
+        foundation::probe_fast_img_lossless_static(source)?
+            && foundation::image::format_detect::detect_true_format(output)? == FormatKind::Jxl,
+        "Fast IMG lossless pixel proof requires a supported lossless still and a JXL output"
+    );
+    let source_hash = calculate_blake3_hash(source)?;
+    let output_hash = calculate_blake3_hash(output)?;
+    anyhow::ensure!(
+        img::lossless_converter::fast_lossless_jxl_fits(
+            std::fs::metadata(source)?.len(),
+            std::fs::metadata(output)?.len()
+        ),
+        "final lossless JXL exceeds its source size"
+    );
+    img::lossless_converter::verify_fast_lossless_jxl_pixels(source, output)?;
+    foundation::image::orientation::verify_pixel_jxl_orientation_metadata(output)?;
+    foundation::metadata::verify_output_embedded_metadata(
+        source,
+        output,
+        foundation::metadata::MetadataOutputPolicy::PreserveSource,
+    )?;
+    anyhow::ensure!(
+        calculate_blake3_hash(source)? == source_hash
+            && calculate_blake3_hash(output)? == output_hash,
+        "source or JXL changed during lossless pixel delivery proof"
+    );
+    Ok(IntegrityResult::FinalModernDelivery {
+        source_hash,
+        output_hash,
+    })
+}
+
 fn fast_img_verify_jxl_output(source: &Path, output: &Path) -> anyhow::Result<IntegrityResult> {
     fast_img_verify_jxl_output_with_profile(source, output, false).map(|(integrity, _)| integrity)
 }
@@ -8321,7 +8558,14 @@ fn fast_img_verify_jxl_output_with_profile(
     output: &Path,
     measure: bool,
 ) -> anyhow::Result<(IntegrityResult, Option<FinalJxlVerificationTimings>)> {
-    if foundation::image::format_detect::detect_true_format(source)? != FormatKind::Jxl {
+    let source_format = foundation::image::format_detect::detect_true_format(source)?;
+    if !matches!(source_format, FormatKind::Jpeg | FormatKind::Jxl) {
+        return Ok((
+            fast_img_verify_lossless_pixel_delivery(source, output)?,
+            None,
+        ));
+    }
+    if source_format == FormatKind::Jpeg {
         if measure {
             let mut timings = FinalJxlVerificationTimings::default();
             let integrity =
@@ -8421,7 +8665,7 @@ fn fast_img_remove_recorded_output(
 }
 
 fn fast_img_refresh_reused_jxl_delivery(source: &Path, output: &Path) -> anyhow::Result<String> {
-    if foundation::image::format_detect::detect_true_format(source)? == FormatKind::Jxl {
+    if foundation::image::format_detect::detect_true_format(source)? != FormatKind::Jpeg {
         fast_img_verify_jxl_output(source, output)?;
         return calculate_blake3_hash(output);
     }
@@ -9182,7 +9426,7 @@ fn fast_img_unlink_prepared_sources(
             fast_img_source_cleanup_result(&candidate.source, "cleanup_companion_failed", cleanup).map_err(
                 |err| {
                     anyhow::anyhow!(
-                        "fast-img failed to delete matching XMP sidecar for already-absent source JPEG {} using output {}: {err}",
+                        "fast-img failed to delete matching XMP sidecar for already-absent source image {} using output {}: {err}",
                         candidate.source.display(),
                         candidate.output.display()
                     )
@@ -9192,7 +9436,7 @@ fn fast_img_unlink_prepared_sources(
             tracing::info!(
                 target: "fast_img_delete",
                 source = %candidate.source.display(),
-                "verified source JPEG already absent"
+                "verified source image already absent"
             );
         }
     }
@@ -9237,7 +9481,7 @@ fn fast_img_unlink_prepared_sources(
         fast_img_source_cleanup_result(&candidate.source, "cleanup_source_failed", cleanup)
             .map_err(|err| {
                 anyhow::anyhow!(
-                    "fast-img failed to delete verified source JPEG {} using output {}: {err}",
+                    "fast-img failed to delete verified source image {} using output {}: {err}",
                     candidate.source.display(),
                     candidate.output.display()
                 )
@@ -9308,7 +9552,7 @@ fn fast_img_delete_verified_source_jpegs_with(
         if !source.exists() {
             safe_delete_matching_xmp_sidecar(&source, &output).map_err(|err| {
                 anyhow::anyhow!(
-                    "fast-img failed to delete matching XMP sidecar for already-absent source JPEG {} using output {}: {err}",
+                    "fast-img failed to delete matching XMP sidecar for already-absent source image {} using output {}: {err}",
                     source.display(),
                     output.display()
                 )
@@ -9317,14 +9561,14 @@ fn fast_img_delete_verified_source_jpegs_with(
             tracing::info!(
                 target: "fast_img_delete",
                 source = %source.display(),
-                "verified source JPEG already absent"
+                "verified source image already absent"
             );
             continue;
         }
         let integrity = verify_integrity(&source, &output)?;
         safe_delete_jpeg_source(&source, &output, &integrity).map_err(|err| {
             anyhow::anyhow!(
-                "fast-img failed to delete verified source JPEG {} using output {}: {err}",
+                "fast-img failed to delete verified source image {} using output {}: {err}",
                 source.display(),
                 output.display()
             )
@@ -12009,7 +12253,7 @@ fn validate_cleanup_complete_deleted_source_state(
         let source = src_dir.join(fast_img_checked_rel_path(rel)?);
         if source.exists() {
             anyhow::bail!(
-                "fast-img cleanup marker expected deleted source JPEG to be absent: {}",
+                "fast-img cleanup marker expected deleted source image to be absent: {}",
                 source.display()
             );
         }
@@ -12072,7 +12316,7 @@ fn validate_cleanup_complete_deleted_source_state(
         let source = src_dir.join(fast_img_checked_rel_path(rel)?);
         if !source.exists() {
             anyhow::bail!(
-                "fast-img cleanup marker expected skipped source JPEG to remain: {}",
+                "fast-img cleanup marker expected skipped source image to remain: {}",
                 source.display()
             );
         }
@@ -12084,7 +12328,7 @@ fn validate_cleanup_complete_deleted_source_state(
         let source = src_dir.join(fast_img_checked_rel_path(rel)?);
         if !source.exists() {
             anyhow::bail!(
-                "fast-img cleanup marker expected failed source JPEG to remain: {}",
+                "fast-img cleanup marker expected failed source image to remain: {}",
                 source.display()
             );
         }
@@ -12845,11 +13089,7 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
     } else {
         "ENCODE"
     };
-    let source_kind = if strategy == "avif" {
-        "static image"
-    } else {
-        "JPEG-derived input"
-    };
+    let source_kind = "static image";
     let pending = jobs.len();
     let encode_progress = foundation::progress::FileStageProgress::new(
         u64::try_from(pending).context("fast-img pending count exceeds u64")?,
@@ -13654,11 +13894,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     };
     let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
     let source_type = "images";
-    let source_kind = if strategy == "avif" {
-        "static image"
-    } else {
-        "JPEG-derived input"
-    };
+    let source_kind = "static image";
     let reconciled = fast_img_reconcile_unrecorded_source_disposition(
         marker,
         src_dir,
@@ -14222,11 +14458,21 @@ mod fast_img_hardening_tests {
         let config = RuntimeConfig::default();
         let jxl = super::fast_img_processing_contract(&config, "jxl", false, false)?;
         let avif = super::fast_img_processing_contract(&config, "avif", false, false)?;
+        let mut saved = serde_json::to_value(&jxl)?;
+        saved["encoding"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pixel_effort_ceiling");
+        let legacy: super::FastImgProcessingContract = serde_json::from_value(saved)?;
+        assert!(!legacy.admits_lossless_pixels());
+        assert!(legacy.matches_current_settings(&jxl));
+        assert!(jxl.admits_lossless_pixels());
+        assert!(!legacy.matches_current_settings(&avif));
         let mut inactive = config.clone();
         inactive.img.jpeg_effort = 7;
         inactive.img.avif_quality = 75;
         inactive.img.jxl_distance = Some(0.5);
-        inactive.img.jxl_effort = Some(8);
+        inactive.img.jxl_effort = Some(11); // capped at the default E10 for d=0
         inactive.img.quality_heuristic = true;
         inactive.img.allow_database = true;
         inactive.vid.codec = VidCodec::Av1;
@@ -14235,6 +14481,11 @@ mod fast_img_hardening_tests {
             super::fast_img_processing_contract(&inactive, "jxl", false, false)?,
             jxl,
             "full JPEG comparison must ignore saved manual effort and other routes' settings"
+        );
+        inactive.img.jxl_effort = Some(8);
+        assert_ne!(
+            super::fast_img_processing_contract(&inactive, "jxl", false, false)?,
+            jxl
         );
         inactive.img.quality_search = QualitySearch::ModeDefault;
         assert_eq!(
@@ -16060,6 +16311,30 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn fast_img_saved_jpeg_policy_keeps_png_outside_the_original_plan() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("synthetic-source.jpg");
+        image::RgbaImage::new(4, 3).save_with_format(&path, image::ImageFormat::Png)?;
+        for include_lossless in [false, true] {
+            let source = foundation::batch::AdmittedImageFile::from_metadata(
+                &path,
+                &std::fs::symlink_metadata(&path)?,
+            )?;
+            let scan = super::scan_fast_img_sources_with_policy(
+                &[source],
+                dir.path(),
+                "jxl",
+                include_lossless,
+                |paths| Ok(foundation::image::format_identity::resolve_format_identities(paths)?),
+            )?;
+            assert_eq!(scan.source_files.contains(&path), include_lossless);
+            assert_eq!(scan.planned_encode_count, usize::from(include_lossless));
+            assert!(scan.modern_lossy_candidates.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn fast_img_refuses_new_file_in_nested_directory_during_format_scan() -> anyhow::Result<()> {
         if isolated_failed_retry_test()? {
             return Ok(());
@@ -16804,9 +17079,10 @@ mod fast_img_hardening_tests {
 
         let files = super::fast_img_failed_retry_input_plan(&child, &context)?;
         let observed = context.admissions().keys().cloned().collect();
-        let inventory = super::scan_fast_img_sources_with(files, &source, "jxl", |paths| {
-            Ok(foundation::image::format_identity::resolve_format_identities(paths)?)
-        })?;
+        let inventory =
+            super::scan_fast_img_sources_with_policy(&files, &source, "jxl", true, |paths| {
+                Ok(foundation::image::format_identity::resolve_format_identities(paths)?)
+            })?;
         super::fast_img_validate_failed_retry_routes(&child, &context, &observed, &inventory)?;
         super::validate_fast_img_marker_source_state(
             &child,
@@ -19406,10 +19682,11 @@ mod fast_img_hardening_tests {
             std::fs::FileTimes::new().set_modified(std::fs::metadata(&source)?.modified()?),
         )?;
 
-        let result = super::scan_fast_img_sources_with(
-            FastImgInputScope::observe(&source, true)?.candidates,
+        let result = super::scan_fast_img_sources_with_policy(
+            &FastImgInputScope::observe(&source, true)?.candidates,
             root.path(),
             "jxl",
+            true,
             |paths| {
                 let identities =
                     foundation::image::format_identity::resolve_format_identities(paths)?;
@@ -19669,10 +19946,12 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn delete_notice_warns_jpeg_derived_inputs_are_deleted_without_prompting() {
+    fn delete_notice_identifies_lossless_stills_and_verified_source_deletion() {
         let message = fast_img_delete_notice_message(3, 0, std::path::Path::new("/photos"), "jxl");
-        assert!(message.contains("will directly delete original JPEG-derived files"));
-        assert!(message.contains("JPEG and reconstructible JXL inputs"));
+        assert!(message.contains(
+            "Original files accepted for delivery will be deleted after final verification"
+        ));
+        assert!(message.contains("JPEG, JXL and confirmed-lossless static PNG, WebP or AVIF"));
         assert!(message.contains("JXL-only delivery"));
     }
 

@@ -70,6 +70,23 @@ pub fn effort_candidates(kind: JxlEffortContext, selected: u8) -> Vec<u8> {
     efforts
 }
 
+/// Fast IMG excludes E11 pixel coding: textured stills can exceed batch budgets even with libjxl 0.14.
+#[must_use]
+pub fn fast_lossless_pixel_ceiling(configured: Option<u8>) -> u8 {
+    const MAX_PIXEL_EFFORT: u8 = 10;
+    configured.unwrap_or(MAX_PIXEL_EFFORT).min(MAX_PIXEL_EFFORT)
+}
+
+/// Adaptive candidates at distance zero for Fast IMG's confirmed lossless stills.
+#[must_use]
+pub fn fast_lossless_pixel_efforts() -> Vec<u8> {
+    let configured = crate::runtime_config::active().and_then(|config| config.img.jxl_effort);
+    effort_candidates(
+        JxlEffortContext::DirectEncode,
+        fast_lossless_pixel_ceiling(configured),
+    )
+}
+
 /// Compare verified payloads at one immutable input/quality domain; ties retain lower effort.
 /// A single candidate preserves the caller's existing verification and recovery path.
 /// # Errors
@@ -1076,6 +1093,9 @@ mod tests {
                     vec![9]
                 );
             }
+            let fast_pixel_efforts = fast_lossless_pixel_efforts();
+            assert_eq!(fast_pixel_efforts.last().copied(), Some(effort.min(10)));
+            assert!(fast_pixel_efforts.len() >= 2 && !fast_pixel_efforts.contains(&11));
             let png_effort =
                 direct_encoder_effort(crate::image::png_validation::PNG_LOSSLESS_JXL_EFFORT);
             assert_eq!(png_effort, effort);

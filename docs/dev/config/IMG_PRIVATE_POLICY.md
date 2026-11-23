@@ -236,6 +236,13 @@ Explicit resume still performs the complete existing source/output/hash and
 delivery reconciliation; fresh selects a separate output rather than overwriting
 the recorded task. Dry-run remains observational.
 
+For a single-file selection, the launcher captures its canonical path and full
+BLAKE3 before the worker can unlink it. Independent delivery verification joins
+that selection to one exact admission and its outcome, checks the published
+output and any recorded Photos UUID, and reports the selected file. Other
+media in the parent directory belong to separate selections. An unrelated
+checkpoint or changed file blocks reuse and cleanup.
+
 Checkpoint updates use a private unpredictable temporary file in the state
 directory, sync its bytes and atomically persist it, then sync the directory.
 A stale predictable `.json.tmp` path is neither followed nor truncated. The
@@ -407,12 +414,18 @@ authorize otherwise forbidden repairs or weaken the route's fidelity checks.
 
 ## Fast IMG
 
-Fast JXL retains its independent JPEG reconstruction and native-media delivery
-workflow. Its settings expose JPEG E and applicable verified E comparison, not
-the pixel encoder's D. Normal IMG and Fast JXL use the same full-search engine,
-while GUI profiles keep their own selected settings. Same-semantics compatibility
+Fast JXL uses independent effort searches for reversible JPEG reconstruction
+and for confirmed lossless stills. The latter encodes pixels at D0, compares
+adaptive effort candidates under `img.jxl_effort` (up to E10), and prefers a
+verified JXL on a size tie with the source. Normal IMG and Fast JXL share the
+JPEG full-search engine, while GUI profiles keep separate effort ceilings. Same-semantics compatibility
 retries in adaptive comparison remain subject to the configured fallback policy
 and exact reconstruction checks; full mode requires exact independent efforts.
+
+The pixel cap is specific to Fast JXL. In a two-thread synthetic D0 encode on
+Apple Silicon (cjxl 0.14.0, 12e4bf40), E10 and E11 both reproduced all samples
+of a 96×96 graphic in 0.064 s and 1.287 s respectively. For a 512×384 textured
+image E10 finished in 3.331 s. E11 had produced no file at the 90-second limit.
 
 Fast AVIF retains its bounded quality search and its locator and final speed
 domains. The existing progressive-output policy limits the search to Q10–Q100.

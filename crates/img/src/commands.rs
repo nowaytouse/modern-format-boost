@@ -137,15 +137,15 @@ pub(crate) enum Commands {
     /// Perform deep diagnostic scan of the database infrastructure and data integrity
     DbHealth,
 
-    /// Fast image encoding: JPEG and reconstructible JXL → reversible JXL, or static images → AVIF.
+    /// Fast still-image encoding with reversible JPEG, lossless pixel JXL, or AVIF.
     ///
     /// Detects true JPEGs via content identity, requires byte-identical JPEG
     /// reconstruction after all metadata work, and deletes sources only after
     /// that final proof. External XMP is appended without rewriting the
     /// reconstruction-owned JXL boxes, then reconstruction is proved again.
-    /// JXL mode also
-    /// delivers confirmed-lossy static WebP/JP2/JXL/AVIF/HEIC originals to
-    /// Photos with UUID/hash custody proof; uncertain or lossless originals remain.
+    /// Static PNG and proven lossless WebP/AVIF use d=0 pixel encoding with effort
+    /// exploration up to E10. A verified complete JXL at or below the original size wins.
+    /// Confirmed-lossy modern stills can be delivered to Photos in their original format.
     ///
     /// Locked decisions: D1=Photos import only with shortest-path,
     /// D2=abort on delete failure, D3=exact JBRD plus orientation audit,
@@ -153,8 +153,8 @@ pub(crate) enum Commands {
     /// D6=verified source delete mandatory, D7=content-based admission.
     #[command(name = "fast-img")]
     FastImg {
-        /// Input directory or single static image. JXL encoding accepts true JPEG and
-        /// JPEG-reconstructible JXL. Eligible modern lossy originals use the Photos-delivery tier.
+        /// Input directory or static image. JXL accepts JPEG, reconstructible JXL,
+        /// static PNG, and confirmed lossless WebP or AVIF.
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 

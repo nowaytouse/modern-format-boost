@@ -2321,8 +2321,7 @@ pub fn delivery_pipeline_pixel_count_u64_or_none(
 #[must_use]
 pub fn conversion_size_increase_diff_tag(diff_bytes: i128) -> String {
     if let Some(s) = crate::numeric_cast::i128_to_i64_strict(diff_bytes, "size_diff") {
-        crate::infra::static_logs::messages::MSG_CONVERSION_SIZE_TAG_POS
-            .replace("{size_diff}", &crate::modern_ui::format_size_diff(s))
+        crate::modern_ui::format_size_diff(s)
     } else {
         delivery_strict_batch_audit(
             "conversion_size_diff",

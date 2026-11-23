@@ -372,6 +372,95 @@ impl WorkingCopyMarker {
     }
 }
 
+/// Bind a file selection to the only source authorized by the saved task.
+///
+/// # Errors
+/// Rejects missing admissions, selections from another task, and changed source bytes.
+pub fn verify_single_source_scope(
+    marker: &WorkingCopyMarker,
+    selected: &Path,
+    source_blake3: &str,
+) -> Result<()> {
+    let rel = crate::pipeline::verification::fast_img_relative_key(
+        selected,
+        &marker.src_dir,
+        "selected file",
+    )
+    .map_err(anyhow::Error::msg)?;
+    let matches = if let Some(plan) = read_admission_plan(marker)? {
+        plan.len() == 1
+            && plan
+                .get(&rel)
+                .is_some_and(|entry| entry.source_blake3 == source_blake3)
+    } else if let Some(retry) = super::failed_retry_context(&marker.working_copy)? {
+        let plan = retry.admissions();
+        marker.failed_retry_manifest_blake3.is_some()
+            && plan.len() == 1
+            && plan
+                .get(&rel)
+                .is_some_and(|entry| entry.admitted_source_blake3 == source_blake3)
+    } else {
+        false
+    };
+    ensure!(
+        matches,
+        "saved Fast IMG admission does not match the selected file and its bytes; use a fresh task"
+    );
+    // Incomplete tasks may have no recorded result yet. Any results that do
+    // exist must belong to this selection before a file-only run may use them.
+    let recorded = marker
+        .blake3_log
+        .iter()
+        .map(|(key, entry)| (key, &entry.src))
+        .chain(
+            marker
+                .skipped_sources
+                .iter()
+                .map(|(key, entry)| (key, &entry.src)),
+        )
+        .chain(
+            marker
+                .all_failed_sources()
+                .map(|(key, entry)| (key, &entry.src)),
+        )
+        .chain(
+            marker
+                .tier2_imported_assets
+                .iter()
+                .map(|asset| (&asset.rel_path, &asset.blake3)),
+        );
+    let mut count = 0;
+    for (key, digest) in recorded {
+        ensure!(
+            key == &rel && digest == source_blake3,
+            "saved Fast IMG result differs from selected file"
+        );
+        count += 1;
+    }
+    ensure!(
+        count <= 1 && (!marker.is_terminal() || count == 1),
+        "incomplete or duplicate Fast IMG result for selected file"
+    );
+    if !marker.photos_imported_assets.is_empty() {
+        let output = marker
+            .blake3_log
+            .get(&rel)
+            .context("selected source has no matching Photos output")?;
+        ensure!(
+            marker.photos_imported_assets.len() == 1
+                && marker
+                    .photos_imported_assets
+                    .iter()
+                    .all(
+                        |asset| output.out_rel.as_deref() == Some(asset.rel_path.as_str())
+                            && asset.blake3 == output.out
+                    ),
+            "Photos delivery receipt belongs to another Fast IMG output"
+        );
+    }
+    Ok(())
+}
+
 /// Load and verify all immutable admissions in one read-only SQL snapshot.
 ///
 /// # Errors

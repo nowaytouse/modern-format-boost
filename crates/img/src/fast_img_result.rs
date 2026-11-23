@@ -116,6 +116,12 @@ struct OriginalDelivery {
 }
 
 #[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DiscoveryOutcome {
+    NoEligibleSources,
+}
+
+#[derive(Debug, serde::Serialize)]
 struct Report {
     schema_version: u8,
     source_directory: std::path::PathBuf,
@@ -124,6 +130,8 @@ struct Report {
     photos_quarantine_blocked: Option<usize>,
     photos_quarantine_locations: Option<PhotosQuarantineLocations>,
     primary_verification_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    discovery_outcome: Option<DiscoveryOutcome>,
     succeeded: usize,
     skipped: usize,
     ignored: usize,
@@ -480,6 +488,7 @@ impl Report {
             photos_quarantine_blocked: None,
             photos_quarantine_locations: None,
             primary_verification_complete: gate1_complete_or_later(&marker.stage),
+            discovery_outcome: None,
             succeeded,
             skipped,
             ignored: 0,
@@ -566,6 +575,7 @@ pub(super) fn finish(
     originals: &[ModernLossyStaticCandidate],
     probe_failures: &ProbeFailures,
     ignored: usize,
+    discovery_outcome: Option<DiscoveryOutcome>,
     execution: anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     let execution = execution.and_then(|()| {
@@ -594,6 +604,9 @@ pub(super) fn finish(
         Err(execution) => error.context(format!("execution also failed: {execution:#}")),
     })?;
     report.record_execution(&execution, photos);
+    if execution.is_ok() {
+        report.discovery_outcome = discovery_outcome;
+    }
     report.ignored = ignored;
     let mut payload = serde_json::to_string(&report)?;
     if payload.len() > 16_384 && report.failed_source_proof.take().is_some() {
@@ -712,6 +725,7 @@ mod tests {
                 &[],
                 &ProbeFailures::default(),
                 0,
+                None,
                 Ok(()),
             )
             .err()
@@ -724,6 +738,7 @@ mod tests {
                 &[],
                 &ProbeFailures::default(),
                 0,
+                None,
                 Err(anyhow::anyhow!("backend unavailable")),
             )
             .err()
@@ -967,6 +982,7 @@ mod tests {
                 &[],
                 &ProbeFailures::default(),
                 0,
+                None,
                 failure
             )
             .err()

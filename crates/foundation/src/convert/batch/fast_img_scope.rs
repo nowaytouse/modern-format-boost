@@ -44,6 +44,20 @@ impl FastImgDirectoryWitness {
 }
 
 impl FastImgInputScope {
+    /// Preserve the exact file identity for post-delivery checks, even if its name is unlinked.
+    pub fn observe_selected_file(input: &Path) -> Result<Option<super::DiscoveredSource>> {
+        let selected = input.canonicalize().context("resolve Fast IMG selection")?;
+        let metadata = selected
+            .symlink_metadata()
+            .context("inspect Fast IMG selection")?;
+        if metadata.is_dir() {
+            return Ok(None);
+        }
+        Ok(Some(super::DiscoveredSource::from_metadata(
+            &selected, &metadata,
+        )?))
+    }
+
     pub fn source_root(input: &Path) -> Result<PathBuf> {
         let selected = crate::media_conversion_gate::canonicalize_for_tool_input(input);
         let metadata = fs::metadata(&selected)

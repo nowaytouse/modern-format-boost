@@ -218,7 +218,7 @@ struct Args {
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_jxl_distance)]
     img_jxl_distance: Option<f32>,
 
-    /// Upper effort for direct pixel JXL exploration, from 2 through 11.
+    /// Upper effort for direct pixel JXL exploration, from 2 through 11. Fast IMG lossless stills cap the search at E10.
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_direct_jxl_effort)]
     img_jxl_effort: Option<u8>,
     #[arg(long, value_enum)]
@@ -734,22 +734,24 @@ fn validate_media_options(args: &Args) -> Result<()> {
     );
     anyhow::ensure!(
         (args.img_jxl_effort.is_none() && args.img_jxl_effort_search.is_none())
+            || (args.mode == LaunchMode::FastImg
+                && args.strategy.as_deref().unwrap_or("jxl") == "jxl")
             || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
                 && processing_filter(args).accepts_image()),
-        "JXL pixel effort requires selected standard images; Fast IMG JXL performs JPEG reconstruction"
+        "JXL pixel effort requires selected standard images or Fast IMG JXL"
     );
     anyhow::ensure!(
         args.img_jxl_distance.is_none()
             || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
                 && processing_filter(args).accepts_image()),
-        "JXL pixel distance requires standard images; Fast IMG does not use pixel distance"
+        "A configurable JXL distance requires standard images. Fast IMG JXL always uses lossless encoding."
     );
     anyhow::ensure!(
         args.img_quality_search.is_none()
             || (args.mode == LaunchMode::FastImg && args.strategy.as_deref() == Some("avif"))
             || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
                 && processing_filter(args).accepts_image()),
-        "quality search requires standard images or Fast IMG AVIF; JPEG reconstruction has no quality search"
+        "Quality search requires standard images or Fast IMG AVIF. Fast IMG JXL always uses lossless encoding."
     );
     anyhow::ensure!(
         args.img_tools.is_empty()
@@ -1649,6 +1651,68 @@ fn finish_standard_workers(
     first_error.map_or(Ok(()), Err)
 }
 
+/// A clean discovery with no admissions has neither a checkpoint nor an output to verify.
+fn fast_img_no_delivery_required(
+    report: Option<&serde_json::Value>,
+    stats: &ProcessorStats,
+    source: &Path,
+    output: &Path,
+    selected: Option<&foundation::batch::DiscoveredSource>,
+) -> Result<bool> {
+    let Some(report) =
+        report.filter(|value| value["discovery_outcome"].as_str() == Some("no_eligible_sources"))
+    else {
+        return Ok(false);
+    };
+    anyhow::ensure!(
+        stats.exit_code == 0
+            && stats.counts_complete()
+            && stats.unprocessed == Some(0)
+            && stats.succeeded == 0
+            && stats.failed == 0
+            && stats.skipped == 0
+            && report["source_directory"].as_str().map(Path::new) == Some(source)
+            && report["output_directory"].as_str().map(Path::new) == Some(output)
+            && report["ignored"].as_u64() == Some(u64::try_from(stats.ignored)?)
+            && [
+                "succeeded",
+                "skipped",
+                "failed",
+                "unprocessed",
+                "encoded",
+                "photos_verified",
+                "source_retained"
+            ]
+            .into_iter()
+            .all(|key| report[key].as_u64() == Some(0))
+            && [
+                "primary_verification_complete",
+                "primary_cleanup_complete",
+                "photos_delivery_deferred",
+                "retained_only_complete"
+            ]
+            .into_iter()
+            .all(|key| report[key].as_bool() == Some(false))
+            && report
+                .get("finalization_error")
+                .is_some_and(serde_json::Value::is_null)
+            && report["original_delivery"].is_null()
+            && report["photos_quarantine_blocked"].is_null()
+            && report["retention_unknown_reason"].is_null()
+            && matches!(fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+            && matches!(foundation::pipeline::verification::read_marker(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+        "no-eligible-input receipt conflicts with the current worker outcome or saved delivery"
+    );
+    if let Some(selected) = selected {
+        anyhow::ensure!(
+            stats.ignored == 1,
+            "selected file is missing from the completed scan"
+        );
+        selected.verify_unchanged()?;
+    }
+    Ok(true)
+}
+
 fn run_fast_img_post_success(
     args: &Args,
     project_root: &Path,
@@ -1658,6 +1722,7 @@ fn run_fast_img_post_success(
     failed_sources_verified: Option<usize>,
     source_root: Option<&Path>,
     recovery: Option<&foundation::pipeline::verification::WorkingCopyMarker>,
+    selected_file: Option<&foundation::batch::DiscoveredSource>,
 ) -> Result<()> {
     let verify_bin = cli_binary(project_root, "verify");
     let recovery_digest = recovery
@@ -1693,12 +1758,27 @@ fn run_fast_img_post_success(
         "   {} Running fast-img delivery verification via Rust verify...",
         pick_symbol("🔍", "[CHECK]")
     );
-    let target = args.inputs.first().context("input required")?;
-    let verification = {
+    let target = selected_file
+        .map(foundation::batch::DiscoveredSource::path)
+        .or_else(|| args.inputs.first().map(PathBuf::as_path))
+        .context("input required")?;
+    let selected_digest = selected_file.map(foundation::batch::DiscoveredSource::content_blake3);
+    let verification = (|| {
+        let selected_marker = if let Some(digest) = &selected_digest {
+            let marker = foundation::pipeline::verification::read_marker(output_dir)
+                .context(IntegrityUnavailableReason::Checkpoint)?;
+            foundation::fast_img_store::verify_single_source_scope(&marker, target, digest)
+                .context(IntegrityUnavailableReason::Checkpoint)?;
+            Some(marker)
+        } else {
+            None
+        };
         let mode = if let Some(digest) = &recovery_digest {
             dev::infra::drag_drop::VerifyFastImgMode::PhotosCleanupRecovery(digest.clone())
         } else {
-            dev::infra::drag_drop::VerifyFastImgMode::Delivery
+            dev::infra::drag_drop::VerifyFastImgMode::Delivery {
+                selected_source_blake3: selected_digest,
+            }
         };
         run_unified_verification(
             &verify_bin,
@@ -1715,8 +1795,9 @@ fn run_fast_img_post_success(
                 strategy: args.strategy.clone(),
             },
         )
-    };
-    let verify = match verification {
+        .map(|verified| (verified, selected_marker))
+    })();
+    let (verify, selected_marker) = match verification {
         Ok(verify) => verify,
         Err(error) => {
             let error = match error.downcast_ref::<IntegrityUnavailableReason>().copied() {
@@ -1769,10 +1850,13 @@ fn run_fast_img_post_success(
                     &cleanup_output_path,
                 ));
             }
-            let mut receipt = recovery.map_or_else(
-                || delete_fast_img_shortest_path_output_dir(output_dir),
-                recover_fast_img_shortest_path_output_dir,
-            );
+            let mut receipt = if let Some(recovered) = recovery {
+                recover_fast_img_shortest_path_output_dir(recovered)
+            } else if let Some(selected) = &selected_marker {
+                dev::infra::drag_drop::delete_selected_fast_img_outputs(selected)
+            } else {
+                delete_fast_img_shortest_path_output_dir(output_dir)
+            };
             receipt.output_path = cleanup_output_path.clone();
             match receipt.outcome {
                 OutputCleanupOutcome::Removed | OutputCleanupOutcome::AlreadyAbsent => {}
@@ -1807,6 +1891,7 @@ fn run_fast_img_post_success(
     if args.shortest_path
         && verify.warnings == Some(false)
         && !failed_only
+        && selected_file.is_none()
         && let Some(source_root) = source_root
     {
         let historical = observe_historical_fast_img_outputs(
@@ -3008,6 +3093,7 @@ fn run_drag_drop_inner(
             None,
             None,
             Some(&marker),
+            None,
         );
         if result.is_ok() {
             session.finish_log(&summary, None)?;
@@ -3198,8 +3284,12 @@ fn run_drag_drop_inner(
         } else {
             draw_separator("Processing (fast-img)");
             // The worker can delete the input before historical output cleanup.
-            let source_root =
-                fast_img_source_root_for_run(args.inputs.first().context("input required")?)?;
+            let target = args.inputs.first().context("input required")?;
+            let source_root = fast_img_source_root_for_run(target)?;
+            let selected_file =
+                foundation::batch::fast_img_scope::FastImgInputScope::observe_selected_file(
+                    target,
+                )?;
             match run_fast_img_task(args, &root, session.expect("session"), None) {
                 Ok(FastImgTaskOutcome {
                     stats,
@@ -3211,6 +3301,7 @@ fn run_drag_drop_inner(
                     let mut retained_only_verified = false;
                     let mut quarantine_blocked = None;
                     let mut evidence_available = false;
+                    let mut no_delivery_required = false;
                     let mut presentation = None;
                     match dev::infra::history_store::read_fast_img_finalization_since(
                         session.expect("session").log_dir(),
@@ -3240,6 +3331,13 @@ fn run_drag_drop_inner(
                                 }
                                 Ok(report) => {
                                     evidence_available = true;
+                                    no_delivery_required = fast_img_no_delivery_required(
+                                        report.as_ref(),
+                                        &stats,
+                                        &source_root,
+                                        &output,
+                                        selected_file.as_ref(),
+                                    )?;
                                     presentation = fast_img_partial_delivery_presentation(
                                         &text,
                                         &stats,
@@ -3305,7 +3403,11 @@ fn run_drag_drop_inner(
                             stats.exit_code
                         ));
                     }
-                    let verified = if evidence_available
+                    let verified = if no_delivery_required {
+                        session.expect("session").record_output_cleanup(
+                            OutputCleanupReceipt::not_requested(&std::path::absolute(&output)?),
+                        )
+                    } else if evidence_available
                         && (stats.exit_code == 0 || failed_sources_verified.is_some())
                     {
                         run_fast_img_post_success(
@@ -3317,6 +3419,7 @@ fn run_drag_drop_inner(
                             failed_sources_verified,
                             Some(&source_root),
                             None,
+                            selected_file.as_ref(),
                         )
                     } else {
                         std::path::absolute(&output)
@@ -4156,7 +4259,11 @@ fn optimization_menu_labels(
                         "JXL"
                     }
                 ),
-                "JPEG→JXL fast path or JXL→JPEG restore.",
+                if strategy == "avif" {
+                    "AVIF quality exploration for Meme Mode."
+                } else {
+                    "Reversible JPEG and lossless stills to JXL, or restore an original JPEG."
+                },
             ),
             1 => (
                 "Mode: In-Place Optimization [Tab to Switch]".to_string(),
@@ -5488,6 +5595,7 @@ mod tests {
             tool_policy: ToolPolicy::Single,
             fallback_policy: FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
                 archive: false,
@@ -5778,6 +5886,7 @@ mod tests {
             tool_policy: ToolPolicy::Single,
             fallback_policy: FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
                 archive: false,
@@ -5891,6 +6000,7 @@ mod tests {
                 tool_policy: ToolPolicy::Single,
                 fallback_policy: FallbackPolicy::Strict,
                 encoding: FastImgEncodingParameters::Jxl {
+                    pixel_effort_ceiling: None,
                     jpeg_effort: 11,
                     jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
                     archive: false,
@@ -7378,6 +7488,74 @@ mod tests {
 
     #[test]
     #[serial]
+    fn no_delivery_requires_explicit_empty_discovery_and_unchanged_selected_file() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir(&source)?;
+        let file = source.join("unsupported.txt");
+        fs::write(&file, b"synthetic ignored source")?;
+        let selected =
+            foundation::batch::fast_img_scope::FastImgInputScope::observe_selected_file(&file)?;
+        let mut stats = ProcessorStats {
+            ignored: 1,
+            reported: [true; 4],
+            unprocessed: Some(0),
+            ..Default::default()
+        };
+        let receipt = serde_json::json!({
+            "schema_version":1, "discovery_outcome":"no_eligible_sources", "source_directory":source, "output_directory":output,
+            "succeeded":0, "skipped":0, "failed":0, "unprocessed":0, "encoded":0, "photos_verified":0, "source_retained":0, "ignored":1,
+            "primary_verification_complete":false, "primary_cleanup_complete":false, "photos_delivery_deferred":false,
+            "retained_only_complete":false, "finalization_error":null,
+        });
+        let check = |receipt: &serde_json::Value, stats: &ProcessorStats| {
+            fast_img_no_delivery_required(Some(receipt), stats, &source, &output, selected.as_ref())
+        };
+        assert!(check(&receipt, &stats)?);
+        let mut missing = receipt.clone();
+        missing.as_object_mut().unwrap().remove("discovery_outcome");
+        assert!(!check(&missing, &stats)?);
+        for (key, value) in [
+            ("encoded", 1.into()),
+            ("photos_verified", 1.into()),
+            ("primary_cleanup_complete", true.into()),
+            ("finalization_error", "incomplete".into()),
+        ] {
+            let mut conflicting = receipt.clone();
+            conflicting[key] = value;
+            assert!(check(&conflicting, &stats).is_err());
+        }
+        stats.reported[0] = false;
+        assert!(check(&receipt, &stats).is_err());
+        stats.reported[0] = true;
+        stats.ignored = 0;
+        let mut empty = receipt.clone();
+        empty["ignored"] = 0.into();
+        assert!(check(&empty, &stats).is_err());
+        assert!(fast_img_no_delivery_required(
+            Some(&empty),
+            &stats,
+            &source,
+            &output,
+            None
+        )?);
+        stats.ignored = 1;
+        fs::write(&file, b"replacement")?;
+        assert!(check(&receipt, &stats).is_err());
+        fs::create_dir(&output)?;
+        assert!(
+            fast_img_no_delivery_required(Some(&receipt), &stats, &source, &output, None).is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
     fn jxl_pixel_effort_is_independent_scoped_and_forwarded() -> Result<()> {
         if isolated_state_test() {
             return Ok(());
@@ -7425,10 +7603,10 @@ mod tests {
         let mut fast = args.clone();
         fast.mode = LaunchMode::FastImg;
         assert!(validate_media_options(&fast).is_err());
-        fast.img_jxl_effort = None;
         fast.img_jxl_distance = Some(0.001);
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_distance = None;
+        fast.img_jxl_effort_search = Some(foundation::runtime_config::EffortSearch::Adaptive);
         fast.img_jpeg_effort_search = Some(foundation::runtime_config::JpegEffortSearch::Adaptive);
         validate_media_options(&fast)?;
         let (command, _) = fast_img_launch_command(&fast, Path::new("/repo"), input.path())?;
@@ -7441,6 +7619,9 @@ mod tests {
         assert!(!command.args.contains(&"--ultimate".to_owned()));
         assert!(!command.args.contains(&"--extreme-precision".to_owned()));
         assert!(!command.args.contains(&"--jxl-distance".to_owned()));
+        for expected in [["--jxl-effort", "8"], ["--jxl-effort-search", "adaptive"]] {
+            assert!(command.args.windows(2).any(|pair| pair == expected));
+        }
         for mode in [LaunchMode::Images, LaunchMode::FastImg] {
             let mut full = fast.clone();
             full.mode = mode;
@@ -7492,7 +7673,17 @@ mod tests {
         for value in ["-0.1", "0.0001", "25.1", "NaN", "inf"] {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-distance", value]).is_err());
         }
-        for mode in ["videos", "fast-vid", "fast-img", "restore-jpeg", "collect"] {
+        let fast_avif = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "fast-img",
+            "--strategy",
+            "avif",
+            "--img-jxl-effort",
+            "8",
+        ])?;
+        assert!(validate_media_options(&fast_avif).is_err());
+        for mode in ["videos", "fast-vid", "restore-jpeg", "collect"] {
             let args = Args::try_parse_from(["mfb", "--mode", mode, "--img-jxl-effort", "8"])?;
             assert!(validate_media_options(&args).is_err());
         }
@@ -8739,6 +8930,7 @@ mod tests {
             tool_policy: foundation::runtime_config::ToolPolicy::Single,
             fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
                 archive: false,
@@ -8796,6 +8988,7 @@ mod tests {
             tool_policy: foundation::runtime_config::ToolPolicy::Single,
             fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
                 archive: false,

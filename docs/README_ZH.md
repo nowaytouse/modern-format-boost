@@ -18,7 +18,7 @@ Apple 照片图库集成仅限 macOS。当前开发版本为 **0.12.0**，开发
 | 处理方式 | 主要行为 | 适合什么情况 |
 | --- | --- | --- |
 | **普通图片** / `img run` | 按完整静图策略处理，通常输出 JXL；不适合再次编码的现代有损格式保留原格式。 | 一般图片归档。 |
-| **Fast IMG · JXL** / `img fast-img --strategy jxl` | 将真实 JPEG 可逆转码为 JXL；符合条件的现代有损静图另走经过核验的照片图库交付路径。 | 集中归档 JPEG，或交付到 Apple 照片图库。 |
+| **Fast IMG · JXL** / `img fast-img --strategy jxl` | JPEG 可逐字节恢复。静态 PNG 和已确认无损的 WebP、AVIF 以 d=0 探索多个努力值。核验通过且完整文件小于或等于原件时采用 JXL，更大时保留原件。符合条件的有损静图沿用原格式图库交付。 | 归档 JPEG 和无损静图，或交付到 Apple 照片图库。 |
 | **Fast IMG · AVIF** / `img fast-img --strategy avif` | 使用独立的 AVIF 体积与质量策略；已有 AVIF 不再重新编码。 | 允许清理元数据的表情包等图片集合。 |
 | **视频** / `vid run` | 处理视频和动图，默认 HEVC，也可选择 AV1。 | 有动态语义的媒体，而不是静图转换。 |
 

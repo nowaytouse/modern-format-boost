@@ -550,7 +550,8 @@ pub use image::fast_img::{
     prune_empty_source_dirs_for_tier2_assets, safe_delete_modern_lossy_static_source,
 };
 pub use image::modern_lossy_static::{
-    ModernLossyStaticCandidate, ModernLossyStaticScan, scan_modern_lossy_static_candidates,
+    ModernLossyStaticCandidate, ModernLossyStaticScan, probe_fast_img_lossless_static,
+    scan_fast_img_static_candidates, scan_modern_lossy_static_candidates,
 };
 pub use image::png_validation::{PNG_LOSSLESS_JXL_EFFORT, is_true_png, png_heuristic_enabled};
 pub use live_photo::is_live as is_live_photo;

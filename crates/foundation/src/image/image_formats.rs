@@ -941,6 +941,49 @@ pub mod avif {
         selected
     }
 
+    /// Every image-bearing item must be one of the planes we can inspect and
+    /// preserve. Derived grids, hidden gain maps and additional image items
+    /// can be absent from the list of top-level libheif image handles.
+    pub(crate) fn only_coded_planes(data: &[u8], plane_ids: &[u32]) -> bool {
+        fn coded_ids(data: &[u8]) -> Option<Vec<u32>> {
+            let meta = unique_child(data, *b"meta")?.strip_prefix(&[0; 4])?;
+            let mut table = unique_child(meta, *b"iinf")?;
+            let header = table.split_off(..4)?;
+            let [version @ (0 | 1), 0, 0, 0] = *header else {
+                return None;
+            };
+            let count = read_item_id(&mut table, version == 1)?;
+            let mut ids = Vec::new();
+            for _ in 0..count {
+                let (kind, mut item, consumed) = crate::common_utils::parse_isobmff_box(table, 0)?;
+                table = table.get(consumed..)?;
+                if kind != *b"infe" {
+                    return None;
+                }
+                let header = item.split_off(..4)?;
+                let [version @ (2 | 3), 0, 0, 0 | 1] = *header else {
+                    return None;
+                };
+                let id = read_item_id(&mut item, version == 3)?;
+                if item.split_off(..2)? != [0; 2] {
+                    return None;
+                }
+                match item.split_off(..4)? {
+                    b"av01" => ids.push(id),
+                    b"Exif" => {}
+                    b"mime"
+                        if item.split(|byte| *byte == 0).nth(1) == Some(b"application/rdf+xml") => {
+                    }
+                    _ => return None,
+                }
+            }
+            table.is_empty().then_some(ids)
+        }
+        coded_ids(data).is_some_and(|ids| {
+            ids.len() == plane_ids.len() && plane_ids.iter().all(|id| ids.contains(id))
+        })
+    }
+
     /// Classify primary AVIF compression from its associated codec property.
     ///
     /// Color subsampling is positive evidence of discarded chroma resolution.
@@ -997,6 +1040,38 @@ pub mod jxl {
     use crate::unified_error::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
+
+    /// Require one complete display frame and only ordinary straight-alpha channels.
+    /// The separate exact sample comparison is still required to prove losslessness.
+    /// # Errors
+    /// Rejects incomplete, animated, XYB, non-modular or auxiliary-channel codestreams.
+    pub fn static_pixel_color_encoding(path: &Path) -> Result<Option<[u8; 4]>> {
+        let image = ::jxl_oxide::JxlImage::builder().open(path).map_err(|e| {
+            ImgQualityError::AnalysisError(format!("invalid pixel JXL codestream: {e}"))
+        })?;
+        let metadata = &image.image_header().metadata;
+        if !image.is_loading_done()
+            || image.num_loaded_keyframes() != 1
+            || metadata.animation.is_some()
+            || metadata.preview.is_some()
+            || metadata.xyb_encoded
+            || metadata.ec_info.len() > 1
+            || metadata
+                .ec_info
+                .iter()
+                .any(|channel| channel.alpha_associated() != Some(false))
+            || (0..image.num_loaded_frames()).any(|i| {
+                image
+                    .frame(i)
+                    .is_none_or(|f| f.header().encoding != ::jxl_oxide::frame::Encoding::Modular)
+            })
+        {
+            return Err(ImgQualityError::AnalysisError(
+                "JXL is not a complete single-image modular pixel encoding".into(),
+            ));
+        }
+        Ok(metadata.colour_encoding.cicp())
+    }
 
     /// Classify JXL compression from codestream evidence.
     ///

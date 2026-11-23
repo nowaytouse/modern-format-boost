@@ -2639,6 +2639,7 @@ mod tests {
             tool_policy: ToolPolicy::Single,
             fallback_policy: FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 3,
                 jpeg_effort_search: JpegEffortSearch::Fixed,
                 archive: false,
@@ -2941,6 +2942,7 @@ mod tests {
             tool_policy: foundation::runtime_config::ToolPolicy::Single,
             fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
                 archive: true,

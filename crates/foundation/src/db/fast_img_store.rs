@@ -38,7 +38,7 @@ pub use crate::mfb_sqlite_store::{
 };
 pub use admission::{
     FastImgAdmissionPlan, FastImgAdmissionRoute, FastImgAdmissionSidecar, FastImgSourceAdmission,
-    initialize_with_admission, read_admission_plan,
+    initialize_with_admission, read_admission_plan, verify_single_source_scope,
 };
 pub use cleanup::{PrimaryCleanupJournal, PrimaryCleanupScope, validate_primary_cleanup_resume};
 pub use finish::{

@@ -56,6 +56,9 @@ struct Args {
     #[arg(long, hide = true, requires_all = ["verify", "fast_img_delivery"])]
     fast_img_photos_cleanup_recovery: Option<String>,
 
+    #[arg(long, hide = true, requires_all = ["verify", "fast_img_delivery"], conflicts_with = "fast_img_photos_cleanup_recovery")]
+    fast_img_selected_source_blake3: Option<String>,
+
     #[arg(
         long = "fast-img-restore",
         help = "Verify fast-img restore-jpeg invariant."
@@ -497,13 +500,20 @@ fn resolve_source_directory_for_post_cleanup(source_dir: &Path) -> Result<(PathB
     }
 }
 
+#[derive(Clone, Copy)]
+enum FastImgDeliveryScope<'a> {
+    Directory,
+    SelectedFile(&'a str),
+    PhotosCleanupRecovery(&'a str),
+}
+
 fn run_fast_img_delivery_check(
     source_dir: &Path,
     optimized_dir: &Path,
     report: &mut String,
     processing_mode: &str,
     strategy: &str,
-    photos_cleanup_recovery: Option<&str>,
+    scope: FastImgDeliveryScope<'_>,
 ) -> Result<IntegrityStats> {
     run_fast_img_delivery_check_for_scope(
         source_dir,
@@ -511,7 +521,7 @@ fn run_fast_img_delivery_check(
         report,
         processing_mode,
         strategy,
-        photos_cleanup_recovery,
+        scope,
         |marker| {
             let _custody = foundation::fast_img::verify_output_photos_custody(marker, true)?;
             Ok(())
@@ -708,7 +718,7 @@ fn run_fast_img_delivery_check_with(
         report,
         processing_mode,
         strategy,
-        None,
+        FastImgDeliveryScope::Directory,
         verify_photos,
     )
 }
@@ -719,29 +729,28 @@ fn run_fast_img_delivery_check_for_scope(
     report: &mut String,
     processing_mode: &str,
     strategy: &str,
-    photos_cleanup_recovery: Option<&str>,
+    scope: FastImgDeliveryScope<'_>,
     verify_photos: impl FnOnce(&foundation::pipeline::verification::WorkingCopyMarker) -> Result<()>,
 ) -> Result<IntegrityStats> {
     foundation::batch_control::checkpoint()?;
-    let recovery_marker = photos_cleanup_recovery
-        .map(|expected| {
-            use dev::infra::drag_drop::{
-                exact_fast_img_photos_cleanup_recovery, fast_img_cleanup_checkpoint_digest,
-            };
-            let marker =
-                exact_fast_img_photos_cleanup_recovery(source_dir, optimized_dir, strategy)?;
-            anyhow::ensure!(
-                fast_img_cleanup_checkpoint_digest(&marker)? == expected,
-                "Fast IMG cleanup checkpoint changed before independent verification"
-            );
-            Ok::<_, anyhow::Error>(marker)
-        })
-        .transpose()
-        .context(IntegrityUnavailableReason::Checkpoint)?;
+    let recovery_marker = if let FastImgDeliveryScope::PhotosCleanupRecovery(expected) = scope {
+        use dev::infra::drag_drop::{
+            exact_fast_img_photos_cleanup_recovery, fast_img_cleanup_checkpoint_digest,
+        };
+        let marker = exact_fast_img_photos_cleanup_recovery(source_dir, optimized_dir, strategy)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
+        anyhow::ensure!(
+            fast_img_cleanup_checkpoint_digest(&marker)
+                .context(IntegrityUnavailableReason::Checkpoint)?
+                == expected,
+            IntegrityUnavailableReason::Checkpoint
+        );
+        Some(marker)
+    } else {
+        None
+    };
     let _uncached = foundation::common_utils::UncachedVerificationScope::new()
         .context(IntegrityUnavailableReason::UncachedVerification)?;
-    let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(source_dir)
-        .context(IntegrityUnavailableReason::DirectoryPair)?;
     let (optimized_dir, optimized_dir_exists) = match fs::symlink_metadata(optimized_dir) {
         Ok(metadata) if metadata.is_dir() => {
             let path = optimized_dir
@@ -768,6 +777,42 @@ fn run_fast_img_delivery_check_for_scope(
         }
     };
 
+    let selected_source = if let FastImgDeliveryScope::SelectedFile(digest) = scope {
+        let marker = foundation::pipeline::verification::read_marker(&optimized_dir)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
+        anyhow::ensure!(
+            marker.is_terminal()
+                && marker.strategy == strategy
+                && marker.working_copy == optimized_dir,
+            IntegrityUnavailableReason::Checkpoint
+        );
+        foundation::fast_img_store::verify_single_source_scope(&marker, source_dir, digest)
+            .context(IntegrityUnavailableReason::Checkpoint)?;
+        let rel = source_dir.strip_prefix(&marker.src_dir)?;
+        foundation::pipeline::verification::validate_no_symlink_components(&marker.src_dir, rel)
+            .map_err(anyhow::Error::msg)
+            .context(IntegrityUnavailableReason::DirectoryPair)?;
+        let present = match source_dir.symlink_metadata() {
+            Ok(_) => {
+                foundation::pipeline::verification::verify_regular_file_blake3(source_dir, digest)
+                    .context(IntegrityUnavailableReason::Checkpoint)?;
+                true
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error).context(IntegrityUnavailableReason::DirectoryPair),
+        };
+        Some((source_dir, present, marker))
+    } else {
+        None
+    };
+    let root = selected_source
+        .as_ref()
+        .map_or(source_dir, |(_, _, marker)| marker.src_dir.as_path());
+    let (source_dir, source_dir_exists) = resolve_source_directory_for_post_cleanup(root)
+        .context(IntegrityUnavailableReason::DirectoryPair)?;
+    let displayed_source = selected_source
+        .as_ref()
+        .map_or(source_dir.as_path(), |(path, _, _)| *path);
     let (marker_opt, _path_opt, marker_error) = load_fast_img_marker_for_optimized(&optimized_dir);
     let failed_retry = foundation::fast_img_store::failed_retry_context(&optimized_dir)
         .context(IntegrityUnavailableReason::Checkpoint)?;
@@ -798,20 +843,18 @@ fn run_fast_img_delivery_check_for_scope(
     };
 
     report.push_str("── FAST-IMG DELIVERY VERIFICATION ─────────────────────────────\n");
-    report.push_str(&format!("Source:    {}\n", source_dir.display()));
+    report.push_str(&format!("Source:    {}\n", displayed_source.display()));
     report.push_str(&format!("Optimized: {}\n\n", optimized_dir.display()));
 
     let mut stats = IntegrityStats {
-        source: source_dir.to_string_lossy().to_string(),
+        source: displayed_source.to_string_lossy().to_string(),
         optimized: optimized_dir.to_string_lossy().to_string(),
         scope: processing_mode.to_string(),
         optimized_path_label: "Optimized".to_string(),
         source_files_label: if routed_child.is_some() {
             "Recorded failed-only admissions".to_string()
-        } else if strategy == "avif" {
-            "Recorded source static images".to_string()
         } else {
-            "Recorded JPEG-derived sources".to_string()
+            "Recorded source static images".to_string()
         },
         optimized_files_label: if strategy == "avif" {
             "Optimized AVIF files".to_string()
@@ -823,7 +866,9 @@ fn run_fast_img_delivery_check_for_scope(
 
     let mut source_true_jpegs = Vec::new();
     let mut source_probe_errors = Vec::new();
-    let source_files = if source_dir_exists {
+    let source_files = if let Some((path, present, _marker)) = &selected_source {
+        present.then(|| path.to_path_buf()).into_iter().collect()
+    } else if source_dir_exists {
         if let Some(context) = &failed_retry {
             let mut paths = Vec::new();
             for admission in context.admissions().values() {
@@ -1391,11 +1436,7 @@ fn run_fast_img_delivery_check_for_scope(
     if let Some(ref err) = marker_error {
         report.push_str(&format!("  Error:                  {err}\n"));
     }
-    let source_kind = if strategy == "avif" {
-        "static images"
-    } else {
-        "JPEG-derived files"
-    };
+    let source_kind = "static images";
     report.push_str(&format!(
         "Recorded source {source_kind}:       {recorded_source_jpegs}\n"
     ));
@@ -1461,13 +1502,8 @@ fn run_fast_img_delivery_check_for_scope(
         }
         if !unexpected_source_true_jpegs.is_empty() {
             report.push_str(&format!(
-                "  - {} unexpected source {} remained under source (not deleted):\n",
-                unexpected_source_true_jpegs.len(),
-                if strategy == "avif" {
-                    "static image(s)"
-                } else {
-                    "JPEG(s)"
-                }
+                "  - {} unexpected source static image(s) remained under source (not deleted):\n",
+                unexpected_source_true_jpegs.len()
             ));
             for p in &unexpected_source_true_jpegs {
                 report.push_str(&format!(
@@ -1583,6 +1619,29 @@ fn run_fast_img_delivery_check_for_scope(
                 && marker_opt.as_ref() == Some(&marker_value),
             IntegrityUnavailableReason::Checkpoint
         );
+        if let Some((_, _, selected_marker)) = &selected_source {
+            anyhow::ensure!(
+                &typed == selected_marker,
+                IntegrityUnavailableReason::Checkpoint
+            );
+            for delivery in typed.blake3_log.values() {
+                let rel = delivery
+                    .out_rel
+                    .as_deref()
+                    .context(IntegrityUnavailableReason::Checkpoint)?;
+                foundation::pipeline::verification::validate_no_symlink_components(
+                    &optimized_dir,
+                    Path::new(rel),
+                )
+                .map_err(anyhow::Error::msg)
+                .context(IntegrityUnavailableReason::Checkpoint)?;
+                foundation::pipeline::verification::verify_regular_file_blake3(
+                    &optimized_dir.join(rel),
+                    &delivery.out,
+                )
+                .context(IntegrityUnavailableReason::Checkpoint)?;
+            }
+        }
         if let Some(expected) = &recovery_marker {
             anyhow::ensure!(
                 &typed == expected
@@ -3219,7 +3278,10 @@ fn main() -> Result<()> {
     }
 
     if let Some(ref verify_args) = args.verify {
-        if args.fast_img_photos_cleanup_recovery.is_some() && verify_args.len() != 2 {
+        if (args.fast_img_photos_cleanup_recovery.is_some()
+            || args.fast_img_selected_source_blake3.is_some())
+            && verify_args.len() != 2
+        {
             return report_integrity_unavailable(
                 Err(anyhow::Error::new(
                     IntegrityUnavailableReason::DirectoryPair,
@@ -3238,7 +3300,14 @@ fn main() -> Result<()> {
                         &mut report,
                         &args.mode,
                         &args.strategy,
-                        args.fast_img_photos_cleanup_recovery.as_deref(),
+                        if let Some(recovery) = args.fast_img_photos_cleanup_recovery.as_deref() {
+                            FastImgDeliveryScope::PhotosCleanupRecovery(recovery)
+                        } else if let Some(digest) = args.fast_img_selected_source_blake3.as_deref()
+                        {
+                            FastImgDeliveryScope::SelectedFile(digest)
+                        } else {
+                            FastImgDeliveryScope::Directory
+                        },
                     ),
                     args.print_integrity_json,
                 )?);
@@ -4354,11 +4423,116 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 &mut String::new(),
                 "images_only",
                 "jxl",
-                None
+                FastImgDeliveryScope::Directory
             )
             .is_err(),
             "historical receipts without an actual library were accepted"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn selected_file_delivery_uses_only_exact_admission() -> Result<()> {
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        use foundation::fast_img_store::{
+            FastImgAdmissionRoute, FastImgSourceAdmission, initialize_with_admission,
+        };
+        use foundation::pipeline::verification::{
+            Blake3Entry, FastImgStageName, WorkingCopyMarker, write_marker_atomic,
+        };
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let _state = marker_test_state(&root);
+        let source = root.join("source");
+        let output = root.join("output");
+        fs::create_dir(&source)?;
+        fs::create_dir(&output)?;
+        let selected = source.join("pixels.png");
+        let sibling = source.join("same-bytes.jpg");
+        let target = output.join("pixels.JXL");
+        let pixels = b"private synthetic source";
+        fs::write(&selected, pixels)?;
+        fs::write(&sibling, pixels)?;
+        fs::write(source.join("unrelated.jpg"), b"\xff\xd8\xff\xe0unselected")?;
+        fs::write(&target, b"\xff\x0asynthetic delivery")?;
+        let hash = calculate_blake3_hash(&selected)?;
+        let out_hash = calculate_blake3_hash(&target)?;
+        let entry = FastImgSourceAdmission {
+            source_blake3: hash.clone(),
+            route: FastImgAdmissionRoute::Primary,
+            xmp: None,
+            aae: None,
+        };
+        let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 1);
+        initialize_with_admission(
+            &mut marker,
+            &BTreeMap::from([("pixels.png".into(), entry.clone())]),
+        )?;
+        marker.encoded_count = 1;
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.blake3_log.insert(
+            "pixels.png".into(),
+            Blake3Entry {
+                src: hash.clone(),
+                out: out_hash.clone(),
+                out_rel: Some("pixels.JXL".into()),
+                library_asset: Some(out_hash.clone()),
+            },
+        );
+        marker.photos_imported_assets.push(serde_json::from_value(serde_json::json!({
+            "rel_path":"pixels.JXL","blake3":out_hash,"sync_status":"photos_local","photos_uuid":"synthetic-uuid",
+            "quarantined":false,"library_blake3":out_hash,
+        }))?);
+        write_marker_atomic(&marker)?;
+        fs::remove_file(&selected)?;
+        let check = |file: &Path, digest: &str, custody: bool| {
+            run_fast_img_delivery_check_for_scope(
+                file,
+                &output,
+                &mut String::new(),
+                "images_only",
+                "jxl",
+                FastImgDeliveryScope::SelectedFile(digest),
+                |saved| {
+                    assert!(foundation::common_utils::verification_cache_disabled());
+                    assert_eq!(
+                        saved.photos_imported_assets[0].photos_uuid.as_deref(),
+                        Some("synthetic-uuid")
+                    );
+                    anyhow::ensure!(custody, "synthetic custody unavailable");
+                    Ok(())
+                },
+            )
+        };
+        let result = check(&selected, &hash, true)?;
+        assert!(!result.has_warnings);
+        assert_eq!(result.optimized_files, 1);
+        assert_eq!(result.source, selected.to_string_lossy());
+        assert!(check(&selected, &hash, false).is_err());
+        assert!(check(&sibling, &hash, true).is_err());
+        assert!(check(&selected, &out_hash, true).is_err());
+        fs::write(&selected, b"replacement")?;
+        assert!(check(&selected, &hash, true).is_err());
+        fs::remove_file(&selected)?;
+        fs::write(&target, b"\xff\x0adifferent pixels")?;
+        assert!(check(&selected, &hash, true).is_err());
+        assert_eq!(fs::read(&sibling)?, pixels);
+        let unrelated = root.join("multi-optimized");
+        let mut multi = WorkingCopyMarker::new(source, unrelated, 2);
+        initialize_with_admission(
+            &mut multi,
+            &BTreeMap::from([
+                ("pixels.png".into(), entry.clone()),
+                ("same-bytes.jpg".into(), entry),
+            ]),
+        )?;
+        assert!(
+            foundation::fast_img_store::verify_single_source_scope(&multi, &selected, &hash)
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]
@@ -4440,7 +4614,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 report,
                 "images_only",
                 "jxl",
-                Some(&digest),
+                FastImgDeliveryScope::PhotosCleanupRecovery(&digest),
                 |verified| {
                     assert!(foundation::common_utils::verification_cache_disabled());
                     assert_eq!(verified.photos_imported_assets.len(), 2);
@@ -4731,6 +4905,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             tool_policy: foundation::runtime_config::ToolPolicy::Single,
             fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
                 archive: false,
@@ -4827,6 +5002,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             tool_policy: defaults.tools.policy,
             fallback_policy: defaults.img.fallback_policy,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: defaults.img.jpeg_effort_search,
                 archive: false,

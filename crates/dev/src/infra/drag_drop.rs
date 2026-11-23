@@ -659,7 +659,9 @@ pub fn choose_fast_img_strategy() -> Result<String> {
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
     println!("\n{green}FAST MODE STRATEGY{reset}");
     println!("   {bold}1{reset} - {green}Default (JXL){reset}");
-    println!("       {dim}Fast lossless encoding of JPEGs to JXL.{reset}");
+    println!(
+        "       {dim}Reconstructible JPEGs and lossless pixels from eligible PNG, WebP and AVIF stills.{reset}"
+    );
     println!("   {bold}2{reset} - {green}AVIF (Meme Mode){reset}");
     println!(
         "       {dim}Meme Mode (表情包模式): lossy static AVIF encoding; may lose metadata or \
@@ -700,11 +702,11 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
         );
     } else {
         println!(
-            "       {dim}JXL-only adjacent output; user imports manually. Source JPEGs are still deleted after strict verification.{reset}"
+            "       {dim}Verified adjacent JXL output for manual import. Eligible sources are removed after final verification.{reset}"
         );
         println!("   {bold}3{reset} - {cyan}Restore to JPEG{reset}");
         println!(
-            "       {dim}Decode JXL outputs back to adjacent JPEGs with metadata and folder structure preserved.{reset}"
+            "       {dim}Restore the original JPEG when the JXL contains JPEG reconstruction data, preserving metadata and folder structure.{reset}"
         );
     }
     let choices = if strategy == "avif" { "1/2" } else { "1/2/3" };
@@ -834,9 +836,13 @@ pub fn fast_img_marker_requires_retry(verify_bin: &Path, output_dir: &Path) -> R
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyFastImgMode {
     None,
-    Delivery,
+    Delivery {
+        selected_source_blake3: Option<String>,
+    },
     PhotosCleanupRecovery(String),
-    Restore { selected_file: bool },
+    Restore {
+        selected_file: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -861,15 +867,20 @@ pub fn run_unified_verification(
     let live_progress = flags.auto_mode
         && matches!(
             &flags.fast_img,
-            VerifyFastImgMode::Delivery | VerifyFastImgMode::PhotosCleanupRecovery(_)
+            VerifyFastImgMode::Delivery { .. } | VerifyFastImgMode::PhotosCleanupRecovery(_)
         )
         && std::env::var_os("MFB_SESSION_ID").is_some_and(|id| !id.is_empty());
     if let Some(opt) = opt_dir {
         cmd.arg("--verify").arg(src_dir).arg(opt);
         cmd.arg("--mode").arg(processing_filter.verify_mode_label());
         match flags.fast_img {
-            VerifyFastImgMode::Delivery => {
+            VerifyFastImgMode::Delivery {
+                selected_source_blake3,
+            } => {
                 cmd.arg("--fast-img-delivery");
+                if let Some(digest) = selected_source_blake3 {
+                    cmd.arg("--fast-img-selected-source-blake3").arg(digest);
+                }
             }
             VerifyFastImgMode::PhotosCleanupRecovery(checkpoint_digest) => {
                 cmd.arg("--fast-img-delivery")
@@ -2790,7 +2801,14 @@ pub fn observe_historical_fast_img_outputs(
 
 /// Remove only unchanged, marker-recorded outputs after verified local Photos delivery.
 pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> OutputCleanupReceipt {
-    delete_fast_img_photos_outputs(output_dir, None)
+    delete_fast_img_photos_outputs(output_dir, None, false)
+}
+
+/// Remove a file-scoped task's outputs only while its verified checkpoint still matches.
+pub fn delete_selected_fast_img_outputs(
+    expected: &foundation::pipeline::verification::WorkingCopyMarker,
+) -> OutputCleanupReceipt {
+    delete_fast_img_photos_outputs(&expected.working_copy, Some(expected), false)
 }
 
 /// Continue cleanup only while the checkpoint still matches the recovered delivery.
@@ -2798,7 +2816,7 @@ pub fn recover_fast_img_shortest_path_output_dir(
     expected: &foundation::pipeline::verification::WorkingCopyMarker,
 ) -> OutputCleanupReceipt {
     let output = &expected.working_copy;
-    let mut receipt = delete_fast_img_photos_outputs(output, Some(expected));
+    let mut receipt = delete_fast_img_photos_outputs(output, Some(expected), true);
     if receipt.outcome == OutputCleanupOutcome::AlreadyAbsent {
         let recheck = (|| {
             let current = exact_fast_img_photos_cleanup_recovery(
@@ -2829,14 +2847,19 @@ pub fn recover_fast_img_shortest_path_output_dir(
 fn delete_fast_img_photos_outputs(
     output_dir: &Path,
     expected: Option<&foundation::pipeline::verification::WorkingCopyMarker>,
+    require_absent_source_root: bool,
 ) -> OutputCleanupReceipt {
     delete_fast_img_outputs_with(output_dir, |marker| {
         if let Some(expected) = expected {
             anyhow::ensure!(
-                marker == expected
-                    && matches!(fs::symlink_metadata(&marker.src_dir),
-                        Err(error) if error.kind() == io::ErrorKind::NotFound),
-                "saved checkpoint or source state changed after cleanup recovery verification"
+                marker == expected,
+                "saved checkpoint changed after delivery verification"
+            );
+        }
+        if require_absent_source_root {
+            anyhow::ensure!(
+                matches!(fs::symlink_metadata(&marker.src_dir), Err(error) if error.kind() == io::ErrorKind::NotFound),
+                "saved source path reappeared before cleanup recovery"
             );
         }
         let custody = foundation::fast_img::verify_output_photos_custody(marker, false)?;
@@ -2844,7 +2867,7 @@ fn delete_fast_img_photos_outputs(
         let marker_source = marker.src_dir.clone();
         Ok(move |target: &Path| {
             custody.verify_before_removal(target)?;
-            if expected.is_some() {
+            if require_absent_source_root {
                 anyhow::ensure!(
                     matches!(fs::symlink_metadata(&marker_source),
                         Err(error) if error.kind() == io::ErrorKind::NotFound),
@@ -3491,6 +3514,7 @@ printf '%s\n' "$MFB_TEST_VERIFY_SUMMARY"
             tool_policy: foundation::runtime_config::ToolPolicy::Single,
             fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
             encoding: FastImgEncodingParameters::Jxl {
+                pixel_effort_ceiling: None,
                 jpeg_effort: 11,
                 jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
                 archive: true,
