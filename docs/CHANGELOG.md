@@ -25,6 +25,13 @@ areas of change are:
 
 ### Photos source cleanup and JPEG metadata verification (2026-11-23)
 
+- A cleanup-only resume includes previously recorded file failures in the new
+  session's failed-file list. Its final message gives the delivered and failed
+  counts when the delivery and cleanup receipts agree.
+- Fast IMG records modern-format inspection failures by relative path and
+  checks the retained originals against hashes observed during the same run.
+  Gate 1 records each file's own metadata mismatch in its failure details.
+
 - Corrected a cleanup preflight that could leave an entire original-format
   batch pending after Photos verified its private XMP-enriched submissions.
   A download mark on the input is checked in the context of the actual

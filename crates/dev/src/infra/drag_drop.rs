@@ -1451,7 +1451,7 @@ pub fn fast_img_reported_output_bytes(
 }
 
 /// A partial exit only authorizes independent verification, never cleanup by itself.
-fn fast_img_file_failure_receipt(
+fn fast_img_counted_failure_receipt(
     text: &str,
     stats: &crate::infra::process_stream::ProcessorStats,
 ) -> Option<Value> {
@@ -1492,7 +1492,19 @@ fn fast_img_file_failure_receipt(
         || count("skipped") != Some(stats.skipped)
         || count("ignored") != Some(stats.ignored)
         || count("unprocessed") != Some(0)
-        || count("failed_sources_retained") != Some(stats.failed)
+    {
+        return None;
+    }
+    Some(report)
+}
+
+fn fast_img_file_failure_receipt(
+    text: &str,
+    stats: &crate::infra::process_stream::ProcessorStats,
+) -> Option<Value> {
+    let report = fast_img_counted_failure_receipt(text, stats)?;
+    let count = |key| usize::try_from(report.get(key)?.as_u64()?).ok();
+    if count("failed_sources_retained") != Some(stats.failed)
         || count("failed_sources_verified") != Some(stats.failed)
         || !report.get("finalization_error")?.is_null()
         || !report.get("retention_unknown_reason")?.is_null()
@@ -1512,21 +1524,108 @@ pub fn fast_img_partial_cleanup_verified(
     photos: bool,
 ) -> Option<usize> {
     let report = fast_img_file_failure_receipt(text, stats)?;
-    let succeeded = u64::try_from(stats.succeeded).ok()?;
-    let encoded = report["encoded"].as_u64()?;
-    let photos_verified = report["photos_verified"].as_u64()?;
+    (fast_img_delivery_matches(&report, stats, source, output, photos)
+        && report["retained_only_complete"].as_bool() != Some(true))
+    .then_some(stats.failed)
+}
+
+// Shared delivery checks are necessary evidence, never sufficient authority for cleanup.
+fn fast_img_delivery_matches(
+    report: &Value,
+    stats: &crate::infra::process_stream::ProcessorStats,
+    source: &Path,
+    output: &Path,
+    photos: bool,
+) -> bool {
+    let Ok(succeeded) = u64::try_from(stats.succeeded) else {
+        return false;
+    };
+    let Some(encoded) = report["encoded"].as_u64() else {
+        return false;
+    };
+    let Some(photos_verified) = report["photos_verified"].as_u64() else {
+        return false;
+    };
     let delivered = if photos {
         photos_verified == succeeded && encoded <= succeeded
     } else {
         photos_verified == 0 && encoded == succeeded
     };
-    (delivered
+    delivered
         && report["source_directory"].as_str().map(Path::new) == Some(source)
         && report["output_directory"].as_str().map(Path::new) == Some(output)
         && report["primary_verification_complete"].as_bool() == Some(true)
         && report["primary_cleanup_complete"].as_bool() == Some(true)
-        && report["retained_only_complete"].as_bool() != Some(true))
-    .then_some(stats.failed)
+}
+
+/// Display evidence only; does not authorize output cleanup or retry.
+pub fn fast_img_unverified_failure_presentation(
+    text: &str,
+    stats: &crate::infra::process_stream::ProcessorStats,
+    source: &Path,
+    output: &Path,
+    photos: bool,
+) -> bool {
+    let Some(report) = fast_img_counted_failure_receipt(text, stats) else {
+        return false;
+    };
+    let Some(failed) = u64::try_from(stats.failed).ok() else {
+        return false;
+    };
+    let Some(succeeded) = u64::try_from(stats.succeeded).ok() else {
+        return false;
+    };
+    // Workers omit the optional original-format receipt when every success was encoded.
+    let original = &report["original_delivery"];
+    let original_count = if original.is_null() {
+        0
+    } else {
+        let Some(verified) = original["photos_verified"].as_u64() else {
+            return false;
+        };
+        if verified == 0 || original["source_cleanup_confirmed"].as_u64() != Some(verified) {
+            return false;
+        }
+        verified
+    };
+    let (
+        Some(retained),
+        Some(verified),
+        Some(reason),
+        Some(verification_error),
+        Some(finalization),
+    ) = (
+        report.get("failed_sources_retained"),
+        report.get("failed_sources_verified"),
+        report.get("retention_unknown_reason"),
+        report.get("failed_source_verification_error"),
+        report.get("finalization_error"),
+    )
+    else {
+        return false;
+    };
+    if ![retained, verified]
+        .iter()
+        .all(|value| value.is_null() || value.as_u64().is_some_and(|count| count <= failed))
+        || ![reason, verification_error]
+            .iter()
+            .all(|value| value.is_null() || value.as_str().is_some_and(|text| !text.is_empty()))
+    {
+        return false;
+    }
+    let retention_unverified = retained.as_u64() != Some(failed)
+        || verified.as_u64() != Some(failed)
+        || !reason.is_null()
+        || !verification_error.is_null();
+    stats.succeeded > 0
+        && fast_img_delivery_matches(&report, stats, source, output, photos)
+        && report["encoded"]
+            .as_u64()
+            .and_then(|count| count.checked_add(original_count))
+            == Some(succeeded)
+        && report["photos_delivery_deferred"].as_bool() == Some(false)
+        && finalization.is_null()
+        && retention_unverified
 }
 
 pub fn fast_img_retained_only_verified(

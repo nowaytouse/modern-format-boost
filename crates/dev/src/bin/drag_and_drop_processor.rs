@@ -16,8 +16,9 @@ use dev::infra::drag_drop::{
     exact_fast_img_photos_cleanup_recovery, fast_img_cleanup_checkpoint_digest,
     fast_img_partial_cleanup_verified, fast_img_reported_output_bytes,
     fast_img_retained_file_names, fast_img_retained_only_verified, fast_img_session_size_metrics,
-    observe_historical_fast_img_outputs, recover_fast_img_shortest_path_output_dir,
-    run_unified_verification, safety_check, scan_content, sync_non_media_files,
+    fast_img_unverified_failure_presentation, observe_historical_fast_img_outputs,
+    recover_fast_img_shortest_path_output_dir, run_unified_verification, safety_check,
+    scan_content, sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{
@@ -1083,6 +1084,20 @@ fn fast_img_file_only_completion(
             failed: stats.failed,
         })
 }
+
+// Presentation evidence does not authorize cleanup or retry. Those use their own stricter proof.
+#[derive(Debug)]
+struct FastImgDeliveryWithUnverifiedFailures {
+    delivered: usize,
+    failed: usize,
+}
+
+impl std::fmt::Display for FastImgDeliveryWithUnverifiedFailures {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "fast-img exited with code 1")
+    }
+}
+impl std::error::Error for FastImgDeliveryWithUnverifiedFailures {}
 
 fn print_batch_result(command: &LaunchCommand, stats: &ProcessorStats, dry_run: bool) {
     if !dry_run && matches!(command.pipeline_label(), "IMG" | "VID") {
@@ -3196,6 +3211,7 @@ fn run_drag_drop_inner(
                     let mut retained_only_verified = false;
                     let mut quarantine_blocked = None;
                     let mut evidence_available = false;
+                    let mut presentation = None;
                     match dev::infra::history_store::read_fast_img_finalization_since(
                         session.expect("session").log_dir(),
                         session.expect("session").stamp(),
@@ -3224,6 +3240,19 @@ fn run_drag_drop_inner(
                                 }
                                 Ok(report) => {
                                     evidence_available = true;
+                                    presentation = fast_img_unverified_failure_presentation(
+                                        &text,
+                                        &stats,
+                                        &source_root,
+                                        &output,
+                                        args.shortest_path,
+                                    )
+                                    .then_some(
+                                        FastImgDeliveryWithUnverifiedFailures {
+                                            delivered: stats.succeeded,
+                                            failed: stats.failed,
+                                        },
+                                    );
                                     retained_only_verified = fast_img_retained_only_verified(
                                         &text,
                                         &stats,
@@ -3317,7 +3346,9 @@ fn run_drag_drop_inner(
                             first_error = quarantine_blocked.map(Into::into);
                         }
                         Ok(()) => {
-                            if let Some(completed) = fast_img_file_only_completion(
+                            if only_worker_exit && let Some(outcome) = presentation {
+                                first_error = Some(outcome.into());
+                            } else if let Some(completed) = fast_img_file_only_completion(
                                 only_worker_exit,
                                 failed_sources_verified,
                                 &stats,
@@ -3408,9 +3439,8 @@ fn run_drag_drop_inner(
                     pick_symbol("❌", "[ERROR]")
                 );
             }
-            // Enumerate every retained file so the user doesn't have to grep logs
             if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
-                eprintln!("   Retained files:");
+                eprintln!("   Failed and skipped files:");
                 for name in &summary.failed_file_names {
                     eprintln!("     [FAIL] {name}");
                 }
@@ -4843,6 +4873,12 @@ fn main() -> Result<std::process::ExitCode> {
         report_drag_drop_failure(&run_result);
     }
     match run_result {
+        Err(error)
+            if error.chain().count() == 1
+                && error.is::<FastImgDeliveryWithUnverifiedFailures>() =>
+        {
+            Ok(std::process::ExitCode::FAILURE)
+        }
         Err(error) if dev::infra::rich_panel::completed_file_failure_count(&error).is_some() => {
             Ok(std::process::ExitCode::FAILURE)
         }
@@ -4856,6 +4892,16 @@ fn report_drag_drop_failure(result: &Result<()>) {
             return;
         }
         let completed_failures = dev::infra::rich_panel::completed_file_failure_count(err);
+        if err.chain().count() == 1
+            && let Some(outcome) = err.downcast_ref::<FastImgDeliveryWithUnverifiedFailures>()
+        {
+            eprintln!(
+                "[PARTIAL DELIVERY] {} file(s) delivered; {} file(s) failed. See the individual failure records and source cleanup receipts.",
+                outcome.delivered, outcome.failed
+            );
+            pause_before_gui_exit();
+            return;
+        }
         if let Some(blocked) = PhotosQuarantineBlocked::from_error(err) {
             println!(
                 "MFB_BATCH_PHOTOS_QUARANTINE_BLOCKED={}",
@@ -4889,6 +4935,81 @@ mod tests {
     use dev::infra::process_stream::ProcessorByteTotals;
     use foundation::infra::runtime_config::RuntimeConfig;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn partial_delivery_presentation_requires_current_complete_delivery_evidence() {
+        let stats = ProcessorStats {
+            succeeded: 12,
+            failed: 2,
+            reported: [true; 4],
+            unprocessed: Some(0),
+            exit_code: 1,
+            ..Default::default()
+        };
+        let receipt = serde_json::json!({"schema_version": 1, "succeeded": 12, "failed": 2,
+            "skipped": 0, "ignored": 0, "unprocessed": 0, "encoded": 9,
+            "photos_verified": 12, "source_directory": "/source", "output_directory": "/output",
+            "primary_verification_complete": true, "primary_cleanup_complete": true,
+            "original_delivery": {"photos_verified": 3, "source_cleanup_confirmed": 3},
+            "photos_delivery_deferred": false, "finalization_error": null,
+            "failed_sources_retained": null, "failed_sources_verified": null,
+            "retention_unknown_reason": "inspection failed", "failed_source_verification_error": null});
+        let classify = |value: &serde_json::Value| {
+            fast_img_unverified_failure_presentation(
+                &format!("MFB_FAST_IMG_RESULT={value}"),
+                &stats,
+                std::path::Path::new("/source"),
+                std::path::Path::new("/output"),
+                true,
+            )
+        };
+        assert!(classify(&receipt));
+        for (key, value) in [
+            ("primary_cleanup_complete", false.into()),
+            ("finalization_error", "system failure".into()),
+            ("unprocessed", 1.into()),
+            ("source_directory", "/other".into()),
+            ("photos_verified", 11.into()),
+        ] {
+            let mut invalid = receipt.clone();
+            invalid[key] = value;
+            assert!(!classify(&invalid), "{key}");
+        }
+        let mut pending = receipt.clone();
+        pending["original_delivery"]["source_cleanup_confirmed"] = 2.into();
+        assert!(!classify(&pending));
+        let mut encoded_only = receipt.clone();
+        encoded_only
+            .as_object_mut()
+            .unwrap()
+            .remove("original_delivery");
+        assert!(!classify(&encoded_only));
+        encoded_only["encoded"] = 12.into();
+        assert!(classify(&encoded_only));
+        let mut complete_proof = receipt.clone();
+        complete_proof["failed_sources_retained"] = 2.into();
+        complete_proof["failed_sources_verified"] = 2.into();
+        complete_proof["retention_unknown_reason"] = serde_json::Value::Null;
+        assert!(!classify(&complete_proof));
+        let mut missing = receipt.clone();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("failed_sources_verified");
+        assert!(!classify(&missing));
+        let mut wrong_total = receipt.clone();
+        wrong_total["encoded"] = 8.into();
+        assert!(!classify(&wrong_total));
+        let mut wrong_exit = stats.clone();
+        wrong_exit.exit_code = 2;
+        assert!(!fast_img_unverified_failure_presentation(
+            &format!("MFB_FAST_IMG_RESULT={receipt}"),
+            &wrong_exit,
+            std::path::Path::new("/source"),
+            std::path::Path::new("/output"),
+            true
+        ));
+    }
 
     #[test]
     fn completed_file_errors_require_full_delivery_and_no_other_failure() {

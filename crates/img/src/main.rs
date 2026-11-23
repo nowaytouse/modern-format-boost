@@ -4843,7 +4843,7 @@ struct FastImgSourceInventory {
     source_files: Vec<PathBuf>,
     scan_failures: BTreeMap<String, String>,
     modern_lossy_candidates: Vec<ModernLossyStaticCandidate>,
-    modern_probe_failure_count: usize,
+    modern_probe_failures: fast_img_result::ProbeFailures,
     ignored: fast_img_ignored::IgnoredInventory,
     source_hashes: BTreeMap<String, String>,
     planned_encode_count: usize,
@@ -4916,7 +4916,7 @@ impl FastImgSourceInventory {
     }
 
     fn history_source_set(&self, root: &Path, import_to_photos: bool) -> Option<HistorySourceSet> {
-        if !self.scan_failures.is_empty() || self.modern_probe_failure_count != 0 {
+        if !self.scan_failures.is_empty() || self.modern_probe_failures.total != 0 {
             return None;
         }
         let tier2 = if import_to_photos {
@@ -5330,7 +5330,8 @@ fn scan_fast_img_sources_with(
         );
         scan_modern_lossy_static_candidates(src_dir, &tier2_paths)?
     };
-    let modern_probe_failure_count = modern_lossy_scan.probe_failures.len();
+    let mut modern_probe_failures =
+        fast_img_result::ProbeFailures::new(modern_lossy_scan.probe_failures.len());
     let modern_candidate_paths = modern_lossy_scan
         .candidates
         .iter()
@@ -5339,14 +5340,9 @@ fn scan_fast_img_sources_with(
     let modern_probe_failure_paths = modern_lossy_scan
         .probe_failures
         .iter()
-        .map(|(path, _)| path.clone())
-        .collect::<BTreeSet<_>>();
-    for (path, reason) in &modern_lossy_scan.probe_failures {
-        println!(
-            "[RETAIN  ] modern source could not be classified safely and will remain: {} ({reason})",
-            path.display()
-        );
-    }
+        .map(|(path, reason)| (path.clone(), reason.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut observed_probe_paths = BTreeSet::new();
     let preparation = foundation::progress::FileStageProgress::new(
         candidate_count as u64,
         foundation::progress::FileProgressStage::FastImgSourcePreparation,
@@ -5356,6 +5352,35 @@ fn scan_fast_img_sources_with(
         foundation::batch_control::checkpoint()?;
         preparation.set(index as u64);
         let path = source.path();
+        if let Some(reason) = modern_probe_failure_paths.get(path) {
+            match foundation::pipeline::verification::fast_img_relative_key(
+                path,
+                src_dir,
+                "probe failure",
+            ) {
+                Ok(rel) => {
+                    if !observed_probe_paths.insert(rel.clone()) {
+                        modern_probe_failures.hashes.remove(&rel);
+                    } else {
+                        match source.content_blake3() {
+                            Ok(hash) => {
+                                modern_probe_failures.hashes.insert(rel.clone(), hash);
+                            }
+                            Err(error) => eprintln!(
+                                "[WARN] probe failure hash unavailable for {}: {}",
+                                rel.replace(char::is_control, "�"),
+                                error.to_string().replace(char::is_control, " ")
+                            ),
+                        }
+                        println!("{}", fast_img_file_failure_line(&rel, reason));
+                    }
+                }
+                Err(error) => eprintln!(
+                    "[WARN] probe failure path could not be bound: {}",
+                    error.replace(char::is_control, " ")
+                ),
+            }
+        }
         if live_photos.is_live(path)? {
             ignored_candidates.push((
                 path.to_path_buf(),
@@ -5414,7 +5439,7 @@ fn scan_fast_img_sources_with(
             source_files.push(source);
         } else if fast_img_tier2_source_format(strategy, identity.family) {
             let admitted = modern_candidate_paths.contains(path);
-            let probe_failed = modern_probe_failure_paths.contains(path);
+            let probe_failed = modern_probe_failure_paths.contains_key(path);
             if !admitted && !probe_failed {
                 let reason = fast_img_ignored::IgnoredReason::ModernTierNotAdmitted;
                 ignored_candidates.push((path.to_path_buf(), reason));
@@ -5429,7 +5454,7 @@ fn scan_fast_img_sources_with(
     let classified_count = source_files
         .len()
         .checked_add(modern_lossy_scan.candidates.len())
-        .and_then(|count| count.checked_add(modern_probe_failure_count))
+        .and_then(|count| count.checked_add(modern_probe_failures.total))
         .context("fast-img scan classification count overflow")?;
     let expected_ignored_count = candidate_count
         .checked_sub(classified_count)
@@ -5470,7 +5495,7 @@ fn scan_fast_img_sources_with(
             .collect(),
         scan_failures,
         modern_lossy_candidates: modern_lossy_scan.candidates,
-        modern_probe_failure_count,
+        modern_probe_failures,
         source_hashes,
         planned_encode_count,
     })
@@ -5675,6 +5700,13 @@ fn fast_img_confirm_resume_if_needed(
     Ok(())
 }
 
+/// Keep file diagnostics on one line in both the live panel and the saved failure list.
+fn fast_img_file_failure_line(rel: &str, reason: &str) -> String {
+    let rel = rel.replace(char::is_control, "�");
+    let reason = reason.replace(char::is_control, " ");
+    format!("[FAIL    ]   {rel}: {reason}")
+}
+
 fn fast_img_try_finish_tier2_delivery(
     existing_marker: &mut Option<WorkingCopyMarker>,
     context: &FastImgMarkerContext<'_>,
@@ -5732,6 +5764,13 @@ fn fast_img_try_finish_tier2_delivery(
     println!(
         "[TIER 2  ] verified Photos delivery complete; source deleted={deleted} already_absent={already_deleted} empty_dirs_pruned={pruned}"
     );
+    // This resume bypasses the encode phase that normally emits the failed-file list.
+    for (rel, failure) in marker.all_failed_sources() {
+        println!(
+            "{}",
+            fast_img_file_failure_line(rel, &format!("previously recorded: {}", failure.reason))
+        );
+    }
     Ok(true)
 }
 
@@ -6130,7 +6169,7 @@ fn run_fast_img_with_format_resolver(
         source_files: source_jpegs,
         scan_failures,
         modern_lossy_candidates,
-        modern_probe_failure_count,
+        modern_probe_failures,
         source_hashes: current_source_hashes,
         ignored,
         planned_encode_count,
@@ -6214,9 +6253,10 @@ fn run_fast_img_with_format_resolver(
             && source_jpegs.is_empty()
             && modern_lossy_candidates.is_empty()
         {
-            if modern_probe_failure_count > 0 {
+            if modern_probe_failures.total > 0 {
                 eprintln!(
-                    "fast-img retained all sources because {modern_probe_failure_count} modern static candidate(s) could not be classified; no Photos import or cleanup was attempted"
+                    "fast-img retained all sources because {} modern static candidate(s) could not be classified; no Photos import or cleanup was attempted",
+                    modern_probe_failures.total
                 );
                 return Ok(());
             }
@@ -6525,7 +6565,7 @@ fn run_fast_img_with_format_resolver(
         failed_retry_context.as_ref(),
         shortest_path.0,
         &modern_lossy_candidates,
-        modern_probe_failure_count,
+        &modern_probe_failures,
         ignored_count,
         execution,
     )
@@ -12993,7 +13033,7 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
             // failed without grepping log shards.
             for (rel, entry) in &marker.failed_sources {
                 let reason = &entry.reason;
-                println!("[FAIL    ]   {rel}: {reason}");
+                println!("{}", fast_img_file_failure_line(rel, reason));
                 tracing::error!(
                     target: "fast_img_failures",
                     file = %rel,
@@ -13456,7 +13496,10 @@ fn fast_img_record_local_gate_failures(
             output.display()
         );
         fast_img_remove_recorded_output(&marker.working_copy, &output, &entry.out)?;
-        println!("[FAIL    ]   {rel}: Gate 1 rejected this asset; batch check details: {reason}");
+        println!(
+            "{}",
+            fast_img_file_failure_line(&rel, &format!("Gate 1 rejected this asset: {reason}"))
+        );
         rejected.push(Err(FastImgTranscodeError {
             rel_key: rel,
             src_hash: entry.src.clone(),
@@ -20033,6 +20076,22 @@ mod fast_img_hardening_tests {
             "terminal tasks must retain their failures for a separate retry"
         );
         Ok(())
+    }
+
+    #[test]
+    fn fast_img_failed_file_detail_is_a_single_history_record() {
+        let line =
+            super::fast_img_file_failure_line("图像/A.jxl", "decoder rejected image\nFailed: 123");
+        assert_eq!(
+            line,
+            "[FAIL    ]   图像/A.jxl: decoder rejected image Failed: 123"
+        );
+        assert_eq!(
+            super::fast_img_file_failure_line("a\nb", "failed")
+                .lines()
+                .count(),
+            1
+        );
     }
 
     #[test]

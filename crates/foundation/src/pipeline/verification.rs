@@ -83,6 +83,8 @@ pub struct CheckDetail {
     pub expected: String,
     pub actual: String,
     pub affected_files: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub file_failure_reasons: BTreeMap<PathBuf, String>,
     pub failure_scope: CheckFailureScope,
 }
 
@@ -194,12 +196,25 @@ impl GateResult {
                         output.display()
                     )
                 })?;
-                let reason = format!(
-                    "Gate 1 {} failed for {}; check summary: {}",
-                    check.name,
-                    output.display(),
-                    check.actual
-                );
+                // Aggregate summaries may describe only the first failed file.
+                // Attribute them only when there is exactly one affected output.
+                let reason = if let Some(reason) = check.file_failure_reasons.get(output) {
+                    format!(
+                        "Gate 1 {} failed for {}: {}",
+                        check.name,
+                        output.display(),
+                        reason
+                    )
+                } else if check.affected_files.len() == 1 {
+                    format!(
+                        "Gate 1 {} failed for {}; check summary: {}",
+                        check.name,
+                        output.display(),
+                        check.actual
+                    )
+                } else {
+                    format!("Gate 1 {} failed for {}", check.name, output.display())
+                };
                 failures
                     .entry((*source).clone())
                     .and_modify(|existing| {
@@ -1117,6 +1132,7 @@ const fn detail(
         expected,
         actual,
         affected_files,
+        file_failure_reasons: BTreeMap::new(),
         failure_scope: CheckFailureScope::Shared,
     }
 }
@@ -1255,7 +1271,23 @@ fn check_meme_metadata_policy(
     ctx: &PipelineCtx,
     progress: &mut dyn FnMut(usize, usize),
 ) -> CheckDetail {
+    check_meme_metadata_with_probe(ctx, progress, |src, out| {
+        crate::metadata::verify_output_embedded_metadata(
+            src,
+            out,
+            crate::metadata::MetadataOutputPolicy::Clear,
+        )
+        .map(|_| ())
+    })
+}
+
+fn check_meme_metadata_with_probe(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+    mut probe: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> CheckDetail {
     let mut failures = Vec::new();
+    let mut file_failure_reasons = BTreeMap::new();
     let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
     let mut cleared = 0usize;
     let mut first_mismatch = None;
@@ -1271,12 +1303,8 @@ fn check_meme_metadata_policy(
             PathBuf::from,
         );
         let out = ctx.working_copy.join(out_rel);
-        match crate::metadata::verify_output_embedded_metadata(
-            &src,
-            &out,
-            crate::metadata::MetadataOutputPolicy::Clear,
-        ) {
-            Ok(_) => cleared = cleared.saturating_add(1),
+        match probe(&src, &out) {
+            Ok(()) => cleared = cleared.saturating_add(1),
             Err(err) => {
                 file_local &= err.kind() == std::io::ErrorKind::InvalidData;
                 if first_mismatch.is_none() {
@@ -1287,6 +1315,7 @@ fn check_meme_metadata_policy(
                     &out,
                     format!("Meme Mode cleared-metadata verification failed during Gate 1: {err}"),
                 );
+                file_failure_reasons.insert(out.clone(), err.to_string());
                 failures.push(out);
             }
         }
@@ -1311,7 +1340,7 @@ fn check_meme_metadata_policy(
             )
         },
     );
-    file_failures(
+    let mut result = file_failures(
         detail(
             "metadata",
             passed,
@@ -1320,7 +1349,9 @@ fn check_meme_metadata_policy(
             failures,
         ),
         file_local,
-    )
+    );
+    result.file_failure_reasons = file_failure_reasons;
+    result
 }
 
 #[cfg(test)]
@@ -1336,7 +1367,46 @@ fn check_exact_metadata_copies_with_resume(
     progress: &mut dyn FnMut(usize, usize),
     resume: Option<&Gate1ProofCache<'_>>,
 ) -> CheckDetail {
+    check_exact_metadata_with_probe(ctx, progress, |src, out| {
+        crate::metadata::verify_exact_metadata_copy(src, out).and_then(|check| {
+            if !check.passed {
+                return Ok(check);
+            }
+            let embedded = || {
+                if let Some(resume) = resume {
+                    crate::metadata::verify_output_embedded_metadata_with_index(
+                        src,
+                        out,
+                        crate::metadata::MetadataOutputPolicy::Preserve,
+                        resume.sidecars(),
+                    )
+                    .map(|_| ())
+                } else {
+                    crate::metadata::verify_output_embedded_metadata(
+                        src,
+                        out,
+                        crate::metadata::MetadataOutputPolicy::Preserve,
+                    )
+                    .map(|_| ())
+                }
+            };
+            if let Some(resume) = resume {
+                resume.verify("embedded_metadata", src, out, embedded)?;
+            } else {
+                embedded()?;
+            }
+            Ok(check)
+        })
+    })
+}
+
+fn check_exact_metadata_with_probe(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+    mut probe: impl FnMut(&Path, &Path) -> std::io::Result<crate::metadata::MetadataCopyCheck>,
+) -> CheckDetail {
     let mut failures = Vec::new();
+    let mut file_failure_reasons = BTreeMap::new();
     let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
     let mut mismatch_count = 0usize;
     let mut first_mismatch = None;
@@ -1352,41 +1422,14 @@ fn check_exact_metadata_copies_with_resume(
             PathBuf::from,
         );
         let out = ctx.working_copy.join(out_rel);
-        match crate::metadata::verify_exact_metadata_copy(&src, &out).and_then(|check| {
-            if !check.passed {
-                return Ok(check);
-            }
-            let embedded = || {
-                if let Some(resume) = resume {
-                    crate::metadata::verify_output_embedded_metadata_with_index(
-                        &src,
-                        &out,
-                        crate::metadata::MetadataOutputPolicy::Preserve,
-                        resume.sidecars(),
-                    )
-                    .map(|_| ())
-                } else {
-                    crate::metadata::verify_output_embedded_metadata(
-                        &src,
-                        &out,
-                        crate::metadata::MetadataOutputPolicy::Preserve,
-                    )
-                    .map(|_| ())
-                }
-            };
-            if let Some(resume) = resume {
-                resume.verify("embedded_metadata", &src, &out, embedded)?;
-            } else {
-                embedded()?;
-            }
-            Ok(check)
-        }) {
+        match probe(&src, &out) {
             Ok(check) if check.passed => {}
             Ok(check) => {
                 mismatch_count = mismatch_count.saturating_add(1);
                 if first_mismatch.is_none() {
                     first_mismatch = Some(check.mismatches.join("; "));
                 }
+                file_failure_reasons.insert(out.clone(), check.mismatches.join("; "));
                 failures.push(out);
             }
             Err(err) => {
@@ -1400,6 +1443,7 @@ fn check_exact_metadata_copies_with_resume(
                     &out,
                     format!("metadata verification failed during Gate 1: {err}"),
                 );
+                file_failure_reasons.insert(out.clone(), err.to_string());
                 failures.push(out);
             }
         }
@@ -1413,7 +1457,7 @@ fn check_exact_metadata_copies_with_resume(
         |detail| format!("{verified} verified, {mismatch_count} failed; first {detail}"),
     );
 
-    file_failures(
+    let mut result = file_failures(
         detail(
             "metadata",
             failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count,
@@ -1425,7 +1469,9 @@ fn check_exact_metadata_copies_with_resume(
             failures,
         ),
         file_local,
-    )
+    );
+    result.file_failure_reasons = file_failure_reasons;
+    result
 }
 
 fn out_rel_index(blake3_log: &Blake3Log) -> BTreeMap<String, &Blake3Entry> {
@@ -2552,6 +2598,102 @@ mod tests {
         assert_eq!(result.checks.len(), 4);
         assert_eq!(events.last(), Some(&super::GateActivityState::Failed));
         assert!(!result.has_completed_file_failures(crate::BatchErrorMode::LogAndContinue));
+    }
+
+    #[test]
+    fn metadata_checks_keep_each_files_own_failure_reason() {
+        let mut ctx = ctx_with_library(2, vec![]);
+        for stem in ["first", "second"] {
+            ctx.blake3_log.insert(
+                format!("{stem}.jpg"),
+                Blake3Entry {
+                    out_rel: Some(format!("{stem}.jxl")),
+                    src: format!("{stem}-source-hash"),
+                    out: format!("{stem}-output-hash"),
+                    library_asset: None,
+                },
+            );
+        }
+        let reason = |out: &std::path::Path| {
+            if out.ends_with("first.jxl") {
+                "first mismatch"
+            } else {
+                "second mismatch"
+            }
+        };
+        let exact = super::check_exact_metadata_with_probe(&ctx, &mut |_, _| {}, |_, out| {
+            if out.ends_with("first.jxl") {
+                Ok(crate::metadata::MetadataCopyCheck {
+                    passed: false,
+                    mismatches: vec![reason(out).to_owned()],
+                })
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    reason(out),
+                ))
+            }
+        });
+        let clear = super::check_meme_metadata_with_probe(&ctx, &mut |_, _| {}, |_, out| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                reason(out),
+            ))
+        });
+        for metadata in [exact, clear] {
+            let mut checks = super::LOCAL_REQUIRED_CHECKS
+                .iter()
+                .map(|(name, _)| super::detail(name, true, "pass".into(), "pass".into(), vec![]))
+                .collect::<Vec<_>>();
+            checks[3] = metadata;
+            let failures = super::gate_result(checks)
+                .isolated_source_failures(&ctx)
+                .unwrap();
+            assert!(failures["first.jpg"].contains("first mismatch"));
+            assert!(!failures["first.jpg"].contains("second mismatch"));
+            assert!(failures["second.jpg"].contains("second mismatch"));
+            assert!(!failures["second.jpg"].contains("first mismatch"));
+        }
+    }
+
+    #[test]
+    fn local_failure_isolation_does_not_attribute_first_file_summary_to_others() {
+        let mut ctx = ctx_with_library(2, vec![]);
+        for stem in ["first", "second"] {
+            ctx.blake3_log.insert(
+                format!("{stem}.jpg"),
+                Blake3Entry {
+                    out_rel: Some(format!("{stem}.jxl")),
+                    src: format!("{stem}-source-hash"),
+                    out: format!("{stem}-output-hash"),
+                    library_asset: None,
+                },
+            );
+        }
+        let mut checks = super::LOCAL_REQUIRED_CHECKS
+            .iter()
+            .map(|(name, _)| super::detail(name, true, "pass".into(), "pass".into(), vec![]))
+            .collect::<Vec<_>>();
+        checks[3] = super::file_failures(
+            super::detail(
+                "metadata",
+                false,
+                "matching metadata".into(),
+                "first.jxl: first file mismatch".into(),
+                vec![
+                    ctx.working_copy.join("first.jxl"),
+                    ctx.working_copy.join("second.jxl"),
+                ],
+            ),
+            true,
+        );
+        let failures = super::gate_result(checks)
+            .isolated_source_failures(&ctx)
+            .unwrap();
+        assert!(failures["first.jpg"].contains("first.jxl"));
+        assert!(failures["second.jpg"].contains("second.jxl"));
+        assert!(!failures["second.jpg"].contains("first.jxl"));
+        assert!(!failures["second.jpg"].contains("first file mismatch"));
     }
 
     #[test]
@@ -6761,6 +6903,7 @@ mod fast_gate_policy_tests {
                 expected: "expected detail".to_string(),
                 actual: "actual detail".to_string(),
                 affected_files: Vec::new(),
+                file_failure_reasons: Default::default(),
                 failure_scope: super::CheckFailureScope::Shared,
             }],
         }

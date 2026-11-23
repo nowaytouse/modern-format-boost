@@ -533,6 +533,7 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
     let sourceRetained: Int?
     let failedSourcesRetained: Int?
     let failedSourcesVerified: Int?
+    let failuresOutsideRetryInventory: Int?
     let failedSourceVerificationError: String?
     let failedSourceProof: FailedSourceProof?
     let retentionUnknownReason: String?
@@ -560,6 +561,7 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
                   original.sourceCleanupConfirmed <= succeeded,
                   original.photosVerified - original.sourceCleanupConfirmed <= unprocessed else { return false }
         }
+        if let failuresOutsideRetryInventory, !(0...failed).contains(failuresOutsideRetryInventory) { return false }
         if let failedSourcesRetained, !(0...failed).contains(failedSourcesRetained) { return false }
         if let failedSourcesVerified, !(0...failed).contains(failedSourcesVerified) { return false }
         if let proof = failedSourceProof {
@@ -611,6 +613,10 @@ struct FastImgDeliveryReceipt: Codable, Equatable {
                   locations.photosOriginals >= locations.affected - locations.workingCopies else { return false }
         }
         return true
+    }
+    var allFailedSourcesEligibleForRetry: Bool {
+        (failuresOutsideRetryInventory ?? 0) == 0 && failedSourcesRetained == failed
+            && failedSourcesVerified == failed && failedSourceVerificationError == nil
     }
     static func absolute(_ path: String) -> Bool { path.hasPrefix("/") && !path.utf8.contains(0) }
     static func samePath(_ left: String?, _ right: String?) -> Bool {
@@ -1363,8 +1369,7 @@ private struct HistoryEntry {
               let summary, summary.img.complete, summary.img.failed.map({ $0 > 0 }) == true,
               summary.img.unprocessed == 0, fastDeliveries.count == 1,
               let receipt = fastDeliveries.first, receipt.failed == summary.img.failed,
-              receipt.failedSourcesRetained == receipt.failed, receipt.failedSourcesVerified == receipt.failed,
-              receipt.failedSourceVerificationError == nil, receipt.primaryCleanupComplete, receipt.finalizationError == nil,
+              receipt.allFailedSourcesEligibleForRetry, receipt.primaryCleanupComplete, receipt.finalizationError == nil,
               let output = outputPaths, FastImgFailedRetryAvailable.path(output),
               let invocation = invocations.first(where: { $0.pipeline == "img" }),
               let strategyIndex = invocation.arguments.firstIndex(of: "--strategy"),
@@ -7060,6 +7065,10 @@ func runProcessingHistorySelfTests() throws {
         && !scopedReceipt.recordsVerifiedSource("/synthetic/other/nested/映像.jpg", invocationID: "synthetic-call-1")
         && !scopedReceipt.recordsVerifiedSource("/synthetic/input/nested/映像.jpg", invocationID: "wrong-call"),
         "Failed source proof was not bound to the exact source and invocation")
+    let scanFailure = try FastImgDeliveryReceipt.decode(payload("MFB_FAST_IMG_RESULT",
+        deferredReceipt.merging(["failures_outside_retry_inventory": 1]) { _, new in new }))!
+    try require(scopedReceipt.allFailedSourcesEligibleForRetry && !scanFailure.allFailedSourcesEligibleForRetry,
+        "A verified scan failure was offered for retry without a saved admission")
     let unsafeProof = pathProof.merging(["verified_relative_paths": ["../outside.jpg"]]) { _, new in new }
     let unsafeReceipt = try payload("MFB_FAST_IMG_RESULT",
         deferredReceipt.merging(["failed_source_proof": unsafeProof]) { _, new in new })

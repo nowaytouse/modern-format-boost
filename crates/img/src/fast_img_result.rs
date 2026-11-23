@@ -17,6 +17,22 @@ use foundation::pipeline::verification::{
 use foundation::unified_error::PhotosDeliveryDeferred;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Current scan evidence only; never an import, cleanup, or retry admission.
+#[derive(Debug, Default)]
+pub(super) struct ProbeFailures {
+    pub(super) total: usize,
+    pub(super) hashes: BTreeMap<String, String>,
+}
+
+impl ProbeFailures {
+    pub(super) const fn new(total: usize) -> Self {
+        Self {
+            total,
+            hashes: BTreeMap::new(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct FileFailures {
     total: usize,
@@ -118,6 +134,8 @@ struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     original_delivery: Option<OriginalDelivery>,
     source_retained: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failures_outside_retry_inventory: Option<usize>,
     failed_sources_retained: Option<usize>,
     failed_sources_verified: Option<usize>,
     failed_source_verification_error: Option<String>,
@@ -153,7 +171,7 @@ impl Report {
             None,
             photos,
             originals,
-            probe_failures,
+            &ProbeFailures::new(probe_failures),
             recorded_failures,
             None,
         )
@@ -164,7 +182,7 @@ impl Report {
         admissions: Option<&BTreeMap<String, FailedRetryAdmission>>,
         photos: bool,
         originals: &[ModernLossyStaticCandidate],
-        probe_failures: usize,
+        probe_failures: &ProbeFailures,
         recorded_failures: Option<&FileFailures>,
         invocation_id: Option<&str>,
     ) -> anyhow::Result<Self> {
@@ -259,7 +277,11 @@ impl Report {
                 .saturating_sub(marker.tier2_failed_sources.len()),
             _ => 0,
         };
-        let unbound_failures = if routed.is_some() { 0 } else { probe_failures };
+        let unbound_failures = if routed.is_some() {
+            0
+        } else {
+            probe_failures.total
+        };
         let failed = checked_add(
             checked_add(marker.failed_source_count(), unbound_failures, "failed")?,
             anonymous_original_failures,
@@ -271,7 +293,7 @@ impl Report {
         } else {
             checked_add(
                 checked_add(marker.src_jpeg_count, tier2.len(), "inventory")?,
-                probe_failures,
+                probe_failures.total,
                 "inventory",
             )?
         };
@@ -333,34 +355,48 @@ impl Report {
                     Err(error) => Err(error),
                 }
             });
-        let failed_sources_retained = match &retention {
+        let mut failed_sources_retained = match &retention {
             Ok((_, count)) if unbound_failures == 0 && anonymous_original_failures == 0 => {
                 Some(*count)
             }
             _ => None,
         };
+        let retention_inspected = retention.is_ok();
         let (mut source_retained, mut retention_unknown_reason) = match retention {
             Err(error) => (
                 None,
                 Some(format!("source existence inspection failed: {error}")),
             ),
-            Ok(_)
-                if probe_failures > 0
-                    || (routed.is_none() && !marker.source_disposition_is_complete()) =>
-            {
-                (
-                    None,
-                    Some("source inventory has unclassified or unaccounted entries".into()),
-                )
-            }
+            Ok(_) if probe_failures.total > 0 => (
+                None,
+                Some("source inventory has unclassified entries outside the saved admission inventory".into()),
+            ),
+            Ok(_) if routed.is_none() && !marker.source_disposition_is_complete() => (
+                None,
+                Some("source inventory has unclassified or unaccounted entries".into()),
+            ),
             Ok((count, _)) => (Some(count), None),
         };
         let mut verified_relative_paths = Vec::new();
         let failed_verification = (|| -> anyhow::Result<usize> {
             anyhow::ensure!(
-                unbound_failures == 0 && anonymous_original_failures == 0,
+                anonymous_original_failures == 0,
                 "failed sources are not all bound to recorded source hashes"
             );
+            let probe_hashes = (routed.is_none()).then_some(&probe_failures.hashes);
+            anyhow::ensure!(
+                unbound_failures == probe_hashes.map_or(0, BTreeMap::len),
+                "failed sources are not all bound to recorded source hashes"
+            );
+            if let Some(probes) = probe_hashes {
+                for (rel, hash) in probes {
+                    anyhow::ensure!(
+                        !sources.contains(rel.as_str()),
+                        "probe failure overlaps another source disposition: {rel}"
+                    );
+                    verify_retained_source(&marker.src_dir, rel, hash)?;
+                }
+            }
             for (rel, entry) in marker.all_failed_sources() {
                 if let Some(admissions) = routed {
                     let admission = admissions.get(rel).ok_or_else(|| {
@@ -380,14 +416,22 @@ impl Report {
                     verified_relative_paths.push(rel.clone());
                 }
             }
-            Ok(marker.failed_source_count())
+            // Every counted failure has now passed an independent retained-source check.
+            Ok(failed)
         })();
         let (failed_sources_verified, failed_source_verification_error) = match failed_verification
         {
             Ok(count) => (Some(count), None),
             Err(error) => (None, Some(format!("{error:#}"))),
         };
-        let failed_source_proof = if verified_relative_paths.is_empty() {
+        if failed_sources_verified == Some(failed)
+            && anonymous_original_failures == 0
+            && retention_inspected
+        {
+            failed_sources_retained = Some(failed);
+        }
+        let failed_source_proof = if probe_failures.total > 0 || verified_relative_paths.is_empty()
+        {
             None
         } else {
             invocation_id
@@ -444,6 +488,7 @@ impl Report {
                 source_cleanup_confirmed: original_cleanup_confirmed,
             }),
             source_retained,
+            failures_outside_retry_inventory: (unbound_failures > 0).then_some(unbound_failures),
             failed_sources_retained,
             failed_sources_verified,
             failed_source_verification_error,
@@ -515,7 +560,7 @@ pub(super) fn finish(
     retry: Option<&FailedRetryContext>,
     photos: bool,
     originals: &[ModernLossyStaticCandidate],
-    probe_failures: usize,
+    probe_failures: &ProbeFailures,
     ignored: usize,
     execution: anyhow::Result<()>,
 ) -> anyhow::Result<()> {
@@ -656,16 +701,24 @@ mod tests {
                 ),
                 (successes, 0, 1, 0)
             );
-            let per_file = finish(&marker, None, true, &[], 0, 0, Ok(()))
-                .err()
-                .ok_or_else(|| anyhow::anyhow!("file failure must produce an error"))?;
+            let per_file = finish(
+                &marker,
+                None,
+                true,
+                &[],
+                &ProbeFailures::default(),
+                0,
+                Ok(()),
+            )
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("file failure must produce an error"))?;
             assert!(per_file.is::<FileFailures>());
             let infrastructure = finish(
                 &marker,
                 None,
                 true,
                 &[],
-                0,
+                &ProbeFailures::default(),
                 0,
                 Err(anyhow::anyhow!("backend unavailable")),
             )
@@ -674,6 +727,62 @@ mod tests {
             assert!(!infrastructure.is::<FileFailures>());
             assert!(infrastructure.to_string().contains("backend unavailable"));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn probe_failure_proof_requires_current_unique_bytes() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut marker =
+            WorkingCopyMarker::new(root.path().join("input"), root.path().join("output"), 0);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        let path = marker.src_dir.join("broken.avif");
+        std::fs::write(&path, b"original")?;
+        let hashes = BTreeMap::from([("broken.avif".to_owned(), calculate_blake3_hash(&path)?)]);
+        let build = |marker: &WorkingCopyMarker, count, hashes: &BTreeMap<String, String>| {
+            Report::from_execution(
+                marker,
+                None,
+                false,
+                &[],
+                &ProbeFailures {
+                    total: count,
+                    hashes: hashes.clone(),
+                },
+                None,
+                Some("worker-1"),
+            )
+        };
+        let report = build(&marker, 1, &hashes)?;
+        assert_eq!(report.failed_sources_verified, Some(1));
+        assert_eq!(report.failed_sources_retained, Some(1));
+        assert_eq!(report.failures_outside_retry_inventory, Some(1));
+        assert!(report.failed_source_proof.is_none());
+        assert!(
+            build(&marker, 2, &hashes)?
+                .failed_sources_verified
+                .is_none()
+        );
+        std::fs::write(&path, b"changed")?;
+        assert!(
+            build(&marker, 1, &hashes)?
+                .failed_sources_verified
+                .is_none()
+        );
+        std::fs::write(&path, b"original")?;
+        marker.src_jpeg_count = 1;
+        marker.failed_sources.insert(
+            "broken.avif".into(),
+            foundation::pipeline::verification::SkippedSourceEntry {
+                src: hashes["broken.avif"].clone(),
+                reason: "old failure".into(),
+            },
+        );
+        assert!(
+            build(&marker, 1, &hashes)?
+                .failed_sources_verified
+                .is_none()
+        );
         Ok(())
     }
 
@@ -740,9 +849,17 @@ mod tests {
         assert_eq!(report.failed_sources_verified, Some(1));
         assert_eq!(report.failed_source_verification_error, None);
         assert_eq!(serde_json::to_value(&report)?["failed_sources_verified"], 1);
-        let proof = Report::from_execution(&marker, None, false, &[], 0, None, Some("worker-1"))?
-            .failed_source_proof
-            .context("matching source should have file-scoped proof")?;
+        let proof = Report::from_execution(
+            &marker,
+            None,
+            false,
+            &[],
+            &ProbeFailures::default(),
+            None,
+            Some("worker-1"),
+        )?
+        .failed_source_proof
+        .context("matching source should have file-scoped proof")?;
         assert_eq!(proof.invocation_id, "worker-1");
         assert_eq!(proof.verified_relative_paths, ["invalid.jpg"]);
 
@@ -752,9 +869,17 @@ mod tests {
         assert_eq!(report.failed_sources_verified, None);
         assert!(report.failed_source_verification_error.is_some());
         assert!(
-            Report::from_execution(&marker, None, false, &[], 0, None, Some("worker-1"))?
-                .failed_source_proof
-                .is_none()
+            Report::from_execution(
+                &marker,
+                None,
+                false,
+                &[],
+                &ProbeFailures::default(),
+                None,
+                Some("worker-1")
+            )?
+            .failed_source_proof
+            .is_none()
         );
 
         std::fs::remove_file(&source)?;
@@ -820,10 +945,18 @@ mod tests {
         report.record_execution(&failure, false);
         assert_eq!(report.finalization_error, None);
         assert!(
-            finish(&marker, None, false, &[], 0, 0, failure)
-                .err()
-                .context("file failure exit")?
-                .is::<FileFailures>()
+            finish(
+                &marker,
+                None,
+                false,
+                &[],
+                &ProbeFailures::default(),
+                0,
+                failure
+            )
+            .err()
+            .context("file failure exit")?
+            .is::<FileFailures>()
         );
 
         report.record_execution(&Err(anyhow::anyhow!("backend unavailable")), false);
@@ -882,6 +1015,7 @@ mod tests {
                 } else {
                     vec![]
                 },
+                file_failure_reasons: Default::default(),
                 failure_scope: CheckFailureScope::Shared,
             })
             .collect(),
@@ -1227,7 +1361,7 @@ mod tests {
                 Some(&admissions),
                 true,
                 &[],
-                0,
+                &ProbeFailures::default(),
                 Some(&FileFailures::originals(1)),
                 None,
             )
@@ -1241,7 +1375,18 @@ mod tests {
         assert_eq!(report.failed_sources_verified, Some(2));
         std::fs::write(src.join("retained.xmp"), b"unexpected companion")?;
         assert_eq!(build(&marker)?.failed_sources_verified, None);
-        assert!(Report::from_execution(&marker, None, true, &[], 0, None, None).is_err());
+        assert!(
+            Report::from_execution(
+                &marker,
+                None,
+                true,
+                &[],
+                &ProbeFailures::default(),
+                None,
+                None
+            )
+            .is_err()
+        );
         Ok(())
     }
 
