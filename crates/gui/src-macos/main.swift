@@ -819,8 +819,8 @@ private enum MediaSetting: String, CaseIterable {
         case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
              .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong, .externalToolSnapshot: ["true", "false"]
         case .imgErrorMode, .vidErrorMode, .fastErrorMode: ["log-and-continue", "fail-fast"]
-        case .imgJxlEffort, .imgJpegEffort, .fastJpegEffort: (2...11).map(String.init)
-        case .fastLosslessPixelEffort: (2...10).map(String.init)
+        case .imgJpegEffort, .fastJpegEffort: (2...11).map(String.init)
+        case .imgJxlEffort, .fastLosslessPixelEffort: (2...10).map(String.init)
         case .imgJpegSearch, .fastJpegSearch: ["full", "adaptive"]
         case .fastAvifSpeed: (0...10).map(String.init)
         case .vidCodec: ["hevc", "av1"]
@@ -1075,6 +1075,9 @@ private struct MediaSettings {
             if preferences.string(forKey: "MFBGuiMediaSettings.imgJxlSearch") == "fixed"
                 || saved[.imgJxlEffort] == "1" {
                 saved.removeValue(forKey: .imgJxlEffort)
+            }
+            for effort in [MediaSetting.imgJxlEffort, .fastLosslessPixelEffort] where saved[effort] == "11" {
+                saved[effort] = "10"
             }
             if let distance = saved[.imgJxlDistance].flatMap(Float.init),
                distance > 0, distance < 0.001 {
@@ -3407,7 +3410,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 : field.isShared ? (self.fast ? fast : (videos ? video : standard))
                 : (field.isFastImage || field.isPhotos ? fast : (field.isVideo ? video : standard))
             let value = effective?[key]
-            inherited[field] = field == .fastLosslessPixelEffort && value == "11" ? "10" : value
+            inherited[field] = value
             inheritedSources[field] = effective?.sourceChain[key]?.joined(separator: " → ")
         }
         for field in MediaSetting.allCases where field.isShared && !self.fast && !videos {
@@ -3866,11 +3869,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
               !(try pixelEffort.arguments(operation: .adjacent, processing: .videosOnly)).contains("--img-jxl-effort") else {
             throw HostError(message: "JXL pixel effort does not preserve independent scopes and inheritance")
         }
-        for effort in ["2", "9", "11"] {
+        for effort in ["2", "9", "10"] {
             pixelEffort.values[.imgJxlEffort] = effort
             try pixelEffort.validate()
         }
-        for invalid in ["0", "1", "12", "1.5"] {
+        for invalid in ["0", "1", "11", "12", "1.5"] {
             pixelEffort.values[.imgJxlEffort] = invalid
             do { try pixelEffort.validate(); throw HostError(message: "Invalid JXL pixel effort accepted") }
             catch { guard error.localizedDescription != "Invalid JXL pixel effort accepted" else { throw error } }
@@ -3888,7 +3891,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let key = "img.jxl_effort"
             let standard = EffectiveRuntimeSettings(values: [key: "8"], sources: [key: "/synthetic/img.json"],
                 sourceChain: [key: ["default", "/synthetic/img.json"]])
-            let fastImage = EffectiveRuntimeSettings(values: [key: "11"], sources: [key: "/synthetic/fast.json"],
+            let fastImage = EffectiveRuntimeSettings(values: [key: "10"], sources: [key: "/synthetic/fast.json"],
                 sourceChain: [key: ["default", "/synthetic/fast.json"]])
             setInheritedValues(standard: standard, fast: fastImage, video: standard)
             restore(MediaSettings())
@@ -13952,7 +13955,7 @@ private func runSelfTest() -> Int32 {
             + configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: false))
         guard imageEffective["execution.error_mode"] == "log-and-continue",
                imageEffective["img.jxl_distance"] == "0.25", imageEffective["img.jxl_effort"] == "8",
-               imageEffective["img.quality_search"] == "adaptive", imageEffective["img.jxl_effort_search"] == "adaptive",
+               imageEffective["img.quality_search"] == "adaptive", imageEffective["img.jxl_effort_search"] == "full",
                imageEffective.sourceChain["img.jxl_distance"]?.last == "CLI",
                imageEffective.sourceChain["img.jxl_effort"]?.last == "CLI",
               imageEffective["img.allow_size_tolerance"] == "true",
@@ -14638,6 +14641,15 @@ private func runSelfTest() -> Int32 {
                   MediaSettings(preferences: preferences).values == legacy.values else {
                 throw HostError(message: "Saving migrated preferences kept retired encoding settings")
             }
+            preferences.set("11", forKey: MediaSetting.imgJxlEffort.preferenceKey)
+            preferences.set("11", forKey: MediaSetting.fastLosslessPixelEffort.preferenceKey)
+            let pixelMigration = MediaSettings(preferences: preferences)
+            guard pixelMigration.values[.imgJxlEffort] == "10",
+                  pixelMigration.values[.fastLosslessPixelEffort] == "10" else {
+                throw HostError(message: "Retired pixel E11 did not migrate to E10")
+            }
+            preferences.removeObject(forKey: MediaSetting.imgJxlEffort.preferenceKey)
+            preferences.removeObject(forKey: MediaSetting.fastLosslessPixelEffort.preferenceKey)
             for exactDistance in ["0", "0.0001"] {
                 preferences.set(exactDistance, forKey: MediaSetting.imgJxlDistance.preferenceKey)
                 guard try MediaSettings(preferences: preferences).arguments(operation: .adjacent, processing: .imagesOnly)

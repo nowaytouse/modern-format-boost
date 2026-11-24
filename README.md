@@ -21,7 +21,7 @@ Development currently targets **0.12.0** on the `nightly` branch.
 | Workflow | What it does | Best fit |
 | --- | --- | --- |
 | **Images** / `img run` | Applies the full static-image policy, normally delivering JXL. Preserves existing modern lossy formats when another encode is inappropriate. | General image archiving. |
-| **Fast IMG, JXL** / `img fast-img --strategy jxl` | Reversibly transcodes JPEGs. For still PNGs and confirmed lossless WebP or AVIF, compares effort candidates at d=0 and keeps the verified JXL when its complete size is at most the source size. Eligible lossy originals retain their separate Photos-delivery path. | JPEG and lossless still-image archiving, including Photos delivery. |
+| **Fast IMG, JXL** / `img fast-img --strategy jxl` | Reversibly transcodes JPEGs. For still PNGs and confirmed lossless WebP or AVIF, compares every pixel effort E1–E10 by default at d=0 and keeps the verified JXL when its complete size is at most the source size. Eligible lossy originals retain their separate Photos-delivery path. | JPEG and lossless still-image archiving, including Photos delivery. |
 | **Fast IMG, AVIF** / `img fast-img --strategy avif` | Uses a separate AVIF size/quality policy. Existing AVIF is not re-encoded. | Meme/image collections whose policy permits metadata cleanup. |
 | **Videos** / `vid run` | Handles video and animation, with HEVC by default and optional AV1. | Time-based media, not static-image conversion. |
 

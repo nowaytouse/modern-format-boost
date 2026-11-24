@@ -1098,7 +1098,7 @@ pub const JXL_DEFAULT_EFFORT: u8 = 7;
 pub const JXL_DEEP_EFFORT: u8 = 8;
 /// Lossless-only high-effort setting.
 pub const JXL_EXPERIMENTAL_LOSSLESS_EFFORT: u8 = 11;
-/// Not selected by automatic defaults; explicit user targets may still use e9.
+/// Historical E9 identifier; complete pixel and JPEG searches include this effort.
 pub const JXL_DISABLED_EFFORT: u8 = 9;
 /// Runtime JXL policy: default mode emits `e7`; ultimate mode emits production `e10`.
 #[must_use]

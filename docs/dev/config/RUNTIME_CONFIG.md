@@ -92,12 +92,14 @@ the app. Its workflow context is the selected operation, not a promise that a
 particular file has already passed a Gate. Actual configuration and per-file
 evidence remain available through settings, run details and history.
 
-- **Pixel JXL effort.** `img.jxl_effort` is an optional search ceiling from E2
-  through E11. With no ceiling override, Normal explores up to E7 and
-  Ultimate/archive or PNG up to E10. Fast JXL uses this ceiling for verified
-  lossless pixel encodes at D0, with a maximum of E10 even if the shared
-  configuration requests E11. Effort comparison evaluates verified
-  pure-media payloads at the same quality. Equal sizes prefer lower E.
+- **Pixel JXL effort.** With no override, direct effort comparison and Fast
+  JXL lossless pixel encoding at D0 evaluate every effort from E1 through E10.
+  `img.jxl_effort` optionally limits the continuous range to E1 through the
+  selected ceiling (E2–E10). Saved E11 pixel ceilings migrate to E10; new CLI
+  requests for pixel E11 are rejected. Quality probes use their own single effort
+  domain. Equal candidate sizes prefer lower E. Old sparse pixel-search
+  checkpoints retain their original contract and cannot certify a new full
+  search.
 - **Pixel JXL distance.** `img.jxl_distance` is an optional fidelity bound.
   Zero requires exact output and effort still adapts. Positive values from
   0.001 through 25 cap the guarded lossy search for eligible inputs. PNG and
@@ -107,7 +109,7 @@ evidence remain available through settings, run details and history.
 Fast JXL also performs reversible JPEG comparison. Ordinary IMG and Fast JXL share
 `jpeg_effort_search`:
 
-- `adaptive`: bounded comparison up to `jpeg_effort` (E2–E11).
+- `adaptive`: continuous comparison from E1 through `jpeg_effort` (E2–E11).
 - `full` (default): compare every effort from E1 through E11 using complete
   metadata-enriched JXL size. Equal sizes prefer lower E. An explicit CLI
   effort ceiling requires adaptive comparison.
@@ -582,9 +584,9 @@ remain subject to macOS behavior.
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
 | `img.jpeg_effort` | `11` | Upper E2–E11 bound for adaptive reversible JPEG comparison. |
 | `img.jxl_distance` | `null` | Optional maximum D for policy-eligible pixel exploration. |
-| `img.jxl_effort` | `null` | Optional E2–E11 ceiling for pixel effort exploration. Fast JXL lossless stills explore up to E10. |
-| `img.jxl_effort_search` | `adaptive` | Verified E comparison at a common quality. |
-| `img.jpeg_effort_search` | `full` | `adaptive` compares a bounded effort set. `full` compares all E1–E11. |
+| `img.jxl_effort` | `null` | Optional E2–E10 ceiling for pixel effort exploration; default E10. |
+| `img.jxl_effort_search` | `full` | Compare every effort at a common quality from E1 to the ceiling. Legacy `adaptive` settings migrate to `full`. |
+| `img.jpeg_effort_search` | `full` | `adaptive` compares E1 through the configured ceiling. `full` compares all E1–E11. |
 | `img.quality_search` | `adaptive` | Guarded standard D or Fast AVIF Q exploration. |
 | `img.avif_speed` | `0` | Speed 0–10 for Fast AVIF final comparison. |
 | `img.avif_metadata_policy` | `clear` | Explicit private Fast AVIF removable-metadata policy; currently the only supported value. Does not change standard JXL preservation or authorize source/sidecar deletion. |
@@ -1162,8 +1164,9 @@ orchestration, not a complete persistent per-file task or delivery manifest.
 
 ## Fast IMG Processing Identity
 
-New Fast IMG checkpoints bind a schema-1 typed `processing_contract` before the
-first write. It contains route-specific effective JPEG E/search/archive/expert
+New Fast IMG JXL checkpoints bind a schema-2 typed `processing_contract` before
+the first write, recording the continuous effort domain. AVIF retains schema 1.
+It contains route-specific effective JPEG E/search/archive/expert
 or AVIF Q/Speed/search/metadata/expert settings, plus tool and recovery
 permissions. Inactive manual E during full JPEG comparison and inactive Q during
 automatic AVIF search are normalized to their actual execution semantics;

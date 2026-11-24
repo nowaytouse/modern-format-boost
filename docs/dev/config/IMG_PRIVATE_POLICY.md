@@ -416,13 +416,14 @@ authorize otherwise forbidden repairs or weaken the route's fidelity checks.
 
 Fast JXL uses independent effort searches for reversible JPEG reconstruction
 and for confirmed lossless stills. The latter encodes pixels at D0, compares
-adaptive effort candidates under `img.jxl_effort` (up to E10), and prefers a
+all pixel effort candidates from E1 through E10 by default (or through the explicitly
+configured `img.jxl_effort` ceiling), and prefers a
 verified JXL on a size tie with the source. Normal IMG and Fast JXL share the
 JPEG full-search engine, while GUI profiles keep separate effort ceilings. Same-semantics compatibility
 retries in adaptive comparison remain subject to the configured fallback policy
 and exact reconstruction checks; full mode requires exact independent efforts.
 
-The pixel cap is specific to Fast JXL. In a two-thread synthetic D0 encode on
+Pixel encoding excludes E11 at the shared policy boundary. In a historical two-thread synthetic D0 encode on
 Apple Silicon (cjxl 0.14.0, 12e4bf40), E10 and E11 both reproduced all samples
 of a 96×96 graphic in 0.064 s and 1.287 s respectively. For a 512×384 textured
 image E10 finished in 3.331 s. E11 had produced no file at the 90-second limit.

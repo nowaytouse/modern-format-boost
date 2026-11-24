@@ -23,6 +23,17 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Complete JXL pixel effort exploration (2026-11-24)
+
+- Direct pixel effort comparisons now cover E1–E10, including E9. E11 remains
+  exclusive to JPEG bitstream transcode. Explicit ceilings compare every effort
+  through that value, including JPEG adaptive comparison. Fast JXL uses the
+  same policy at D0 with final pixel and delivery verification. Existing
+  sparse-search receipts retain their original scope.
+- The encoder logs the requested domain and candidate starts and results.
+  Byte-identical Fast JXL staging reuses the already verified pixel proof;
+  changed bytes and final delivery still require independent verification.
+
 ### Fast IMG metadata verification (2026-11-24)
 
 - PNG text or XMP after the image data can now pass orientation verification.

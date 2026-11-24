@@ -4040,7 +4040,7 @@ fn fast_img_processing_contract(
 
     let encoding = match strategy {
         "jxl" => FastImgEncodingParameters::Jxl {
-            pixel_effort_ceiling: Some(foundation::jxl_effort_policy::fast_lossless_pixel_ceiling(
+            pixel_effort_ceiling: Some(foundation::jxl_effort_policy::pixel_effort_ceiling(
                 config.img.jxl_effort,
             )),
             // Full comparison ignores the saved manual E, just like the actual
@@ -4064,7 +4064,7 @@ fn fast_img_processing_contract(
         _ => anyhow::bail!("unsupported fast-img strategy for processing contract: {strategy}"),
     };
     let contract = FastImgProcessingContract {
-        schema: 1,
+        schema: if strategy == "jxl" { 2 } else { 1 },
         tool_policy: config.tools.policy,
         fallback_policy: config.img.fallback_policy,
         encoding,
@@ -8473,7 +8473,12 @@ fn fast_img_publish_lossless_pixels(
         Some(".JXL"),
     )?
     .into_temp_path();
-    encode_fast_lossless_jxl(&job.source, &candidate, options)?;
+    let (encoded_source_hash, encoded_candidate_hash) =
+        encode_fast_lossless_jxl(&job.source, &candidate, options)?;
+    anyhow::ensure!(
+        encoded_source_hash == job.src_hash,
+        "lossless input changed before encoding"
+    );
     foundation::ensure_parent_dir_exists(output)?;
     let mut final_bytes = None;
     let committed = foundation::conversion::commit_temp_to_output_with_metadata_checked(
@@ -8489,10 +8494,19 @@ fn fast_img_publish_lossless_pixels(
             if !fast_lossless_jxl_fits(source_bytes, size) {
                 return Ok(false);
             }
-            img::lossless_converter::verify_fast_lossless_jxl_pixels(&job.source, staged)
-                .map_err(std::io::Error::other)?;
+            // Reuse only the exact same verified source and complete candidate
+            // bytes. Metadata writes that alter bytes require a fresh proof.
+            let reuse = calculate_blake3_hash(staged).map_err(std::io::Error::other)?
+                == encoded_candidate_hash;
+            if !reuse {
+                img::lossless_converter::verify_fast_lossless_jxl_pixels(&job.source, staged)
+                    .map_err(std::io::Error::other)?;
+            }
             fast_img_verify_source_hash_unchanged(&job.source, &job.src_hash)
                 .map_err(std::io::Error::other)?;
+            if reuse {
+                tracing::info!("reused byte-identical lossless pixel proof before publication");
+            }
             Ok(true)
         },
     )?;
@@ -14459,6 +14473,7 @@ mod fast_img_hardening_tests {
         let jxl = super::fast_img_processing_contract(&config, "jxl", false, false)?;
         let avif = super::fast_img_processing_contract(&config, "avif", false, false)?;
         let mut saved = serde_json::to_value(&jxl)?;
+        saved["schema"] = serde_json::json!(1);
         saved["encoding"]
             .as_object_mut()
             .unwrap()
@@ -14472,7 +14487,7 @@ mod fast_img_hardening_tests {
         inactive.img.jpeg_effort = 7;
         inactive.img.avif_quality = 75;
         inactive.img.jxl_distance = Some(0.5);
-        inactive.img.jxl_effort = Some(11); // capped at the default E10 for d=0
+        inactive.img.jxl_effort = Some(10); // explicit full-range ceiling equals the default
         inactive.img.quality_heuristic = true;
         inactive.img.allow_database = true;
         inactive.vid.codec = VidCodec::Av1;
@@ -14483,6 +14498,23 @@ mod fast_img_hardening_tests {
             "full JPEG comparison must ignore saved manual effort and other routes' settings"
         );
         inactive.img.jxl_effort = Some(8);
+        let bounded = super::fast_img_processing_contract(&inactive, "jxl", false, false)?;
+        let mut sparse = bounded.clone();
+        sparse.schema = 1;
+        assert!(sparse.validate("jxl").is_ok());
+        assert!(!sparse.matches_current_settings(&bounded));
+        inactive.img.jpeg_effort_search = JpegEffortSearch::Adaptive;
+        let adaptive = super::fast_img_processing_contract(&inactive, "jxl", false, false)?;
+        let mut old_adaptive = serde_json::to_value(&adaptive)?;
+        old_adaptive["schema"] = serde_json::json!(1);
+        old_adaptive["encoding"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pixel_effort_ceiling");
+        let old_adaptive: super::FastImgProcessingContract = serde_json::from_value(old_adaptive)?;
+        assert!(old_adaptive.validate("jxl").is_ok());
+        assert!(!old_adaptive.matches_current_settings(&adaptive));
+        inactive.img.jpeg_effort_search = JpegEffortSearch::Full;
         assert_ne!(
             super::fast_img_processing_contract(&inactive, "jxl", false, false)?,
             jxl

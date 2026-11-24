@@ -229,13 +229,14 @@ pub const fn fast_lossless_jxl_fits(source_bytes: u64, finalized_bytes: u64) -> 
 ///
 /// `staged_output` is a private caller-owned staging path. Publication and the final
 /// metadata-inclusive size decision belong to the delivery transaction.
+/// Returns the source and candidate BLAKE3 identities after exact verification.
 /// # Errors
 /// Rejects unproven sources, encoder failures, drift, or a failed sample/color proof.
 pub fn encode_fast_lossless_jxl(
     source: &Path,
     staged_output: &Path,
     options: &ConvertOptions,
-) -> Result<()> {
+) -> Result<(String, String)> {
     let before = foundation::common_utils::calculate_blake3_hash(source)?;
     ensure!(
         foundation::probe_fast_img_lossless_static(source)?,
@@ -290,7 +291,7 @@ pub fn encode_fast_lossless_jxl(
     let input = pam
         .as_ref()
         .map_or(raster.path.as_path(), NamedTempFile::path);
-    let efforts = foundation::jxl_effort_policy::fast_lossless_pixel_efforts();
+    let efforts = foundation::jxl_effort_policy::pixel_effort_candidates();
     let ((), _) = foundation::jxl_effort_policy::run_effort_search(
         source,
         staged_output,
@@ -322,12 +323,17 @@ pub fn encode_fast_lossless_jxl(
         |()| true,
         |candidate| Ok(fs::metadata(candidate)?.len()),
     )?;
+    let candidate_hash = foundation::common_utils::calculate_blake3_hash(staged_output)?;
     raster.verify(source, staged_output)?;
     ensure!(
         foundation::common_utils::calculate_blake3_hash(source)? == before,
         "lossless source changed during encoding"
     );
-    Ok(())
+    ensure!(
+        foundation::common_utils::calculate_blake3_hash(staged_output)? == candidate_hash,
+        "lossless candidate changed during verification"
+    );
+    Ok((before, candidate_hash))
 }
 
 #[cfg(test)]

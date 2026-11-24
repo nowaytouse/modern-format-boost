@@ -199,10 +199,10 @@ pub(super) struct RuntimeArgs {
     /// Maximum lossy JXL distance where the policy permits it. Zero allows only exact output.
     #[arg(long, global = true, value_parser = runtime_config::parse_jxl_distance)]
     jxl_distance: Option<f32>,
-    /// Upper effort (E2..E11) for direct JXL exploration. Fast IMG lossless stills cap the search at E10.
+    /// Optional upper effort (E2..E10) for direct JXL exploration. Default: E10.
     #[arg(long, global = true, value_parser = runtime_config::parse_direct_jxl_effort)]
     jxl_effort: Option<u8>,
-    /// Compare verified direct JXL encodes within the effort ceiling.
+    /// Compare every direct JXL effort from E1 through the ceiling (default E10).
     #[arg(long, global = true, value_enum)]
     jxl_effort_search: Option<runtime_config::EffortSearch>,
     /// Search for a fitting quality on eligible media.
@@ -527,7 +527,7 @@ mod tests {
         );
         assert_eq!(
             loaded.config.img.jxl_effort_search,
-            runtime_config::EffortSearch::Adaptive
+            runtime_config::EffortSearch::Full
         );
         assert_eq!(
             loaded.config.img.jpeg_effort_search,
@@ -686,7 +686,7 @@ mod tests {
         .resolve(false)?;
         assert_eq!(
             loaded.config.img.jxl_effort_search,
-            runtime_config::EffortSearch::Adaptive
+            runtime_config::EffortSearch::Full
         );
         assert_eq!(
             loaded.config.img.quality_search,
@@ -729,7 +729,7 @@ mod tests {
         );
         assert_eq!(
             loaded.config.img.jxl_effort_search,
-            runtime_config::EffortSearch::Adaptive
+            runtime_config::EffortSearch::Full
         );
         assert_eq!(
             loaded.config.img.quality_search,
@@ -793,13 +793,13 @@ mod tests {
             assert_eq!(loaded.config.img.jpeg_effort, 11);
             assert_eq!(
                 loaded.config.img.jxl_effort_search,
-                runtime_config::EffortSearch::Adaptive
+                runtime_config::EffortSearch::Full
             );
             assert_eq!(loaded.sources["img.jpeg_effort_search"], "CLI");
         }
         assert!(
             crate::Cli::try_parse_from(["img", "run", "/unused", "--jxl-effort-search", "full"])
-                .is_err()
+                .is_ok()
         );
         Ok(())
     }
@@ -823,7 +823,6 @@ mod tests {
                 (vec!["--jxl-effort", "7"], 7, "CLI"),
                 (vec!["--jxl-effort", "10"], 10, "CLI"),
                 (vec!["--jxl-effort", "2"], 2, "CLI"),
-                (vec!["--jxl-effort", "11"], 11, "CLI"),
             ] {
                 let argv = [vec!["img", command, tail, "--config", path], flags].concat();
                 let loaded = crate::Cli::try_parse_from(argv)?.policy.resolve(false)?;
@@ -839,7 +838,7 @@ mod tests {
                 );
             }
         }
-        for effort in ["0", "1", "12", "255", "256", "null"] {
+        for effort in ["0", "1", "11", "12", "255", "256", "null"] {
             assert!(
                 crate::Cli::try_parse_from(["img", "config", "show", "--jxl-effort", effort])
                     .is_err()

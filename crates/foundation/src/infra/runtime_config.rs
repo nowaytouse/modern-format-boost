@@ -207,13 +207,13 @@ impl AvifMetadataPolicy {
 /// Parse a direct pixel JXL search ceiling.
 ///
 /// # Errors
-/// Rejects ceilings below 2 or above 11.
+/// Rejects ceilings outside E2–E10. E11 is only supported by JPEG transcode.
 pub fn parse_direct_jxl_effort(value: &str) -> std::result::Result<u8, String> {
     let effort = value.parse::<u8>().map_err(|error| error.to_string())?;
-    if (2..=11).contains(&effort) {
+    if (2..=10).contains(&effort) {
         Ok(effort)
     } else {
-        Err("direct JXL search effort ceiling must be 2..11".into())
+        Err("direct JXL search effort ceiling must be 2..10 (E11 is JPEG transcode only)".into())
     }
 }
 
@@ -238,8 +238,14 @@ pub fn parse_jxl_distance(value: &str) -> std::result::Result<f32, String> {
 pub enum EffortSearch {
     #[value(skip)]
     Fixed,
-    #[default]
+    #[value(skip)]
     Adaptive,
+    #[default]
+    #[value(
+        alias = "adaptive",
+        help = "Compare every pixel effort E1 through E10, or through an explicit ceiling"
+    )]
+    Full,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
@@ -247,7 +253,7 @@ pub enum EffortSearch {
 pub enum JpegEffortSearch {
     #[value(skip)]
     Fixed,
-    #[value(help = "Compare a subset of JPEG efforts within the configured ceiling")]
+    #[value(help = "Compare every JPEG effort from E1 through the configured ceiling")]
     Adaptive,
     #[default]
     #[value(help = "Compare every JPEG effort E1 through E11")]
@@ -334,7 +340,7 @@ impl Default for ImgPolicy {
             jpeg_effort: 11,
             jxl_distance: None,
             jxl_effort: None,
-            jxl_effort_search: EffortSearch::Adaptive,
+            jxl_effort_search: EffortSearch::Full,
             jpeg_effort_search: JpegEffortSearch::Full,
             quality_search: QualitySearch::Adaptive,
             fallback_policy: FallbackPolicy::Strict,
@@ -568,8 +574,8 @@ impl RuntimeConfig {
             self.img.quality_search = QualitySearch::Adaptive;
             migrated.push("img.quality_search");
         }
-        if self.img.jxl_effort_search != EffortSearch::Adaptive {
-            self.img.jxl_effort_search = EffortSearch::Adaptive;
+        if self.img.jxl_effort_search != EffortSearch::Full {
+            self.img.jxl_effort_search = EffortSearch::Full;
             migrated.push("img.jxl_effort_search");
         }
         if self.img.jpeg_effort_search == JpegEffortSearch::Fixed {
@@ -582,6 +588,10 @@ impl RuntimeConfig {
         }
         if self.img.jxl_effort == Some(1) {
             self.img.jxl_effort = Some(2);
+            migrated.push("img.jxl_effort");
+        }
+        if self.img.jxl_effort == Some(11) {
+            self.img.jxl_effort = Some(10);
             migrated.push("img.jxl_effort");
         }
         if let Some(distance) = self.img.jxl_distance
@@ -1061,7 +1071,7 @@ mod tests {
         let mut config = RuntimeConfig::default();
         assert_eq!(config.img.jxl_effort, None);
         assert_eq!(config.img.jxl_distance, None);
-        assert_eq!(config.img.jxl_effort_search, EffortSearch::Adaptive);
+        assert_eq!(config.img.jxl_effort_search, EffortSearch::Full);
         assert_eq!(config.img.jpeg_effort_search, JpegEffortSearch::Full);
         assert_eq!(config.img.quality_search, QualitySearch::Adaptive);
         assert_eq!(
@@ -1069,7 +1079,7 @@ mod tests {
             Value::Null
         );
         assert!(parse_direct_jxl_effort("1").is_err());
-        for effort in 2..=11 {
+        for effort in 2..=10 {
             config.img.jxl_effort = Some(effort);
             config.validate()?;
             assert_eq!(parse_direct_jxl_effort(&effort.to_string()), Ok(effort));
@@ -1080,6 +1090,11 @@ mod tests {
             assert!(config.validate().is_err());
             assert!(parse_direct_jxl_effort(&effort.to_string()).is_err());
         }
+        config.img.jxl_effort = Some(11);
+        config.validate()?;
+        assert!(parse_direct_jxl_effort("11").is_err());
+        assert!(config.migrate_image_search().contains(&"img.jxl_effort"));
+        assert_eq!(config.img.jxl_effort, Some(10));
         let mut value = serde_json::to_value(RuntimeConfig::default())?;
         let mut sources = BTreeMap::new();
         let mut source_chain = BTreeMap::new();
@@ -1141,12 +1156,10 @@ mod tests {
         let serialized = serde_json::to_value(&restored)?;
         assert_eq!(serialized["img"]["jpeg_effort_search"], "full");
         assert_eq!(JpegEffortSearch::Full.as_str(), "full");
-        assert!(
-            serde_json::from_value::<RuntimeConfig>(json!({
-                "img": {"jxl_effort_search": "full"}
-            }))
-            .is_err()
-        );
+        let full: RuntimeConfig = serde_json::from_value(json!({
+            "img": {"jxl_effort_search": "full"}
+        }))?;
+        assert_eq!(full.img.jxl_effort_search, EffortSearch::Full);
         Ok(())
     }
 

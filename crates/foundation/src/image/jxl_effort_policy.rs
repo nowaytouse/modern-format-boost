@@ -5,15 +5,14 @@
 //! quality-search axis: effort search selects one domain before quality search by default.
 //!
 //! ## Encoder tiers
-//! Direct pixel encoding uses bounded search by default with these mode ceilings;
-//! explicit search ceilings can select 2 through 11 (e11 needs the expert switch).
-//!   - Normal   → e7  (`ultimate = false`)
-//!   - Ultimate → e10 (`ultimate = true`)
+//! Direct pixel effort search compares E1 through E10 by default, or every
+//! effort up to an explicitly configured ceiling. Quality probes retain their
+//! single-domain mode effort.
 //!
 //! JPEG bitstream transcode is separate: full search compares e1 through e11.
 //! Bounded search retains its verified compatibility fallback;
 //! full search never substitutes a different effort for an unavailable candidate.
-//! Pixel e11 is explicit only, because it can be disproportionately slow.
+//! E11 is reserved for JPEG bitstream transcode because pixel E11 can stall.
 //!
 //! `archive` is a product mode, not a third encoder tier. Normalize it to the
 //! Ultimate tier here so individual encode paths cannot drift:
@@ -40,7 +39,7 @@ pub fn quality_search_enabled(default: bool) -> bool {
         .enabled(default)
 }
 
-/// Compare bounded efforts at a fixed quality before entering one distance-search domain.
+/// Compare efforts at a fixed quality before entering one distance-search domain.
 #[must_use]
 pub fn effort_candidates(kind: JxlEffortContext, selected: u8) -> Vec<u8> {
     use crate::runtime_config::JpegEffortSearch;
@@ -52,38 +51,31 @@ pub fn effort_candidates(kind: JxlEffortContext, selected: u8) -> Vec<u8> {
     {
         return (1..=11).collect();
     }
-    let domain: &[u8] = match kind {
-        JxlEffortContext::DirectEncode => &[7, 8, 10],
-        JxlEffortContext::JpegLosslessTranscode => &[1, 7, 8, 10, 11],
+    let ceiling = match kind {
+        JxlEffortContext::DirectEncode => pixel_effort_ceiling(Some(selected)),
+        JxlEffortContext::JpegLosslessTranscode => selected,
     };
-    let mut efforts: Vec<u8> = domain
-        .iter()
-        .copied()
-        .filter(|effort| *effort < selected)
-        .collect();
-    // A low ceiling should still compare two candidates. The source policy
-    // supplies the default ceiling while the adaptive domain stays sparse.
-    if efforts.is_empty() && selected > 1 {
-        efforts.push(selected - 1);
-    }
-    efforts.push(selected);
-    efforts
+    (1..=ceiling).collect()
 }
 
-/// Fast IMG excludes E11 pixel coding: textured stills can exceed batch budgets even with libjxl 0.14.
+/// Resolve the complete pixel search ceiling, independently of quality probes.
 #[must_use]
-pub fn fast_lossless_pixel_ceiling(configured: Option<u8>) -> u8 {
-    const MAX_PIXEL_EFFORT: u8 = 10;
-    configured.unwrap_or(MAX_PIXEL_EFFORT).min(MAX_PIXEL_EFFORT)
+pub fn pixel_effort_ceiling(configured: Option<u8>) -> u8 {
+    configured
+        .unwrap_or(constants::JXL_ULTIMATE_EFFORT)
+        .min(constants::JXL_ULTIMATE_EFFORT)
 }
 
-/// Adaptive candidates at distance zero for Fast IMG's confirmed lossless stills.
+fn active_pixel_effort_ceiling() -> u8 {
+    pixel_effort_ceiling(crate::runtime_config::active().and_then(|config| config.img.jxl_effort))
+}
+
+/// Complete candidates at a common quality, shared by direct pixel encoders.
 #[must_use]
-pub fn fast_lossless_pixel_efforts() -> Vec<u8> {
-    let configured = crate::runtime_config::active().and_then(|config| config.img.jxl_effort);
+pub fn pixel_effort_candidates() -> Vec<u8> {
     effort_candidates(
         JxlEffortContext::DirectEncode,
-        fast_lossless_pixel_ceiling(configured),
+        active_pixel_effort_ceiling(),
     )
 }
 
@@ -109,6 +101,9 @@ pub fn run_effort_search<T>(
     if let [effort] = efforts {
         return Ok((run(*effort, output)?, *effort));
     }
+    crate::log_detail!(&format!(
+        "Effort search plan: requested efforts {efforts:?}"
+    ));
     let identity = crate::common_utils::calculate_blake3_hash(input)?;
     let parent = output.parent().context("effort search output parent")?;
     let scratch = tempfile::Builder::new()
@@ -117,8 +112,10 @@ pub fn run_effort_search<T>(
     let mut best = None;
     for effort in efforts {
         let candidate = scratch.path().join(format!("e{effort}.jxl"));
+        crate::log_detail!(&format!("Effort search starting requested e{effort}"));
         let started = std::time::Instant::now();
-        let observation = run(*effort, &candidate)?;
+        let observation = run(*effort, &candidate)
+            .with_context(|| format!("effort search incomplete at requested e{effort}"))?;
         if !successful(&observation) {
             anyhow::ensure!(
                 crate::common_utils::calculate_blake3_hash(input)? == identity,
@@ -133,7 +130,8 @@ pub fn run_effort_search<T>(
             std::fs::symlink_metadata(&candidate)?.file_type().is_file(),
             "effort search candidate is not a regular file"
         );
-        let size = verify_payload(&candidate)?;
+        let size = verify_payload(&candidate)
+            .with_context(|| format!("effort search candidate e{effort} verification failed"))?;
         anyhow::ensure!(size > 0, "effort search candidate has no media payload");
         anyhow::ensure!(
             crate::common_utils::calculate_blake3_hash(input)? == identity,
@@ -412,7 +410,7 @@ pub fn direct_encoder_effort(default: u8) -> u8 {
 }
 
 fn resolve_direct_effort(configured: Option<u8>, default: u8) -> u8 {
-    configured.unwrap_or(default)
+    pixel_effort_ceiling(configured.or(Some(default)))
 }
 
 /// Map product flags onto the two encoder tiers.
@@ -832,12 +830,13 @@ mod tests {
             );
             assert_eq!(
                 effort_candidates(JxlEffortContext::DirectEncode, 9),
-                [7, 8, 9]
+                (1..=9).collect::<Vec<_>>()
             );
+            assert_eq!(pixel_effort_candidates(), (1..=10).collect::<Vec<_>>());
             assert!(quality_search_enabled(false));
             let mut config = RuntimeConfig::default();
             config.img.jpeg_effort_search = JpegEffortSearch::Full;
-            config.img.jxl_effort_search = EffortSearch::Adaptive;
+            config.img.jxl_effort_search = EffortSearch::Full;
             crate::runtime_config::install(config)?;
             for selected in [1, 5, 9, 11] {
                 assert_eq!(
@@ -847,8 +846,9 @@ mod tests {
             }
             assert_eq!(
                 effort_candidates(JxlEffortContext::DirectEncode, 9),
-                [7, 8, 9]
+                (1..=9).collect::<Vec<_>>()
             );
+            assert_eq!(pixel_effort_candidates(), (1..=10).collect::<Vec<_>>());
             return Ok(());
         }
         let name = format!(
@@ -877,19 +877,23 @@ mod tests {
         let source = root.path().join("source");
         let output = root.path().join("output");
         std::fs::write(&source, b"synthetic opaque input")?;
+        let mut tried = Vec::new();
+        let complete_domain = (1..=10).collect::<Vec<_>>();
         let (observed, effort) = run_effort_search(
             &source,
             &output,
-            &[7, 8, 10],
+            &complete_domain,
             |effort, candidate| {
+                tried.push(effort);
                 assert!(std::fs::read_dir(candidate.parent().unwrap())?.count() <= 1);
-                std::fs::write(candidate, vec![b'x'; if effort == 7 { 40 } else { 20 }])?;
+                std::fs::write(candidate, vec![b'x'; if effort >= 9 { 20 } else { 40 }])?;
                 Ok(effort)
             },
             |_| true,
             |candidate| Ok(std::fs::metadata(candidate)?.len()),
         )?;
-        assert_eq!((observed, effort), (8, 8));
+        assert_eq!(tried, complete_domain);
+        assert_eq!((observed, effort), (9, 9));
         assert_eq!(std::fs::metadata(&output)?.len(), 20);
         let prior = std::fs::read(&output)?;
         for cause in ["verification", "mutation", "launch"] {
@@ -928,6 +932,26 @@ mod tests {
             |_| unreachable!(),
         )?;
         assert!(!success);
+        assert_eq!(std::fs::read(&output)?, prior);
+        let mut tried = Vec::new();
+        let (success, failed_effort) = run_effort_search(
+            &source,
+            &output,
+            &complete_domain,
+            |effort, candidate| {
+                tried.push(effort);
+                if effort == 10 {
+                    return Ok(false);
+                }
+                std::fs::write(candidate, b"opaque candidate")?;
+                Ok(true)
+            },
+            |value| *value,
+            |candidate| Ok(std::fs::metadata(candidate)?.len()),
+        )?;
+        assert!(!success);
+        assert_eq!(failed_effort, 10);
+        assert_eq!(tried, complete_domain);
         assert_eq!(std::fs::read(&output)?, prior);
         let remaining = std::fs::read_dir(root.path())?.collect::<std::io::Result<Vec<_>>>()?;
         assert_eq!(remaining.len(), 2, "owned search staging leaked");
@@ -1022,7 +1046,10 @@ mod tests {
         ] {
             assert_eq!(resolve_direct_effort(None, default), default);
             for configured in 1..=11 {
-                assert_eq!(resolve_direct_effort(Some(configured), default), configured);
+                assert_eq!(
+                    resolve_direct_effort(Some(configured), default),
+                    configured.min(10)
+                );
                 assert_eq!(jpeg_transcode_effort(None), 11);
             }
         }
@@ -1049,7 +1076,7 @@ mod tests {
             let mut config = crate::infra::runtime_config::RuntimeConfig::default();
             config.img.jxl_effort = Some(effort);
             config.img.jpeg_effort = 9;
-            config.img.jxl_effort_search = crate::runtime_config::EffortSearch::Adaptive;
+            config.img.jxl_effort_search = crate::runtime_config::EffortSearch::Full;
             config.img.jpeg_effort_search = crate::runtime_config::JpegEffortSearch::Adaptive;
             config.tools.paths.insert(
                 "cjxl".into(),
@@ -1061,18 +1088,11 @@ mod tests {
             crate::infra::runtime_config::install(config)?;
             assert_eq!(
                 effort_candidates(JxlEffortContext::DirectEncode, effort),
-                match effort {
-                    2..=7 => vec![effort - 1, effort],
-                    8 => vec![7, 8],
-                    9 => vec![7, 8, 9],
-                    10 => vec![7, 8, 10],
-                    11 => vec![7, 8, 10, 11],
-                    _ => unreachable!(),
-                }
+                (1..=effort).collect::<Vec<_>>()
             );
             assert_eq!(
                 effort_candidates(JxlEffortContext::JpegLosslessTranscode, 9),
-                vec![1, 7, 8, 9]
+                (1..=9).collect::<Vec<_>>()
             );
             for (ultimate, archive) in [(false, false), (true, false), (false, true)] {
                 assert_eq!(encoder_effort_for_mode(ultimate, archive), effort);
@@ -1093,9 +1113,7 @@ mod tests {
                     vec![9]
                 );
             }
-            let fast_pixel_efforts = fast_lossless_pixel_efforts();
-            assert_eq!(fast_pixel_efforts.last().copied(), Some(effort.min(10)));
-            assert!(fast_pixel_efforts.len() >= 2 && !fast_pixel_efforts.contains(&11));
+            assert_eq!(pixel_effort_candidates(), (1..=effort).collect::<Vec<_>>());
             let png_effort =
                 direct_encoder_effort(crate::image::png_validation::PNG_LOSSLESS_JXL_EFFORT);
             assert_eq!(png_effort, effort);
@@ -1113,12 +1131,9 @@ mod tests {
                 args.windows(2)
                     .any(|pair| pair[0] == constants::JXL_ARG_DISTANCE && pair[1] == "0")
             );
-            assert_eq!(
-                args.contains(&std::ffi::OsStr::new(
-                    constants::JXL_ARG_ALLOW_EXPERT_OPTIONS
-                )),
-                effort == 11
-            );
+            assert!(!args.contains(&std::ffi::OsStr::new(
+                constants::JXL_ARG_ALLOW_EXPERT_OPTIONS
+            )));
             return Ok(());
         }
         let name = format!(
@@ -1127,10 +1142,10 @@ mod tests {
         );
         let (_, name) = name.split_once("::").context("test module path")?;
         let root = tempfile::tempdir()?;
-        for effort in ["2", "7", "8", "9", "10", "11"] {
+        for effort in 2..=10 {
             let status = std::process::Command::new(std::env::current_exe()?)
                 .args(["--exact", name])
-                .env(CHILD, effort)
+                .env(CHILD, effort.to_string())
                 .env("MFB_HOME_ROOT", root.path())
                 .env("MFB_LOG_DIR", root.path().join("logs"))
                 .status()?;

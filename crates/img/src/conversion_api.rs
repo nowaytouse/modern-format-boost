@@ -697,24 +697,13 @@ fn convert_to_jxl(
             builder.apple_compat(true);
         }
 
-        let effort = foundation::jxl_effort_policy::encoder_effort_for_mode(
-            config.ultimate_mode(),
-            config.archive_mode(),
-        );
-        let efforts = foundation::jxl_effort_policy::effort_candidates(
-            foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
-            effort,
-        );
+        let efforts = foundation::jxl_effort_policy::pixel_effort_candidates();
         let (status, _) = foundation::jxl_effort_policy::run_effort_search(
             &input_abs,
             &output_abs,
             &efforts,
             |selected, candidate| {
-                let mut command = builder
-                    .output(candidate)
-                    .effort(selected)
-                    .allow_expert_options(config.allow_expert_options())
-                    .build();
+                let mut command = builder.output(candidate).effort(selected).build();
                 foundation::process_runner::run_command_with_liveness_timeout(
                     &mut command,
                     std::time::Duration::from_secs(120),

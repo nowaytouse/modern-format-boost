@@ -210,7 +210,7 @@ struct Args {
     /// Upper effort for adaptive reversible JPEG comparison, from 2 through 11.
     #[arg(long, value_parser = clap::value_parser!(u8).range(2..=11))]
     img_jpeg_effort: Option<u8>,
-    /// JPEG search: adaptive compares selected efforts, full compares all E1..E11.
+    /// JPEG search: adaptive compares E1 through its ceiling, full compares all E1..E11.
     #[arg(long, value_enum)]
     img_jpeg_effort_search: Option<foundation::runtime_config::JpegEffortSearch>,
 
@@ -218,7 +218,7 @@ struct Args {
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_jxl_distance)]
     img_jxl_distance: Option<f32>,
 
-    /// Upper effort for direct pixel JXL exploration, from 2 through 11. Fast IMG lossless stills cap the search at E10.
+    /// Optional upper effort for direct pixel JXL exploration, from 2 through 10 (default E10).
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_direct_jxl_effort)]
     img_jxl_effort: Option<u8>,
     #[arg(long, value_enum)]
@@ -2538,7 +2538,8 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
     if let Some(strategy) = args.img_jxl_effort_search {
         let value = match strategy {
             foundation::runtime_config::EffortSearch::Fixed => "fixed",
-            foundation::runtime_config::EffortSearch::Adaptive => "adaptive",
+            foundation::runtime_config::EffortSearch::Adaptive
+            | foundation::runtime_config::EffortSearch::Full => "full",
         };
         command.extend(["--jxl-effort-search".to_owned(), value.to_owned()]);
     }
@@ -7606,7 +7607,7 @@ mod tests {
         fast.img_jxl_distance = Some(0.001);
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_distance = None;
-        fast.img_jxl_effort_search = Some(foundation::runtime_config::EffortSearch::Adaptive);
+        fast.img_jxl_effort_search = Some(foundation::runtime_config::EffortSearch::Full);
         fast.img_jpeg_effort_search = Some(foundation::runtime_config::JpegEffortSearch::Adaptive);
         validate_media_options(&fast)?;
         let (command, _) = fast_img_launch_command(&fast, Path::new("/repo"), input.path())?;
@@ -7619,7 +7620,7 @@ mod tests {
         assert!(!command.args.contains(&"--ultimate".to_owned()));
         assert!(!command.args.contains(&"--extreme-precision".to_owned()));
         assert!(!command.args.contains(&"--jxl-distance".to_owned()));
-        for expected in [["--jxl-effort", "8"], ["--jxl-effort-search", "adaptive"]] {
+        for expected in [["--jxl-effort", "8"], ["--jxl-effort-search", "full"]] {
             assert!(command.args.windows(2).any(|pair| pair == expected));
         }
         for mode in [LaunchMode::Images, LaunchMode::FastImg] {
@@ -7648,7 +7649,7 @@ mod tests {
         fast.strategy = Some("avif".to_owned());
         fast.img_jpeg_effort = None;
         assert!(validate_media_options(&fast).is_err());
-        for value in ["0", "1", "12", "255"] {
+        for value in ["0", "1", "11", "12", "255"] {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", value]).is_err());
         }
         assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort", "1"]).is_err());
@@ -7660,13 +7661,13 @@ mod tests {
             assert!(Args::try_parse_from(["mfb", flag, "fixed"]).is_err());
         }
         assert!(Args::try_parse_from(["mfb", "--img-quality-search", "mode-default"]).is_err());
-        for effort in 2..=11 {
+        for effort in 2..=10 {
             let value = effort.to_string();
             assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", &value]).is_ok());
         }
         assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "adaptive"]).is_ok());
         assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "full"]).is_ok());
-        assert!(Args::try_parse_from(["mfb", "--img-jxl-effort-search", "full"]).is_err());
+        assert!(Args::try_parse_from(["mfb", "--img-jxl-effort-search", "full"]).is_ok());
         let exact = Args::try_parse_from(["mfb", "--mode", "images", "--img-jxl-distance", "0"])?;
         assert_eq!(exact.img_jxl_distance, Some(0.0));
         validate_media_options(&exact)?;

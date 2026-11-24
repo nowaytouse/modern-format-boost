@@ -15,7 +15,6 @@ pub struct CjxlBuilder {
     threads: Option<usize>,
     lossless_jpeg: bool,
     allow_jpeg_recon: Option<bool>,
-    allow_expert_options: bool,
     fixed_features: bool,
     color_space: Option<String>,
     icc_profile: Option<PathBuf>,
@@ -60,11 +59,6 @@ impl CjxlBuilder {
 
     pub const fn allow_jpeg_reconstruction(&mut self, allow: bool) -> &mut Self {
         self.allow_jpeg_recon = Some(allow);
-        self
-    }
-
-    pub const fn allow_expert_options(&mut self, allow: bool) -> &mut Self {
-        self.allow_expert_options = allow;
         self
     }
 
@@ -147,17 +141,11 @@ impl ToolBuilder for CjxlBuilder {
         if let Some(e) = self.effort {
             let lossless_encode_e11 =
                 self.lossless_jpeg && e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
-            let expert_e11 = e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
-                && (self.allow_expert_options
-                    || crate::runtime_config::active()
-                        .is_some_and(|config| config.img.jxl_effort == Some(e)));
             debug_assert!(
-                constants::is_supported_jxl_effort_with_expert(e, expert_e11)
-                    || (self.lossless_jpeg && (1..=11).contains(&e)),
-                "unsupported cjxl effort {e}; pixel policy permits e1 through e10 or explicit \
-                 expert e11; reversible JPEG permits e1 through e11"
+                constants::is_supported_jxl_effort_with_expert(e, lossless_encode_e11),
+                "unsupported cjxl effort {e}; E11 is restricted to JPEG bitstream transcode"
             );
-            if lossless_encode_e11 || expert_e11 {
+            if lossless_encode_e11 {
                 cmd.arg(constants::JXL_ARG_ALLOW_EXPERT_OPTIONS);
             }
             cmd.arg(constants::JXL_ARG_EFFORT).arg(e.to_string());
@@ -419,12 +407,12 @@ mod tests {
     }
 
     #[test]
-    fn cjxl_builder_emits_waiver_for_explicit_expert_e11() {
+    fn cjxl_builder_emits_waiver_for_jpeg_e11() {
         let mut builder = CjxlBuilder::new();
         builder
-            .input(Path::new("in.png"))
+            .input(Path::new("in.jpg"))
             .output(Path::new("out.jxl"))
-            .allow_expert_options(true)
+            .lossless_jpeg(true)
             .effort(constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT);
 
         let cmd = builder.build();

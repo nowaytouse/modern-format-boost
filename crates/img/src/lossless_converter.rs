@@ -80,9 +80,8 @@ const fn input_size_allows_jxl_distance_exploration(file_size: u64) -> bool {
     file_size >= JXL_DISTANCE_EXPLORATION_MIN_INPUT_BYTES
 }
 
-fn format_jxl_effort_plan(plan: &[JxlEffortPlan]) -> String {
+fn format_jxl_effort_plan(plan: &[u8]) -> String {
     plan.iter()
-        .map(|item| item.effort())
         .map(|effort| format!("e{effort}"))
         .collect::<Vec<_>>()
         .join(", ")
@@ -1223,7 +1222,7 @@ pub fn convert_to_jxl(
             options.archive(),
         )
     };
-    let effort_plan = vec![JxlEffortPlan::Single(actual_eff)];
+    let efforts = foundation::jxl_effort_policy::pixel_effort_candidates();
 
     // Report the source color evidence; the encoder below applies a validated
     // named `cjxl` color-space mapping when one is unambiguous.
@@ -1251,17 +1250,13 @@ pub fn convert_to_jxl(
             "{} Orchestrating cjxl (D:{:.2}, E-plan:[{}], T:{}) -> {} to {}",
             foundation::infra::static_logs::messages::LABEL_PHASE_1,
             actual_dist,
-            format_jxl_effort_plan(&effort_plan),
+            format_jxl_effort_plan(&efforts),
             max_threads,
             actual_input.display(),
             temp_output.display()
         ));
     }
 
-    let efforts = foundation::jxl_effort_policy::effort_candidates(
-        foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
-        actual_eff,
-    );
     let result = foundation::jxl_effort_policy::run_effort_search(
         &actual_input,
         &temp_output,
@@ -1832,7 +1827,7 @@ fn run_cjxl_jpeg_encode_with_effort(
     observation: JpegInvocationObservation<'_>,
 ) -> anyhow::Result<JpegEncodeOutput> {
     let run = |selected_effort: u8,
-               allow_expert: bool,
+               _allow_expert: bool,
                apple_compat: bool|
      -> anyhow::Result<JpegEncodeOutput> {
         use anyhow::Context;
@@ -1841,7 +1836,6 @@ fn run_cjxl_jpeg_encode_with_effort(
             .input(input)
             .output(temp_output)
             .lossless_jpeg(true)
-            .allow_expert_options(allow_expert)
             .effort(selected_effort)
             .threads(max_threads)
             .apple_compat(apple_compat);
@@ -5431,25 +5425,17 @@ pub fn convert_to_jxl_matched(
         foundation::thread_manager::get_optimal_threads()
     };
 
-    let effort_plan = foundation::jxl_effort_policy::effort_plan_for_mode(
-        foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
-        options.ultimate(),
-        options.archive(),
-    );
+    let efforts = foundation::jxl_effort_policy::pixel_effort_candidates();
 
     log_detail!(&format!(
         "{} Encoding quality-matched JXL: {} (distance={}, effort_plan=[{}], threads={})",
         foundation::infra::static_logs::messages::LABEL_JXL,
         input.display(),
         actual_dist,
-        format_jxl_effort_plan(&effort_plan),
+        format_jxl_effort_plan(&efforts),
         max_threads
     ));
 
-    let efforts = foundation::jxl_effort_policy::effort_candidates(
-        foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
-        effort_plan[0].effort(),
-    );
     let result = foundation::jxl_effort_policy::run_effort_search(
         input,
         &temp_output,
@@ -5550,7 +5536,6 @@ fn build_direct_jxl_encode_command(
         .distance(distance)
         .effort(effort)
         .threads(max_threads)
-        .allow_expert_options(flags.contains(ConvertFlags::ALLOW_EXPERT_OPTIONS))
         .apple_compat(flags.contains(ConvertFlags::APPLE_COMPAT))
         .fixed_features(flags.contains(ConvertFlags::JXL_FIXED_FEATURES));
 

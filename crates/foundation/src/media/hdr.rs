@@ -279,10 +279,7 @@ pub fn convert_heic_with_gainmap_to_jxl(
         );
     }
 
-    let efforts = crate::jxl_effort_policy::effort_candidates(
-        crate::jxl_effort_policy::JxlEffortContext::DirectEncode,
-        actual_effort,
-    );
+    let efforts = crate::jxl_effort_policy::pixel_effort_candidates();
     let (status, _) = crate::jxl_effort_policy::run_effort_search(
         &tmp_file,
         output,
@@ -468,10 +465,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         );
     }
 
-    let efforts = crate::jxl_effort_policy::effort_candidates(
-        crate::jxl_effort_policy::JxlEffortContext::DirectEncode,
-        actual_effort,
-    );
+    let efforts = crate::jxl_effort_policy::pixel_effort_candidates();
     let (status, _) = crate::jxl_effort_policy::run_effort_search(
         &tmp_file,
         output,

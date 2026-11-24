@@ -4305,6 +4305,7 @@ impl FastImgProcessingContract {
         if let (
             FastImgEncodingParameters::Jxl {
                 pixel_effort_ceiling: None,
+                jpeg_effort_search: crate::runtime_config::JpegEffortSearch::Full,
                 ..
             },
             FastImgEncodingParameters::Jxl {
@@ -4314,6 +4315,7 @@ impl FastImgProcessingContract {
         ) = (&self.encoding, &mut effective.encoding)
         {
             *pixel_effort_ceiling = None;
+            effective.schema = self.schema;
         }
         self == &effective
     }
@@ -4324,9 +4326,9 @@ impl FastImgProcessingContract {
     /// # Errors
     /// Rejects unknown schemas, a conflicting strategy, or invalid encoder values.
     pub fn validate(&self, strategy: &str) -> Result<(), String> {
-        if self.schema != 1 {
+        if !matches!(self.schema, 1 | 2) {
             return Err(format!(
-                "unsupported fast-img processing contract schema {}; expected 1",
+                "unsupported fast-img processing contract schema {}; expected 1 or 2",
                 self.schema
             ));
         }
@@ -4337,7 +4339,11 @@ impl FastImgProcessingContract {
                 ..
             } if strategy == "jxl"
                 && (1..=11).contains(jpeg_effort)
-                && pixel_effort_ceiling.is_none_or(|effort| (2..=10).contains(&effort)) =>
+                && if self.schema == 1 {
+                    pixel_effort_ceiling.is_none_or(|effort| (2..=10).contains(&effort))
+                } else {
+                    pixel_effort_ceiling.is_some_and(|effort| (2..=10).contains(&effort))
+                } =>
             {
                 Ok(())
             }
@@ -4345,7 +4351,11 @@ impl FastImgProcessingContract {
                 avif_quality,
                 avif_speed,
                 ..
-            } if strategy == "avif" && (10..=100).contains(avif_quality) && *avif_speed <= 10 => {
+            } if self.schema == 1
+                && strategy == "avif"
+                && (10..=100).contains(avif_quality)
+                && *avif_speed <= 10 =>
+            {
                 Ok(())
             }
             _ => Err(format!(
