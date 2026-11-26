@@ -1,6 +1,10 @@
+#![cfg_attr(windows, feature(windows_by_handle))]
+
 use anyhow::Context;
 pub mod commands;
 pub mod fast_img_ignored;
+mod fast_img_publication;
+mod fast_img_publication_replay;
 mod fast_img_result;
 mod resume_admission;
 mod runtime_cli;
@@ -7065,7 +7069,11 @@ fn fast_img_emit_explicit_skip(rel_key: &str, reason: &str) {
     );
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FastImgTranscodeProof {
+    #[serde(skip)]
+    stage: Option<tempfile::TempDir>,
     rel_key: String,
     out_rel: String,
     src_hash: String,
@@ -8457,6 +8465,7 @@ fn fast_img_run_encode_job_inner(
     }
     Ok(FastImgTranscodeOutcome::Converted(Box::new(
         FastImgTranscodeProof {
+            stage: None,
             rel_key: job.rel_key.clone(),
             out_rel: actual_out_rel,
             src_hash,
@@ -12976,20 +12985,9 @@ fn fast_img_commit_primary_disposition(
     Ok(())
 }
 
-fn fast_img_apply_encode_results(
-    marker: &mut WorkingCopyMarker,
-    results: impl IntoIterator<Item = FastImgJobResult>,
-    summary: &mut FastImgEncodeResultSummary,
-    src_dir: &Path,
-    working_copy: &Path,
-    failure_phase: FileFailurePhase,
-) -> anyhow::Result<()> {
-    for result in results {
-        use foundation::fast_img_store::{
-            PrimaryResultObservation, write_marker_with_primary_result,
-        };
-
-        let attempt = match (
+fn fast_img_execution_attempt() -> anyhow::Result<Option<JpegExecutionAttempt>> {
+    Ok(
+        match (
             std::env::var("MFB_RUN_ID"),
             std::env::var("MFB_INVOCATION_ID"),
         ) {
@@ -13005,7 +13003,43 @@ fn fast_img_apply_encode_results(
             }
             (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => None,
             _ => anyhow::bail!("Fast IMG result attempt identity is incomplete"),
+        },
+    )
+}
+
+fn fast_img_apply_encode_results(
+    marker: &mut WorkingCopyMarker,
+    results: impl IntoIterator<Item = FastImgJobResult>,
+    summary: &mut FastImgEncodeResultSummary,
+    src_dir: &Path,
+    working_copy: &Path,
+    failure_phase: FileFailurePhase,
+) -> anyhow::Result<()> {
+    fast_img_apply_encode_results_at_attempt(
+        marker,
+        results,
+        summary,
+        src_dir,
+        working_copy,
+        failure_phase,
+        fast_img_execution_attempt()?,
+    )
+}
+
+fn fast_img_apply_encode_results_at_attempt(
+    marker: &mut WorkingCopyMarker,
+    results: impl IntoIterator<Item = FastImgJobResult>,
+    summary: &mut FastImgEncodeResultSummary,
+    src_dir: &Path,
+    working_copy: &Path,
+    failure_phase: FileFailurePhase,
+    attempt: Option<JpegExecutionAttempt>,
+) -> anyhow::Result<()> {
+    for result in results {
+        use foundation::fast_img_store::{
+            PrimaryResultObservation, write_marker_with_primary_result,
         };
+        let attempt = attempt.clone();
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(err) => {
@@ -13190,6 +13224,7 @@ fn fast_img_run_encode_wave(
 
 fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::Result<()> {
     runtime_cli::check_tool_runtime_after_failure()?;
+    fast_img_publication_replay::recover(&mut context)?;
     let total = context.source_jpegs.len();
     let (jobs, completed_from_resume) = context.plan_jobs()?;
     let FastImgEncodeContext {
@@ -13268,25 +13303,37 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
                             reason: "encode admission unexpectedly cancelled".to_owned(),
                             reason_code: None,
                         })?;
-                    fast_img_run_encode_job(
+                    let stage = fast_img_publication::new_stage(working_copy).map_err(|error| {
+                        FastImgTranscodeError {
+                            rel_key: job.rel_key.clone(),
+                            src_hash: job.src_hash.clone(),
+                            reason: format!(
+                                "prepare private Fast IMG publication stage: {error:#}"
+                            ),
+                            reason_code: None,
+                        }
+                    })?;
+                    let mut outcome = fast_img_run_encode_job(
                         job,
                         src_dir,
-                        working_copy,
+                        stage.path(),
                         permit.child_threads,
                         archive.0,
                         allow_expert_options.0,
                         strategy,
-                    )
+                    )?;
+                    if let FastImgTranscodeOutcome::Converted(proof) = &mut outcome {
+                        proof.stage = Some(stage);
+                    }
+                    Ok(outcome)
                 },
                 |job, result| {
-                    let completed = result.is_ok();
-                    fast_img_apply_encode_results(
+                    let completed = fast_img_publication::record_result(
                         marker,
-                        [result],
+                        result,
                         &mut summary,
                         src_dir,
                         working_copy,
-                        FileFailurePhase::EncodeOrPublish,
                     )?;
                     classified += 1;
                     encode_progress.set(classified);
@@ -16795,6 +16842,77 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn late_publication_collision_records_one_failure_and_commits_peer() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let src = root.path().canonicalize()?.join("source");
+        let wc = root.path().canonicalize()?.join("delivery");
+        std::fs::create_dir(&src)?;
+        std::fs::create_dir(&wc)?;
+        let mut marker = WorkingCopyMarker::new(src.clone(), wc.clone(), 2);
+        marker.stage = FastImgStageName::OutputPrepared;
+        marker.processing_contract = Some(super::fast_img_active_processing_contract(
+            "jxl", false, false,
+        )?);
+        marker.tool_snapshot_disabled = true;
+        super::write_marker_atomic(&marker)?;
+        let mut summary = super::FastImgEncodeResultSummary::default();
+        for stem in ["collision", "peer"] {
+            let occupied = stem == "collision";
+            let rel = format!("{stem}.jpg");
+            let out_rel = format!("{stem}.JXL");
+            let source = src.join(&rel);
+            std::fs::write(&source, b"synthetic original")?;
+            let stage = super::fast_img_publication::new_stage(&wc)?;
+            let staged = stage.path().join(&out_rel);
+            std::fs::write(&staged, b"synthetic verified candidate")?;
+            if occupied {
+                std::fs::write(wc.join(&out_rel), b"external file")?;
+            }
+            let proof = super::FastImgTranscodeProof {
+                stage: Some(stage),
+                rel_key: rel,
+                out_rel,
+                src_hash: calculate_blake3_hash(&source)?,
+                out_hash: calculate_blake3_hash(&staged)?,
+                adopted_existing_jxl: false,
+                jpeg_invocation: None,
+                reconstructed_jpeg_execution: None,
+                avif_invocation: None,
+            };
+            let completed = super::fast_img_publication::record_result(
+                &mut marker,
+                Ok(super::FastImgTranscodeOutcome::Converted(Box::new(proof))),
+                &mut summary,
+                &src,
+                &wc,
+            )?;
+            assert_eq!(completed, !occupied);
+        }
+        assert_eq!(std::fs::read(wc.join("collision.JXL"))?, b"external file");
+        assert_eq!(
+            std::fs::read(src.join("collision.jpg"))?,
+            b"synthetic original"
+        );
+        assert_eq!(
+            std::fs::read(wc.join("peer.JXL"))?,
+            b"synthetic verified candidate"
+        );
+        assert!(marker.failed_sources.contains_key("collision.jpg"));
+        assert!(marker.blake3_log.contains_key("peer.jpg"));
+        assert_eq!((summary.session_failed, summary.session_converted), (1, 1));
+        assert_eq!(super::read_marker(&wc)?, marker);
+        assert_eq!(
+            foundation::fast_img_store::pending_publications(&marker)?.len(),
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
     fn fast_img_encode_wave_checkpoints_verified_output_while_peer_is_running() -> anyhow::Result<()>
     {
         if isolated_failed_retry_test()? {
@@ -16848,6 +16966,7 @@ mod fast_img_hardening_tests {
                 }
                 Ok(super::FastImgTranscodeOutcome::Converted(Box::new(
                     super::FastImgTranscodeProof {
+                        stage: None,
                         rel_key: job.rel_key.clone(),
                         out_rel: job.out_rel_key.clone(),
                         src_hash: job.src_hash.clone(),
@@ -17048,6 +17167,7 @@ mod fast_img_hardening_tests {
              BEGIN SELECT RAISE(ABORT,'synthetic execution receipt failure'); END",
         )?;
         let proof = super::FastImgTranscodeProof {
+            stage: None,
             rel_key: "image.jpg".into(),
             out_rel: "image.JXL".into(),
             src_hash: calculate_blake3_hash(&source)?,
@@ -18387,6 +18507,178 @@ mod fast_img_hardening_tests {
         Ok(())
     }
 
+    #[test]
+    fn resume_replays_stranded_publications_before_allocating_new_paths() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let root = root.path().canonicalize()?;
+        let src = root.join("src");
+        let wc = root.join("output");
+        std::fs::create_dir(&wc)?;
+        let template = root.join("fixture.JXL");
+        if !foundation::ExiftoolBuilder::check_available()
+            || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
+            || !write_real_reconstructible_jxl(&template)?
+        {
+            return Ok(());
+        }
+        let stems = [
+            "staged",
+            "linked",
+            "recorded",
+            "foreign",
+            "missing",
+            "unwitnessed",
+        ];
+        let mut marker = WorkingCopyMarker::new(src.clone(), wc.clone(), stems.len());
+        marker.stage = FastImgStageName::OutputPrepared;
+        marker.processing_contract = Some(super::fast_img_active_processing_contract(
+            "jxl", false, false,
+        )?);
+        marker.tool_snapshot_disabled = true;
+        std::fs::create_dir(&src)?;
+        super::write_marker_atomic(&marker)?;
+        let digest = calculate_blake3_hash(&template)?;
+        let mut sources = Vec::new();
+        let mut linked_witness = false;
+        for stem in stems {
+            let rel = format!("{stem}.jpg");
+            let out_rel = format!("{stem}.JXL");
+            let path = src.join(&rel);
+            write_real_jpeg(&path, [10, 20, 30])?;
+            let source_hash = calculate_blake3_hash(&path)?;
+            sources.push(path);
+            let stage = super::fast_img_publication::new_stage(&wc)?;
+            let staged = stage.path().join(&out_rel);
+            std::fs::copy(&template, &staged)?;
+            let proof = super::FastImgTranscodeProof {
+                stage: None,
+                rel_key: rel,
+                out_rel: out_rel.clone(),
+                src_hash: source_hash,
+                out_hash: digest.clone(),
+                adopted_existing_jxl: false,
+                jpeg_invocation: None,
+                reconstructed_jpeg_execution: None,
+                avif_invocation: None,
+            };
+            let pending = super::fast_img_publication::prepare(&marker, stage, &proof, None)?;
+            match stem {
+                "linked" | "recorded" | "unwitnessed" => {
+                    super::fast_img_publication::publish(&marker, &pending)?;
+                    if stem == "linked" {
+                        linked_witness = staged.exists();
+                    }
+                    if stem == "recorded" {
+                        super::fast_img_apply_encode_results_at_attempt(
+                            &mut marker,
+                            [Ok(super::FastImgTranscodeOutcome::Converted(Box::new(
+                                proof,
+                            )))],
+                            &mut super::FastImgEncodeResultSummary::default(),
+                            &src,
+                            &wc,
+                            super::FileFailurePhase::EncodeOrPublish,
+                            None,
+                        )?;
+                    }
+                    if stem != "linked" && staged.exists() {
+                        std::fs::remove_file(&staged)?;
+                    }
+                }
+                "foreign" => {
+                    std::fs::copy(&template, wc.join(&out_rel))?;
+                }
+                "missing" => {
+                    std::fs::remove_file(&staged)?;
+                }
+                _ => {}
+            }
+        }
+        let hashes = fast_img_source_hash_set(&src, &sources)?;
+        let mut context = FastImgEncodeContext {
+            marker: &mut marker,
+            source_jpegs: &sources,
+            current_source_hashes: &hashes,
+            scan_failures: &BTreeMap::new(),
+            src_dir: &src,
+            working_copy: &wc,
+            retry_failed_sources_from_cleanup: RetryFlag(false),
+            archive: ArchiveFlag(false),
+            allow_expert_options: ExpertOptionsFlag(false),
+            shortest_path: ShortestPathFlag(false),
+            strategy: "jxl",
+        };
+        // Change the first journaled source after inventory, before recovering it.
+        let first = src.join("foreign.jpg");
+        let original = std::fs::read(&first)?;
+        std::fs::write(&first, b"replacement source")?;
+        assert!(super::fast_img_publication_replay::recover(&mut context).is_err());
+        assert_eq!(
+            foundation::fast_img_store::pending_publications(context.marker)?.len(),
+            stems.len()
+        );
+        assert_eq!(context.marker.blake3_log.len(), 1);
+        std::fs::write(&first, original)?;
+        super::fast_img_publication_replay::recover(&mut context)?;
+        super::fast_img_publication_replay::recover(&mut context)?;
+        assert_eq!(
+            foundation::fast_img_store::pending_publications(context.marker)?.len(),
+            0
+        );
+        let (jobs, reused) = context.plan_jobs()?;
+        let recovered = 2 + usize::from(linked_witness);
+        assert_eq!(reused, recovered);
+        assert_eq!(jobs.len() + recovered, stems.len());
+        let pending = jobs
+            .iter()
+            .map(|job| (job.rel_key.as_str(), job.out_rel_key.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(pending.get("missing.jpg"), Some(&"missing.JXL"));
+        assert!(
+            pending
+                .get("foreign.jpg")
+                .is_some_and(|out| *out != "foreign.JXL")
+        );
+        assert!(
+            pending
+                .get("unwitnessed.jpg")
+                .is_some_and(|out| *out != "unwitnessed.JXL")
+        );
+        assert_eq!(calculate_blake3_hash(&wc.join("foreign.JXL"))?, digest);
+        assert_eq!(context.marker.encoded_count, recovered);
+        assert_eq!(context.marker.blake3_log.len(), recovered);
+        // Matching journal/file digests cannot turn an undecodable payload into a success.
+        let stage = super::fast_img_publication::new_stage(&wc)?;
+        let staged = stage.path().join("missing.JXL");
+        std::fs::write(&staged, b"synthetic invalid candidate")?;
+        let invalid = super::FastImgTranscodeProof {
+            stage: None,
+            rel_key: "missing.jpg".into(),
+            out_rel: "missing.JXL".into(),
+            src_hash: hashes["missing.jpg"].clone(),
+            out_hash: calculate_blake3_hash(&staged)?,
+            adopted_existing_jxl: false,
+            jpeg_invocation: None,
+            reconstructed_jpeg_execution: None,
+            avif_invocation: None,
+        };
+        let invalid = super::fast_img_publication::prepare(context.marker, stage, &invalid, None)?;
+        assert!(super::fast_img_publication_replay::recover(&mut context).is_err());
+        assert_eq!(context.marker.encoded_count, recovered);
+        assert!(!context.marker.blake3_log.contains_key("missing.jpg"));
+        assert_eq!(
+            foundation::fast_img_store::pending_publications(context.marker)?.len(),
+            1
+        );
+        assert!(sources.iter().all(|path| path.is_file()));
+        super::fast_img_publication::finish(context.marker, &invalid)?;
+        Ok(())
+    }
+
     /// A recorded name cannot authorize replacing bytes that differ from the saved digest.
     #[test]
     fn stale_proof_reencode_preserves_occupied_marker_path() -> anyhow::Result<()> {
@@ -18453,6 +18745,8 @@ mod fast_img_hardening_tests {
                 library_asset: None,
             },
         );
+        // The live entry point persists the task before the encoder can publish.
+        super::write_marker_atomic(&marker)?;
 
         fast_img_run_encode_phase(FastImgEncodeContext {
             marker: &mut marker,

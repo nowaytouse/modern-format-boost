@@ -72,7 +72,8 @@ pub type JpegEncoderInvocation = EncoderInvocation;
 pub type AvifEncoderInvocation = EncoderInvocation;
 
 /// Verified private JPEG input and metadata-prepared candidate for existing-JXL replacement.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReconstructedJpegExecution {
     pub reconstructed_jpeg_blake3: String,
     pub candidate_blake3: String,

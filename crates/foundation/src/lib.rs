@@ -1,4 +1,5 @@
 #![feature(core_intrinsics, portable_simd)]
+#![cfg_attr(windows, feature(windows_by_handle))]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 // Legacy media analyzers exceed pedantic `too_many_lines` (100); workspace keeps this allow
 // until refactors split loop_intent / image_detection. New code in img/vid must stay under 100 LOC.

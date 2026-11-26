@@ -513,7 +513,8 @@ mod tests {
         let saved_digest = marker.admission_plan_blake3.clone();
         let conn = open_store_connection()?;
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_results;
+            "DROP TABLE fast_img_pending_publications;
+             DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
              UPDATE store_metadata SET value=12 WHERE key='schema_version';
@@ -572,7 +573,8 @@ mod tests {
         let digest = marker.admission_plan_blake3.clone();
         let conn = open_store_connection()?;
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_results;
+            "DROP TABLE fast_img_pending_publications;
+             DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              UPDATE store_metadata SET value=13 WHERE key='schema_version';
              CREATE TRIGGER reject_aae_upgrade BEFORE UPDATE OF value ON store_metadata

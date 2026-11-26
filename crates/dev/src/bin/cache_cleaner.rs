@@ -1101,10 +1101,16 @@ fn add_fast_img_state_namespace(
     }
     for (table, required_since) in foundation::fast_img_store::EXECUTION_TABLES
         .into_iter()
-        .chain([(
-            "fast_img_primary_results",
-            foundation::fast_img_store::FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION,
-        )])
+        .chain([
+            (
+                "fast_img_primary_results",
+                foundation::fast_img_store::FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION,
+            ),
+            (
+                "fast_img_pending_publications",
+                foundation::fast_img_store::FAST_IMG_PUBLICATION_SCHEMA_VERSION,
+            ),
+        ])
     {
         if version < required_since {
             continue;
@@ -2738,7 +2744,8 @@ mod tests {
         let (cache, conn, _marker) = fast_img_state_fixture(&root);
         // Reproduce the exact previous release shape using only disposable data.
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_results;
+            "DROP TABLE fast_img_pending_publications;
+             DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
              DROP TABLE fast_img_admission;
@@ -2894,7 +2901,8 @@ mod tests {
         assert!(!namespaces[0].rebuildable);
 
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_results;
+            "DROP TABLE fast_img_pending_publications;
+             DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
              DROP TABLE fast_img_admission;

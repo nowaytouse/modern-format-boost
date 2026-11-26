@@ -56,7 +56,8 @@ pub fn copy_sqlite_snapshot(source: &Connection, destination: &mut Connection) -
     Ok(())
 }
 
-pub const STORE_SCHEMA_VERSION: i32 = 15;
+pub const STORE_SCHEMA_VERSION: i32 = 16;
+pub const FAST_IMG_PUBLICATION_SCHEMA_VERSION: i32 = 16;
 pub const FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION: i32 = 15;
 pub const FAST_IMG_ADMISSION_SCHEMA_VERSION: i32 = 12;
 pub const FAST_IMG_ADMISSION_XMP_SCHEMA_VERSION: i32 = 13;
@@ -289,6 +290,17 @@ const FAST_IMG_ADMISSION_AAE_SCHEMA: &str = "CREATE TABLE fast_img_admission_aae
        OR (state != 'present' AND aae_rel IS NULL AND aae_blake3 IS NULL)),
     PRIMARY KEY(task_key, source_rel),
     FOREIGN KEY(task_key, source_rel) REFERENCES fast_img_admission(task_key, source_rel) ON DELETE CASCADE
+) STRICT";
+
+const FAST_IMG_PUBLICATION_SCHEMA: &str = "CREATE TABLE fast_img_pending_publications (
+    task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE RESTRICT,
+    source_rel TEXT NOT NULL,
+    output_rel TEXT NOT NULL,
+    stage_name TEXT NOT NULL UNIQUE,
+    payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 1048576),
+    payload_blake3 BLOB NOT NULL CHECK(length(payload_blake3) = 32),
+    PRIMARY KEY(task_key, source_rel),
+    UNIQUE(task_key, output_rel)
 ) STRICT";
 
 const FAST_IMG_PRIMARY_RESULT_SCHEMA: &str = "CREATE TABLE fast_img_primary_results (
@@ -1209,6 +1221,11 @@ fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()>
             FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION,
             FAST_IMG_PRIMARY_RESULT_SCHEMA,
         ),
+        (
+            "fast_img_pending_publications",
+            FAST_IMG_PUBLICATION_SCHEMA_VERSION,
+            FAST_IMG_PUBLICATION_SCHEMA,
+        ),
     ] {
         let cleanup_sql: Option<String> = conn
             .query_row(
@@ -1549,6 +1566,15 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
         tx.execute(
             "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
             [FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION],
+        )?;
+        version = FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION;
+    }
+    if version == FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION {
+        tx.execute_batch(FAST_IMG_PUBLICATION_SCHEMA)
+            .context("Failed to create the pending Fast IMG publication journal")?;
+        tx.execute(
+            "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
+            [FAST_IMG_PUBLICATION_SCHEMA_VERSION],
         )?;
     }
     validate_current_store_schema(&tx)?;
@@ -3505,7 +3531,8 @@ mod tests {
         let conn = open_connection()?;
         seed_fast_img_schema_rows(&conn)?;
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_results;
+            "DROP TABLE fast_img_pending_publications;
+             DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
              DROP TABLE fast_img_admission;
@@ -3562,7 +3589,8 @@ mod tests {
         let conn = open_connection()?;
         seed_fast_img_schema_rows(&conn)?;
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_results;
+            "DROP TABLE fast_img_pending_publications;
+             DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
              DROP TABLE fast_img_admission;
@@ -3619,6 +3647,7 @@ mod tests {
         seed_fast_img_schema_rows(&conn)?;
         conn.execute_batch(
             "INSERT INTO fast_img_jpeg_execution VALUES('task','one.jpg',zeroblob(32),x'42',zeroblob(32));
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
@@ -3670,7 +3699,8 @@ mod tests {
         let conn = open_connection()?;
         seed_fast_img_schema_rows(&conn)?;
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_results;
+            "DROP TABLE fast_img_pending_publications;
+             DROP TABLE fast_img_primary_results;
              UPDATE store_metadata SET value=14 WHERE key='schema_version';
              CREATE TRIGGER reject_result BEFORE UPDATE OF value ON store_metadata
              WHEN NEW.value=15 BEGIN SELECT RAISE(ABORT,'synthetic result migration failure'); END",
@@ -3693,7 +3723,10 @@ mod tests {
         conn.execute_batch("DROP TRIGGER reject_result")?;
         drop(conn);
         let conn = open_connection()?;
-        assert_eq!(inspect_store_schema_version(&conn)?, Some(15));
+        assert_eq!(
+            inspect_store_schema_version(&conn)?,
+            Some(STORE_SCHEMA_VERSION)
+        );
         assert_eq!(
             conn.query_row("SELECT header_json FROM fast_img_tasks", [], |row| row
                 .get::<_, Vec<u8>>(0))?,
@@ -3722,7 +3755,8 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         conn.execute_batch(
-            "DROP TABLE fast_img_primary_results;
+            "DROP TABLE fast_img_pending_publications;
+             DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
              DROP TABLE fast_img_admission;

@@ -31,6 +31,9 @@ areas of change are:
 - Parallel encoding saves each verified result as it finishes. Continuing a
   post-Gate-1 JXL job checks the saved output bytes once during resume setup.
   Gate 2 independently verifies local files and Photos resources before cleanup.
+- If Fast IMG is interrupted while publishing a verified file, it can recover
+  that output before allocating new filenames. A different file occupying
+  the reserved name keeps its name and contents.
 - Lossless PNG-to-JXL delivery carries the PNG creation time in XMP and
   verifies the time, fractional seconds and offset. Conflicting source dates
   retain the original. Copying sparse EXIF from a lossless still into JXL no

@@ -1292,6 +1292,13 @@ transaction with the outcome and any winning encoder receipt. A change
 made without new processing evidence clears the current attribution.
 Older rows and unobserved transitions return unknown.
 
+Starting with Core SQLite schema 16, Fast IMG records a verified candidate,
+its native file identity and intended output path before publishing it. On
+resume it checks the task contract, source, candidate and destination before
+planning new encodes. This covers an interruption on either side of publication.
+A pending record grants no Photos or source-cleanup authority. Outputs from
+older runs without ownership evidence still use normal collision handling.
+
 The JSON also reports source-bound submission references with a request
 identity digest and backend. AppleScript uncertainty is reported when its
 separate evidence exists. An absent coverage flag or receipt leaves the

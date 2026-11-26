@@ -27,11 +27,14 @@ mod finish;
 mod jpeg_execution;
 mod migration;
 mod primary_result;
+mod publication;
 mod retry;
 mod retry_admission;
 mod source_evidence;
 mod tier2_cleanup;
-pub use crate::db::mfb_sqlite_store::FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION;
+pub use crate::db::mfb_sqlite_store::{
+    FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION, FAST_IMG_PUBLICATION_SCHEMA_VERSION,
+};
 pub use crate::mfb_sqlite_store::{
     FAST_IMG_ADMISSION_AAE_SCHEMA_VERSION, FAST_IMG_ADMISSION_SCHEMA_VERSION,
     FAST_IMG_ADMISSION_XMP_SCHEMA_VERSION,
@@ -56,6 +59,9 @@ pub use jpeg_execution::{
 };
 pub use primary_result::{
     PrimaryResultEvidence, PrimaryResultObservation, write_marker_with_primary_result,
+};
+pub use publication::{
+    PendingPublication, forget_publication, pending_publications, prepare_publication,
 };
 pub use retry::{
     FailedRetryAdmission, FailedRetryContext, FailedRetryDeliveryIntent, FailedRetryParent,
@@ -316,6 +322,17 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
             ensure!(
                 !primary_result::has_rows(conn, key, None)?,
                 "Missing Fast IMG task still has protected primary result evidence"
+            );
+        }
+        if version.is_some_and(|version| version >= FAST_IMG_PUBLICATION_SCHEMA_VERSION) {
+            let pending: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM fast_img_pending_publications WHERE task_key=?1)",
+                [key],
+                |row| row.get(0),
+            )?;
+            ensure!(
+                !pending,
+                "Missing Fast IMG task still has pending publication evidence"
             );
         }
         return Ok(None);
@@ -1559,6 +1576,16 @@ fn row_count(conn: &Connection) -> Result<usize> {
             .checked_add(usize::try_from(rows)?)
             .context("Fast IMG primary result row count overflow")?;
     }
+    if version.is_some_and(|v| v >= FAST_IMG_PUBLICATION_SCHEMA_VERSION) {
+        let rows: i64 = conn.query_row(
+            "SELECT count(*) FROM fast_img_pending_publications",
+            [],
+            |row| row.get(0),
+        )?;
+        count = count
+            .checked_add(usize::try_from(rows)?)
+            .context("Fast IMG pending publication row count overflow")?;
+    }
     Ok(count)
 }
 
@@ -1615,6 +1642,13 @@ pub fn inspect_integrity(conn: &Connection) -> Result<usize> {
             }
             if version.is_some_and(|version| version >= FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION) {
                 primary_result::validate_history(conn, &key, &marker)?;
+            }
+            if version.is_some_and(|v| v >= FAST_IMG_PUBLICATION_SCHEMA_VERSION) {
+                publication::read_records(
+                    conn,
+                    &key,
+                    &publication::owner(&marker, &marker.src_dir)?,
+                )?;
             }
         }
         ensure_no_orphans(conn)?;
