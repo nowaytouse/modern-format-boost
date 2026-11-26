@@ -11324,6 +11324,30 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
+    fn reverify_synthetic_photos_custody(
+        handle: &LibraryHandle,
+        targets: &BTreeSet<PathBuf>,
+        probes: &[FastImgLibraryAssetProbe],
+    ) -> Result<()> {
+        reverify_modern_lossy_static_photos_custody_with(
+            handle,
+            &mut |ids| {
+                let found: Vec<_> = probes
+                    .iter()
+                    .filter(|probe| ids.contains(&probe.uuid))
+                    .cloned()
+                    .collect();
+                reject_referenced_cleanup_targets(&found, targets)?;
+                Ok(found)
+            },
+            &mut |asset, path| {
+                tier2_custody_quarantined(asset, path, handle.photos_library_path.as_deref())
+            },
+            &mut |_, _, _, _| (),
+        )
+    }
+
     #[test]
     #[cfg(target_os = "macos")]
     fn gif_quarantine_resume_verifies_managed_original_without_resubmission() -> anyhow::Result<()>
@@ -11343,33 +11367,15 @@ mod tests {
         let photos_mark = b"0082;6af525b4;Photos;";
         let other_mark = b"0083;6af525b4;Browser;download";
         let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x01\x04\x00;";
+        let fixtures: [(&str, &Path, &[u8], &[u8]); 4] = [
+            ("good.gif", &originals, gif, photos_mark),
+            ("browser.gif", &originals, gif, other_mark),
+            ("outside.gif", &root, gif, photos_mark),
+            ("fake.gif", &originals, b"GIF89a", photos_mark),
+        ];
         let mut probes = Vec::new();
-        for (name, managed, bytes, mark) in [
-            (
-                "good.gif",
-                originals.join("good.gif"),
-                gif.as_slice(),
-                photos_mark.as_slice(),
-            ),
-            (
-                "browser.gif",
-                originals.join("browser.gif"),
-                gif.as_slice(),
-                other_mark.as_slice(),
-            ),
-            (
-                "outside.gif",
-                root.join("outside.gif"),
-                gif.as_slice(),
-                photos_mark.as_slice(),
-            ),
-            (
-                "fake.gif",
-                originals.join("fake.gif"),
-                b"GIF89a".as_slice(),
-                photos_mark.as_slice(),
-            ),
-        ] {
+        for (name, parent, bytes, mark) in fixtures {
+            let managed = parent.join(name);
             std::fs::write(src.join(name), bytes)?;
             std::fs::write(&managed, bytes)?;
             xattr::set(&managed, key, mark)?;
@@ -11390,7 +11396,7 @@ mod tests {
         }
         let refreshed = refresh_tier2_quarantine_receipts_with(&mut marker, &library, |ids| {
             assert_eq!(ids.len(), probes.len());
-            Ok(probes)
+            Ok(probes.clone())
         })?;
         assert_eq!(refreshed, 1);
         let resume = original_photos_checkpoint_plan(
@@ -11406,10 +11412,6 @@ mod tests {
         for asset in &marker.tier2_imported_assets {
             assert_eq!(asset.quarantined, asset.rel_path != "good.gif");
         }
-        assert_eq!(
-            read_quarantine_xattr(&originals.join("good.gif"))?.as_deref(),
-            Some(photos_mark.as_slice())
-        );
         assert!(!tier2_import_quarantined(
             &src.join("good.gif"),
             &originals.join("good.gif"),
@@ -11417,6 +11419,41 @@ mod tests {
             Some(&library),
             &mut strict_photos_quarantine
         )?);
+
+        let _store =
+            crate::mfb_sqlite_store::set_test_store_path_for_tests(root.join("state.sqlite"));
+        std::fs::create_dir(&marker.working_copy)?;
+        marker.stage = crate::pipeline::verification::FastImgStageName::CleanupComplete;
+        marker.tier2_in_progress = true;
+        marker.tier2_cleanup_journal = true;
+        crate::fast_img_store::write_marker(&marker)?;
+        let handle = library_handle_from_marker_tier2_proof(&marker).unwrap();
+        let mut journal = crate::fast_img_store::Tier2CleanupJournal::open(&marker)?;
+        let mut removed = Vec::new();
+        let counts = delete_verified_modern_lossy_static_sources_with(
+            &src,
+            &handle,
+            &mut removed,
+            Some(&mut journal),
+            |eligible, targets| reverify_synthetic_photos_custody(eligible, targets, &probes),
+        )?;
+        assert_eq!(counts, (1, 0));
+        assert_eq!(removed, [src.join("good.gif")]);
+        assert_eq!(
+            crate::fast_img_store::count_recorded_tier2_unlinks(&marker)?,
+            1
+        );
+        for (name, parent, bytes, mark) in fixtures {
+            let source = src.join(name);
+            if name == "good.gif" {
+                assert!(!source.try_exists()?);
+            } else {
+                assert_eq!(std::fs::read(source)?, bytes);
+            }
+            let managed = parent.join(name);
+            assert_eq!(std::fs::read(&managed)?, bytes);
+            assert_eq!(read_quarantine_xattr(&managed)?.as_deref(), Some(mark));
+        }
         Ok(())
     }
 

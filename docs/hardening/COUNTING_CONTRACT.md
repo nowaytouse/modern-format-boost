@@ -99,9 +99,10 @@ all entries ever stored in a checkpoint.
 - `primary_cleanup_complete` covers only the owning primary workflow. It is not
   proof that all output folders were removed; local Photos verification is not
   iCloud synchronization evidence.
-- Fast VID counts GIFs through the original-media Photos receipts. GIFs contribute
-  zero to the encode count. Verified imports and confirmed source removals have
-  separate totals so interrupted cleanup remains visible.
+- Fast VID local checks count intact GIFs kept in place as skipped, invalid GIFs
+  as failed, and unrelated inputs as ignored. With Photos delivery selected,
+  verified imports and confirmed source removals have separate receipt totals.
+  GIF originals contribute zero to the encode count in both modes.
 - Integrity issues and infrastructure errors can fail the whole command but
   must not invent failed files or erase already proven successes. Missing or
   malformed child counts remain unknown through the launcher and native GUI.

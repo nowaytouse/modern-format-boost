@@ -41,7 +41,9 @@ covers **how results are shown**, not how they are computed.
 ## Native operation capabilities
 
 The AppKit shell derives controls and command arguments from one capability
-map. FastImg JXL/AVIF are image-only, FastVid imports GIF originals into Photos, and Restore Original JPEG is
+map. FastImg JXL/AVIF are image-only. FastVid checks GIF originals in place
+unless the user selects **Import into Photos**. Only an import uses a delivery
+checkpoint and qualifies for verified source cleanup. Restore Original JPEG is
 image-only with no secondary mode. General processing operations may expose the
 media selector; utility operations do not pretend to support media or encoder
 flags. Restore derives local recovery or live Photos audit from the selected

@@ -24,7 +24,7 @@ Development currently targets **0.12.0** on the `nightly` branch.
 | **Fast IMG, JXL** / `img fast-img --strategy jxl` | Reversibly transcodes JPEGs. For still PNGs and confirmed lossless WebP or AVIF, compares every pixel effort E1–E10 by default at d=0 and keeps the verified JXL when its complete size is at most the source size. Eligible lossy originals retain their separate Photos-delivery path. | JPEG and lossless still-image archiving, including Photos delivery. |
 | **Fast IMG, AVIF** / `img fast-img --strategy avif` | Uses a separate AVIF size/quality policy. Existing AVIF is not re-encoded. | Meme/image collections whose policy permits metadata cleanup. |
 | **Videos** / `vid run` | Handles video and animation, with HEVC by default and optional AV1. | Time-based media, not static-image conversion. |
-| **Fast VID · GIF originals** / `vid fast-vid` | Identifies single-frame and animated GIFs by their contents and imports the original bytes into Apple Photos. Verified originals are eligible for source cleanup. | Importing GIF collections on macOS. Use `--dry-run` to preview. |
+| **Fast VID · GIF originals** / `vid fast-vid` | Checks single-frame and animated GIFs by content and keeps them in place. Add `--shortest-path` to import the original bytes into Apple Photos and clean up verified sources. | Checking a GIF collection locally or importing it on macOS. Use `--dry-run` to preview. |
 
 MFB identifies media from its contents, not just its extension. Images and videos
 have separate owners: `img` does not silently hand an unsuitable file to `vid`.
@@ -64,9 +64,9 @@ verified source cleanup is part of the workflow, not an opt-in enabled by
 1. Open `Modern Format Boost.app` and select or drop a file/folder.
 2. Choose the matching image or video workflow. Open **Settings** to review its
    own quality/search choices, tool configuration and Photos preferences.
-3. Use **Preview** to see which files qualify. Fast VID always delivers to Apple
-   Photos and can remove verified source GIFs. Fast IMG offers **Import into
-   Photos** as a choice.
+3. Use **Preview** to see which files qualify. Fast IMG and Fast VID both offer
+   **Import into Photos**. Clear it in Fast VID to check GIFs in place. Select
+   it to import original GIFs and allow cleanup after verification.
 4. Review the final summary. **Processing History** provides recorded counts,
    paths, verification results, cleanup details and diagnostics without hunting
    through log folders.

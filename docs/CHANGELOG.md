@@ -28,6 +28,18 @@ areas of change are:
 - Fast VID now imports verified GIF87a and GIF89a originals into Apple Photos
   with the shared original-file receipts, resume checks and verified cleanup.
   This replaces the previous Fast GIF conversion modes and their CLI options.
+- Fast VID shares Fast IMG's **Import into Photos** checkbox and remembers its
+  setting separately. With import off, it checks GIFs in place and retains the
+  originals. A completed local check with damaged GIFs reports the individual
+  failures and keeps a nonzero exit status. The CLI selects Photos delivery
+  with `--shortest-path`.
+- GIF inspection accepts a missing LZW end code when every frame still decodes
+  to its declared pixel count and the data blocks and file terminate correctly.
+  Fresh Photos verification also recognizes a managed GIF carrying Photos'
+  own sandbox mark, including when rechecking a saved import before cleanup.
+- Continuing a GIF import with receipts for its entire saved file list can
+  finish that list even when a newer decoder recognizes additional GIFs.
+  Those additional files stay in place for a new task.
 
 ### Fast IMG delivery and session reporting (2026-11-26)
 

@@ -84,6 +84,11 @@ def build_fast_img_restore_command(
     return command
 
 
-def build_fast_vid_command(vid_binary: Path, target: Path) -> list[str]:
-    """Import GIF originals through the video CLI's Photos workflow."""
-    return [str(vid_binary), "fast-vid", "--", str(target)]
+def build_fast_vid_command(
+    vid_binary: Path, target: Path, *, shortest_path: bool = False
+) -> list[str]:
+    """Check GIF originals locally or deliver them to Photos when selected."""
+    command = [str(vid_binary), "fast-vid"]
+    if shortest_path:
+        command.append("--shortest-path")
+    return [*command, "--", str(target)]

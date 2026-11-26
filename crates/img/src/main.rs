@@ -124,6 +124,10 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
     if let Commands::FastImg {
         strategy,
         shortest_path,
+        output,
+        retry,
+        retry_failed,
+        delete_source,
         archive,
         allow_expert_options,
         ..
@@ -131,8 +135,8 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
         && strategy == "gif"
     {
         anyhow::ensure!(
-            *shortest_path,
-            "Fast VID GIF originals require Apple Photos delivery"
+            *shortest_path || (output.is_none() && !retry && !retry_failed && !delete_source),
+            "Local GIF verification retains files in place. Output, retry and cleanup options require --shortest-path for Photos delivery."
         );
         anyhow::ensure!(
             !archive && !allow_expert_options,
@@ -741,7 +745,15 @@ fn main_inner() -> anyhow::Result<()> {
         return cli.policy.inspect(command);
     }
     let resolved = cli.policy.resolve(legacy_expert)?;
-    if let Some(options) = FastImgRunOptions::for_command(&cli.command) {
+    if let Some(mut options) = FastImgRunOptions::for_command(&cli.command) {
+        if options.is_local_gif() {
+            // This route only reads media. Skip delivery locks, tools, and persistent task state.
+            resolved.emit_history_marker_if_session("img")?;
+            foundation::infra::runtime_config::install(resolved.config)?;
+            foundation::ctrlc_guard::init();
+            options.planned_scope = cli.planned_fast_img_scope.as_deref();
+            return run_fast_img(options);
+        }
         validate_fast_img_startup_photos_location(options, cli.planned_fast_img_scope.is_some())?;
     }
     let _production_lease = command_requires_production_lease(&cli.command)
@@ -3956,6 +3968,10 @@ struct FastImgRunOptions<'a> {
 }
 
 impl<'a> FastImgRunOptions<'a> {
+    fn is_local_gif(self) -> bool {
+        self.strategy == "gif" && !self.shortest_path.0
+    }
+
     fn for_command(command: &'a Commands) -> Option<Self> {
         let Commands::FastImg {
             input,
@@ -5426,7 +5442,7 @@ fn scan_fast_img_sources_with_policy(
     >,
 ) -> anyhow::Result<FastImgSourceInventory> {
     if strategy == "gif" {
-        return fast_vid_gif::scan_originals(observed, src_dir);
+        return fast_vid_gif::scan_originals(observed, src_dir, None);
     }
     if strategy == "avif" {
         println!(
@@ -6082,10 +6098,9 @@ fn run_fast_img_with_format_resolver(
     >,
 ) -> anyhow::Result<()> {
     foundation::batch_control::checkpoint()?;
-    anyhow::ensure!(
-        options.strategy != "gif" || options.shortest_path.0,
-        "Fast VID GIF originals require Apple Photos delivery"
-    );
+    if options.is_local_gif() {
+        return fast_vid_gif::verify_local(options);
+    }
     validate_fast_img_options(&options);
     if let Some((parent, child)) = fast_img_missing_source_retry_selection(options)? {
         return fast_img_complete_missing_source_retry(&parent, &child);
@@ -6286,13 +6301,30 @@ fn run_fast_img_with_format_resolver(
             marker.processing_contract.as_ref()
         })
         .is_some_and(FastImgProcessingContract::admits_lossless_pixels);
-    let mut inventory = scan_fast_img_sources_with_policy(
-        &candidates,
-        &src_dir,
-        strategy,
-        admitted_pixels,
-        resolve_formats,
-    )?;
+    let saved_gif_scope = if strategy == "gif"
+        && retry_requested
+        && remove_selected_root
+        && failed_retry_context.is_none()
+    {
+        existing_marker
+            .as_ref()
+            .map(fast_vid_gif::pending_receipt_scope)
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    let mut inventory = if let Some(saved) = &saved_gif_scope {
+        fast_vid_gif::scan_originals(&candidates, &src_dir, Some(saved))?
+    } else {
+        scan_fast_img_sources_with_policy(
+            &candidates,
+            &src_dir,
+            strategy,
+            admitted_pixels,
+            resolve_formats,
+        )?
+    };
     if let (Some(context), Some(marker), Some(observed)) = (
         &failed_retry_context,
         &existing_marker,
@@ -6301,7 +6333,7 @@ fn run_fast_img_with_format_resolver(
         fast_img_validate_failed_retry_routes(marker, context, observed, &inventory)?;
     }
     let admission_plan = if failed_retry_context.is_none()
-        && !dry_run.0
+        && (!dry_run.0 || saved_gif_scope.is_some())
         && existing_marker
             .as_ref()
             .is_none_or(foundation::verification::WorkingCopyMarker::has_admission_plan)
@@ -13565,7 +13597,13 @@ fn fast_img_deliver_modern_lossy_static_tier(
         None
     };
     let library_handle = if exact_failures && !cleanup_first {
-        fast_img_import_originals_with_failures(marker, src_dir, candidates, retry.as_ref())?
+        fast_img_import_originals_with_failures(
+            marker,
+            src_dir,
+            candidates,
+            retry.as_ref(),
+            foundation::fast_img::import_modern_lossy_static_tier_checkpointed_with_failures,
+        )?
     } else if cleanup_first || candidates.is_empty() {
         foundation::pipeline::verification::LibraryHandle {
             photos_library_path: marker.photos_library_path.clone(),
@@ -13683,6 +13721,11 @@ fn fast_img_import_originals_with_failures(
     source_root: &Path,
     candidates: &[ModernLossyStaticCandidate],
     retry: Option<&FailedRetryContext>,
+    import: impl FnOnce(
+        &mut WorkingCopyMarker,
+        &[ModernLossyStaticCandidate],
+    )
+        -> foundation::unified_error::Result<foundation::fast_img::Tier2ImportReport>,
 ) -> anyhow::Result<LibraryHandle> {
     let saved = marker
         .tier2_imported_assets
@@ -13714,10 +13757,7 @@ fn fast_img_import_originals_with_failures(
             ..Default::default()
         });
     }
-    let report = foundation::fast_img::import_modern_lossy_static_tier_checkpointed_with_failures(
-        marker, &pending,
-    )
-    .context("fast-img original Photos delivery failed")?;
+    let report = import(marker, &pending).context("fast-img original Photos delivery failed")?;
     let mut returned = BTreeSet::new();
     for asset in &report.library.imported_assets {
         let rel = asset.rel_path.as_str();
@@ -16292,6 +16332,7 @@ mod fast_img_hardening_tests {
         let plan = super::fast_vid_gif::scan_originals(
             &FastImgInputScope::observe(&first, true)?.candidates,
             &source,
+            None,
         )?
         .admission_plan(&source)?;
         foundation::fast_img_store::initialize_with_admission(&mut marker, &plan)?;
@@ -16323,6 +16364,114 @@ mod fast_img_hardening_tests {
         )?;
         assert_ne!(fresh, saved.working_copy);
         assert_eq!(std::fs::read(&first)?, std::fs::read(&sibling)?);
+        Ok(())
+    }
+
+    #[test]
+    fn fast_vid_gif_resume_keeps_newly_decodable_files_outside_saved_photos_receipts()
+    -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let root = temp.path().canonicalize()?;
+        let source = root.join("gifs");
+        std::fs::create_dir(&source)?;
+        let working = super::resolve_fresh_working_copy_dir_for_delivery(&source, true)?;
+        super::prepare_photos_working_copy_parent(&source, &working)?;
+        std::fs::create_dir(&working)?;
+        for name in ["already-1.gif", "already-2.gif"] {
+            image::RgbImage::new(2, 1).save(source.join(name))?;
+        }
+        let scan = |scope: Option<&foundation::fast_img_store::FastImgAdmissionPlan>| {
+            super::fast_vid_gif::scan_originals(
+                &FastImgInputScope::observe(&source, true)?.candidates,
+                &source,
+                scope,
+            )
+        };
+        let original = scan(None)?.admission_plan(&source)?;
+        let mut marker =
+            WorkingCopyMarker::new(source.clone(), working, 0).with_strategy("gif".into());
+        foundation::fast_img_store::initialize_with_admission(&mut marker, &original)?;
+        marker.photos_library_path = Some(root.join("synthetic.photoslibrary"));
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.tier2_cleanup_journal = true;
+        marker.tier2_in_progress = true;
+        for (rel, entry) in &original {
+            marker.tier2_imported_assets.push(LibraryAssetRecord {
+                rel_path: rel.clone(),
+                blake3: entry.source_blake3.clone(),
+                photos_uuid: Some(format!("synthetic-{rel}")),
+                sync_status: "local".into(),
+                quarantined: true,
+                ..Default::default()
+            });
+        }
+        super::write_marker_atomic(&marker)?;
+        let marker = super::read_marker(&marker.working_copy)?;
+        let saved =
+            super::fast_vid_gif::pending_receipt_scope(&marker)?.context("saved GIF plan")?;
+        // Complete 1-pixel LZW payload with a sub-block terminator and GIF trailer, no explicit end code.
+        let legacy = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x01\x04\x00;";
+        for index in 0..25 {
+            std::fs::write(source.join(format!("legacy-{index}.gif")), legacy)?;
+        }
+        let full = scan(None)?.admission_plan(&source)?;
+        assert_eq!(full.len(), 27);
+        assert!(super::fast_img_check_admission_resume(&marker, &full).is_err());
+        let resumed = scan(Some(&saved))?;
+        assert_eq!(resumed.ignored.count(), 25);
+        assert_eq!(resumed.modern_probe_failures.total, 0);
+        let reused = super::fast_img_import_originals_with_failures(
+            &mut marker.clone(),
+            &source,
+            &resumed.modern_lossy_candidates,
+            None,
+            |_, _| panic!("saved Photos receipts must prevent duplicate imports"),
+        )?;
+        assert_eq!(reused.imported_assets.len(), 0);
+        let plan = resumed.admission_plan(&source)?;
+        super::fast_img_check_admission_resume(&marker, &plan)?;
+        assert_eq!(plan, original);
+        let cli = Cli::try_parse_from(
+            [
+                "img",
+                "fast-img",
+                "--strategy",
+                "gif",
+                "--shortest-path",
+                "--retry",
+                "--dry-run",
+                "--",
+            ]
+            .into_iter()
+            .map(std::ffi::OsStr::new)
+            .chain([source.as_os_str()]),
+        )?;
+        let preview = FastImgRunOptions::for_command(&cli.command).context("GIF resume options")?;
+        run_fast_img(preview)?;
+
+        let mut invalid_receipt = marker.clone();
+        invalid_receipt.tier2_imported_assets[0].blake3 = "0".repeat(64);
+        assert!(super::fast_vid_gif::pending_receipt_scope(&invalid_receipt).is_err());
+        std::fs::write(source.join("unbound-broken.gif"), b"GIF89a")?;
+        let mixed = scan(Some(&saved))?;
+        assert_eq!(
+            (mixed.ignored.count(), mixed.modern_probe_failures.total),
+            (26, 0)
+        );
+
+        image::RgbImage::new(3, 1).save(source.join("already-1.gif"))?;
+        let drifted = scan(Some(&saved))?.admission_plan(&source)?;
+        assert!(super::fast_img_check_admission_resume(&marker, &drifted).is_err());
+        let error = run_fast_img(preview).expect_err("changed saved original");
+        assert!(error.to_string().contains("MFB_RESUME_INPUT_CHANGED"));
+        assert_eq!(
+            foundation::fast_img_store::read_admission_plan(&marker)?,
+            Some(original)
+        );
+        assert_eq!(std::fs::read_dir(&source)?.count(), 28);
         Ok(())
     }
 

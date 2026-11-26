@@ -12,6 +12,7 @@ pub enum IgnoredReason {
     LivePhotoPairMember,
     AnimatedImageContainer,
     OutsideCurrentPolicyScope,
+    OutsideSavedGifTask,
     ModernTierNotAdmitted,
 }
 
@@ -21,6 +22,7 @@ impl IgnoredReason {
             Self::LivePhotoPairMember => "live_photo_pair_member",
             Self::AnimatedImageContainer => "animated_image_container",
             Self::OutsideCurrentPolicyScope => "outside_current_policy_scope",
+            Self::OutsideSavedGifTask => "outside_saved_gif_task",
             Self::ModernTierNotAdmitted => "modern_tier_not_admitted_for_original_delivery",
         }
     }
@@ -36,6 +38,9 @@ impl IgnoredReason {
             }
             Self::OutsideCurrentPolicyScope => {
                 "Source format is outside the selected processing strategy"
+            }
+            Self::OutsideSavedGifTask => {
+                "File retained for a new task; outside the saved GIF Photos delivery"
             }
             Self::ModernTierNotAdmitted => {
                 "Modern-format source was not admitted for original-byte delivery by the current fast-img policy"

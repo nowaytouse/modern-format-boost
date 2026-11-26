@@ -205,14 +205,18 @@ AV1 defaults to non-Apple delivery; an explicitly
 conflicting `--apple-compat` request is rejected. HEVC keeps Apple compatibility
 by default; `--no-apple-compat` still disables it. Video quality and preset are not exposed by the current
 CLI and therefore are not editable controls.
-Video encoder settings apply to standard `vid run` processing. Fast VID uses
-`vid fast-vid INPUT` to import byte-exact GIF originals into Apple Photos.
-The worker decodes GIF frames during admission and uses the shared Photos
-checkpoint and original-resource verification. A GIF with a missing or
+Video encoder settings apply to standard `vid run` processing.
+`vid fast-vid INPUT` checks GIF frames and retains the files in place.
+`vid fast-vid --shortest-path INPUT` selects Apple Photos delivery and
+uses the shared Photos checkpoint and original-resource verification. This
+is the GUI's **Import into Photos** checkbox. A GIF with a missing or
 misleading extension receives a private transport filename ending in `.gif`.
 Its receipt retains the selected source's relative path. An unverified
 external XMP or AAE companion retains the source and its companion.
-Use `--dry-run` to preview and `--retry` to continue a saved task.
+Use `--dry-run` to preview, or `--shortest-path --retry` to continue a saved import.
+If all previously admitted GIFs already have Photos receipts, continuing can
+recheck those assets and finish their cleanup. Additional GIFs recognized by
+the current decoder stay in place for a fresh import with `--shortest-path --no-resume`.
 Fast IMG accepts the same typed `execution.error_mode` through its own GUI override
 and launcher `--img-error-mode`. The default is `log-and-continue` (record failures,
 preserve sources and continue independent work). Fail-fast drains and checkpoints

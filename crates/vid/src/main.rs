@@ -122,7 +122,7 @@ enum Commands {
     )]
     DbHealth,
 
-    /// Import original GIF files into Apple Photos and verify delivery before cleanup.
+    /// Verify GIF originals in place or deliver them to Apple Photos with --shortest-path.
     #[command(name = "fast-vid")]
     FastVid(FastVidArgs),
 }
@@ -132,8 +132,11 @@ struct FastVidArgs {
     /// GIF file or directory to scan recursively; identity is checked from content.
     #[arg(value_name = "INPUT")]
     input: PathBuf,
-    /// Exact private working copy for this task.
-    #[arg(short, long, value_name = "WORKING_COPY")]
+    /// Import into Apple Photos and verify delivery before cleaning up originals.
+    #[arg(long)]
+    shortest_path: bool,
+    /// Exact private working copy for a Photos delivery.
+    #[arg(short, long, value_name = "WORKING_COPY", requires = "shortest_path")]
     output: Option<PathBuf>,
     /// Preview the admission without importing, deleting, or writing a checkpoint.
     #[arg(long)]
@@ -150,14 +153,14 @@ struct FastVidArgs {
 #[derive(clap::Args)]
 #[group(multiple = false)]
 struct FastVidResumeArgs {
-    /// Continue a matching task from its verified checkpoint.
-    #[arg(long)]
+    /// Continue a matching Photos delivery from its verified checkpoint.
+    #[arg(long, requires = "shortest_path")]
     retry: bool,
-    /// Start a fresh task with its own working copy.
+    /// Start fresh. Photos delivery uses a new working copy.
     #[arg(long)]
     no_resume: bool,
-    /// Retry retained failures from a completed task.
-    #[arg(long)]
+    /// Retry retained failures from a completed Photos delivery.
+    #[arg(long, requires = "shortest_path")]
     retry_failed: bool,
 }
 
@@ -266,7 +269,10 @@ fn fast_vid_worker(cli: &Cli, args: &FastVidArgs) -> anyhow::Result<std::process
     let worker =
         std::env::current_exe()?.with_file_name(format!("img{}", std::env::consts::EXE_SUFFIX));
     let mut command = std::process::Command::new(worker);
-    command.args(["fast-img", "--strategy", "gif", "--shortest-path"]);
+    command.args(["fast-img", "--strategy", "gif"]);
+    if args.shortest_path {
+        command.arg("--shortest-path");
+    }
     if let Some(config) = &cli.config {
         command.arg("--config").arg(config);
     }
@@ -305,17 +311,17 @@ fn run_fast_vid(cli: &Cli, args: &FastVidArgs) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        Err(worker.exec()).context("could not start the co-installed img worker for GIF import")
+        Err(worker.exec()).context("could not start the co-installed Fast VID worker")
     }
     #[cfg(not(unix))]
     {
         let status = worker
             .status()
-            .context("could not start the co-installed img worker for GIF import")?;
+            .context("could not start the co-installed Fast VID worker")?;
         std::process::exit(
             status
                 .code()
-                .context("GIF import worker exited without a status code")?,
+                .context("Fast VID worker exited without a status code")?,
         )
     }
 }
@@ -950,6 +956,7 @@ mod cli_tests {
             "vid",
             "--no-config",
             "fast-vid",
+            "--shortest-path",
             "--dry-run",
             "--retry",
             "--output",
@@ -990,11 +997,25 @@ mod cli_tests {
     }
 
     #[test]
+    fn fast_vid_local_default_only_forwards_the_original_selection() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from(["vid", "fast-vid", "selected"])?;
+        let Commands::FastVid(args) = &cli.command else {
+            anyhow::bail!("expected Fast VID")
+        };
+        assert_eq!(
+            fast_vid_worker(&cli, args)?.get_args().collect::<Vec<_>>(),
+            ["fast-img", "--strategy", "gif", "--", "selected"]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn retired_fast_vid_routes_and_conflicting_retry_flags_are_rejected() -> anyhow::Result<()> {
         assert!(Cli::try_parse_from(["vid", "fast-gif", "."]).is_err());
         for option in [
             "--strategy",
-            "--shortest-path",
+            "--retry",
+            "--retry-failed",
             "--originals",
             "--force",
             "--apple-compat",
@@ -1007,7 +1028,17 @@ mod cli_tests {
                 "{option}"
             );
         }
-        assert!(Cli::try_parse_from(["vid", "fast-vid", ".", "--retry", "--no-resume"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "vid",
+                "fast-vid",
+                ".",
+                "--shortest-path",
+                "--retry",
+                "--no-resume"
+            ])
+            .is_err()
+        );
         assert!(
             Cli::try_parse_from(["vid", "fast-vid", ".", "--retry-failed-parent", "old"]).is_err()
         );

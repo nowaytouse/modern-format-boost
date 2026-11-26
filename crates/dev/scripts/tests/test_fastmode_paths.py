@@ -156,10 +156,17 @@ class TestFastModePaths(unittest.TestCase):
             ],
         )
 
-    def test_fast_vid_command_imports_gif_originals(self):
+    def test_fast_vid_command_imports_only_when_selected(self):
         target = Path("/tmp/synthetic/animated.data")
-        self.assertEqual(fastmode_paths.build_fast_vid_command(Path("/bin/vid"), target),
-                         ["/bin/vid", "fast-vid", "--", str(target)])
+        binary = Path("/bin/vid")
+        self.assertEqual(
+            fastmode_paths.build_fast_vid_command(binary, target),
+            ["/bin/vid", "fast-vid", "--", str(target)],
+        )
+        self.assertEqual(
+            fastmode_paths.build_fast_vid_command(binary, target, shortest_path=True),
+            ["/bin/vid", "fast-vid", "--shortest-path", "--", str(target)],
+        )
 
     def test_drag_processor_wires_shortest_path_fastmode_to_rust_flags(self):
         rust_source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(

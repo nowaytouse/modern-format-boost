@@ -1,17 +1,21 @@
-//! GIF originals enter the shared Photos custody route with an exact byte hash.
+//! Inspect GIF originals in place or admit them to Photos custody with an exact byte hash.
 #![expect(
     clippy::redundant_pub_crate,
     reason = "the worker exposes these helpers only within the binary crate"
 )]
 use super::fast_img_ignored::{IgnoredInventory, IgnoredReason};
 use super::fast_img_result::ProbeFailures;
-use super::{FastImgSourceInventory, fast_img_file_failure_line};
+use super::{
+    FastImgInputScope, FastImgRunOptions, FastImgSourceInventory, fast_img_file_failure_line,
+};
 use anyhow::{Context, Result};
 use foundation::ModernLossyStaticCandidate;
 use foundation::batch::AdmittedImageFile;
+use foundation::fast_img_store::{FastImgAdmissionPlan, FastImgAdmissionRoute};
 use foundation::image::format_detect::FormatKind;
 use foundation::metadata::XmpSidecarIndex;
 use foundation::pipeline::verification::fast_img_relative_key;
+use foundation::pipeline::verification::{FastImgStageName, WorkingCopyMarker};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -19,7 +23,7 @@ pub(super) fn validate_selection(input: &Path) -> Result<()> {
     match std::fs::symlink_metadata(input) {
         Ok(metadata) => anyhow::ensure!(
             !metadata.file_type().is_symlink(),
-            "select the GIF source directly; a symbolic link cannot authorize source cleanup"
+            "select the original GIF file or folder directly; the selection is a symbolic link"
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
         Err(error) => return Err(error.into()),
@@ -27,22 +31,149 @@ pub(super) fn validate_selection(input: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn scan_originals(
-    observed: &[AdmittedImageFile],
-    root: &Path,
-) -> Result<FastImgSourceInventory> {
-    let mut verified = Vec::new();
-    let mut ignored = Vec::new();
-    let mut failures = ProbeFailures::new(0);
-    let mut live_photos = foundation::live_photo::LivePhotoScan::default();
+/// Use the same full stream decoder for both local retention and Photos admission.
+fn inspect_gifs<'a>(
+    observed: &'a [AdmittedImageFile],
+    mut classify: impl FnMut(&'a AdmittedImageFile, std::io::Result<bool>) -> Result<()>,
+) -> Result<()> {
     let progress = foundation::progress::FileStageProgress::new(
         observed.len() as u64,
         foundation::progress::FileProgressStage::FastImgSourcePreparation,
     );
     for (index, source) in observed.iter().enumerate() {
         foundation::batch_control::checkpoint()?;
+        classify(
+            source,
+            foundation::media_meta_utils::is_verified_gif(source.path()),
+        )?;
+        progress.set((index + 1) as u64);
+    }
+    progress.finish();
+    Ok(())
+}
+
+pub(super) fn verify_local(options: FastImgRunOptions<'_>) -> Result<()> {
+    validate_selection(options.input)?;
+    let scope = FastImgInputScope::observe(options.input, options.recursive.0)?;
+    anyhow::ensure!(
+        options
+            .planned_scope
+            .is_none_or(|expected| expected == scope.token()),
+        "GIF input selection changed after preview. Review the selection and start again."
+    );
+    let root = scope.src_root.clone();
+    let (observed, witness) = scope.into_scan();
+    let mut ignored = Vec::new();
+    let mut skipped = 0;
+    let mut failed = 0;
+    if options.dry_run.0 {
+        println!("[DRY RUN ] Verify original GIFs and keep them in place.");
+    }
+    inspect_gifs(&observed, |source, result| {
         let path = source.path();
-        match foundation::media_meta_utils::is_verified_gif(path) {
+        let rel = fast_img_relative_key(path, &root, "GIF original").map_err(anyhow::Error::msg)?;
+        match result {
+            Ok(true) => {
+                skipped += 1;
+                println!(
+                    "[SKIP    ]   {}: valid GIF original retained in place",
+                    rel.replace(char::is_control, "�")
+                );
+            }
+            Ok(false) => ignored.push((path.to_owned(), IgnoredReason::OutsideCurrentPolicyScope)),
+            Err(error) => {
+                failed += 1;
+                report_failure(path, &rel, &error.to_string());
+            }
+        }
+        Ok(())
+    })?;
+    for source in &observed {
+        source.verify_regular_file_unchanged()?;
+    }
+    witness.verify_unchanged()?;
+    validate_selection(options.input)?;
+    let expected_ignored = observed
+        .len()
+        .checked_sub(skipped + failed)
+        .context("overlapping GIF local verification results")?;
+    let ignored = IgnoredInventory::new(&root, ignored, expected_ignored)?;
+    ignored.emit_markers_from_environment()?;
+    super::fast_img_result::print_processor_counts(0, skipped, failed, ignored.count(), 0);
+    anyhow::ensure!(
+        failed == 0,
+        "Local GIF verification failed for {failed} file(s); originals retained."
+    );
+    Ok(())
+}
+
+/// A GIF task with receipts for its entire immutable plan only needs to reverify its
+/// existing Photos assets. A newer decoder may recognize additional files in the folder.
+pub(super) fn pending_receipt_scope(
+    marker: &WorkingCopyMarker,
+) -> Result<Option<FastImgAdmissionPlan>> {
+    if marker.strategy != "gif"
+        || marker.stage != FastImgStageName::CleanupComplete
+        || !marker.tier2_in_progress
+        || !marker.tier2_cleanup_journal
+        || marker.photos_library_path.is_none()
+        || marker.tier2_imported_assets.is_empty()
+    {
+        return Ok(None);
+    }
+    let Some(plan) = foundation::fast_img_store::read_admission_plan(marker)? else {
+        return Ok(None);
+    };
+    if plan.len() != marker.tier2_imported_assets.len() {
+        return Ok(None);
+    }
+    // Loading the saved marker rejects duplicate receipt paths and UUIDs.
+    for asset in &marker.tier2_imported_assets {
+        anyhow::ensure!(
+            asset
+                .photos_uuid
+                .as_ref()
+                .is_some_and(|uuid| !uuid.is_empty())
+                && asset.xmp_sidecar_blake3.is_none()
+                && asset
+                    .library_blake3
+                    .as_ref()
+                    .is_none_or(|hash| hash == &asset.blake3)
+                && plan.get(&asset.rel_path).is_some_and(|entry| {
+                    entry.route == FastImgAdmissionRoute::Original
+                        && entry.source_blake3 == asset.blake3
+                }),
+            "saved GIF Photos receipt differs from its original admission; sources retained"
+        );
+    }
+    Ok(Some(plan))
+}
+
+pub(super) fn scan_originals(
+    observed: &[AdmittedImageFile],
+    root: &Path,
+    saved_scope: Option<&FastImgAdmissionPlan>,
+) -> Result<FastImgSourceInventory> {
+    let mut verified = Vec::new();
+    let mut ignored = Vec::new();
+    let mut failures = ProbeFailures::new(0);
+    let mut live_photos = foundation::live_photo::LivePhotoScan::default();
+    let mut deferred = 0;
+    inspect_gifs(observed, |source, result| {
+        let path = source.path();
+        // Files outside the old admission can neither expand this recovery nor add new failures.
+        if let Some(saved) = saved_scope
+            && !matches!(result, Ok(false))
+        {
+            let rel =
+                fast_img_relative_key(path, root, "GIF original").map_err(anyhow::Error::msg)?;
+            if !saved.contains_key(&rel) {
+                ignored.push((path.to_owned(), IgnoredReason::OutsideSavedGifTask));
+                deferred += 1;
+                return Ok(());
+            }
+        }
+        match result {
             Ok(false) => ignored.push((path.to_owned(), IgnoredReason::OutsideCurrentPolicyScope)),
             Ok(true) if live_photos.is_live(path)? => {
                 ignored.push((path.to_owned(), IgnoredReason::LivePhotoPairMember));
@@ -54,9 +185,8 @@ pub(super) fn scan_originals(
                 record_failure(&mut failures, source, &rel, &error.to_string());
             }
         }
-        progress.set((index + 1) as u64);
-    }
-    progress.finish();
+        Ok(())
+    })?;
     let paths: Vec<_> = verified
         .iter()
         .map(|source| source.path().to_owned())
@@ -93,6 +223,11 @@ pub(super) fn scan_originals(
         .len()
         .checked_sub(originals.len() + failures.total)
         .context("overlapping GIF source classifications")?;
+    if deferred > 0 {
+        println!(
+            "[RESUME  ] {deferred} file(s) outside the saved GIF Photos task retained in place. After verified cleanup, start a new task (--no-resume) for the remaining files."
+        );
+    }
     println!(
         "[FASTVID ] selected {} verified GIF original(s) for Apple Photos",
         originals.len()
@@ -123,6 +258,17 @@ fn record_failure(
             tracing::warn!(target: "fast_vid", source_rel = rel, %error, "GIF failure hash unavailable");
         }
     }
+    report_failure(source.path(), rel, reason);
+}
+
+fn report_failure(path: &Path, rel: &str, reason: &str) {
+    super::log_file_failure_at_phase(
+        "img",
+        path,
+        reason,
+        None,
+        super::FileFailurePhase::Admission,
+    );
     println!("{}", fast_img_file_failure_line(rel, reason));
 }
 
@@ -190,10 +336,19 @@ mod tests {
     }
 
     #[test]
-    fn gif_worker_requires_photos_and_rejects_encoder_settings() -> Result<()> {
+    fn gif_worker_accepts_local_and_photos_but_rejects_encoder_settings() -> Result<()> {
         let args = ["img", "fast-img", "sample", "--strategy", "gif"];
         let cli = Cli::try_parse_from(args)?;
-        assert!(crate::validate_command_strategy(&cli.command).is_err());
+        crate::validate_command_strategy(&cli.command)?;
+        for flags in [
+            &["--output", "working"][..],
+            &["--retry"],
+            &["--retry-failed"],
+            &["--delete-source"],
+        ] {
+            let local = Cli::try_parse_from(args.into_iter().chain(flags.iter().copied()))?;
+            assert!(crate::validate_command_strategy(&local.command).is_err());
+        }
         let cli = Cli::try_parse_from(args.into_iter().chain(["--shortest-path"]))?;
         crate::validate_command_strategy(&cli.command)?;
         let config = foundation::runtime_config::RuntimeConfig::default();
@@ -222,7 +377,7 @@ mod tests {
         let scope = foundation::batch::fast_img_scope::FastImgInputScope::observe(&selected, true)?;
         assert!(!scope.selected_is_directory);
         let (observed, witness) = scope.into_scan();
-        let inventory = scan_originals(&observed, &root)?;
+        let inventory = scan_originals(&observed, &root, None)?;
         let plan = inventory.admission_plan(&root)?;
         assert_eq!(plan.keys().collect::<Vec<_>>(), ["selected"]);
         witness.verify_unchanged()?;

@@ -719,6 +719,16 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
     })
 }
 
+pub fn choose_gif_photos_import() -> Result<bool> {
+    println!("  1 - Verify GIF originals and keep them in place");
+    println!("  2 - Import original GIFs into Photos and clean up verified sources");
+    match read_line("Choose GIF action [1/2] (Enter = keep in place): ")?.trim() {
+        "" | "1" => Ok(false),
+        "2" => Ok(true),
+        _ => bail!("choose 1 or 2 for the GIF action"),
+    }
+}
+
 pub fn confirm_in_place() -> Result<bool> {
     let red = if colors_enabled() { "\x1b[31m" } else { "" };
     let yellow = if colors_enabled() { "\x1b[33m" } else { "" };

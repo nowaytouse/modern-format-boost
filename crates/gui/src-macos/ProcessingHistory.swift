@@ -1254,7 +1254,7 @@ private struct HistorySourceSet: Decodable, Hashable {
 
     func matches(_ context: HistoryContext) -> Bool {
         schema_version == 1 && context.run_id.map(validHistoryIdentity) == true
-            && (context.checkpointedMedia || ["auto", "images", "videos"].contains(context.mode)) && context.dry_run != true
+            && (context.checkpointedMedia || ["auto", "images", "videos", "fast-vid-gif"].contains(context.mode)) && context.dry_run != true
             && context.retry != true && context.inputs.count == 1
             && source_root.hasPrefix("/") && !source_root.contains("\0")
             && context.inputs.first.map {
@@ -1571,6 +1571,25 @@ private struct HistoryEntry {
         else { return nil }
         return count
     }
+    var localGIFInspectionWithFileErrors: Bool {
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure,
+              !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid, !fastDeliveryInvalid, !outputCleanupInvalid,
+              let context, context.mode == "fast-vid-gif", !context.shortest_path, !context.in_place,
+              !context.dry_run, context.output == nil, context.inputs.count == 1,
+              fastDeliveries.isEmpty, outputCleanups.isEmpty, verification == nil, inputVerifications.isEmpty,
+              finished?.outcome == "failed", finished?.completed_with_file_errors == true,
+              let summary, summary.valid, summary.img.complete, !summary.vid.active,
+              summary.img.exit_code == 1, summary.img.unprocessed == 0, summary.img.succeeded == 0,
+              let failed = summary.img.failed, failed > 0,
+              invocations.count == 1, let invocation = invocations.first, invocation.pipeline == "img",
+              let run = context.run_id, invocation.run_id == run,
+              invocation.arguments.starts(with: ["fast-img", "--strategy", "gif"]),
+              !invocation.arguments.dropLast(2).contains("--shortest-path"),
+              invocation.arguments.suffix(2).elementsEqual(["--", context.inputs[0]]),
+              let exited = workerExecutions[invocation.invocation_id]?.last,
+              exited.state == "exited", exited.exit_code == 1, exited.signal == nil else { return false }
+        return true
+    }
     var retainedOnlySourceCount: Int? {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty,
               !fastDeliveryInvalid, !outputCleanupInvalid, !hasVerificationFailure,
@@ -1696,7 +1715,7 @@ private struct HistoryEntry {
         if confirmedPhotosQuarantine != nil { return "result.final_photos_quarantine_title" }
         if deliveryIsDeferred { return "result.delivery_deferred" }
         if hasPartialSuccess || hasMixedDeliveryFacts { return "history.status.partial" }
-        if retainedOnlySourceCount != nil { return "history.status.file_failures" }
+        if retainedOnlySourceCount != nil || localGIFInspectionWithFileErrors { return "history.status.file_failures" }
         if finished?.outcome == "failed", context?.shortest_path == true,
            !fastDeliveryInvalid, fastDeliveries.contains(where: { $0.finalPhotosQuarantineCount != nil }) {
             return "result.final_photos_quarantine_review"
@@ -1746,7 +1765,7 @@ private struct HistoryEntry {
         if cleanupRecovery != nil || cleanupRecoveryInvalid { return .systemOrange }
         if hasVerificationFailure { return .systemRed }
         if deliveryIsDeferred || confirmedPhotosQuarantine != nil || independentVerificationUnavailable != nil { return .systemOrange }
-        if hasPartialSuccess || hasMixedDeliveryFacts || retainedOnlySourceCount != nil { return .systemOrange }
+        if hasPartialSuccess || hasMixedDeliveryFacts || retainedOnlySourceCount != nil || localGIFInspectionWithFileErrors { return .systemOrange }
         if finished?.outcome == "failed" || hasFailures { return .systemRed }
         return needsAttention ? .systemOrange : .labelColor
     }
@@ -7744,6 +7763,25 @@ func runProcessingHistorySelfTests() throws {
             fields["run_id"] = "synthetic-cleanup-run"
             return try payload(name, fields)
         }
+        let gifContext = try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
+            "mode": "fast-vid-gif", "dry_run": false, "in_place": false, "shortest_path": false])
+        let gifLaunch = try bound("MFB_HISTORY_INVOCATION", launchValue.merging(["arguments": [
+            "fast-img", "--strategy", "gif", "--recursive", "--", "/synthetic/input"
+        ]]) { _, new in new })
+        let gifExit = try bound("MFB_HISTORY_WORKER_EXECUTION", exitValue.merging(["exit_code": 1]) { _, new in new })
+        let gifSpawn = try bound("MFB_HISTORY_WORKER_EXECUTION", spawnValue)
+        let gifCounts = try bound("MFB_HISTORY_SUMMARY", summaryValue.merging(["img": [
+            "active": true, "succeeded": 0, "failed": 1, "skipped": 2, "ignored": 1, "unprocessed": 0, "exit_code": 1
+        ]]) { _, new in new })
+        let gifFinish = try bound("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed",
+            "completed_with_file_errors": true, "error": "synthetic GIF failed to decode"])
+        let inspection = try parsed([gifContext, gifLaunch, gifSpawn, gifExit, gifCounts, gifFinish]).entries[0]
+        try require(inspection.statusKey == "history.status.file_failures" && inspection.statusColor == .systemOrange
+            && inspection.summary?.img.skipped == 2 && inspection.needsAttention,
+            "History described a completed local GIF check as an interrupted batch")
+        let unconfirmedGIF = try parsed([gifContext, gifLaunch, gifSpawn, gifCounts, gifFinish]).entries[0]
+        try require(unconfirmedGIF.statusKey == "history.status.failed" && unconfirmedGIF.statusColor == .systemRed,
+            "History called a local GIF check complete without an observed worker exit")
         let cleanupContext = try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
             "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": true])
         let cleanup: [String: Any] = ["schema_version": 1, "output_path": "/synthetic/output", "outcome": "residual",

@@ -587,17 +587,32 @@ pub fn print_menu_hint() {
 
 /// File failures remain a nonzero outcome after delivery or retention was verified.
 #[derive(Debug)]
-pub struct CompletedWithFileFailures {
-    pub failed: usize,
+pub enum CompletedWithFileFailures {
+    OriginalsVerified(usize),
+    LocalGifInspection(usize),
+}
+
+impl CompletedWithFileFailures {
+    #[must_use]
+    pub fn failed(&self) -> usize {
+        match *self {
+            Self::OriginalsVerified(failed) | Self::LocalGifInspection(failed) => failed,
+        }
+    }
 }
 
 impl std::fmt::Display for CompletedWithFileFailures {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "batch completed with {} failed source(s); failed originals verified and retained",
-            self.failed
-        )
+        match self {
+            Self::OriginalsVerified(failed) => write!(
+                formatter,
+                "batch completed with {failed} failed source(s); failed originals verified and retained"
+            ),
+            Self::LocalGifInspection(failed) => write!(
+                formatter,
+                "local GIF inspection finished; {failed} file(s) could not be verified and were kept in place"
+            ),
+        }
     }
 }
 impl std::error::Error for CompletedWithFileFailures {}
@@ -607,7 +622,7 @@ pub fn completed_file_failure_count(error: &anyhow::Error) -> Option<usize> {
     if error.chain().count() != 1 {
         return None;
     }
-    Some(error.downcast_ref::<CompletedWithFileFailures>()?.failed)
+    Some(error.downcast_ref::<CompletedWithFileFailures>()?.failed())
 }
 
 /// Summarize the observed outcome without inventing a child crash or success.

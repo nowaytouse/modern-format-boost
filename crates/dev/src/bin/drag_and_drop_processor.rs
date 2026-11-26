@@ -103,6 +103,7 @@ struct Args {
     #[arg(long)]
     archive: bool,
 
+    /// Import Fast IMG output or original Fast VID GIFs into Photos. Local Fast VID keeps GIFs in place.
     #[arg(long = "shortest-path")]
     shortest_path: bool,
 
@@ -131,7 +132,7 @@ struct Args {
     #[arg(long)]
     dry_run: bool,
 
-    /// Print a read-only standard routing plan or Fast IMG conflict preview.
+    /// Print a read-only routing plan or a checkpoint preview. Local GIF inspection uses --dry-run.
     /// Does not create sessions, outputs, locks, or launch processing workers.
     #[arg(long, conflicts_with_all = ["dry_run", "watch"])]
     plan_json: bool,
@@ -701,23 +702,21 @@ const fn mode_uses_external_tool_snapshot(mode: &LaunchMode) -> bool {
     )
 }
 
-impl LaunchMode {
-    const fn checkpointed(&self) -> bool {
-        matches!(self, Self::FastImg | Self::FastVid)
-    }
-}
-
 impl Args {
+    fn uses_checkpoint(&self) -> bool {
+        self.mode == LaunchMode::FastImg || (self.mode == LaunchMode::FastVid && self.shortest_path)
+    }
+
+    fn keeps_gifs_in_place(&self) -> bool {
+        self.mode == LaunchMode::FastVid && !self.shortest_path
+    }
+
     fn delivery_strategy(&self) -> Option<&str> {
         if self.mode == LaunchMode::FastVid {
             Some("gif")
         } else {
             self.strategy.as_deref()
         }
-    }
-
-    fn photos_delivery(&self) -> bool {
-        self.mode == LaunchMode::FastVid || self.shortest_path
     }
 }
 
@@ -729,14 +728,22 @@ fn validate_media_options(args: &Args) -> Result<()> {
         );
         anyhow::ensure!(
             args.strategy.is_none()
-                && !args.shortest_path
                 && !args.archive
                 && !args.in_place
                 && !args.force
                 && !args.images_only
                 && !args.ultimate
                 && !args.watch,
-            "Fast VID imports original GIFs to Photos and does not accept conversion, watch or output-mode switches"
+            "Fast VID handles original GIFs and does not accept conversion, watch or in-place switches"
+        );
+        anyhow::ensure!(
+            !args.keeps_gifs_in_place()
+                || (args.output.is_none()
+                    && !args.retry
+                    && !args.resume
+                    && !args.retry_failed
+                    && !args.recover_photos_cleanup),
+            "local GIF inspection retains originals in place; output and recovery options require --shortest-path"
         );
     }
     if args.mode == LaunchMode::FastImg {
@@ -747,15 +754,15 @@ fn validate_media_options(args: &Args) -> Result<()> {
     }
     if args.recover_photos_cleanup {
         anyhow::ensure!(
-            args.mode.checkpointed()
-                && args.photos_delivery()
+            args.uses_checkpoint()
+                && args.shortest_path
                 && args.inputs.len() == 1
                 && matches!(args.delivery_strategy(), Some("jxl" | "avif" | "gif")),
             "Photos cleanup recovery requires one saved source and its Photos delivery strategy"
         );
     }
     anyhow::ensure!(
-        !args.retry_failed || (args.mode.checkpointed() && args.inputs.len() == 1),
+        !args.retry_failed || (args.uses_checkpoint() && args.inputs.len() == 1),
         "--retry-failed requires Fast IMG or Fast VID and exactly one source"
     );
     anyhow::ensure!(
@@ -835,8 +842,8 @@ fn validate_media_options(args: &Args) -> Result<()> {
         "cache policy settings require media processing mode"
     );
     anyhow::ensure!(
-        args.photos.cli_arguments().is_empty() || args.mode.checkpointed(),
-        "Photos import settings require --mode fast-img or --mode fast-vid"
+        args.photos.cli_arguments().is_empty() || args.uses_checkpoint(),
+        "Photos import settings require --mode fast-img or --mode fast-vid --shortest-path"
     );
     anyhow::ensure!(
         args.external_tool_snapshot.is_none() || mode_uses_external_tool_snapshot(&args.mode),
@@ -947,13 +954,14 @@ fn reconcile_scheduled_worker_inventory(
 
 fn run_scheduled_workers(
     commands: Vec<LaunchCommand>,
-    dry_run: bool,
+    args: &Args,
     session: Option<&AppSession>,
     started: Instant,
     error_mode: BatchErrorMode,
     (image_error_mode, video_error_mode): (BatchErrorMode, BatchErrorMode),
     summary: &mut PipelineSummary,
 ) -> Result<Option<anyhow::Error>> {
+    let dry_run = args.dry_run;
     let mut first_error = None;
     for command in commands {
         update_terminal_title(started.elapsed());
@@ -976,6 +984,16 @@ fn run_scheduled_workers(
                 let child_failed = stats.failed;
                 let child_counts_complete = stats.counts_complete();
                 let child_pending = stats.unprocessed;
+                // Local GIF counts are emitted only after every file and the input directory
+                // have been rechecked. A crash or early return has no complete terminal counts.
+                let completed_gif_inspection = !dry_run
+                    && args.keeps_gifs_in_place()
+                    && pipeline == "IMG"
+                    && child_counts_complete
+                    && stats.succeeded == 0
+                    && child_pending == Some(0)
+                    && child_exit_code == 1
+                    && child_failed > 0;
                 let is_img = pipeline == "IMG";
                 let is_vid = pipeline == "VID";
                 if is_img {
@@ -1004,7 +1022,9 @@ fn run_scheduled_workers(
                     child_failed,
                     child_counts_complete,
                 ) {
-                    let err = if child_counts_complete {
+                    let err = if completed_gif_inspection {
+                        CompletedWithFileFailures::LocalGifInspection(child_failed).into()
+                    } else if child_counts_complete {
                         anyhow::anyhow!(
                             "{} command exited with code {} and reported {} failed file(s)",
                             command.pipeline_label(),
@@ -1125,9 +1145,7 @@ fn fast_img_file_only_completion(
         && verified_failed_sources == Some(stats.failed)
         && summary.integrity_state == Some("CLEAN")
         && summary.integrity_issue_count == 0)
-        .then_some(CompletedWithFileFailures {
-            failed: stats.failed,
-        })
+        .then_some(CompletedWithFileFailures::OriginalsVerified(stats.failed))
 }
 
 // Presentation evidence does not authorize cleanup or retry. Those use their own stricter proof.
@@ -1847,7 +1865,7 @@ fn run_fast_img_post_success(
                 Some(reason) => error.context(FastImgIndependentVerificationUnavailable(reason)),
                 None => error,
             };
-            let receipt = if args.photos_delivery() {
+            let receipt = if args.shortest_path {
                 OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
             } else {
                 OutputCleanupReceipt::not_requested(&cleanup_output_path)
@@ -1880,7 +1898,7 @@ fn run_fast_img_post_success(
                 .warnings
                 .map(|w| if w { "WARNINGS" } else { "CLEAN" });
             summary.integrity_issue_count = verify.issue_count;
-            if !args.photos_delivery() {
+            if !args.shortest_path {
                 return Ok(OutputCleanupReceipt::not_requested(&cleanup_output_path));
             }
             if verify.warnings != Some(false) {
@@ -1931,7 +1949,7 @@ fn run_fast_img_post_success(
             "Fast IMG cleanup recovery verification found unresolved evidence"
         );
     }
-    if args.photos_delivery()
+    if args.shortest_path
         && verify.warnings == Some(false)
         && !failed_only
         && selected_file.is_none()
@@ -2103,13 +2121,13 @@ fn resolve_fast_img_output_for_run(args: &Args, target: &Path) -> Result<PathBuf
     } else if args.no_resume {
         foundation::pipeline::verification::resolve_fresh_working_copy_dir_for_delivery(
             &source_root,
-            args.photos_delivery(),
+            args.shortest_path,
         )?
     } else {
         foundation::pipeline::verification::resolve_working_copy_dir_for_delivery(
             &source_root,
             args.delivery_strategy().unwrap_or("jxl"),
-            args.photos_delivery(),
+            args.shortest_path,
         )?
     };
     if let Some(configured) = &args.output
@@ -2182,7 +2200,7 @@ fn selected_failed_retry_parent(
     };
     let parent = foundation::fast_img_store::inspect_failed_retry_parent_for_delivery(
         &context.parent().working_copy,
-        args.photos_delivery(),
+        args.shortest_path,
     )?;
     let source = validate_failed_retry_input(&parent, target)?;
     anyhow::ensure!(
@@ -2212,7 +2230,7 @@ fn fast_img_cleanup_recovery_for_run(
             bail!("Photos cleanup recovery requires exact saved source, output and strategy");
         };
         anyhow::ensure!(
-            args.mode.checkpointed(),
+            args.uses_checkpoint(),
             "Photos cleanup recovery requires Fast IMG or Fast VID"
         );
         return exact_fast_img_photos_cleanup_recovery(source, output, strategy).map(Some);
@@ -2220,8 +2238,8 @@ fn fast_img_cleanup_recovery_for_run(
     let ([source], Some(output)) = (args.inputs.as_slice(), args.output.as_deref()) else {
         return Ok(None);
     };
-    if !args.mode.checkpointed()
-        || !args.photos_delivery()
+    if !args.uses_checkpoint()
+        || !args.shortest_path
         || args.dry_run
         || args.watch
         || args.retry_failed
@@ -2246,7 +2264,7 @@ fn fast_img_cleanup_recovery_for_run(
 }
 
 fn fast_img_retry_before_scan(args: &Args) -> Result<Option<FastImgRetryBeforeScan>> {
-    if !args.mode.checkpointed() || args.dry_run {
+    if !args.uses_checkpoint() || args.dry_run {
         return Ok(None);
     }
     let Some(target) = args.inputs.first() else {
@@ -2283,7 +2301,7 @@ fn failed_retry_parent_for_run(
     let (parent, source) = if let Some(selected) = &args.retry_failed_parent {
         let parent = foundation::fast_img_store::inspect_failed_retry_parent_for_delivery(
             selected,
-            args.photos_delivery(),
+            args.shortest_path,
         )?;
         let source = validate_failed_retry_input(&parent, target)?;
         (parent, source)
@@ -2294,7 +2312,7 @@ fn failed_retry_parent_for_run(
         );
         let parent = foundation::fast_img_store::inspect_failed_retry_parent_for_delivery(
             &selected,
-            args.photos_delivery(),
+            args.shortest_path,
         )?;
         let source = validate_failed_retry_input(&parent, target)?;
         (parent, source)
@@ -2303,14 +2321,14 @@ fn failed_retry_parent_for_run(
         let selected = foundation::pipeline::verification::resolve_working_copy_dir_for_delivery(
             &source,
             strategy,
-            args.photos_delivery(),
+            args.shortest_path,
         )?;
         let selected = foundation::fast_img_store::failed_retry_context(&selected)?
             .map_or(selected, |context| context.parent().working_copy.clone());
         (
             foundation::fast_img_store::inspect_failed_retry_parent_for_delivery(
                 &selected,
-                args.photos_delivery(),
+                args.shortest_path,
             )?,
             source,
         )
@@ -2325,7 +2343,7 @@ fn failed_retry_parent_for_run(
 fn failed_retry_delivery(
     args: &Args,
 ) -> Result<foundation::fast_img_store::FailedRetryDeliveryIntent> {
-    if !args.photos_delivery() {
+    if !args.shortest_path {
         return Ok(foundation::fast_img_store::FailedRetryDeliveryIntent::Local);
     }
     let mut loaded = foundation::runtime_config::load(args.img_config.as_deref(), false)?;
@@ -2495,7 +2513,7 @@ fn fast_img_launch_command(
         &img_bin,
         target,
         &output,
-        args.photos_delivery(),
+        args.shortest_path,
         args.archive,
         retry,
         args.no_resume,
@@ -2805,6 +2823,25 @@ fn plan_cli_invocations(
             LaunchMode::Videos => {
                 commands.push(rust_run_command(project_root, "vid", args, input)?)
             }
+            LaunchMode::FastVid if args.keeps_gifs_in_place() => {
+                let mut command = dev_bin_command(
+                    project_root,
+                    "img",
+                    vec![
+                        "fast-img".into(),
+                        "--strategy".into(),
+                        "gif".into(),
+                        "--recursive".into(),
+                    ],
+                )?;
+                push_img_policy_args(&mut command.args, args)?;
+                let input = std::path::absolute(input).context("resolve local GIF selection")?;
+                command.args.extend([
+                    "--".into(),
+                    input.to_str().context("GIF input is not UTF-8")?.into(),
+                ]);
+                commands.push(command);
+            }
             LaunchMode::FastImg | LaunchMode::FastVid => {
                 commands.push(fast_img_launch_command(args, project_root, input)?.0);
             }
@@ -2898,7 +2935,7 @@ const fn mode_label(mode: &LaunchMode) -> &'static str {
         LaunchMode::Videos => "Videos/Animated",
         LaunchMode::FastImg => "Fast Image",
         LaunchMode::RestoreJpeg => "Restore Original JPEG",
-        LaunchMode::FastVid => "Fast Video · Import GIF originals to Photos",
+        LaunchMode::FastVid => "Fast Video · GIF originals",
         LaunchMode::Collect => "Collect Recovery Originals",
         LaunchMode::Compare => "Compare Backup",
         LaunchMode::MergeXmp => "Merge XMP",
@@ -3062,7 +3099,7 @@ fn run_with_history(
                 },
                 dry_run: args.dry_run,
                 in_place: args.in_place,
-                shortest_path: args.photos_delivery(),
+                shortest_path: args.shortest_path,
                 retry: args.retry,
                 resume: args.resume,
                 no_resume: args.no_resume,
@@ -3163,7 +3200,7 @@ fn run_drag_drop_inner(
         let mut command = plan_cli_invocations(args, &root, session)?
             .pop()
             .context("GIF preview requires a worker command")?;
-        command.args.push("--dry-run".into());
+        command.args.insert(1, "--dry-run".into());
         return command.run(false);
     }
     if !args.dry_run
@@ -3182,7 +3219,11 @@ fn run_drag_drop_inner(
                 check_system_resources(&directory, minimum)?;
             }
         }
-    } else if !args.dry_run && !args.inputs.is_empty() && !args.mode.checkpointed() {
+    } else if !args.dry_run
+        && !args.inputs.is_empty()
+        && !args.uses_checkpoint()
+        && !args.keeps_gifs_in_place()
+    {
         check_system_resources(&args.inputs[0], minimum_free_disk_bytes(0)?)?;
     }
 
@@ -3233,7 +3274,7 @@ fn run_drag_drop_inner(
         println!("\n\x1B[34m🚀 Launching Rust Fast Mode Pipeline...\x1B[0m");
     }
 
-    if (args.mode.checkpointed() || args.mode == LaunchMode::RestoreJpeg) && !args.dry_run {
+    if (args.uses_checkpoint() || args.mode == LaunchMode::RestoreJpeg) && !args.dry_run {
         if args.mode == LaunchMode::RestoreJpeg {
             let input = args.inputs.first().expect("input");
             let (output, is_photos_audit) =
@@ -3377,7 +3418,7 @@ fn run_drag_drop_inner(
                                         &stats,
                                         &source_root,
                                         &output,
-                                        args.photos_delivery(),
+                                        args.shortest_path,
                                     )
                                     .then_some(
                                         FastImgPartialDelivery {
@@ -3396,9 +3437,9 @@ fn run_drag_drop_inner(
                                         &stats,
                                         &source_root,
                                         &output,
-                                        args.photos_delivery(),
+                                        args.shortest_path,
                                     );
-                                    if args.photos_delivery() {
+                                    if args.shortest_path {
                                         quarantine_blocked = report.as_ref().and_then(|report| {
                                             PhotosQuarantineBlocked::from_receipt(
                                                 report,
@@ -3460,7 +3501,7 @@ fn run_drag_drop_inner(
                             .context("resolve blocked output cleanup path")
                             .and_then(|path| {
                                 session.expect("session").record_output_cleanup(
-                                    if args.photos_delivery() && !retained_only_verified {
+                                    if args.shortest_path && !retained_only_verified {
                                         OutputCleanupReceipt::verification_blocked(&path)
                                     } else {
                                         OutputCleanupReceipt::not_requested(&path)
@@ -3473,10 +3514,7 @@ fn run_drag_drop_inner(
                         Err(error) => first_error = Some(error),
                         Ok(()) if only_worker_exit && retained_only_verified => {
                             first_error = Some(
-                                CompletedWithFileFailures {
-                                    failed: stats.failed,
-                                }
-                                .into(),
+                                CompletedWithFileFailures::OriginalsVerified(stats.failed).into(),
                             );
                         }
                         Ok(()) if only_worker_exit && quarantine_blocked.is_some() => {
@@ -3515,7 +3553,7 @@ fn run_drag_drop_inner(
                 let scoped = input_audit_session(session, index, plans.len());
                 let recoverable = run_scheduled_workers(
                     commands,
-                    args.dry_run,
+                    args,
                     scoped.as_ref(),
                     started,
                     error_mode,
@@ -3561,14 +3599,10 @@ fn run_drag_drop_inner(
             );
         }
         if let Some(failed_files) = summary.total_count(3).filter(|count| *count > 0) {
-            if first_error
-                .as_ref()
-                .and_then(dev::infra::rich_panel::completed_file_failure_count)
-                == Some(failed_files)
+            if let Some(error) = first_error.as_ref()
+                && dev::infra::rich_panel::completed_file_failure_count(error) == Some(failed_files)
             {
-                println!(
-                    "[WARN] {failed_files} file(s) failed; their original files were verified and retained."
-                );
+                println!("[WARN] {error}");
             } else {
                 eprintln!(
                     "\n   {} Exiting with failures: {failed_files} file(s) did not complete \
@@ -3590,7 +3624,7 @@ fn run_drag_drop_inner(
         if let Some(ref scan) = scan
             && first_error.is_none()
         {
-            let size_comparison = if args.mode.checkpointed() {
+            let size_comparison = if args.uses_checkpoint() {
                 let before = summary
                     .fast_img_session_source_bytes
                     .unwrap_or(scan.media_total_size);
@@ -3655,7 +3689,7 @@ fn run_drag_drop_inner(
         && session.is_some()
         && let Some(output_dir) = &args.output
     {
-        let sizes = if args.mode.checkpointed() {
+        let sizes = if args.uses_checkpoint() {
             summary
                 .fast_img_session_source_bytes
                 .zip(summary.fast_img_size_after_override)
@@ -3916,7 +3950,7 @@ fn execute_menu_selection(
                     None,
                     false,
                     false,
-                    false,
+                    dev::infra::drag_drop::choose_gif_photos_import()?,
                     filter,
                     None,
                     settings,
@@ -4269,8 +4303,8 @@ fn optimization_menu_labels(
     match filter {
         ProcessingFilter::VideosOnly => match sub {
             0 => (
-                "Mode: Fast Video · Import GIF Originals to Photos [Tab to Switch]".to_owned(),
-                "Verify GIF content, then import the original bytes into Photos.",
+                "Mode: Fast Video · GIF Originals [Tab to Switch]".to_owned(),
+                "Check GIF originals in place, or choose to import them into Photos.",
             ),
             1 => (
                 "Mode: In-Place Optimization [Tab to Switch]".to_string(),
@@ -4376,7 +4410,7 @@ fn run_watch_loop(args: &Args, session: &AppSession) -> Result<()> {
 }
 
 fn validate_launcher_photos_working_copy_location(args: &Args) -> Result<()> {
-    if !args.mode.checkpointed() || !args.photos_delivery() {
+    if !args.uses_checkpoint() || !args.shortest_path {
         return Ok(());
     }
     let [input] = args.inputs.as_slice() else {
@@ -4523,7 +4557,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
         bail!("Fast IMG conflict preview requires exactly one input");
     };
     anyhow::ensure!(
-        args.mode.checkpointed()
+        args.uses_checkpoint()
             && !args.in_place
             && args.backup.is_none()
             && args.photos_album_id.is_none()
@@ -4567,7 +4601,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
             "input_path": input,
             "source_root": source,
             "strategy": strategy,
-            "photos": args.photos_delivery(),
+            "photos": args.shortest_path,
             "decision": decision,
         }))
     };
@@ -4647,7 +4681,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
     let (fresh_output, fresh_unavailable_reason, collisions) =
         match inspect_fresh_working_copy_dir_for_delivery(
             &source,
-            args.photos_delivery(),
+            args.shortest_path,
             OCCUPIED_OUTPUT_LIMIT,
         ) {
             Ok((output, collisions)) => (Some(output), None, collisions),
@@ -4659,7 +4693,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
                 return migration_required(&source);
             }
             Err(error)
-                if args.photos_delivery()
+                if args.shortest_path
                     && !args.no_resume
                     && saved_previous.is_some()
                     && is_photos_working_copy_unavailable(&error) =>
@@ -4711,12 +4745,10 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
         }) {
             Some(marker) => match inspect_failed_retry_parent_for_delivery(
                 &marker.working_copy,
-                args.photos_delivery(),
+                args.shortest_path,
             ) {
                 Ok(parent) => Some(parent),
-                Err(error)
-                    if args.photos_delivery() && is_photos_working_copy_unavailable(&error) =>
-                {
+                Err(error) if args.shortest_path && is_photos_working_copy_unavailable(&error) => {
                     None
                 }
                 Err(error) => return Err(error.into()),
@@ -4817,7 +4849,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
         output_resource_check_dir(proposed),
     );
     let mut unknown = vec!["current_media_verification"];
-    if args.photos_delivery() {
+    if args.shortest_path {
         unknown.push("photos_duplicate_count");
     }
     Ok(serde_json::json!({
@@ -4826,7 +4858,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
         "input_path": input,
         "source_root": source,
         "strategy": strategy,
-        "photos": args.photos_delivery(),
+        "photos": args.shortest_path,
         "decision": decision,
         "proposed_output": proposed,
         "storage": {"output_path": proposed, "observation": storage},
@@ -4848,7 +4880,7 @@ fn migrate_fast_img_state(args: &Args) -> Result<serde_json::Value> {
     };
     validate_media_options(args)?;
     anyhow::ensure!(
-        args.mode.checkpointed(),
+        args.uses_checkpoint(),
         "Shared media checkpoint migration requires Fast IMG or Fast VID"
     );
     anyhow::ensure!(
@@ -4912,8 +4944,12 @@ fn main() -> Result<std::process::ExitCode> {
     if args.plan_json {
         #[cfg(unix)]
         isolate_preflight_process_group()?;
-        if args.mode.checkpointed() {
-            if args.photos_delivery() {
+        anyhow::ensure!(
+            !args.keeps_gifs_in_place(),
+            "local GIF inspection has no checkpoint plan; use --dry-run to inspect the GIF sources"
+        );
+        if args.uses_checkpoint() {
+            if args.shortest_path {
                 load_local_env()?;
             }
             println!(
@@ -5187,7 +5223,7 @@ mod tests {
         assert_eq!(
             fast_img_file_only_completion(true, Some(6), &stats, &summary)
                 .unwrap()
-                .failed,
+                .failed(),
             6
         );
         assert!(fast_img_file_only_completion(false, Some(6), &stats, &summary).is_none());
@@ -5422,7 +5458,13 @@ mod tests {
             b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;",
         )?;
         for selection in [input.path(), source.as_path()] {
-            let mut args = Args::try_parse_from(["mfb", "--mode", "fast-vid", "--no-resume"])?;
+            let mut args = Args::try_parse_from([
+                "mfb",
+                "--mode",
+                "fast-vid",
+                "--shortest-path",
+                "--no-resume",
+            ])?;
             args.inputs.push(selection.to_path_buf());
             let plan = inspect_fast_img_retry_plan(&args)?;
             assert_eq!(plan["strategy"], "gif");
@@ -5439,8 +5481,25 @@ mod tests {
             args.strategy = Some("avif".into());
             assert!(validate_media_options(&args).is_err());
             args.strategy = None;
-            args.shortest_path = true;
+            args.shortest_path = false;
+            validate_media_options(&args)?;
+            args.no_resume = false;
+            args.retry = true;
             assert!(validate_media_options(&args).is_err());
+            args.retry = false;
+            let commands = plan_cli_invocations(&args, Path::new("/repo"), None)?;
+            assert_eq!(
+                commands[0].args,
+                [
+                    "fast-img",
+                    "--strategy",
+                    "gif",
+                    "--recursive",
+                    "--",
+                    selection.to_str().unwrap()
+                ]
+            );
+            assert!(inspect_fast_img_retry_plan(&args).is_err());
         }
         assert!(source.is_file());
         Ok(())
@@ -9645,7 +9704,7 @@ mod tests {
         let mode = BatchErrorMode::LogAndContinue;
         let error = run_scheduled_workers(
             vec![command, next],
-            false,
+            &Args::try_parse_from(["ddp", "--mode", "images", "--", "synthetic.jpg"])?,
             Some(&session),
             Instant::now(),
             mode,
@@ -9729,7 +9788,7 @@ mod tests {
             ];
             let stopped = run_scheduled_workers(
                 commands,
-                false,
+                &args,
                 Some(&session),
                 Instant::now(),
                 modes.0,
@@ -9754,7 +9813,7 @@ mod tests {
             // cancellation already pending. The unavailable binary must not be inspected.
             let rejected = run_scheduled_workers(
                 vec![command(&temp.path().join("missing/vid"), &[])?],
-                false,
+                &args,
                 Some(&session),
                 Instant::now(),
                 modes.0,
