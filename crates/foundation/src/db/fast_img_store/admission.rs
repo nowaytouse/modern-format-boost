@@ -513,7 +513,9 @@ mod tests {
         let saved_digest = marker.admission_plan_blake3.clone();
         let conn = open_store_connection()?;
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
@@ -573,7 +575,9 @@ mod tests {
         let digest = marker.admission_plan_blake3.clone();
         let conn = open_store_connection()?;
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              UPDATE store_metadata SET value=13 WHERE key='schema_version';

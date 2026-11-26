@@ -2744,7 +2744,9 @@ mod tests {
         let (cache, conn, _marker) = fast_img_state_fixture(&root);
         // Reproduce the exact previous release shape using only disposable data.
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
@@ -2901,7 +2903,9 @@ mod tests {
         assert!(!namespaces[0].rebuildable);
 
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;

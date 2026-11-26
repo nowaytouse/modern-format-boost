@@ -285,21 +285,27 @@ where
     if hash != entry.blake3_entry.out {
         return Ok(None);
     }
+    let quarantine = if kind == PhotosSubmissionKind::Original {
+        super::tier2_import_quarantine(
+            &entry.path,
+            &probe.path,
+            &entry.blake3_entry.out,
+            direct_library,
+            quarantined,
+        )?
+    } else {
+        super::OriginalImportQuarantine {
+            submitted_blocked: quarantined(&entry.path)?,
+            ..Default::default()
+        }
+    };
     Ok(Some(LibraryAssetRecord {
         rel_path: entry.rel_path.clone(),
         blake3: hash,
         sync_status: super::photos_sync_status(&probe).to_owned(),
-        quarantined: if kind == PhotosSubmissionKind::Original {
-            super::tier2_import_quarantined(
-                &entry.path,
-                &probe.path,
-                &entry.blake3_entry.out,
-                direct_library,
-                quarantined,
-            )?
-        } else {
-            quarantined(&entry.path)?
-        },
+        quarantined: quarantine.blocked(),
+        gif_source_quarantine_blake3: quarantine.gif_source_quarantine_blake3,
+        gif_photos_quarantine_blake3: quarantine.gif_photos_quarantine_blake3,
         photos_uuid: Some(probe.uuid),
         library_blake3: None,
         xmp_sidecar_blake3: None,

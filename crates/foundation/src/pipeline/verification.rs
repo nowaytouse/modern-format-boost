@@ -50,6 +50,51 @@ pub struct LibraryAssetRecord {
     /// Adjacent XMP BLAKE3 proven inside the Photos-delivered original.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xmp_sidecar_blake3: Option<String>,
+    /// Source quarantine xattr digest bound to the byte-identical Photos GIF original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gif_source_quarantine_blake3: Option<String>,
+    /// Distinct quarantine xattr digest observed on that Photos original, if Photos replaced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gif_photos_quarantine_blake3: Option<String>,
+}
+
+impl LibraryAssetRecord {
+    pub(crate) fn validate_gif_quarantine_binding(&self, original_gif: bool) -> Result<(), String> {
+        if let Some(photos) = &self.gif_photos_quarantine_blake3 {
+            validate_submission_blake3("Photos GIF quarantine", photos)?;
+            if self
+                .gif_source_quarantine_blake3
+                .as_ref()
+                .is_none_or(|source| source == photos)
+            {
+                return Err(
+                    "a replaced Photos GIF quarantine requires distinct source and Photos digests"
+                        .into(),
+                );
+            }
+        }
+        if let Some(digest) = &self.gif_source_quarantine_blake3 {
+            validate_submission_blake3("GIF source quarantine", digest)?;
+            validate_submission_blake3("GIF source", &self.blake3)?;
+            if !original_gif
+                || self.quarantined
+                || self.xmp_sidecar_blake3.is_some()
+                || self
+                    .photos_uuid
+                    .as_deref()
+                    .is_none_or(|uuid| uuid.trim().is_empty())
+                || self
+                    .library_blake3
+                    .as_ref()
+                    .is_some_and(|hash| hash != &self.blake3)
+            {
+                return Err(
+                    "GIF quarantine evidence requires an exact original GIF Photos receipt".into(),
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -3031,6 +3076,8 @@ mod tests {
                     photos_uuid: None,
                     library_blake3: None,
                     xmp_sidecar_blake3: None,
+                    gif_source_quarantine_blake3: None,
+                    gif_photos_quarantine_blake3: None,
                 },
                 LibraryAssetRecord {
                     rel_path: "b.AVIF".to_string(),
@@ -3040,6 +3087,8 @@ mod tests {
                     photos_uuid: None,
                     library_blake3: None,
                     xmp_sidecar_blake3: None,
+                    gif_source_quarantine_blake3: None,
+                    gif_photos_quarantine_blake3: None,
                 },
             ],
         );
@@ -3872,6 +3921,8 @@ mod tests {
                 photos_uuid: None,
                 library_blake3: None,
                 xmp_sidecar_blake3: None,
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
             }],
         );
         ctx.blake3_log.insert(
@@ -4025,6 +4076,8 @@ mod tests {
                     photos_uuid: None,
                     library_blake3: None,
                     xmp_sidecar_blake3: None,
+                    gif_source_quarantine_blake3: None,
+                    gif_photos_quarantine_blake3: None,
                 },
                 LibraryAssetRecord {
                     rel_path: "a.JXL".to_string(),
@@ -4034,6 +4087,8 @@ mod tests {
                     photos_uuid: None,
                     library_blake3: None,
                     xmp_sidecar_blake3: None,
+                    gif_source_quarantine_blake3: None,
+                    gif_photos_quarantine_blake3: None,
                 },
             ],
         );
@@ -4080,6 +4135,8 @@ mod tests {
                     photos_uuid: None,
                     library_blake3: None,
                     xmp_sidecar_blake3: None,
+                    gif_source_quarantine_blake3: None,
+                    gif_photos_quarantine_blake3: None,
                 },
                 LibraryAssetRecord {
                     rel_path: "a.JXL".to_string(),
@@ -4089,6 +4146,8 @@ mod tests {
                     photos_uuid: None,
                     library_blake3: None,
                     xmp_sidecar_blake3: None,
+                    gif_source_quarantine_blake3: None,
+                    gif_photos_quarantine_blake3: None,
                 },
             ],
         );
@@ -5035,6 +5094,7 @@ impl WorkingCopyMarker {
     pub fn validate_library_asset_receipts_unique(&self) -> Result<(), String> {
         let mut primary_paths = BTreeSet::new();
         for asset in &self.photos_imported_assets {
+            asset.validate_gif_quarantine_binding(false)?;
             if !primary_paths.insert(asset.rel_path.as_str()) {
                 return Err(format!(
                     "fast-img marker has duplicate primary Photos receipt path {}",
@@ -5045,6 +5105,7 @@ impl WorkingCopyMarker {
 
         let mut tier2_paths = BTreeSet::new();
         for asset in &self.tier2_imported_assets {
+            asset.validate_gif_quarantine_binding(self.strategy == "gif")?;
             if !tier2_paths.insert(asset.rel_path.as_str()) {
                 return Err(format!(
                     "fast-img marker has duplicate tier-2 Photos receipt path {}",

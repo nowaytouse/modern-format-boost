@@ -211,7 +211,11 @@ Video encoder settings apply to standard `vid run` processing.
 uses the shared Photos checkpoint and original-resource verification. This
 is the GUI's **Import into Photos** checkbox. A GIF with a missing or
 misleading extension receives a private transport filename ending in `.gif`.
-Its receipt retains the selected source's relative path. An unverified
+Its receipt retains the selected source's relative path. For a marked GIF,
+Fast VID verifies the source mark and reads the complete managed Photos original
+at its saved resource ID. A receipt stores the digest of the inherited mark and,
+if Photos applied its own recognized mark during import, the digest of that value.
+Cleanup verifies both files against the recorded evidence. An unverified
 external XMP or AAE companion retains the source and its companion.
 Use `--dry-run` to preview, or `--shortest-path --retry` to continue a saved import.
 If all previously admitted GIFs already have Photos receipts, continuing can

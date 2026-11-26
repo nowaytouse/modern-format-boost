@@ -23,7 +23,7 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
-### Fast VID GIF originals (2026-11-26)
+### Fast VID GIF originals (2026-11-27)
 
 - Fast VID now imports verified GIF87a and GIF89a originals into Apple Photos
   with the shared original-file receipts, resume checks and verified cleanup.
@@ -37,6 +37,13 @@ areas of change are:
   to its declared pixel count and the data blocks and file terminate correctly.
   Fresh Photos verification also recognizes a managed GIF carrying Photos'
   own sandbox mark, including when rechecking a saved import before cleanup.
+- Original GIF delivery can now verify a quarantine mark inherited from the
+  source. Before removing the source, Fast VID reopens the recorded Photos
+  original, compares the complete file, and checks the mark on both files.
+  Continuing an earlier blocked import uses its saved Photos resource IDs.
+- GIF validation accepts NUL and ASCII whitespace after the trailer. These
+  padding bytes remain part of the original file and its delivery hash.
+  Empty animations and unexpected trailing content have separate diagnostics.
 - Continuing a GIF import with receipts for its entire saved file list can
   finish that list even when a newer decoder recognizes additional GIFs.
   Those additional files stay in place for a new task.

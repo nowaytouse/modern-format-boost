@@ -241,7 +241,9 @@ mod tests {
         super::super::write_marker(&marker)?;
         let conn = open_store_connection()?;
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
             UPDATE store_metadata SET value=15 WHERE key='schema_version';
             CREATE TRIGGER interrupt_v16 BEFORE UPDATE ON store_metadata
             WHEN NEW.value=16 BEGIN SELECT RAISE(ABORT,'synthetic interruption'); END",
@@ -272,7 +274,10 @@ mod tests {
             std::slice::from_ref(&pending)
         );
         let conn = open_store_connection()?;
-        assert_eq!(inspect_store_schema_version(&conn)?, Some(16));
+        assert_eq!(
+            inspect_store_schema_version(&conn)?,
+            Some(crate::mfb_sqlite_store::STORE_SCHEMA_VERSION)
+        );
         let preserved: Vec<u8> =
             conn.query_row("SELECT snapshot_blake3 FROM fast_img_tasks", [], |row| {
                 row.get(0)

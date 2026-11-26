@@ -68,13 +68,41 @@ impl VerifiedOutputPhotosCustody {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PhotosResource<'a> {
+    Output(&'a str),
+    Original {
+        receipt: &'a LibraryAssetRecord,
+        hash: &'a str,
+    },
+}
+
+impl<'a> PhotosResource<'a> {
+    fn original(receipt: &'a LibraryAssetRecord) -> Result<Self> {
+        let hash = crate::fast_img_store::tier2_library_hash(receipt)?;
+        Ok(Self::Original { receipt, hash })
+    }
+
+    const fn expected_hash(self) -> &'a str {
+        match self {
+            Self::Output(hash) | Self::Original { hash, .. } => hash,
+        }
+    }
+}
+
 fn output_quarantined(
     path: &Path,
-    managed: Option<(&Path, ManagedOriginalKind, &str)>,
+    managed: Option<(&Path, PhotosResource<'_>)>,
 ) -> super::Result<bool> {
     match managed {
-        Some((library, kind, expected)) => {
-            super::managed_photos_quarantine(path, library, kind, expected)
+        Some((library, PhotosResource::Output(expected))) => super::managed_photos_quarantine(
+            path,
+            library,
+            ManagedOriginalKind::ConvertedOutput,
+            expected,
+        ),
+        Some((library, PhotosResource::Original { receipt: asset, .. })) => {
+            super::tier2_custody_quarantined(asset, path, Some(library))
         }
         None => super::strict_photos_quarantine(path),
     }
@@ -86,10 +114,7 @@ fn verify_output_resource_with(
     library: &Path,
     output_root: &Path,
     query: &mut impl FnMut(&[String], &Path) -> super::Result<Vec<FastImgLibraryAssetProbe>>,
-    quarantined: &mut impl FnMut(
-        &Path,
-        Option<(&Path, ManagedOriginalKind, &str)>,
-    ) -> super::Result<bool>,
+    quarantined: &mut impl FnMut(&Path, Option<(&Path, PhotosResource<'_>)>) -> super::Result<bool>,
 ) -> Result<()> {
     crate::batch_control::checkpoint()?;
     let ids = vec![uuid.to_owned()];
@@ -114,7 +139,7 @@ fn verify_output_resource_with(
     ensure!(
         !quarantined(
             &probe.path,
-            Some((library, ManagedOriginalKind::ConvertedOutput, expected))
+            Some((library, PhotosResource::Output(expected)))
         )?,
         "output removal Photos original is quarantined"
     );
@@ -220,10 +245,7 @@ fn verify_output_photos_custody_with(
     marker: &WorkingCopyMarker,
     query: &mut impl FnMut(&[String], &Path) -> super::Result<Vec<FastImgLibraryAssetProbe>>,
     active_library: &mut impl FnMut(&Path) -> super::Result<()>,
-    quarantined: &mut impl FnMut(
-        &Path,
-        Option<(&Path, ManagedOriginalKind, &str)>,
-    ) -> super::Result<bool>,
+    quarantined: &mut impl FnMut(&Path, Option<(&Path, PhotosResource<'_>)>) -> super::Result<bool>,
     on_files: &mut impl FnMut(usize, usize),
 ) -> Result<(Option<PathBuf>, BTreeMap<PathBuf, (String, String)>)> {
     use crate::pipeline::verification::FastImgStageName;
@@ -262,13 +284,7 @@ fn verify_output_photos_custody_with(
         let uuid = uuid(asset)?.to_owned();
         ensure!(
             targets
-                .insert(
-                    uuid.clone(),
-                    (
-                        candidate.blake3.clone(),
-                        ManagedOriginalKind::ConvertedOutput
-                    )
-                )
+                .insert(uuid.clone(), PhotosResource::Output(&asset.blake3))
                 .is_none(),
             "output custody contains a duplicate Photos UUID"
         );
@@ -287,13 +303,7 @@ fn verify_output_photos_custody_with(
     for asset in &marker.tier2_imported_assets {
         ensure!(
             targets
-                .insert(
-                    uuid(asset)?.to_owned(),
-                    (
-                        crate::fast_img_store::tier2_library_hash(asset)?.to_owned(),
-                        ManagedOriginalKind::Tier2Original,
-                    )
-                )
+                .insert(uuid(asset)?.to_owned(), PhotosResource::original(asset)?)
                 .is_none(),
             "output custody Photos UUID has conflicting source routes"
         );
@@ -315,7 +325,7 @@ fn verify_output_photos_custody_with(
     let total = targets.len();
     on_files(0, total);
     let mut observations = Vec::new();
-    for (index, (uuid, (expected, kind))) in targets.into_iter().enumerate() {
+    for (index, (uuid, resource)) in targets.into_iter().enumerate() {
         crate::batch_control::checkpoint()?;
         let probe = probes
             .get(&uuid)
@@ -332,9 +342,9 @@ fn verify_output_photos_custody_with(
             !super::fast_img_require_icloud_upload_proof() || probe.incloud == Some(true),
             "output custody requested iCloud proof is unavailable"
         );
-        observe_file(&probe.path, &expected, &mut observations)?;
+        observe_file(&probe.path, resource.expected_hash(), &mut observations)?;
         ensure!(
-            !quarantined(&probe.path, Some((library, kind, &expected)))?,
+            !quarantined(&probe.path, Some((library, resource)))?,
             "output custody Photos original is quarantined"
         );
         on_files(index + 1, total);
@@ -537,10 +547,7 @@ fn verify_with(
     snapshot: &FailedRetryFinishSnapshot,
     query: &mut impl FnMut(&[String], &Path) -> super::Result<Vec<FastImgLibraryAssetProbe>>,
     active_library: &mut impl FnMut(&Path) -> super::Result<()>,
-    quarantined: &mut impl FnMut(
-        &Path,
-        Option<(&Path, ManagedOriginalKind, &str)>,
-    ) -> super::Result<bool>,
+    quarantined: &mut impl FnMut(&Path, Option<(&Path, PhotosResource<'_>)>) -> super::Result<bool>,
 ) -> Result<VerifiedFailedRetryFinish> {
     snapshot.validate_eligibility()?;
     let marker = snapshot.marker();
@@ -693,23 +700,18 @@ fn verify_with(
                     targets
                         .insert(
                             uuid(asset)?.to_owned(),
-                            (
-                                expected.as_str(),
-                                Some(rel),
-                                ManagedOriginalKind::ConvertedOutput
-                            )
+                            (PhotosResource::Output(expected), Some(rel))
                         )
                         .is_none(),
                     "finish-only Photos UUID is duplicated"
                 );
             }
             for asset in &marker.tier2_imported_assets {
-                let expected = crate::fast_img_store::tier2_library_hash(asset)?;
                 ensure!(
                     targets
                         .insert(
                             uuid(asset)?.to_owned(),
-                            (expected, None, ManagedOriginalKind::Tier2Original)
+                            (PhotosResource::original(asset)?, None)
                         )
                         .is_none(),
                     "finish-only Photos UUID has conflicting source routes"
@@ -718,7 +720,7 @@ fn verify_with(
             let uuids = targets.keys().cloned().collect::<Vec<_>>();
             active_library(library)?;
             let probes = super::index_photos_probes_by_uuid(&uuids, query(&uuids, library)?)?;
-            for (uuid, (expected, output_rel, kind)) in targets {
+            for (uuid, (resource, output_rel)) in targets {
                 crate::batch_control::checkpoint()?;
                 let probe = probes
                     .get(&uuid)
@@ -728,9 +730,9 @@ fn verify_with(
                     !super::fast_img_require_icloud_upload_proof() || probe.incloud == Some(true),
                     "finish-only requested iCloud proof is unavailable"
                 );
-                observe_file(&probe.path, expected, &mut observations)?;
+                observe_file(&probe.path, resource.expected_hash(), &mut observations)?;
                 ensure!(
-                    !quarantined(&probe.path, Some((library, kind, expected)))?,
+                    !quarantined(&probe.path, Some((library, resource)))?,
                     "finish-only Photos original is quarantined"
                 );
                 if let Some(rel) = output_rel {
@@ -1127,15 +1129,14 @@ mod tests {
             assert_eq!(ids, &[UUID.to_owned()]);
             Ok(vec![probe(&fixture)])
         };
-        let mut check_generated =
-            |path: &Path, library: Option<(&Path, ManagedOriginalKind, &str)>| {
-                assert_eq!(path, fixture.original);
-                assert!(matches!(
-                    library,
-                    Some((path, ManagedOriginalKind::ConvertedOutput, _)) if path == fixture.library
-                ));
-                Ok(false)
-            };
+        let mut check_generated = |path: &Path, library: Option<(&Path, PhotosResource<'_>)>| {
+            assert_eq!(path, fixture.original);
+            assert!(matches!(
+                library,
+                Some((path, PhotosResource::Output(_))) if path == fixture.library
+            ));
+            Ok(false)
+        };
         let mut matches = Vec::new();
         let (library, outputs) = verify_output_photos_custody_with(
             &fixture.marker,
@@ -1275,13 +1276,13 @@ mod tests {
                 if path == tier2.path {
                     assert!(matches!(
                         library,
-                        Some((path, ManagedOriginalKind::Tier2Original, _)) if path == fixture.library
+                        Some((path, PhotosResource::Original { .. })) if path == fixture.library
                     ));
                     Ok(true)
                 } else {
                     assert!(matches!(
                         library,
-                        Some((path, ManagedOriginalKind::ConvertedOutput, _)) if path == fixture.library
+                        Some((path, PhotosResource::Output(_))) if path == fixture.library
                     ));
                     Ok(false)
                 }
@@ -1329,6 +1330,81 @@ mod tests {
             )?;
             assert!(verify(&tier2).is_err());
         }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn output_cleanup_rechecks_inherited_gif_mark_after_source_unlink() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        unsafe { std::env::remove_var("MFB_PHOTOS_LIBRARY_PATH") };
+        let temp = tempfile::tempdir()?;
+        let state = temp.path().join("state");
+        fs::create_dir(&state)?;
+        let _state = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", state.to_str().unwrap());
+        let root = temp.path().canonicalize()?;
+        let library = root.join("Synthetic.photoslibrary");
+        fs::create_dir_all(library.join("database"))?;
+        fs::write(
+            library.join("database/Photos.sqlite"),
+            b"synthetic database",
+        )?;
+        let mut marker = WorkingCopyMarker::new(root.join("removed-source"), root.join("work"), 0)
+            .with_strategy("gif".into());
+        fs::create_dir(&marker.working_copy)?;
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.photos_library_path = Some(library.clone());
+        let gif = FastImgLibraryAssetProbe {
+            uuid: UUID.into(),
+            path: library.join("originals/A/example.gif"),
+            iscloudasset: false,
+            incloud: Some(true),
+            ismissing: false,
+        };
+        fs::create_dir_all(gif.path.parent().unwrap())?;
+        let bytes = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
+        let mark = b"0083;67890000;SyntheticBrowser;12345678";
+        let key = "com.apple.quarantine";
+        fs::write(&gif.path, bytes)?;
+        xattr::set(&gif.path, key, mark)?;
+        marker.tier2_imported_assets.push(LibraryAssetRecord {
+            rel_path: "example.gif".into(),
+            blake3: blake3::hash(bytes).to_hex().to_string(),
+            photos_uuid: Some(gif.uuid.clone()),
+            gif_source_quarantine_blake3: Some(blake3::hash(mark).to_hex().to_string()),
+            ..Default::default()
+        });
+        let verify = |marker: &WorkingCopyMarker| {
+            verify_output_photos_custody_with(
+                marker,
+                &mut |_, _| Ok(vec![gif.clone()]),
+                &mut |_| Ok(()),
+                &mut output_quarantined,
+                &mut |_, _| {},
+            )
+        };
+        verify(&marker)?;
+        assert_eq!(
+            xattr::get(&gif.path, key)?.as_deref(),
+            Some(mark.as_slice())
+        );
+        xattr::set(&gif.path, key, b"0083;67890000;DifferentBrowser;12345678")?;
+        assert!(verify(&marker).is_err());
+        xattr::remove(&gif.path, key)?;
+        assert!(verify(&marker).is_err());
+        let photos_mark = b"0082;67890000;photolibraryd;";
+        xattr::set(&gif.path, key, photos_mark)?;
+        assert!(verify(&marker).is_err());
+        marker.tier2_imported_assets[0].gif_photos_quarantine_blake3 =
+            Some(blake3::hash(photos_mark).to_hex().to_string());
+        verify(&marker)?;
+        xattr::set(&gif.path, key, b"0082;67890001;photolibraryd;")?;
+        assert!(verify(&marker).is_err());
+        xattr::set(&gif.path, key, photos_mark)?;
+        fs::write(&gif.path, b"changed after cleanup")?;
+        assert!(verify(&marker).is_err());
         Ok(())
     }
 
@@ -1416,7 +1492,7 @@ mod tests {
                 assert_eq!(path, fixture.original);
                 assert!(matches!(
                     library,
-                    Some((path, ManagedOriginalKind::ConvertedOutput, _)) if path == fixture.library
+                    Some((path, PhotosResource::Output(_))) if path == fixture.library
                 ));
                 Ok(false)
             },

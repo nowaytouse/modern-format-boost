@@ -56,7 +56,8 @@ pub fn copy_sqlite_snapshot(source: &Connection, destination: &mut Connection) -
     Ok(())
 }
 
-pub const STORE_SCHEMA_VERSION: i32 = 16;
+pub const STORE_SCHEMA_VERSION: i32 = 17;
+pub(super) const FAST_IMG_GIF_QUARANTINE_SCHEMA_VERSION: i32 = 17;
 pub const FAST_IMG_PUBLICATION_SCHEMA_VERSION: i32 = 16;
 pub const FAST_IMG_PRIMARY_RESULT_SCHEMA_VERSION: i32 = 15;
 pub const FAST_IMG_ADMISSION_SCHEMA_VERSION: i32 = 12;
@@ -352,6 +353,22 @@ const FAST_IMG_TIER2_FAILURE_SCHEMA: &str = "CREATE TABLE fast_img_tier2_failure
         PRIMARY KEY(task_key, source_rel)
     ) STRICT";
 
+const GIF_SOURCE_QUARANTINE_COLUMN: &str = "gif_source_quarantine_blake3 TEXT CHECK(
+    gif_source_quarantine_blake3 IS NULL OR (
+        receipt_kind='original' AND quarantined=0 AND photos_uuid IS NOT NULL
+        AND xmp_sidecar_blake3 IS NULL AND (library_blake3 IS NULL OR library_blake3=blake3)
+        AND length(gif_source_quarantine_blake3)=64
+        AND gif_source_quarantine_blake3 NOT GLOB '*[^0-9a-f]*'
+    )
+)";
+const GIF_PHOTOS_QUARANTINE_COLUMN: &str = "gif_photos_quarantine_blake3 TEXT CHECK(
+    gif_photos_quarantine_blake3 IS NULL OR (
+        gif_source_quarantine_blake3 IS NOT NULL
+        AND gif_photos_quarantine_blake3<>gif_source_quarantine_blake3
+        AND length(gif_photos_quarantine_blake3)=64
+        AND gif_photos_quarantine_blake3 NOT GLOB '*[^0-9a-f]*'
+    )
+)";
 const RETRY_ROUTE_COLUMN: &str = "route TEXT CHECK(route IN ('primary','original'))";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -964,10 +981,31 @@ fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()>
             "SQLite state table {table} is missing or not strict; database retained without repair"
         );
         let statement = conn.prepare(&format!("SELECT * FROM {table} LIMIT 0"))?;
+        let gif_proof_columns = (table == "fast_img_photos_receipts"
+            && version >= FAST_IMG_GIF_QUARANTINE_SCHEMA_VERSION)
+            .then_some([
+                "gif_source_quarantine_blake3",
+                "gif_photos_quarantine_blake3",
+            ]);
         anyhow::ensure!(
-            statement.column_names().eq(expected.iter().copied()),
+            statement.column_names().eq(expected
+                .iter()
+                .copied()
+                .chain(gif_proof_columns.into_iter().flatten())),
             "SQLite state table {table} has unexpected columns; database retained without repair"
         );
+        if gif_proof_columns.is_some() {
+            let sql: String = conn.query_row(
+                "SELECT sql FROM sqlite_schema WHERE name=?1",
+                [table],
+                |row| row.get(0),
+            )?;
+            anyhow::ensure!(
+                sql.contains(GIF_SOURCE_QUARANTINE_COLUMN)
+                    && sql.contains(GIF_PHOTOS_QUARANTINE_COLUMN),
+                "SQLite GIF quarantine proof schema is invalid"
+            );
+        }
     }
     for statement in [
         "INSERT INTO fast_img_tasks(task_key) VALUES (?1) ON CONFLICT(task_key) DO NOTHING",
@@ -1575,6 +1613,18 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
         tx.execute(
             "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
             [FAST_IMG_PUBLICATION_SCHEMA_VERSION],
+        )?;
+        version = FAST_IMG_PUBLICATION_SCHEMA_VERSION;
+    }
+    if version == FAST_IMG_PUBLICATION_SCHEMA_VERSION {
+        tx.execute_batch(&format!(
+            "ALTER TABLE fast_img_photos_receipts ADD COLUMN {GIF_SOURCE_QUARANTINE_COLUMN};
+             ALTER TABLE fast_img_photos_receipts ADD COLUMN {GIF_PHOTOS_QUARANTINE_COLUMN}"
+        ))
+        .context("Failed to extend GIF quarantine custody receipts; state retained")?;
+        tx.execute(
+            "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
+            [FAST_IMG_GIF_QUARANTINE_SCHEMA_VERSION],
         )?;
     }
     validate_current_store_schema(&tx)?;
@@ -3531,7 +3581,9 @@ mod tests {
         let conn = open_connection()?;
         seed_fast_img_schema_rows(&conn)?;
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
@@ -3589,7 +3641,9 @@ mod tests {
         let conn = open_connection()?;
         seed_fast_img_schema_rows(&conn)?;
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
@@ -3647,6 +3701,8 @@ mod tests {
         seed_fast_img_schema_rows(&conn)?;
         conn.execute_batch(
             "INSERT INTO fast_img_jpeg_execution VALUES('task','one.jpg',zeroblob(32),x'42',zeroblob(32));
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
              DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
@@ -3699,7 +3755,9 @@ mod tests {
         let conn = open_connection()?;
         seed_fast_img_schema_rows(&conn)?;
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              UPDATE store_metadata SET value=14 WHERE key='schema_version';
              CREATE TRIGGER reject_result BEFORE UPDATE OF value ON store_metadata
@@ -3755,7 +3813,9 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         conn.execute_batch(
-            "DROP TABLE fast_img_pending_publications;
+            "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+             DROP TABLE fast_img_pending_publications;
              DROP TABLE fast_img_primary_results;
              DROP TABLE fast_img_admission_aae;
              DROP TABLE fast_img_admission_xmp;
@@ -4001,7 +4061,7 @@ mod tests {
                 NULL, NULL, 'request-id', NULL);
              INSERT INTO fast_img_photos_entries VALUES('task', 0, 'request', 'encoded',
                 'retained.jpg', '', 'retained.JXL', '', 'Synthetic');
-             INSERT INTO fast_img_photos_receipts VALUES('task', 'primary', 'verified.JXL', 0,
+             INSERT INTO fast_img_photos_receipts(task_key,receipt_kind,rel_path,ordinal,blake3,sync_status,quarantined,photos_uuid,library_blake3,xmp_sidecar_blake3) VALUES('task', 'primary', 'verified.JXL', 0,
                 '', 'photos_local', 0, 'synthetic-uuid', NULL, NULL);
              INSERT INTO fast_img_migrations(origin_path, origin_blake3, source_json, task_key, retired)
                 VALUES('/synthetic/old.json', zeroblob(32), X'7B7D', 'task', 0);",

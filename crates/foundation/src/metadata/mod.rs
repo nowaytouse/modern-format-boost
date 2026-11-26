@@ -1179,6 +1179,33 @@ pub(crate) fn reapply_macos_exact_copy_xattrs_for_delivery(
     reapply_spotlight_content_creation_date_for_delivery(src, dst, report);
 }
 
+#[cfg(target_os = "macos")]
+fn copy_macos_delivery_xattrs(src: &Path, dst: &Path, report: &mut MetadataDeliveryReport) {
+    record_xattr_delivery_result(network::preserve_network_metadata(src, dst), report);
+    record_xattr_delivery_result(copy_supplemental_xattrs(src, dst), report);
+    record_xattr_delivery_result(
+        macos::apply_spotlight_content_creation_date(src, dst),
+        report,
+    );
+    record_xattr_delivery_result(copy_macos_exact_copy_xattrs(src, dst), report);
+}
+
+/// Copy metadata to a new private original-media transport before applying the source's
+/// potentially read-only mode and ACL. The caller separately verifies the original bytes
+/// and the source and transport quarantine marks.
+#[cfg(target_os = "macos")]
+pub(crate) fn preserve_private_original_transport_metadata(
+    src: &Path,
+    dst: &Path,
+) -> io::Result<MetadataDeliveryReport> {
+    let mut report = MetadataDeliveryReport::default();
+    copy_macos_delivery_xattrs(src, dst, &mut report);
+    apply_file_timestamps_for_delivery(src, dst, &mut report)?;
+    macos::copy_native_acl_and_stat(src, dst)?;
+    verify_exact_metadata_copy(src, dst)?;
+    Ok(report)
+}
+
 /// Best-effort `preserve_pro` for conversion delivery (see
 /// [`preserve_for_delivery`]).
 pub(super) fn preserve_pro_for_delivery(
@@ -1203,13 +1230,7 @@ pub(super) fn preserve_pro_for_delivery(
         if copy_internal_metadata {
             record_exif_delivery_result(exif::preserve_internal(src, dst), report);
         }
-        record_xattr_delivery_result(network::preserve_network_metadata(src, dst), report);
-        record_xattr_delivery_result(copy_supplemental_xattrs(src, dst), report);
-        record_xattr_delivery_result(
-            macos::apply_spotlight_content_creation_date(src, dst),
-            report,
-        );
-        record_xattr_delivery_result(copy_macos_exact_copy_xattrs(src, dst), report);
+        copy_macos_delivery_xattrs(src, dst, report);
 
         match std::fs::metadata(src) {
             Ok(meta) => {

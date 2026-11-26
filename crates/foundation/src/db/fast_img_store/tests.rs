@@ -136,6 +136,8 @@ fn complete_marker(root: &Path) -> Result<WorkingCopyMarker> {
         photos_uuid: Some("synthetic-primary-uuid".into()),
         library_blake3: Some(digest(b"Photos resource bytes")),
         xmp_sidecar_blake3: None,
+        gif_source_quarantine_blake3: None,
+        gif_photos_quarantine_blake3: None,
     });
     marker.tier2_imported_assets.push(LibraryAssetRecord {
         rel_path: "original.webp".into(),
@@ -145,6 +147,8 @@ fn complete_marker(root: &Path) -> Result<WorkingCopyMarker> {
         photos_uuid: Some("synthetic-original-uuid".into()),
         library_blake3: Some(digest(b"original XMP-enriched delivery")),
         xmp_sidecar_blake3: Some(digest(b"external XMP")),
+        gif_source_quarantine_blake3: None,
+        gif_photos_quarantine_blake3: None,
     });
     marker.processing_contract = Some(FastImgProcessingContract {
         schema: 1,
@@ -222,6 +226,109 @@ fn raw_family_rows(
         family.insert(table, values);
     }
     Ok(family)
+}
+
+#[test]
+fn original_gif_quarantine_evidence_upgrades_v16_without_inventing_or_losing_proof() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let _store =
+        crate::mfb_sqlite_store::set_test_store_path_for_tests(root.path().join("state.sqlite"));
+    let root = root.path().canonicalize()?;
+    let mut marker = WorkingCopyMarker::new(root.join("input"), root.join("output"), 0)
+        .with_strategy("gif".into());
+    fs::create_dir(&marker.src_dir)?;
+    fs::create_dir(&marker.working_copy)?;
+    marker.photos_library_path = Some(root.join("Synthetic.photoslibrary"));
+    let asset = LibraryAssetRecord {
+        rel_path: "renamed".into(),
+        blake3: digest(b"synthetic original GIF"),
+        photos_uuid: Some("synthetic-gif".into()),
+        sync_status: "photos_local".into(),
+        ..Default::default()
+    };
+    assert!(
+        serde_json::to_value(&asset)?
+            .get("gif_source_quarantine_blake3")
+            .is_none(),
+        "legacy snapshot digests require absent optional fields to be omitted"
+    );
+    marker.tier2_imported_assets.push(asset);
+    write_marker(&marker)?;
+
+    let conn = open_store_connection()?;
+    conn.execute_batch(
+        "ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_photos_quarantine_blake3;
+             ALTER TABLE fast_img_photos_receipts DROP COLUMN gif_source_quarantine_blake3;
+        UPDATE store_metadata SET value=16 WHERE key='schema_version';
+        CREATE TRIGGER reject_gif_proof BEFORE UPDATE ON store_metadata
+        WHEN NEW.value=17 BEGIN SELECT RAISE(ABORT,'synthetic migration interruption'); END;",
+    )?;
+    let old_digest: Vec<u8> =
+        conn.query_row("SELECT snapshot_blake3 FROM fast_img_tasks", [], |r| {
+            r.get(0)
+        })?;
+    assert_eq!(read_marker(&marker.working_copy)?, marker);
+    assert!(open_store_connection().is_err());
+    assert_eq!(inspect_store_schema_version(&conn)?, Some(16));
+    conn.execute_batch("DROP TRIGGER reject_gif_proof")?;
+    drop(conn);
+    let conn = open_store_connection()?;
+    let snapshot: Vec<u8> =
+        conn.query_row("SELECT snapshot_blake3 FROM fast_img_tasks", [], |r| {
+            r.get(0)
+        })?;
+    assert_eq!(old_digest, snapshot);
+    assert_eq!(read_marker(&marker.working_copy)?, marker);
+
+    let proof = digest(b"synthetic quarantine xattr");
+    marker.tier2_imported_assets[0].gif_source_quarantine_blake3 = Some(proof.clone());
+    write_marker(&marker)?;
+    assert_eq!(read_marker(&marker.working_copy)?, marker);
+    let stored: String = conn.query_row(
+        "SELECT gif_source_quarantine_blake3 FROM fast_img_photos_receipts",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(stored, proof);
+    assert!(conn.execute("UPDATE fast_img_photos_receipts SET gif_photos_quarantine_blake3=gif_source_quarantine_blake3", []).is_err());
+    let photos = digest(b"Photos quarantine xattr");
+    marker.tier2_imported_assets[0].gif_photos_quarantine_blake3 = Some(photos.clone());
+    write_marker(&marker)?;
+    assert_eq!(read_marker(&marker.working_copy)?, marker);
+    let stored_photos: String = conn.query_row(
+        "SELECT gif_photos_quarantine_blake3 FROM fast_img_photos_receipts",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(stored_photos, photos);
+    assert!(
+        conn.execute(
+            "UPDATE fast_img_photos_receipts SET gif_source_quarantine_blake3=NULL",
+            []
+        )
+        .is_err()
+    );
+
+    assert!(
+        conn.execute("UPDATE fast_img_photos_receipts SET quarantined=1", [])
+            .is_err()
+    );
+    assert!(
+        conn.execute(
+            "UPDATE fast_img_photos_receipts SET gif_source_quarantine_blake3='invalid'",
+            []
+        )
+        .is_err()
+    );
+    assert_eq!(
+        conn.execute(
+            "UPDATE fast_img_photos_receipts SET gif_photos_quarantine_blake3=?1",
+            [digest(b"different")]
+        )?,
+        1
+    );
+    assert!(read_marker(&marker.working_copy).is_err());
+    Ok(())
 }
 
 #[test]
@@ -1072,6 +1179,8 @@ fn receipt_reorder_removal_and_insertion_preserve_exact_other_collections() -> R
             photos_uuid: Some(format!("synthetic-{name}-uuid")),
             library_blake3: None,
             xmp_sidecar_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
         });
     }
     write_marker(&marker)?;
@@ -1100,6 +1209,8 @@ fn receipt_reorder_removal_and_insertion_preserve_exact_other_collections() -> R
             photos_uuid: Some("synthetic-new-original-uuid".into()),
             library_blake3: Some(digest(b"new delivered resource")),
             xmp_sidecar_blake3: Some(digest(b"new original XMP")),
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
         },
     );
     write_marker(&marker)?;

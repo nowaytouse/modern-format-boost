@@ -1472,8 +1472,44 @@ fn refresh_tier2_quarantine_receipts_with(
             continue;
         };
         let result = (|| {
+            crate::pipeline::verification::validate_marker_relative_path(
+                "Tier-2 original",
+                &asset.rel_path,
+            )
+            .map_err(ImgQualityError::AnalysisError)?;
+            let relative = Path::new(&asset.rel_path);
+            crate::pipeline::verification::validate_no_symlink_components(
+                &marker.src_dir,
+                relative,
+            )
+            .map_err(ImgQualityError::AnalysisError)?;
+            let source = marker.src_dir.join(relative);
+            let mark_proof = if marker.strategy == "gif"
+                && asset.xmp_sidecar_blake3.is_none()
+                && asset
+                    .library_blake3
+                    .as_ref()
+                    .is_none_or(|hash| hash == &asset.blake3)
+            {
+                verified_marked_gif_delivery(&source, &probe.path, library, &asset.blake3)?
+            } else {
+                None
+            };
+            let (source_hash, photos_hash) =
+                mark_proof.map_or((None, None), |(source, photos)| (Some(source), photos));
+            if (asset.gif_source_quarantine_blake3.is_some()
+                || asset.gif_photos_quarantine_blake3.is_some())
+                && (asset.gif_source_quarantine_blake3 != source_hash
+                    || asset.gif_photos_quarantine_blake3 != photos_hash)
+            {
+                return Err(ImgQualityError::AnalysisError(
+                    "Tier-2 source quarantine differs from its receipt".into(),
+                ));
+            }
             let mut clean = asset.clone();
             clean.quarantined = false;
+            clean.gif_source_quarantine_blake3.clone_from(&source_hash);
+            clean.gif_photos_quarantine_blake3.clone_from(&photos_hash);
             let local = LibraryHandle {
                 imported_assets: vec![clean],
                 ..Default::default()
@@ -1483,9 +1519,10 @@ fn refresh_tier2_quarantine_receipts_with(
                     "Tier-2 quarantine refresh requires a present local source".into(),
                 ))
             })?;
-            let source = marker.src_dir.join(&asset.rel_path);
-            // A blocked historical receipt does not identify which copy was marked.
-            verify_tier2_source_quarantine(&source, asset)?;
+            // A legacy blocked receipt does not identify which copy was marked.
+            if source_hash.is_none() {
+                verify_tier2_source_quarantine(&source, asset)?;
+            }
             verified_tier2_sidecar_for_cleanup(&source, asset.xmp_sidecar_blake3.as_deref())?;
             if !photos_probe_satisfies_policy(probe, require_icloud_upload) {
                 return Err(ImgQualityError::AnalysisError(
@@ -1493,22 +1530,26 @@ fn refresh_tier2_quarantine_receipts_with(
                         .into(),
                 ));
             }
-            if inspect_managed_photos_quarantine(
-                &probe.path,
-                library,
-                ManagedOriginalKind::Tier2Original,
-                crate::fast_img_store::tier2_library_hash(asset)?,
-                true,
-            )? {
+            if source_hash.is_none()
+                && inspect_managed_photos_quarantine(
+                    &probe.path,
+                    library,
+                    ManagedOriginalKind::Tier2Original,
+                    crate::fast_img_store::tier2_library_hash(asset)?,
+                    true,
+                )?
+            {
                 return Err(ImgQualityError::AnalysisError(
                     "Tier-2 quarantine refresh could not prove exact unblocked Photos bytes".into(),
                 ));
             }
-            Ok(())
+            Ok((source_hash, photos_hash))
         })();
         match result {
-            Ok(()) => {
+            Ok((source_hash, photos_hash)) => {
                 asset.quarantined = false;
+                asset.gif_source_quarantine_blake3 = source_hash;
+                asset.gif_photos_quarantine_blake3 = photos_hash;
                 refreshed += 1;
             }
             Err(error) => {
@@ -1923,6 +1964,27 @@ fn preflight_modern_lossy_static_source_deletion(
 }
 
 fn verify_tier2_source_quarantine(source: &Path, receipt: &LibraryAssetRecord) -> Result<()> {
+    receipt
+        .validate_gif_quarantine_binding(true)
+        .map_err(ImgQualityError::AnalysisError)?;
+    if let Some(expected) = &receipt.gif_source_quarantine_blake3 {
+        #[cfg(target_os = "macos")]
+        if observe_file_quarantine(source, |_, _, current| {
+            Ok(current.is_some_and(|mark| {
+                !mark.is_empty()
+                    && blake3::hash(mark).to_hex().as_str() == expected
+                    && (receipt.gif_photos_quarantine_blake3.is_none()
+                        || valid_source_quarantine(mark))
+            }))
+        })? {
+            return Ok(());
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = expected;
+        return Err(ImgQualityError::AnalysisError(
+            "Tier-2 original GIF quarantine evidence changed; source retained".into(),
+        ));
+    }
     // An enriched receipt binds three distinct files: source, XMP, and the
     // staged submission verified in Photos. Only direct imports submit source.
     let staged = receipt.xmp_sidecar_blake3.is_some() && receipt.library_blake3.is_some();
@@ -5740,6 +5802,12 @@ fn gif_original_transport(
     }
     // Two different originals may have the same stem in one album.
     let parent = staging.join(index.to_string());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new().mode(0o700).create(&parent)?;
+    }
+    #[cfg(not(unix))]
     std::fs::create_dir(&parent)?;
     let basename = candidate
         .path
@@ -5751,11 +5819,101 @@ fn gif_original_transport(
         filename = format!("{}.gif", candidate.blake3).into();
     }
     let staged = parent.join(filename);
+    #[cfg(target_os = "macos")]
+    observe_file_quarantine(&candidate.path, |_, _, source_mark| {
+        use crate::metadata::quarantine::{read_quarantine, verify_quarantine_file_identity};
+
+        let mut output = std::fs::File::create_new(&staged)?;
+        let identity = output.metadata()?;
+        // Copying the filesystem metadata can make the transport read-only.
+        preserve_gif_transport_quarantine(&staged, &output, source_mark)?;
+        copy_photos_transport_into(
+            &candidate.path,
+            &staged,
+            &candidate.blake3,
+            &mut output,
+            crate::metadata::preserve_private_original_transport_metadata,
+        )?;
+        verify_quarantine_file_identity(&staged, &output, &identity)?;
+        if read_quarantine(&output)?.as_deref() != source_mark {
+            return Err(
+                std::io::Error::other("GIF transport quarantine changed during copy").into(),
+            );
+        }
+        Ok(())
+    })
+    .map_err(std::io::Error::other)?;
+    #[cfg(not(target_os = "macos"))]
     copy_photos_transport(&candidate.path, &staged, &candidate.blake3)?;
     Ok(staged)
 }
 
+#[cfg(target_os = "macos")]
+fn preserve_gif_transport_quarantine(
+    staged: &Path,
+    output: &std::fs::File,
+    source_mark: Option<&[u8]>,
+) -> std::io::Result<()> {
+    use crate::metadata::quarantine::{
+        ATTRIBUTE, read_quarantine, verify_quarantine_file_identity,
+    };
+    use std::os::{fd::AsRawFd as _, unix::fs::MetadataExt as _};
+
+    let before = output.metadata()?;
+    verify_quarantine_file_identity(staged, output, &before)?;
+    if before.nlink() != 1 {
+        return Err(std::io::Error::other(
+            "GIF transport is not a standalone file",
+        ));
+    }
+    if let (None, Some(value)) = (read_quarantine(output)?, source_mark) {
+        let name = std::ffi::CString::new(ATTRIBUTE)?;
+        // SAFETY: The newly created file and both byte buffers live through the call.
+        // XATTR_CREATE leaves any concurrently added mark untouched.
+        let result = unsafe {
+            libc::fsetxattr(
+                output.as_raw_fd(),
+                name.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                libc::XATTR_CREATE,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    verify_quarantine_file_identity(staged, output, &before)?;
+    if read_quarantine(output)?.as_deref() != source_mark {
+        return Err(std::io::Error::other(
+            "GIF transport quarantine differs from its source",
+        ));
+    }
+    Ok(())
+}
+
 fn copy_photos_transport(source: &Path, staged: &Path, expected: &str) -> std::io::Result<()> {
+    let mut output = std::fs::File::create_new(staged)?;
+    copy_photos_transport_into(
+        source,
+        staged,
+        expected,
+        &mut output,
+        crate::metadata::preserve_filesystem_for_delivery,
+    )
+}
+
+fn copy_photos_transport_into(
+    source: &Path,
+    staged: &Path,
+    expected: &str,
+    output: &mut std::fs::File,
+    preserve_metadata: impl FnOnce(
+        &Path,
+        &Path,
+    ) -> std::io::Result<crate::metadata::MetadataDeliveryReport>,
+) -> std::io::Result<()> {
     use crate::metadata::MetadataLayerOutcome;
     use crate::pipeline::verification::{FinalInputObservation, verify_regular_file_blake3};
 
@@ -5766,9 +5924,8 @@ fn copy_photos_transport(source: &Path, staged: &Path, expected: &str) -> std::i
         ));
     }
     let mut input = crate::io_utils::open_regular_nofollow(source)?;
-    let mut output = std::fs::File::create_new(staged)?;
-    std::io::copy(&mut input, &mut output)?;
-    let metadata = crate::metadata::preserve_filesystem_for_delivery(source, staged)?;
+    std::io::copy(&mut input, output)?;
+    let metadata = preserve_metadata(source, staged)?;
     if metadata.xattr == MetadataLayerOutcome::PartialAudit
         || metadata.timestamps == MetadataLayerOutcome::PartialAudit
     {
@@ -6097,17 +6254,20 @@ where
             "Import aborted before checkpoint because Photos library bytes do not match the \
              working copy.",
         )?;
+        let quarantine = tier2_import_quarantine(
+            &entry.path,
+            &verified_probe.probe.path,
+            &entry.blake3_entry.out,
+            direct_library(&entry.rel_path),
+            is_quarantined,
+        )?;
         records.push(LibraryAssetRecord {
             rel_path: entry.rel_path.clone(),
             blake3: entry.blake3_entry.out.clone(),
             sync_status: photos_sync_status(&verified_probe.probe).to_string(),
-            quarantined: tier2_import_quarantined(
-                &entry.path,
-                &verified_probe.probe.path,
-                &entry.blake3_entry.out,
-                direct_library(&entry.rel_path),
-                is_quarantined,
-            )?,
+            quarantined: quarantine.blocked(),
+            gif_source_quarantine_blake3: quarantine.gif_source_quarantine_blake3,
+            gif_photos_quarantine_blake3: quarantine.gif_photos_quarantine_blake3,
             photos_uuid: Some(verified_probe.probe.uuid.clone()),
             library_blake3: None,
             xmp_sidecar_blake3: None,
@@ -7673,6 +7833,8 @@ struct SavedPhotosVerification<'a> {
 enum ManagedOriginalKind {
     ConvertedOutput,
     Tier2Original,
+    #[cfg(target_os = "macos")]
+    GifOriginal,
 }
 
 fn library_handle_from_media_output_probes_with_pixel_verifier(
@@ -7854,23 +8016,41 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
                 )));
             }
         }
-        let working_copy_marked = is_quarantined(&candidate.path)?;
-        let photos_original_marked = if let Some((library, kind)) =
-            managed_exact_library.filter(|_| final_library_blake3.is_none() && !working_copy_marked)
-        {
-            managed_photos_quarantine(&probe.path, library, kind, &candidate.blake3)?
+        let exact = managed_exact_library.filter(|_| final_library_blake3.is_none());
+        let quarantine = if let Some((library, ManagedOriginalKind::Tier2Original)) = exact {
+            tier2_import_quarantine(
+                &candidate.path,
+                &probe.path,
+                &candidate.blake3,
+                Some(library),
+                &mut is_quarantined,
+            )?
         } else {
-            is_quarantined(&probe.path)?
+            let submitted_blocked = is_quarantined(&candidate.path)?;
+            let original_blocked =
+                if let Some((library, kind)) = exact.filter(|_| !submitted_blocked) {
+                    managed_photos_quarantine(&probe.path, library, kind, &candidate.blake3)?
+                } else {
+                    is_quarantined(&probe.path)?
+                };
+            OriginalImportQuarantine {
+                submitted_blocked,
+                original_blocked,
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
+            }
         };
-        let quarantined = working_copy_marked || photos_original_marked;
-        locations.working_copies += usize::from(working_copy_marked);
-        locations.photos_originals += usize::from(photos_original_marked);
+        let quarantined = quarantine.blocked();
+        locations.working_copies += usize::from(quarantine.submitted_blocked);
+        locations.photos_originals += usize::from(quarantine.original_blocked);
         locations.affected += usize::from(quarantined);
         imported_assets.push(LibraryAssetRecord {
             rel_path: target.rel_path,
             blake3: candidate.blake3.clone(),
             sync_status: photos_sync_status(probe).to_string(),
             quarantined,
+            gif_source_quarantine_blake3: quarantine.gif_source_quarantine_blake3,
+            gif_photos_quarantine_blake3: quarantine.gif_photos_quarantine_blake3,
             photos_uuid: Some(probe.uuid.clone()),
             library_blake3: final_library_blake3,
             xmp_sidecar_blake3: None,
@@ -7969,6 +8149,8 @@ fn library_handle_from_batch_probes(
             quarantined,
             photos_uuid: Some(target.osxphotos_uuid.clone()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         });
     }
@@ -9046,11 +9228,40 @@ fn strict_photos_quarantine(path: &Path) -> Result<bool> {
     }
 }
 
-fn tier2_custody_quarantined(
+pub(super) fn tier2_custody_quarantined(
     asset: &LibraryAssetRecord,
     path: &Path,
     bound_library: Option<&Path>,
 ) -> Result<bool> {
+    asset
+        .validate_gif_quarantine_binding(true)
+        .map_err(ImgQualityError::AnalysisError)?;
+    if let Some(mark_hash) = asset.gif_source_quarantine_blake3.as_deref() {
+        #[cfg(target_os = "macos")]
+        if let Some(library) = bound_library {
+            let replacement = asset.gif_photos_quarantine_blake3.as_deref();
+            let expected = replacement.unwrap_or(mark_hash);
+            return Ok(verified_managed_quarantine(
+                path,
+                library,
+                ManagedOriginalKind::GifOriginal,
+                &asset.blake3,
+                true,
+                |mark| {
+                    mark.filter(|value| {
+                        !value.is_empty()
+                            && (replacement.is_none() || is_photos_sandbox_provenance(value))
+                            && blake3::hash(value).to_hex().as_str() == expected
+                    })
+                    .map(|_| ())
+                },
+            )?
+            .is_none());
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = mark_hash;
+        return Ok(true);
+    }
     match bound_library.filter(|_| !asset.quarantined) {
         Some(library) => managed_photos_quarantine(
             path,
@@ -9062,15 +9273,41 @@ fn tier2_custody_quarantined(
     }
 }
 
+#[derive(Default)]
+struct OriginalImportQuarantine {
+    submitted_blocked: bool,
+    original_blocked: bool,
+    gif_source_quarantine_blake3: Option<String>,
+    gif_photos_quarantine_blake3: Option<String>,
+}
+
+impl OriginalImportQuarantine {
+    const fn blocked(&self) -> bool {
+        self.submitted_blocked || self.original_blocked
+    }
+}
+
 // Use only after the managed original matches the exact submitted digest.
-fn tier2_import_quarantined(
+fn tier2_import_quarantine(
     submitted: &Path,
     original: &Path,
     submitted_hash: &str,
     direct_library: Option<&Path>,
     is_quarantined: &mut impl FnMut(&Path) -> Result<bool>,
-) -> Result<bool> {
+) -> Result<OriginalImportQuarantine> {
     let submitted_marked = is_quarantined(submitted)?;
+    #[cfg(target_os = "macos")]
+    if submitted_marked
+        && let Some(library) = direct_library
+        && let Some((source_digest, photos_digest)) =
+            verified_marked_gif_delivery(submitted, original, library, submitted_hash)?
+    {
+        return Ok(OriginalImportQuarantine {
+            gif_source_quarantine_blake3: Some(source_digest),
+            gif_photos_quarantine_blake3: photos_digest,
+            ..Default::default()
+        });
+    }
     let original_marked = match direct_library.filter(|_| !submitted_marked) {
         Some(library) => managed_photos_quarantine(
             original,
@@ -9086,11 +9323,88 @@ fn tier2_import_quarantined(
             target: "fast_img_delete",
             submitted_copy_blocked = submitted_marked,
             photos_original_blocked = original_marked,
-            checked_managed_provenance = direct_library.is_some() && !submitted_marked,
+            bound_library_available = direct_library.is_some(),
             "Tier-2 import quarantine observation"
         );
     }
-    Ok(blocked)
+    Ok(OriginalImportQuarantine {
+        submitted_blocked: submitted_marked,
+        original_blocked: original_marked,
+        gif_source_quarantine_blake3: None,
+        gif_photos_quarantine_blake3: None,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn valid_source_quarantine(mark: &[u8]) -> bool {
+    let Ok(value) = std::str::from_utf8(mark) else {
+        return false;
+    };
+    let mut fields = value.split(';');
+    let hex = |value: &str, len| {
+        value.len() == len
+            && value.bytes().all(|b| b.is_ascii_hexdigit())
+            && value.bytes().any(|b| b != b'0')
+    };
+    fields.next().is_some_and(|v| hex(v, 4))
+        && fields.next().is_some_and(|v| hex(v, 8))
+        && fields
+            .next()
+            .is_some_and(|v| !v.trim().is_empty() && !v.chars().any(char::is_control))
+        && fields
+            .next()
+            .is_some_and(|v| !v.chars().any(char::is_control))
+        && fields.next().is_none()
+}
+
+#[cfg(target_os = "macos")]
+fn verified_marked_gif_delivery(
+    source: &Path,
+    original: &Path,
+    library: &Path,
+    expected_bytes: &str,
+) -> Result<Option<(String, Option<String>)>> {
+    use std::io::Seek as _;
+    if source.canonicalize()?.starts_with(library) {
+        return Ok(None);
+    }
+    observe_file_quarantine(source, |file, _, mark| {
+        let Some(mark) = mark.filter(|value| !value.is_empty()) else {
+            return Ok(None);
+        };
+        if !crate::media_meta_utils::verify_gif_reader(&mut *file)? {
+            return Ok(None);
+        }
+        file.rewind()?;
+        let mut source_hash = blake3::Hasher::new();
+        source_hash.update_reader(file)?;
+        if source_hash.finalize().to_hex().as_str() != expected_bytes {
+            return Ok(None);
+        }
+        verified_managed_quarantine(
+            original,
+            library,
+            ManagedOriginalKind::GifOriginal,
+            expected_bytes,
+            true,
+            |original_mark| {
+                let original_mark = original_mark?;
+                let source_digest = blake3::hash(mark).to_hex().to_string();
+                if original_mark == mark {
+                    Some((source_digest, None))
+                } else if valid_source_quarantine(mark)
+                    && is_photos_sandbox_provenance(original_mark)
+                {
+                    Some((
+                        source_digest,
+                        Some(blake3::hash(original_mark).to_hex().to_string()),
+                    ))
+                } else {
+                    None
+                }
+            },
+        )
+    })
 }
 
 #[cfg(all(target_os = "macos", test))]
@@ -9169,19 +9483,38 @@ fn inspect_managed_photos_quarantine(
     expected: &str,
     recovering: bool,
 ) -> Result<bool> {
+    Ok(
+        verified_managed_quarantine(path, library, kind, expected, recovering, |mark| {
+            mark.is_none_or(is_photos_sandbox_provenance).then_some(())
+        })?
+        .is_none(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn verified_managed_quarantine<T>(
+    path: &Path,
+    library: &Path,
+    kind: ManagedOriginalKind,
+    expected: &str,
+    verify_clean: bool,
+    classify: impl FnOnce(Option<&[u8]>) -> Option<T>,
+) -> Result<Option<T>> {
     use std::io::Seek as _;
     use std::os::unix::fs::MetadataExt as _;
 
     observe_file_quarantine(path, |file, metadata, mark| {
-        if mark.is_none() && !recovering {
-            return Ok(false);
+        let Some(proof) = classify(mark) else {
+            return Ok(None);
+        };
+        if mark.is_none() && !verify_clean {
+            return Ok(Some(proof));
         }
-        if mark.is_some_and(|value| !is_photos_sandbox_provenance(value))
-            || !path.starts_with(library.join("originals"))
+        if !path.starts_with(library.join("originals"))
             || metadata.nlink() != 1
             || path.canonicalize()? != path
         {
-            return Ok(true);
+            return Ok(None);
         }
         let supported_format = match kind {
             ManagedOriginalKind::ConvertedOutput => path
@@ -9190,7 +9523,7 @@ fn inspect_managed_photos_quarantine(
                 .is_some_and(|extension| {
                     extension.eq_ignore_ascii_case("jxl") || extension.eq_ignore_ascii_case("avif")
                 }),
-            ManagedOriginalKind::Tier2Original => {
+            ManagedOriginalKind::Tier2Original | ManagedOriginalKind::GifOriginal => {
                 let format = super::format_detect::detect_open_format(path, file)?;
                 if !format.extension_matches_path(path) {
                     false
@@ -9198,17 +9531,18 @@ fn inspect_managed_photos_quarantine(
                     file.rewind()?;
                     crate::media_meta_utils::verify_gif_reader(&mut *file)?
                 } else {
-                    super::modern_lossy_static::is_modern_static_image_format(format)
+                    matches!(kind, ManagedOriginalKind::Tier2Original)
+                        && super::modern_lossy_static::is_modern_static_image_format(format)
                 }
             }
         };
         if !supported_format {
-            return Ok(true);
+            return Ok(None);
         }
         file.rewind()?;
         let mut hasher = blake3::Hasher::new();
         hasher.update_reader(file)?;
-        Ok(hasher.finalize().to_hex().as_str() != expected)
+        Ok((hasher.finalize().to_hex().as_str() == expected).then_some(proof))
     })
 }
 
@@ -9630,6 +9964,8 @@ mod tests {
                 quarantined: false,
                 photos_uuid: Some("uuid-1".to_string()),
                 library_blake3: None,
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
                 xmp_sidecar_blake3: None,
             }],
             import_error_count: 0,
@@ -10171,6 +10507,61 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn gif_transport_preserves_readonly_source_quarantine_and_refuses_conflicting_marks()
+    -> anyhow::Result<()> {
+        use crate::metadata::quarantine::{ATTRIBUTE, read_quarantine};
+        use std::os::unix::fs::PermissionsExt as _;
+        use xattr::FileExt as _;
+
+        let dir = tempfile::tempdir()?;
+        let source = dir.path().join("untitled");
+        let bytes = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;\0\n";
+        std::fs::write(&source, bytes)?;
+        let mark = b"0081;61ee20ff;SyntheticGIF;";
+        xattr::set(&source, ATTRIBUTE, mark)?;
+        xattr::set(&source, "org.mfb.fixture-metadata", b"synthetic attribute")?;
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o444))?;
+        let candidate = PhotosImportCandidate {
+            rel_path: "untitled".into(),
+            path: source.clone(),
+            album_name: "Synthetic".into(),
+            blake3: blake3::hash(bytes).to_hex().to_string(),
+        };
+        let staging = tempfile::tempdir()?;
+        let transport = gif_original_transport(&candidate, staging.path(), 0)?;
+        assert_eq!(std::fs::read(&transport)?, bytes);
+        assert_eq!(
+            xattr::get(&source, ATTRIBUTE)?.as_deref(),
+            Some(mark.as_slice())
+        );
+        assert_eq!(
+            xattr::get(&transport, ATTRIBUTE)?.as_deref(),
+            Some(mark.as_slice())
+        );
+        assert_eq!(
+            xattr::get(&transport, "org.mfb.fixture-metadata")?.as_deref(),
+            Some(b"synthetic attribute".as_slice()),
+        );
+        let directory = std::fs::metadata(staging.path().join("0"))?;
+        assert_eq!(directory.permissions().mode() & 0o077, 0);
+        assert!(std::fs::metadata(&transport)?.permissions().readonly());
+
+        let existing = tempfile::NamedTempFile::new_in(staging.path())?;
+        let different = b"0081;61ee21ff;DifferentAgent;";
+        let output = existing.as_file();
+        output.set_xattr(ATTRIBUTE, different)?;
+        for expected in [Some(mark.as_slice()), None] {
+            assert!(preserve_gif_transport_quarantine(existing.path(), output, expected).is_err());
+            assert_eq!(
+                read_quarantine(output)?.as_deref(),
+                Some(different.as_slice())
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn generic_media_import_handle_verifies_gif_output_blake3() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -10290,6 +10681,8 @@ mod tests {
             quarantined: false,
             photos_uuid: Some(uuid.to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         };
         apply_tier2_library_assets_to_marker(
@@ -11367,8 +11760,10 @@ mod tests {
         let photos_mark = b"0082;6af525b4;Photos;";
         let other_mark = b"0083;6af525b4;Browser;download";
         let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x01\x04\x00;";
-        let fixtures: [(&str, &Path, &[u8], &[u8]); 4] = [
-            ("good.gif", &originals, gif, photos_mark),
+        let opaque = b"\xffopaque;synthetic";
+        let fixtures: [(&str, &Path, &[u8], &[u8]); 5] = [
+            ("good.gif", &originals, gif, opaque),
+            ("normalized.gif", &originals, gif, photos_mark),
             ("browser.gif", &originals, gif, other_mark),
             ("outside.gif", &root, gif, photos_mark),
             ("fake.gif", &originals, b"GIF89a", photos_mark),
@@ -11394,11 +11789,30 @@ mod tests {
                 incloud: Some(true),
             });
         }
+        xattr::set(src.join("good.gif"), key, opaque)?;
+        xattr::set(src.join("normalized.gif"), key, other_mark)?;
         let refreshed = refresh_tier2_quarantine_receipts_with(&mut marker, &library, |ids| {
             assert_eq!(ids.len(), probes.len());
             Ok(probes.clone())
         })?;
-        assert_eq!(refreshed, 1);
+        assert_eq!(refreshed, 2);
+        for (asset, expected_source, expected_target) in [
+            (&marker.tier2_imported_assets[0], opaque.as_slice(), None),
+            (
+                &marker.tier2_imported_assets[1],
+                other_mark.as_slice(),
+                Some(photos_mark.as_slice()),
+            ),
+        ] {
+            assert_eq!(
+                asset.gif_source_quarantine_blake3.as_deref(),
+                Some(blake3::hash(expected_source).to_hex().as_str())
+            );
+            assert_eq!(
+                asset.gif_photos_quarantine_blake3,
+                expected_target.map(|mark| blake3::hash(mark).to_hex().to_string())
+            );
+        }
         let resume = original_photos_checkpoint_plan(
             &marker,
             &[PhotosImportCandidate {
@@ -11410,15 +11824,21 @@ mod tests {
         )?;
         assert!(resume.pending_entries.is_empty());
         for asset in &marker.tier2_imported_assets {
-            assert_eq!(asset.quarantined, asset.rel_path != "good.gif");
+            assert_eq!(
+                asset.quarantined,
+                !matches!(asset.rel_path.as_str(), "good.gif" | "normalized.gif")
+            );
         }
-        assert!(!tier2_import_quarantined(
-            &src.join("good.gif"),
-            &originals.join("good.gif"),
-            &marker.tier2_imported_assets[0].blake3,
-            Some(&library),
-            &mut strict_photos_quarantine
-        )?);
+        assert!(
+            !tier2_import_quarantine(
+                &src.join("good.gif"),
+                &originals.join("good.gif"),
+                &marker.tier2_imported_assets[0].blake3,
+                Some(&library),
+                &mut strict_photos_quarantine
+            )?
+            .blocked()
+        );
 
         let _store =
             crate::mfb_sqlite_store::set_test_store_path_for_tests(root.join("state.sqlite"));
@@ -11437,15 +11857,15 @@ mod tests {
             Some(&mut journal),
             |eligible, targets| reverify_synthetic_photos_custody(eligible, targets, &probes),
         )?;
-        assert_eq!(counts, (1, 0));
-        assert_eq!(removed, [src.join("good.gif")]);
+        assert_eq!(counts, (2, 0));
+        assert_eq!(removed, [src.join("good.gif"), src.join("normalized.gif")]);
         assert_eq!(
             crate::fast_img_store::count_recorded_tier2_unlinks(&marker)?,
-            1
+            2
         );
         for (name, parent, bytes, mark) in fixtures {
             let source = src.join(name);
-            if name == "good.gif" {
+            if matches!(name, "good.gif" | "normalized.gif") {
                 assert!(!source.try_exists()?);
             } else {
                 assert_eq!(std::fs::read(source)?, bytes);
@@ -11453,6 +11873,105 @@ mod tests {
             let managed = parent.join(name);
             assert_eq!(std::fs::read(&managed)?, bytes);
             assert_eq!(read_quarantine_xattr(&managed)?.as_deref(), Some(mark));
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn gif_quarantine_new_import_requires_matching_source_and_managed_provenance()
+    -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let library = root.join("Test.photoslibrary");
+        let original = library.join("originals/00/asset.gif");
+        std::fs::create_dir_all(original.parent().unwrap())?;
+        let input = root.join("source");
+        let source = input.join("animation.gif");
+        std::fs::create_dir(&input)?;
+        let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
+        std::fs::write(&source, gif)?;
+        std::fs::write(&original, gif)?;
+        let key = crate::metadata::quarantine::ATTRIBUTE;
+        let download = b"0083;6af525b4;Browser;synthetic-event";
+        let other = b"0083;6af525b4;Other;synthetic-event";
+        let photos = b"0082;6af525b4;photolibraryd;";
+        let opaque = b"\xffopaque;synthetic";
+        let mut marker = WorkingCopyMarker::new(input, root.join("work"), 0);
+        marker.strategy = "gif".into();
+        let candidates = [PhotosImportCandidate {
+            rel_path: "animation.gif".into(),
+            path: source.clone(),
+            album_name: "Synthetic".into(),
+            blake3: blake3::hash(gif).to_hex().to_string(),
+        }];
+        let entries = original_photos_checkpoint_plan(&marker, &candidates)?.pending_entries;
+        let pairs = [("animation.gif".into(), "UUID-A".into())];
+        let mut query = |_: &[String]| {
+            Ok(vec![FastImgLibraryAssetProbe {
+                uuid: "UUID-A".into(),
+                path: original.clone(),
+                ismissing: false,
+                iscloudasset: true,
+                incloud: Some(true),
+            }])
+        };
+        for (source_mark, mark, accepted) in [
+            (download.as_slice(), Some(download.as_slice()), true),
+            (download.as_slice(), Some(photos.as_slice()), true),
+            (opaque.as_slice(), Some(opaque.as_slice()), true),
+            (opaque.as_slice(), Some(photos.as_slice()), false),
+            (download.as_slice(), Some(other.as_slice()), false),
+            (download.as_slice(), None, false),
+            (&[][..], Some(&[][..]), false),
+        ] {
+            let digest = blake3::hash(source_mark).to_hex();
+            xattr::set(&source, key, source_mark)?;
+            if let Some(mark) = mark {
+                xattr::set(&original, key, mark)?;
+            } else {
+                xattr::remove(&original, key)?;
+            }
+            let native = library_records_from_pending_import(
+                &entries,
+                &pairs,
+                &mut query,
+                &mut strict_photos_quarantine,
+                |_| Some(&library),
+            )?;
+            let script = library_handle_from_original_probes(
+                &candidates,
+                &pairs,
+                &mut query,
+                strict_photos_quarantine,
+                Some(&library),
+            )?;
+            assert_eq!(native, script.imported_assets);
+            let asset = &native[0];
+            assert_eq!(asset.quarantined, !accepted);
+            assert_eq!(
+                asset.gif_source_quarantine_blake3.as_deref(),
+                accepted.then_some(digest.as_str())
+            );
+            let replacement_digest = mark
+                .filter(|value| accepted && *value != source_mark)
+                .map(|value| blake3::hash(value).to_hex().to_string());
+            assert_eq!(asset.gif_photos_quarantine_blake3, replacement_digest);
+            if accepted {
+                verify_tier2_source_quarantine(&source, asset)?;
+                assert!(!tier2_custody_quarantined(
+                    asset,
+                    &original,
+                    Some(&library)
+                )?);
+                xattr::set(&source, key, other)?;
+                assert!(verify_tier2_source_quarantine(&source, asset).is_err());
+                xattr::set(&source, key, source_mark)?;
+                for changed in [other.as_slice(), b"0082;6af525b5;Photos;"] {
+                    xattr::set(&original, key, changed)?;
+                    assert!(tier2_custody_quarantined(asset, &original, Some(&library))?);
+                }
+            }
         }
         Ok(())
     }
@@ -11502,28 +12021,37 @@ mod tests {
             b"0082;6af525c9;photolibraryd;".as_slice(),
         ] {
             xattr::set(&original, key, value)?;
-            assert!(!tier2_import_quarantined(
-                &input,
-                &original,
-                &receipt.blake3,
-                Some(&library),
-                &mut strict_photos_quarantine
-            )?);
-            assert!(tier2_import_quarantined(
-                &input,
-                &original,
-                &receipt.blake3,
-                None,
-                &mut strict_photos_quarantine
-            )?);
+            assert!(
+                !tier2_import_quarantine(
+                    &input,
+                    &original,
+                    &receipt.blake3,
+                    Some(&library),
+                    &mut strict_photos_quarantine
+                )?
+                .blocked()
+            );
+            assert!(
+                tier2_import_quarantine(
+                    &input,
+                    &original,
+                    &receipt.blake3,
+                    None,
+                    &mut strict_photos_quarantine
+                )?
+                .blocked()
+            );
             xattr::set(&input, key, value)?;
-            assert!(tier2_import_quarantined(
-                &input,
-                &original,
-                &receipt.blake3,
-                Some(&library),
-                &mut strict_photos_quarantine
-            )?);
+            assert!(
+                tier2_import_quarantine(
+                    &input,
+                    &original,
+                    &receipt.blake3,
+                    Some(&library),
+                    &mut strict_photos_quarantine
+                )?
+                .blocked()
+            );
             xattr::remove(&input, key)?;
         }
         std::fs::remove_file(&input)?;
@@ -11578,19 +12106,22 @@ mod tests {
         xattr::set(&staged, key, download)?;
         let digest = blake3::hash(&delivered).to_hex().to_string();
         clear_generated_import_quarantine(&staged, &digest)?;
-        let blocked = tier2_import_quarantined(
+        let blocked = tier2_import_quarantine(
             &staged,
             &original,
             &digest,
             Some(&library),
             &mut strict_photos_quarantine,
-        )?;
+        )?
+        .blocked();
         assert!(!blocked);
         let receipt = LibraryAssetRecord {
             rel_path: "photo.webp".into(),
             photos_uuid: Some("UUID-A".into()),
             sync_status: "local".into(),
             blake3: blake3::hash(raw).to_hex().to_string(),
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: Some(blake3::hash(packet).to_hex().to_string()),
             library_blake3: Some(digest),
             quarantined: blocked,
@@ -11736,13 +12267,14 @@ mod tests {
                 || name.starts_with("changed-bytes");
             let delivered_hash = blake3::hash(&delivered).to_hex().to_string();
             assert_eq!(
-                tier2_import_quarantined(
+                tier2_import_quarantine(
                     &source,
                     &original,
                     &delivered_hash,
                     Some(&library),
                     &mut strict_photos_quarantine
-                )?,
+                )?
+                .blocked(),
                 is_blocked_at_import,
                 "{name}",
             );
@@ -11751,6 +12283,8 @@ mod tests {
                 photos_uuid: Some(name.into()),
                 blake3: blake3::hash(header).to_hex().to_string(),
                 library_blake3: Some(delivered_hash),
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
                 xmp_sidecar_blake3: Some(blake3::hash(xmp).to_hex().to_string()),
                 quarantined: true,
                 sync_status: "local".into(),
@@ -12401,6 +12935,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("UUID-A/L0/001".to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         });
         marker.blake3_log.insert(
@@ -12629,6 +13165,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("UUID-A/L0/001".to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         });
         let mut is_quarantined = |_path: &Path| Ok(false);
@@ -12665,6 +13203,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: None,
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         };
         assert!(
@@ -13295,6 +13835,8 @@ end mfbResolveAlbumComponent
                 quarantined: false,
                 photos_uuid: None,
                 library_blake3: None,
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
                 xmp_sidecar_blake3: None,
             });
         }
@@ -16019,6 +16561,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         };
         let err =
@@ -16035,6 +16579,8 @@ end mfbResolveAlbumComponent
         let handle = crate::pipeline::verification::LibraryHandle {
             imported_assets: vec![crate::pipeline::verification::LibraryAssetRecord {
                 rel_path: "../escape.webp".to_string(),
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
                 blake3: "claimed".to_string(),
                 sync_status: "local".to_string(),
                 quarantined: false,
@@ -16067,6 +16613,8 @@ end mfbResolveAlbumComponent
                 quarantined: false,
                 photos_uuid: Some("synthetic-uuid".into()),
                 library_blake3: Some(blake3::hash(b"synthetic output").to_hex().to_string()),
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
                 xmp_sidecar_blake3: Some(blake3::hash(bytes).to_hex().to_string()),
             }],
             ..Default::default()
@@ -16241,6 +16789,8 @@ end mfbResolveAlbumComponent
                             .to_hex()
                             .to_string(),
                     ),
+                    gif_source_quarantine_blake3: None,
+                    gif_photos_quarantine_blake3: None,
                     xmp_sidecar_blake3: Some(blake3::hash(xmp_bytes).to_hex().to_string()),
                 },
             ],
@@ -16338,6 +16888,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("synthetic-uuid".into()),
             library_blake3: Some(blake3::hash(b"synthetic output").to_hex().to_string()),
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: Some(crate::common_utils::calculate_blake3_hash(&xmp)?),
         };
         let mut removed = Vec::new();
@@ -16374,6 +16926,8 @@ end mfbResolveAlbumComponent
                 quarantined: false,
                 photos_uuid: Some("synthetic-uuid".into()),
                 library_blake3: None,
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
                 xmp_sidecar_blake3: None,
             }],
             ..Default::default()
@@ -16395,6 +16949,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         };
         let err =
@@ -16414,6 +16970,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         };
         let err =
@@ -16438,6 +16996,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         };
         proof.library_blake3 = Some("old-pixel-only-proof".to_string());
@@ -16473,6 +17033,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         };
 
@@ -16508,6 +17070,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: Some("verified-photos-delivery".to_string()),
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: Some(crate::common_utils::calculate_blake3_hash(&sidecar).unwrap()),
         };
 
@@ -16530,6 +17094,8 @@ end mfbResolveAlbumComponent
             quarantined: false,
             photos_uuid: Some("uuid".to_string()),
             library_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
             xmp_sidecar_blake3: None,
         };
         safe_delete_modern_lossy_static_source_after_reverify(&src_path, &proof).unwrap();

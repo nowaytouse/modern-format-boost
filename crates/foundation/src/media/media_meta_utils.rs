@@ -54,13 +54,32 @@ pub(crate) fn verify_gif_reader(mut file: impl std::io::Read) -> std::io::Result
         }
         saw_frame = true;
     }
-    if !saw_frame || !decoder.into_inner().fill_buf()?.is_empty() {
+    if !saw_frame {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "expected one complete GIF stream",
+            "GIF contains no image frames",
         ));
     }
-    Ok(true)
+    // The decoder has consumed the GIF trailer. Permit NUL or ASCII whitespace
+    // padding only. Custody hashes and imports the entire original, including padding.
+    let mut tail = decoder.into_inner();
+    loop {
+        let chunk = tail.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(true);
+        }
+        if !chunk
+            .iter()
+            .all(|&byte| byte == 0 || byte.is_ascii_whitespace())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "additional non-padding data follows the GIF trailer",
+            ));
+        }
+        let len = chunk.len();
+        tail.consume(len);
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -453,6 +472,27 @@ mod tests {
         let fake = dir.path().join("video.gif");
         fs::write(&fake, b"\0\0\0\x18ftypisom")?;
         assert!(!is_verified_gif(&fake)?);
+        Ok(())
+    }
+
+    #[test]
+    fn verified_gif_accepts_only_padding_after_a_decoded_image() -> anyhow::Result<()> {
+        let image = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
+        let mut padded = image.to_vec();
+        padded.extend_from_slice(b"\r\n\t ");
+        padded.extend(std::iter::repeat_n(0, 24 * 1024));
+        assert!(verify_gif_reader(padded.as_slice())?);
+        for payload in [image.as_slice(), b"data".as_slice(), b"\xff".as_slice()] {
+            let stream = [padded.as_slice(), payload].concat();
+            let error = verify_gif_reader(stream.as_slice()).expect_err("unverified trailing data");
+            assert!(error.to_string().contains("non-padding data follows"));
+        }
+        let missing_trailer = [&image[..image.len() - 1], b"\0\n "].concat();
+        assert!(verify_gif_reader(missing_trailer.as_slice()).is_err());
+        let empty = [&image[..19], b";\0"].concat();
+        let error =
+            verify_gif_reader(empty.as_slice()).expect_err("a palette alone is not an image");
+        assert!(error.to_string().contains("no image frames"));
         Ok(())
     }
 

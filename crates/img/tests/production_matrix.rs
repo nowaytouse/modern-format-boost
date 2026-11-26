@@ -2062,6 +2062,8 @@ fn tier2_cleanup_prunes_only_verified_source_directories() -> Result<()> {
         photos_uuid: Some("uuid".to_string()),
         library_blake3: None,
         xmp_sidecar_blake3: None,
+        gif_source_quarantine_blake3: None,
+        gif_photos_quarantine_blake3: None,
     }];
     let pruned =
         foundation::prune_empty_source_dirs_for_tier2_assets(&source_root, &imported, true)?;

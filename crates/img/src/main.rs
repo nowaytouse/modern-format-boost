@@ -16346,6 +16346,8 @@ mod fast_img_hardening_tests {
                 quarantined: false,
                 library_blake3: None,
                 xmp_sidecar_blake3: None,
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
             });
         marker.stage = FastImgStageName::CleanupComplete;
         super::write_marker_atomic(&marker)?;
@@ -20610,6 +20612,8 @@ mod fast_img_hardening_tests {
             photos_uuid: Some("UUID-A/L0/001".to_string()),
             library_blake3: None,
             xmp_sidecar_blake3: None,
+            gif_source_quarantine_blake3: None,
+            gif_photos_quarantine_blake3: None,
         });
 
         marker.stage = FastImgStageName::Gate2Failed;
@@ -21818,6 +21822,8 @@ mod fast_img_hardening_tests {
                 photos_uuid: Some("UUID-A".to_string()),
                 library_blake3: None,
                 xmp_sidecar_blake3: None,
+                gif_source_quarantine_blake3: None,
+                gif_photos_quarantine_blake3: None,
             }],
             import_error_count: 1,
             photos_library_path: None,

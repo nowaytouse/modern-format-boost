@@ -43,6 +43,9 @@ fn asset_digest(marker: &WorkingCopyMarker, asset: &LibraryAssetRecord) -> Resul
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .context("Tier-2 cleanup receipt has no Photos UUID")?;
+    asset
+        .validate_gif_quarantine_binding(marker.strategy == "gif")
+        .map_err(anyhow::Error::msg)?;
     let hash = tier2_library_hash(asset)?;
     ensure!(
         !asset.quarantined
@@ -54,16 +57,26 @@ fn asset_digest(marker: &WorkingCopyMarker, asset: &LibraryAssetRecord) -> Resul
                 .is_none_or(cleanup::hash_is_valid),
         "Tier-2 cleanup requires complete, unquarantined Photos evidence"
     );
-    Ok(blake3::hash(&canonical_bytes(&(
+    let identity = (
         library,
         uuid,
         &asset.rel_path,
         &asset.blake3,
         hash,
         &asset.xmp_sidecar_blake3,
-    ))?)
-    .to_hex()
-    .to_string())
+    );
+    // Older journal entries hash exactly this identity tuple. Add a domain and the
+    // attribute digest only when the receipt actually carries new evidence.
+    let bytes = match &asset.gif_source_quarantine_blake3 {
+        Some(digest) => canonical_bytes(&(
+            "gif-source-quarantine-v1",
+            identity,
+            digest,
+            &asset.gif_photos_quarantine_blake3,
+        ))?,
+        None => canonical_bytes(&identity)?,
+    };
+    Ok(blake3::hash(&bytes).to_hex().to_string())
 }
 
 fn entry_digest(key: &str, source: &str, rel: &str, entry: &Entry) -> Result<blake3::Hash> {
@@ -757,6 +770,53 @@ mod tests {
     use crate::db::mfb_sqlite_store::set_test_store_path_for_tests;
     use SourceUnlinkEvent::{Intent, Ready, Removed};
     use SourceUnlinkKind::{Media, Xmp};
+
+    #[test]
+    fn gif_quarantine_digest_keeps_old_journals_and_binds_observed_evidence() -> Result<()> {
+        let mut marker = WorkingCopyMarker::new("/synthetic/in".into(), "/synthetic/out".into(), 0)
+            .with_strategy("gif".into());
+        let library = Path::new("/synthetic/library");
+        marker.photos_library_path = Some(library.into());
+        let mut asset = LibraryAssetRecord {
+            rel_path: "untitled".into(),
+            blake3: blake3::hash(b"synthetic GIF").to_hex().to_string(),
+            photos_uuid: Some("fixture".into()),
+            ..Default::default()
+        };
+        let old = blake3::hash(&canonical_bytes(&(
+            library,
+            "fixture",
+            &asset.rel_path,
+            &asset.blake3,
+            &asset.blake3,
+            Option::<String>::None,
+        ))?)
+        .to_hex()
+        .to_string();
+        assert_eq!(asset_digest(&marker, &asset)?, old);
+        asset.gif_source_quarantine_blake3 = Some(blake3::hash(b"mark one").to_hex().to_string());
+        let bound = asset_digest(&marker, &asset)?;
+        assert_ne!(bound, old);
+        asset.gif_source_quarantine_blake3 = Some(blake3::hash(b"mark two").to_hex().to_string());
+        let second = asset_digest(&marker, &asset)?;
+        assert_ne!(second, bound);
+        asset.gif_photos_quarantine_blake3 =
+            Some(blake3::hash(b"Photos mark").to_hex().to_string());
+        assert_ne!(asset_digest(&marker, &asset)?, second);
+        asset.gif_photos_quarantine_blake3 = asset.gif_source_quarantine_blake3.clone();
+        assert!(asset_digest(&marker, &asset).is_err());
+        asset.gif_photos_quarantine_blake3 = None;
+        assert!(asset.validate_gif_quarantine_binding(false).is_err());
+        asset.xmp_sidecar_blake3 = Some(asset.blake3.clone());
+        assert!(asset_digest(&marker, &asset).is_err());
+        asset.xmp_sidecar_blake3 = None;
+        asset.library_blake3 = Some(blake3::hash(b"other media").to_hex().to_string());
+        assert!(asset_digest(&marker, &asset).is_err());
+        asset.library_blake3 = None;
+        asset.quarantined = true;
+        assert!(asset_digest(&marker, &asset).is_err());
+        Ok(())
+    }
 
     #[test]
     fn tier2_journal_cold_resume_retains_replacements_and_distinguishes_unknown_unlinks()

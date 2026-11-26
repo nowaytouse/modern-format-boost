@@ -10,8 +10,9 @@ fn local_gif_selection_reports_exact_dispositions_without_writing_state() -> any
     let source = root.join("selection");
     fs::create_dir(&source)?;
     let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
+    let padded = [gif.as_slice(), b"\0\r\n"].concat();
     let inputs: [(&str, &[u8]); 4] = [
-        ("selected", gif),
+        ("selected", &padded),
         ("selected.xmp", b"sidecar"),
         ("pretend.gif", b"unrelated file"),
         ("damaged.gif", &gif[..gif.len() - 1]),

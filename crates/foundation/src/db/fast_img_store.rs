@@ -533,16 +533,23 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
             "Unknown history header contains invented submission rows"
         );
     }
+    let gif_quarantine = if version
+        .is_some_and(|v| v >= super::mfb_sqlite_store::FAST_IMG_GIF_QUARANTINE_SCHEMA_VERSION)
+    {
+        "gif_source_quarantine_blake3,gif_photos_quarantine_blake3"
+    } else {
+        "NULL,NULL"
+    };
     for (kind, field) in [
         ("primary", "photos_imported_assets"),
         ("original", "tier2_imported_assets"),
     ] {
         let mut assets = Vec::new();
-        let mut statement = conn.prepare(
+        let mut statement = conn.prepare(&format!(
             "SELECT ordinal,rel_path,blake3,sync_status,quarantined,
-            photos_uuid,library_blake3,xmp_sidecar_blake3 FROM fast_img_photos_receipts
-            WHERE task_key=?1 AND receipt_kind=?2 ORDER BY ordinal",
-        )?;
+            photos_uuid,library_blake3,xmp_sidecar_blake3,{gif_quarantine} FROM fast_img_photos_receipts
+            WHERE task_key=?1 AND receipt_kind=?2 ORDER BY ordinal"
+        ))?;
         let mut rows = statement.query(params![key, kind])?;
         while let Some(row) = rows.next()? {
             ensure!(
@@ -559,6 +566,8 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
                 photos_uuid: row.get(5)?,
                 library_blake3: row.get(6)?,
                 xmp_sidecar_blake3: row.get(7)?,
+                gif_source_quarantine_blake3: row.get(8)?,
+                gif_photos_quarantine_blake3: row.get(9)?,
             });
         }
         value[field] = serde_json::to_value(assets)?;
@@ -1203,13 +1212,14 @@ fn write_receipts(
             continue;
         }
         conn.execute("INSERT INTO fast_img_photos_receipts(task_key,receipt_kind,rel_path,ordinal,
-            blake3,sync_status,quarantined,photos_uuid,library_blake3,xmp_sidecar_blake3)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+            blake3,sync_status,quarantined,photos_uuid,library_blake3,xmp_sidecar_blake3,gif_source_quarantine_blake3,gif_photos_quarantine_blake3)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
             ON CONFLICT(task_key,receipt_kind,rel_path) DO UPDATE SET ordinal=excluded.ordinal,
             blake3=excluded.blake3,sync_status=excluded.sync_status,quarantined=excluded.quarantined,
-            photos_uuid=excluded.photos_uuid,library_blake3=excluded.library_blake3,xmp_sidecar_blake3=excluded.xmp_sidecar_blake3",
+            photos_uuid=excluded.photos_uuid,library_blake3=excluded.library_blake3,xmp_sidecar_blake3=excluded.xmp_sidecar_blake3,
+            gif_source_quarantine_blake3=excluded.gif_source_quarantine_blake3,gif_photos_quarantine_blake3=excluded.gif_photos_quarantine_blake3",
             params![key,kind,asset.rel_path,i64::try_from(ordinal)?,asset.blake3,asset.sync_status,
-                i64::from(asset.quarantined),asset.photos_uuid,asset.library_blake3,asset.xmp_sidecar_blake3])?;
+                i64::from(asset.quarantined),asset.photos_uuid,asset.library_blake3,asset.xmp_sidecar_blake3,asset.gif_source_quarantine_blake3,asset.gif_photos_quarantine_blake3])?;
     }
     Ok(())
 }
