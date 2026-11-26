@@ -3379,6 +3379,9 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     let mut metadata_failures = 0usize;
     let mut failures = FailedSourceLog::new();
     let mut seen = BTreeSet::new();
+    let gif_originals = checkpoint
+        .as_deref()
+        .is_some_and(|marker| marker.strategy == "gif");
     let previous = previous_tier2_preparation_submissions(checkpoint.as_deref());
     let admissions = checkpoint
         .as_deref()
@@ -3386,7 +3389,7 @@ fn import_modern_lossy_static_tier_with_checkpoint(
         .transpose()?
         .flatten();
 
-    for candidate in base_candidates {
+    for (index, mut candidate) in base_candidates.into_iter().enumerate() {
         let relative = crate::pipeline::verification::fast_img_relative_key(
             &candidate.path,
             src_dir,
@@ -3453,6 +3456,44 @@ fn import_modern_lossy_static_tier_with_checkpoint(
             }
             Ok(observed)
         });
+        if gif_originals {
+            let transport = traced_xmp.and_then(|sidecar| {
+                if sidecar.is_some() {
+                    return Err(std::io::Error::other(
+                        "GIF original has an external XMP sidecar",
+                    ));
+                }
+                gif_original_transport(&candidate, staging.path(), index)
+            });
+            match transport {
+                Ok(path) => {
+                    candidate.path = path;
+                    import_candidates.push(candidate);
+                }
+                Err(error) => {
+                    metadata_failures += 1;
+                    log_file_failure_at_phase(
+                        "img",
+                        &candidate.path,
+                        &error.to_string(),
+                        Some("gif_original_preparation_failed"),
+                        FileFailurePhase::MetadataPreparation,
+                    );
+                    record_tier2_preparation_failure(
+                        &mut failures,
+                        previous.as_ref(),
+                        &candidate,
+                        "GIF original could not be prepared for byte-exact import",
+                    );
+                    println!(
+                        "[FAIL    ]   {}: GIF original retained: {}",
+                        candidate.rel_path.escape_debug(),
+                        error.to_string().escape_debug()
+                    );
+                }
+            }
+            continue;
+        }
         let xmp_path = match traced_xmp {
             Ok(Some(path)) => path,
             Ok(None) => {
@@ -5682,13 +5723,68 @@ where
     Ok(())
 }
 
+fn gif_original_transport(
+    candidate: &PhotosImportCandidate,
+    staging: &Path,
+    index: usize,
+) -> std::io::Result<PathBuf> {
+    if !crate::media_meta_utils::is_verified_gif(&candidate.path)? {
+        return Err(std::io::Error::other("expected a complete GIF original"));
+    }
+    if candidate
+        .path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
+    {
+        return Ok(candidate.path.clone());
+    }
+    // Two different originals may have the same stem in one album.
+    let parent = staging.join(index.to_string());
+    std::fs::create_dir(&parent)?;
+    let basename = candidate
+        .path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("GIF source has no filename"))?;
+    let mut filename = basename.to_os_string();
+    filename.push(".gif");
+    if filename.as_encoded_bytes().len() > 255 {
+        filename = format!("{}.gif", candidate.blake3).into();
+    }
+    let staged = parent.join(filename);
+    copy_photos_transport(&candidate.path, &staged, &candidate.blake3)?;
+    Ok(staged)
+}
+
+fn copy_photos_transport(source: &Path, staged: &Path, expected: &str) -> std::io::Result<()> {
+    use crate::metadata::MetadataLayerOutcome;
+    use crate::pipeline::verification::{FinalInputObservation, verify_regular_file_blake3};
+
+    let observed = FinalInputObservation::capture(source)?;
+    if observed.blake3() != expected {
+        return Err(std::io::Error::other(
+            "Photos transport source changed after admission",
+        ));
+    }
+    let mut input = crate::io_utils::open_regular_nofollow(source)?;
+    let mut output = std::fs::File::create_new(staged)?;
+    std::io::copy(&mut input, &mut output)?;
+    let metadata = crate::metadata::preserve_filesystem_for_delivery(source, staged)?;
+    if metadata.xattr == MetadataLayerOutcome::PartialAudit
+        || metadata.timestamps == MetadataLayerOutcome::PartialAudit
+    {
+        return Err(std::io::Error::other(
+            "Photos transport could not preserve filesystem metadata",
+        ));
+    }
+    output.sync_all()?;
+    observed.verify_unchanged()?;
+    verify_regular_file_blake3(staged, expected)
+}
+
 fn stage_applescript_media_transport(
     entries: &[PhotosImportPendingEntry],
     aae_by_directory: &mut BTreeMap<PathBuf, BTreeSet<String>>,
 ) -> Result<(Option<tempfile::TempDir>, Vec<PhotosImportPendingEntry>)> {
-    use crate::metadata::MetadataLayerOutcome;
-    use crate::pipeline::verification::FinalInputObservation;
-
     let mut scratch = None::<tempfile::TempDir>;
     let mut transport = entries.to_vec();
     for (index, entry) in transport.iter_mut().enumerate() {
@@ -5738,27 +5834,7 @@ fn stage_applescript_media_transport(
         let staged = item_dir.join(entry.path.file_name().ok_or_else(|| {
             ImgQualityError::AnalysisError("Photos working-copy media has no basename".into())
         })?);
-        let observed = FinalInputObservation::capture(&entry.path)?;
-        if observed.blake3() != entry.blake3_entry.out {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "Photos AppleScript staging found changed output {}; source retained",
-                entry.rel_path,
-            )));
-        }
-        let mut input = crate::io_utils::open_regular_nofollow(&entry.path)?;
-        let mut output = std::fs::File::create_new(&staged)?;
-        std::io::copy(&mut input, &mut output)?;
-        let metadata = crate::metadata::preserve_filesystem_for_delivery(&entry.path, &staged)?;
-        if metadata.xattr == MetadataLayerOutcome::PartialAudit
-            || metadata.timestamps == MetadataLayerOutcome::PartialAudit
-        {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "Photos AppleScript staging could not preserve filesystem metadata for {}",
-                entry.rel_path,
-            )));
-        }
-        output.sync_all()?;
-        observed.verify_unchanged()?;
+        copy_photos_transport(&entry.path, &staged, &entry.blake3_entry.out)?;
         entry.path = staged;
     }
     Ok((scratch, transport))
@@ -8763,6 +8839,13 @@ fn osxphotos_candidate_paths(home: Option<&Path>) -> Vec<PathBuf> {
 }
 
 fn resolve_osxphotos_command() -> Result<PathBuf> {
+    if crate::common_utils::explicit_tool_override("osxphotos").is_some() {
+        return crate::common_utils::resolve_tool_path("osxphotos").ok_or_else(|| {
+            ImgQualityError::AnalysisError(
+                "The selected osxphotos executable is unavailable".into(),
+            )
+        });
+    }
     let home = std::env::var_os(crate::constants::ENV_HOME).map(PathBuf::from);
     for candidate in osxphotos_candidate_paths(home.as_deref()) {
         if candidate.is_file() {
@@ -9979,6 +10062,96 @@ mod tests {
                 quarantined_path.is_some()
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn gif_transport_keeps_exact_bytes_and_source_key_for_a_misnamed_original() -> anyhow::Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let source = dir.path().join("animation.mp4");
+        {
+            let mut encoder = gif::Encoder::new(
+                std::fs::File::create_new(&source)?,
+                1,
+                1,
+                &[0, 0, 0, 255, 255, 255],
+            )?;
+            encoder.write_frame(&gif::Frame {
+                width: 1,
+                height: 1,
+                buffer: std::borrow::Cow::Borrowed(&[0]),
+                ..Default::default()
+            })?;
+            encoder.write_frame(&gif::Frame {
+                width: 1,
+                height: 1,
+                delay: 4,
+                buffer: std::borrow::Cow::Borrowed(&[1]),
+                ..Default::default()
+            })?;
+        }
+        let staging = tempfile::tempdir()?;
+        let mut candidate = PhotosImportCandidate {
+            rel_path: "animation.mp4".into(),
+            path: source.clone(),
+            album_name: "Synthetic".into(),
+            blake3: crate::common_utils::calculate_blake3_hash(&source)?,
+        };
+        let transport = gif_original_transport(&candidate, staging.path(), 0)?;
+        assert_eq!(
+            transport.file_name(),
+            Some(std::ffi::OsStr::new("animation.mp4.gif"))
+        );
+        assert_eq!(std::fs::read(&source)?, std::fs::read(&transport)?);
+        candidate.path = transport.clone();
+        assert_eq!(
+            gif_original_transport(&candidate, staging.path(), 1)?,
+            transport
+        );
+        let mut marker =
+            WorkingCopyMarker::new(dir.path().to_owned(), staging.path().to_owned(), 1);
+        marker.strategy = "gif".into();
+        let originals = [candidate];
+        let plan = original_photos_checkpoint_plan(&marker, &originals)?;
+        assert_eq!(plan.pending_entries[0].source_rel, "animation.mp4");
+        assert_eq!(plan.pending_entries[0].path, transport);
+        let managed = dir.path().join("managed.gif");
+        let verify = || {
+            library_handle_from_original_probes(
+                &originals,
+                &[("animation.mp4".into(), "UUID-A".into())],
+                |_| {
+                    Ok(vec![FastImgLibraryAssetProbe {
+                        uuid: "UUID-A".into(),
+                        path: managed.clone(),
+                        iscloudasset: false,
+                        incloud: Some(false),
+                        ismissing: false,
+                    }])
+                },
+                |_| Ok(false),
+                None,
+            )
+        };
+        let mut bytes = std::fs::read(&source)?;
+        std::fs::write(&managed, &bytes)?;
+        assert_eq!(verify()?.imported_assets[0].blake3, originals[0].blake3);
+        // Only the second frame's delay changes; the pixels and first frame still match.
+        let delay = bytes
+            .windows(5)
+            .position(|b| b.starts_with(&[0x21, 0xf9, 4]) && b[4] == 4)
+            .expect("synthetic second-frame control extension")
+            + 4;
+        bytes[delay] = 5;
+        std::fs::write(&managed, bytes)?;
+        assert!(crate::media_meta_utils::is_verified_gif(&managed)?);
+        assert!(
+            verify()
+                .expect_err("changed timing must retain the source")
+                .to_string()
+                .contains("BLAKE3 mismatch")
+        );
         Ok(())
     }
 
@@ -16373,11 +16546,19 @@ printf ']'
         )?;
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700))?;
         let uuids = (0..1473).map(|n| format!("asset-{n}")).collect::<Vec<_>>();
+        let selected = {
+            let _override = crate::common_utils::EnvGuard::set(
+                "MFB_TOOL_OSXPHOTOS",
+                tool.to_str().expect("synthetic executable path"),
+            );
+            resolve_osxphotos_command()?
+        };
+        assert_eq!(selected, tool);
         // Full osxphotos rows exceed the runner's 8 MiB cap, as in the failed batch.
         let probes = query_osxphotos_asset_probes_with_command(
             &uuids,
             &scratch.path().join("synthetic.photoslibrary"),
-            &tool,
+            &selected,
         )?;
         assert_eq!(probes.len(), uuids.len());
         for (probe, uuid) in probes.iter().zip(&uuids) {

@@ -252,15 +252,16 @@ impl RuntimeArgs {
             "JXL pixel effort settings require the Fast IMG JXL strategy"
         );
         anyhow::ensure!(
-            strategy != "avif" || (self.jpeg_effort.is_none() && self.jpeg_effort_search.is_none()),
-            "JPEG effort settings do not apply to Fast IMG AVIF"
+            strategy == "jxl" || (self.jpeg_effort.is_none() && self.jpeg_effort_search.is_none()),
+            "JPEG effort settings require the Fast IMG JXL strategy"
         );
         anyhow::ensure!(
-            strategy != "jxl" || self.quality_search.is_none(),
-            "Fast IMG JXL uses lossless encoding and has no lossy quality search"
+            strategy == "avif" || self.quality_search.is_none(),
+            "Lossy quality search settings require the Fast IMG AVIF strategy"
         );
         anyhow::ensure!(
-            strategy != "jxl" || (self.avif_speed.is_none() && self.avif_metadata_policy.is_none()),
+            strategy == "avif"
+                || (self.avif_speed.is_none() && self.avif_metadata_policy.is_none()),
             "AVIF speed and metadata policy settings apply only to Fast IMG AVIF"
         );
         Ok(())

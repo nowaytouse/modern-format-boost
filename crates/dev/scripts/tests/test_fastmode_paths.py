@@ -156,51 +156,10 @@ class TestFastModePaths(unittest.TestCase):
             ],
         )
 
-    def test_fast_vid_dirs_use_adjacent_suffixes(self):
-        src = Path("/Users/example/Movies/Clips")
-
-        self.assertEqual(
-            fastmode_paths.fast_vid_output_dir_for_target(src),
-            Path("/Users/example/Movies/Clips_optimized"),
-        )
-
-    def test_fast_vid_command_uses_full_loop_intent_run_pipeline(self):
-        command = fastmode_paths.build_fast_vid_command(
-            Path("/opt/mfb/vid"),
-            Path("/Users/example/Movies/Clips"),
-            output_dir=Path("/Users/example/Movies/Clips_optimized"),
-            shortest_path=False,
-        )
-
-        self.assertEqual(
-            command,
-            [
-                "/opt/mfb/vid",
-                "run",
-                "/Users/example/Movies/Clips",
-                "--output",
-                "/Users/example/Movies/Clips_optimized",
-                "--base-dir",
-                "/Users/example/Movies/Clips",
-                "--recursive",
-                "--apple-compat",
-                "--ultimate",
-                "--archive",
-            ],
-        )
-
-    def test_fast_vid_shortest_path_command_stays_on_full_run_pipeline(self):
-        command = fastmode_paths.build_fast_vid_command(
-            Path("/opt/mfb/vid"),
-            Path("/Users/example/Movies/Clips"),
-            output_dir=Path("/Users/example/Movies/Clips_optimized"),
-            shortest_path=True,
-        )
-
-        self.assertIn("run", command)
-        self.assertNotIn("fast-gif", command)
-        self.assertNotIn("--shortest-path", command)
-        self.assertNotIn("--auto-import", command)
+    def test_fast_vid_command_imports_gif_originals(self):
+        target = Path("/tmp/synthetic/animated.data")
+        self.assertEqual(fastmode_paths.build_fast_vid_command(Path("/bin/vid"), target),
+                         ["/bin/vid", "fast-vid", "--", str(target)])
 
     def test_drag_processor_wires_shortest_path_fastmode_to_rust_flags(self):
         rust_source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
@@ -237,7 +196,7 @@ class TestFastModePaths(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("AppSession::start()", source)
+        self.assertIn("AppSession::start,", source)
         self.assertIn("session.archive()", source)
         self.assertIn("ensure_unified_log_dir", session)
         self.assertIn("archive_drag_drop_session_bundle", session)
@@ -279,11 +238,3 @@ class TestFastModePaths(unittest.TestCase):
         self.assertIn("fn run_fast_img_post_success", source)
         self.assertIn("run_fast_img_post_success(", source)
         self.assertIn("VerifyFastImgMode::Delivery", source)
-
-    def test_drag_processor_wires_videos_only_fastmode_to_full_vid_run(self):
-        rust_source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("choose_fast_vid_shortest_path(strategy)?", rust_source)
-        self.assertIn("LaunchMode::FastVid", rust_source)
-        self.assertIn("build_fast_vid_command(", rust_source)

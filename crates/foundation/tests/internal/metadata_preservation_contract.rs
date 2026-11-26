@@ -1408,33 +1408,6 @@ fn contract_meme_finalize_requires_cleared_embedded_metadata() {
 }
 
 #[test]
-fn contract_animated_meme_finalize_requires_cleared_embedded_metadata() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = fs::read_to_string(manifest_dir.join("../vid/src/animated_image.rs"))
-        .expect("animated_image source must be readable");
-    let convert = source
-        .split("pub fn convert_to_avif_meme(")
-        .nth(1)
-        .and_then(|rest| rest.split("pub fn ").next())
-        .expect("convert_to_avif_meme body");
-    let commit_pos = convert
-        .find("commit_temp_to_output_with_metadata(")
-        .expect("animated meme commit");
-    let clear_pos = convert
-        .find("MetadataOutputPolicy::Clear")
-        .expect("animated meme cleared metadata audit");
-    assert!(
-        commit_pos < clear_pos && convert[commit_pos..clear_pos].contains("None,"),
-        "CONTRACT: animated meme commit must not copy source metadata before its Clear audit"
-    );
-    assert!(
-        convert.contains("verify_output_embedded_metadata(")
-            && convert.contains("cleared-metadata mismatch output cleanup"),
-        "CONTRACT: animated meme output must fail closed and remove residual-metadata output"
-    );
-}
-
-#[test]
 fn contract_metadata_directory_and_xmp_probe_errors_are_not_silent() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let metadata_sources = [

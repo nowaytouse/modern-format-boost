@@ -1564,6 +1564,18 @@ fn check_orientation_policy_with_resume(
     progress: &mut dyn FnMut(usize, usize),
     resume: Option<&Gate1ProofCache<'_>>,
 ) -> CheckDetail {
+    if files.is_empty() {
+        return detail(
+            "orient",
+            ctx.expected_count == 0 && ctx.blake3_log.is_empty(),
+            format!(
+                "{} encoded outputs for orientation checks",
+                ctx.expected_count
+            ),
+            "0 encoded outputs".into(),
+            Vec::new(),
+        );
+    }
     if !is_command_available("exiftool") {
         return detail(
             "orient",
@@ -3196,7 +3208,7 @@ mod tests {
 
     #[test]
     fn empty_orientation_output_set_does_not_report_file_progress() {
-        let ctx = PipelineCtx {
+        let mut ctx = PipelineCtx {
             working_copy: PathBuf::from("/tmp"),
             src_dir: PathBuf::from("/tmp"),
             blake3_log: Blake3Log::new(),
@@ -3207,15 +3219,12 @@ mod tests {
         };
         let mut attempts = Vec::new();
 
-        let check = super::check_orientation_policy_with_probes(
-            &ctx,
-            &[],
-            &mut |done, total| attempts.push((done, total)),
-            |_| Ok(false),
-            |_, _| Ok(false),
-        );
+        let mut record = |done, total| attempts.push((done, total));
+        let check = super::check_orientation_policy(&ctx, &[], &mut record);
 
         assert!(check.passed);
+        ctx.expected_count = 1;
+        assert!(!super::check_orientation_policy(&ctx, &[], &mut record).passed);
         assert_eq!(attempts, [] as [(usize, usize); 0]);
     }
 
@@ -4267,6 +4276,8 @@ pub struct FastImgProcessingContract {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "strategy", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum FastImgEncodingParameters {
+    /// Deliver the original GIF resource without running an encoder.
+    Gif,
     Jxl {
         jpeg_effort: u8,
         jpeg_effort_search: crate::runtime_config::JpegEffortSearch,
@@ -4333,6 +4344,7 @@ impl FastImgProcessingContract {
             ));
         }
         match &self.encoding {
+            FastImgEncodingParameters::Gif if self.schema == 1 && strategy == "gif" => Ok(()),
             FastImgEncodingParameters::Jxl {
                 jpeg_effort,
                 pixel_effort_ceiling,

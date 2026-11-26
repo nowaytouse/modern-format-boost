@@ -22,8 +22,7 @@ use dev::infra::drag_drop::{
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{
-    build_fast_img_command, build_fast_img_restore_command, build_fast_vid_command,
-    fast_img_restore_output_dir_for_target, fast_vid_output_dir_for_target,
+    build_fast_img_command, build_fast_img_restore_command, fast_img_restore_output_dir_for_target,
 };
 use dev::infra::process_stream::ProcessorStats;
 use dev::infra::rich_panel::{
@@ -121,7 +120,7 @@ struct Args {
     #[arg(
         long,
         hide = true,
-        requires_all = ["retry", "shortest_path", "output"],
+        requires_all = ["retry", "output"],
         conflicts_with_all = ["retry_failed", "resume", "dry_run", "watch", "in_place", "force"]
     )]
     recover_photos_cleanup: bool,
@@ -610,10 +609,10 @@ fn ensure_tools_ready(project_root: &Path, mode: &LaunchMode) -> Result<()> {
     let img_bin = cli_binary(project_root, "img");
     let vid_bin = cli_binary(project_root, "vid");
     let verify_bin = cli_binary(project_root, "verify");
-    let needs_img = !matches!(mode, LaunchMode::Videos | LaunchMode::FastVid);
+    let needs_img = !matches!(mode, LaunchMode::Videos);
     let needs_vid = !matches!(
         mode,
-        LaunchMode::Images | LaunchMode::FastImg | LaunchMode::RestoreJpeg
+        LaunchMode::Images | LaunchMode::FastImg | LaunchMode::FastVid | LaunchMode::RestoreJpeg
     );
 
     if is_app_bundle_resource_root(project_root) {
@@ -682,7 +681,7 @@ const fn processing_filter(args: &Args) -> ProcessingFilter {
     } else {
         match args.mode {
             LaunchMode::Images => ProcessingFilter::ImagesOnly,
-            LaunchMode::Videos => ProcessingFilter::VideosOnly,
+            LaunchMode::Videos | LaunchMode::FastVid => ProcessingFilter::VideosOnly,
             _ => ProcessingFilter::Both,
         }
     }
@@ -702,18 +701,62 @@ const fn mode_uses_external_tool_snapshot(mode: &LaunchMode) -> bool {
     )
 }
 
+impl LaunchMode {
+    const fn checkpointed(&self) -> bool {
+        matches!(self, Self::FastImg | Self::FastVid)
+    }
+}
+
+impl Args {
+    fn delivery_strategy(&self) -> Option<&str> {
+        if self.mode == LaunchMode::FastVid {
+            Some("gif")
+        } else {
+            self.strategy.as_deref()
+        }
+    }
+
+    fn photos_delivery(&self) -> bool {
+        self.mode == LaunchMode::FastVid || self.shortest_path
+    }
+}
+
 fn validate_media_options(args: &Args) -> Result<()> {
+    if args.mode == LaunchMode::FastVid {
+        anyhow::ensure!(
+            args.inputs.len() == 1,
+            "Fast VID requires one GIF file or input folder"
+        );
+        anyhow::ensure!(
+            args.strategy.is_none()
+                && !args.shortest_path
+                && !args.archive
+                && !args.in_place
+                && !args.force
+                && !args.images_only
+                && !args.ultimate
+                && !args.watch,
+            "Fast VID imports original GIFs to Photos and does not accept conversion, watch or output-mode switches"
+        );
+    }
+    if args.mode == LaunchMode::FastImg {
+        anyhow::ensure!(
+            matches!(args.strategy.as_deref(), None | Some("jxl" | "avif")),
+            "Fast IMG requires JXL or AVIF; GIF originals use Fast VID"
+        );
+    }
     if args.recover_photos_cleanup {
         anyhow::ensure!(
-            args.mode == LaunchMode::FastImg
+            args.mode.checkpointed()
+                && args.photos_delivery()
                 && args.inputs.len() == 1
-                && matches!(args.strategy.as_deref(), Some("jxl" | "avif")),
-            "Photos cleanup recovery requires Fast IMG with one saved source and its explicit strategy"
+                && matches!(args.delivery_strategy(), Some("jxl" | "avif" | "gif")),
+            "Photos cleanup recovery requires one saved source and its Photos delivery strategy"
         );
     }
     anyhow::ensure!(
-        !args.retry_failed || (args.mode == LaunchMode::FastImg && args.inputs.len() == 1),
-        "--retry-failed requires --mode fast-img and exactly one source directory"
+        !args.retry_failed || (args.mode.checkpointed() && args.inputs.len() == 1),
+        "--retry-failed requires Fast IMG or Fast VID and exactly one source"
     );
     anyhow::ensure!(
         args.img_avif_speed.is_none()
@@ -735,7 +778,7 @@ fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
         (args.img_jxl_effort.is_none() && args.img_jxl_effort_search.is_none())
             || (args.mode == LaunchMode::FastImg
-                && args.strategy.as_deref().unwrap_or("jxl") == "jxl")
+                && args.delivery_strategy().unwrap_or("jxl") == "jxl")
             || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
                 && processing_filter(args).accepts_image()),
         "JXL pixel effort requires selected standard images or Fast IMG JXL"
@@ -792,8 +835,8 @@ fn validate_media_options(args: &Args) -> Result<()> {
         "cache policy settings require media processing mode"
     );
     anyhow::ensure!(
-        args.photos.cli_arguments().is_empty() || args.mode == LaunchMode::FastImg,
-        "Photos import settings require --mode fast-img"
+        args.photos.cli_arguments().is_empty() || args.mode.checkpointed(),
+        "Photos import settings require --mode fast-img or --mode fast-vid"
     );
     anyhow::ensure!(
         args.external_tool_snapshot.is_none() || mode_uses_external_tool_snapshot(&args.mode),
@@ -1588,7 +1631,7 @@ fn run_post_adjacent_steps(
             include_logs: true,
             auto_mode: true,
             fast_img: dev::infra::drag_drop::VerifyFastImgMode::None,
-            strategy: args.strategy.clone(),
+            strategy: args.delivery_strategy().map(str::to_owned),
         },
     )?;
     session.record_history_verification(&verify, target, &output, None)?;
@@ -1740,11 +1783,11 @@ fn run_fast_img_post_success(
         && foundation::fast_img_store::failed_retry_context(output_dir)?.is_some();
     let cleanup_output_path =
         std::path::absolute(output_dir).context("resolve output cleanup receipt path")?;
-    if recovery.is_none() {
+    if recovery.is_none() && args.mode != LaunchMode::FastVid {
         match fast_img_reported_output_bytes(
             summary.fast_img_session_output_bytes,
             output_dir,
-            args.strategy.as_deref().unwrap_or("jxl"),
+            args.delivery_strategy().unwrap_or("jxl"),
         ) {
             Ok(bytes) => summary.fast_img_size_after_override = Some(bytes),
             Err(error) => {
@@ -1792,7 +1835,7 @@ fn run_fast_img_post_success(
                 include_logs: false,
                 auto_mode: true,
                 fast_img: mode,
-                strategy: args.strategy.clone(),
+                strategy: args.delivery_strategy().map(str::to_owned),
             },
         )
         .map(|verified| (verified, selected_marker))
@@ -1804,7 +1847,7 @@ fn run_fast_img_post_success(
                 Some(reason) => error.context(FastImgIndependentVerificationUnavailable(reason)),
                 None => error,
             };
-            let receipt = if args.shortest_path {
+            let receipt = if args.photos_delivery() {
                 OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
             } else {
                 OutputCleanupReceipt::not_requested(&cleanup_output_path)
@@ -1837,7 +1880,7 @@ fn run_fast_img_post_success(
                 .warnings
                 .map(|w| if w { "WARNINGS" } else { "CLEAN" });
             summary.integrity_issue_count = verify.issue_count;
-            if !args.shortest_path {
+            if !args.photos_delivery() {
                 return Ok(OutputCleanupReceipt::not_requested(&cleanup_output_path));
             }
             if verify.warnings != Some(false) {
@@ -1888,7 +1931,7 @@ fn run_fast_img_post_success(
             "Fast IMG cleanup recovery verification found unresolved evidence"
         );
     }
-    if args.shortest_path
+    if args.photos_delivery()
         && verify.warnings == Some(false)
         && !failed_only
         && selected_file.is_none()
@@ -1896,7 +1939,7 @@ fn run_fast_img_post_success(
     {
         let historical = observe_historical_fast_img_outputs(
             source_root,
-            args.strategy.as_deref().unwrap_or("jxl"),
+            args.delivery_strategy().unwrap_or("jxl"),
             &cleanup_output_path,
         );
         let recorded = serde_json::to_value(historical)
@@ -2016,7 +2059,7 @@ fn run_fast_img_restore_post_success(
             include_logs: false,
             auto_mode: true,
             fast_img: dev::infra::drag_drop::VerifyFastImgMode::Restore { selected_file },
-            strategy: args.strategy.clone(),
+            strategy: args.delivery_strategy().map(str::to_owned),
         },
     )?;
     summary.integrity_state = verify
@@ -2060,13 +2103,13 @@ fn resolve_fast_img_output_for_run(args: &Args, target: &Path) -> Result<PathBuf
     } else if args.no_resume {
         foundation::pipeline::verification::resolve_fresh_working_copy_dir_for_delivery(
             &source_root,
-            args.shortest_path,
+            args.photos_delivery(),
         )?
     } else {
         foundation::pipeline::verification::resolve_working_copy_dir_for_delivery(
             &source_root,
-            args.strategy.as_deref().unwrap_or("jxl"),
-            args.shortest_path,
+            args.delivery_strategy().unwrap_or("jxl"),
+            args.photos_delivery(),
         )?
     };
     if let Some(configured) = &args.output
@@ -2127,7 +2170,7 @@ fn selected_failed_retry_parent(
         let source = fast_img_source_root_for_run(target)?;
         let Some(child) = foundation::fast_img_store::resolve_failed_retry_child_for_source(
             &source,
-            args.strategy.as_deref().unwrap_or("jxl"),
+            args.delivery_strategy().unwrap_or("jxl"),
         )?
         else {
             return Ok(None);
@@ -2139,12 +2182,12 @@ fn selected_failed_retry_parent(
     };
     let parent = foundation::fast_img_store::inspect_failed_retry_parent_for_delivery(
         &context.parent().working_copy,
-        args.shortest_path,
+        args.photos_delivery(),
     )?;
     let source = validate_failed_retry_input(&parent, target)?;
     anyhow::ensure!(
         source == parent.marker().src_dir
-            && parent.marker().strategy == args.strategy.as_deref().unwrap_or("jxl")
+            && parent.marker().strategy == args.delivery_strategy().unwrap_or("jxl")
             && output == parent.child_working_copy(),
         "selected retry child belongs to a different source, strategy or output"
     );
@@ -2161,24 +2204,24 @@ fn fast_img_cleanup_recovery_for_run(
     args: &Args,
 ) -> Result<Option<foundation::pipeline::verification::WorkingCopyMarker>> {
     if args.recover_photos_cleanup {
-        let ([source], Some(output), Some(strategy @ ("jxl" | "avif"))) = (
+        let ([source], Some(output), Some(strategy @ ("jxl" | "avif" | "gif"))) = (
             args.inputs.as_slice(),
             args.output.as_deref(),
-            args.strategy.as_deref(),
+            args.delivery_strategy(),
         ) else {
             bail!("Photos cleanup recovery requires exact saved source, output and strategy");
         };
         anyhow::ensure!(
-            args.mode == LaunchMode::FastImg,
-            "Photos cleanup recovery requires Fast IMG"
+            args.mode.checkpointed(),
+            "Photos cleanup recovery requires Fast IMG or Fast VID"
         );
         return exact_fast_img_photos_cleanup_recovery(source, output, strategy).map(Some);
     }
     let ([source], Some(output)) = (args.inputs.as_slice(), args.output.as_deref()) else {
         return Ok(None);
     };
-    if args.mode != LaunchMode::FastImg
-        || !args.shortest_path
+    if !args.mode.checkpointed()
+        || !args.photos_delivery()
         || args.dry_run
         || args.watch
         || args.retry_failed
@@ -2197,13 +2240,13 @@ fn fast_img_cleanup_recovery_for_run(
     exact_fast_img_photos_cleanup_recovery(
         source,
         output,
-        args.strategy.as_deref().unwrap_or("jxl"),
+        args.delivery_strategy().unwrap_or("jxl"),
     )
     .map(Some)
 }
 
 fn fast_img_retry_before_scan(args: &Args) -> Result<Option<FastImgRetryBeforeScan>> {
-    if args.mode != LaunchMode::FastImg || args.dry_run {
+    if !args.mode.checkpointed() || args.dry_run {
         return Ok(None);
     }
     let Some(target) = args.inputs.first() else {
@@ -2236,11 +2279,11 @@ fn failed_retry_parent_for_run(
     args: &Args,
     target: &Path,
 ) -> Result<foundation::fast_img_store::FailedRetryParent> {
-    let strategy = args.strategy.as_deref().unwrap_or("jxl");
+    let strategy = args.delivery_strategy().unwrap_or("jxl");
     let (parent, source) = if let Some(selected) = &args.retry_failed_parent {
         let parent = foundation::fast_img_store::inspect_failed_retry_parent_for_delivery(
             selected,
-            args.shortest_path,
+            args.photos_delivery(),
         )?;
         let source = validate_failed_retry_input(&parent, target)?;
         (parent, source)
@@ -2251,7 +2294,7 @@ fn failed_retry_parent_for_run(
         );
         let parent = foundation::fast_img_store::inspect_failed_retry_parent_for_delivery(
             &selected,
-            args.shortest_path,
+            args.photos_delivery(),
         )?;
         let source = validate_failed_retry_input(&parent, target)?;
         (parent, source)
@@ -2260,14 +2303,14 @@ fn failed_retry_parent_for_run(
         let selected = foundation::pipeline::verification::resolve_working_copy_dir_for_delivery(
             &source,
             strategy,
-            args.shortest_path,
+            args.photos_delivery(),
         )?;
         let selected = foundation::fast_img_store::failed_retry_context(&selected)?
             .map_or(selected, |context| context.parent().working_copy.clone());
         (
             foundation::fast_img_store::inspect_failed_retry_parent_for_delivery(
                 &selected,
-                args.shortest_path,
+                args.photos_delivery(),
             )?,
             source,
         )
@@ -2282,7 +2325,7 @@ fn failed_retry_parent_for_run(
 fn failed_retry_delivery(
     args: &Args,
 ) -> Result<foundation::fast_img_store::FailedRetryDeliveryIntent> {
-    if !args.shortest_path {
+    if !args.photos_delivery() {
         return Ok(foundation::fast_img_store::FailedRetryDeliveryIntent::Local);
     }
     let mut loaded = foundation::runtime_config::load(args.img_config.as_deref(), false)?;
@@ -2452,12 +2495,12 @@ fn fast_img_launch_command(
         &img_bin,
         target,
         &output,
-        args.shortest_path,
+        args.photos_delivery(),
         args.archive,
         retry,
         args.no_resume,
-        args.strategy.as_deref(),
-        args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
+        args.delivery_strategy(),
+        args.mode != LaunchMode::FastVid && (args.ultimate || DRAG_DROP_CHILD_ULTIMATE),
     ))?;
     if args.retry_failed {
         command.args.push("--retry-failed".into());
@@ -2747,7 +2790,6 @@ fn plan_cli_invocations(
     }
 
     let img_bin = cli_binary(project_root, "img");
-    let vid_bin = cli_binary(project_root, "vid");
     let mut commands = Vec::new();
 
     for input in &args.inputs {
@@ -2763,7 +2805,7 @@ fn plan_cli_invocations(
             LaunchMode::Videos => {
                 commands.push(rust_run_command(project_root, "vid", args, input)?)
             }
-            LaunchMode::FastImg => {
+            LaunchMode::FastImg | LaunchMode::FastVid => {
                 commands.push(fast_img_launch_command(args, project_root, input)?.0);
             }
             LaunchMode::RestoreJpeg => {
@@ -2775,22 +2817,6 @@ fn plan_cli_invocations(
                     output.as_deref(),
                     args,
                 )?);
-            }
-            LaunchMode::FastVid => {
-                let output = args
-                    .output
-                    .clone()
-                    .unwrap_or_else(|| fast_vid_output_dir_for_target(input));
-                let mut command = LaunchCommand::from_argv(build_fast_vid_command(
-                    &vid_bin,
-                    input,
-                    &output,
-                    args.shortest_path,
-                    args.strategy.as_deref(),
-                ))?;
-                command.args.extend(args.performance.cli_arguments());
-                command.args.extend(args.cache.cli_arguments());
-                commands.push(command);
             }
             LaunchMode::Collect | LaunchMode::Compare => {
                 let output = args.output.clone().unwrap_or_else(|| {
@@ -2872,7 +2898,7 @@ const fn mode_label(mode: &LaunchMode) -> &'static str {
         LaunchMode::Videos => "Videos/Animated",
         LaunchMode::FastImg => "Fast Image",
         LaunchMode::RestoreJpeg => "Restore Original JPEG",
-        LaunchMode::FastVid => "Fast Video",
+        LaunchMode::FastVid => "Fast Video · Import GIF originals to Photos",
         LaunchMode::Collect => "Collect Recovery Originals",
         LaunchMode::Compare => "Compare Backup",
         LaunchMode::MergeXmp => "Merge XMP",
@@ -2886,11 +2912,7 @@ const fn mode_label(mode: &LaunchMode) -> &'static str {
 const fn mode_supports_ultimate(mode: &LaunchMode) -> bool {
     matches!(
         mode,
-        LaunchMode::Auto
-            | LaunchMode::Images
-            | LaunchMode::Videos
-            | LaunchMode::FastImg
-            | LaunchMode::FastVid
+        LaunchMode::Auto | LaunchMode::Images | LaunchMode::Videos | LaunchMode::FastImg
     )
 }
 
@@ -3029,15 +3051,18 @@ fn run_with_history(
                 inputs: args.inputs.clone(),
                 output: args.output.clone(),
                 backup: args.backup.clone(),
-                mode: args
-                    .mode
-                    .to_possible_value()
-                    .context("history mode has no CLI name")?
-                    .get_name()
-                    .to_owned(),
+                mode: if args.mode == LaunchMode::FastVid {
+                    "fast-vid-gif".to_owned()
+                } else {
+                    args.mode
+                        .to_possible_value()
+                        .context("history mode has no CLI name")?
+                        .get_name()
+                        .to_owned()
+                },
                 dry_run: args.dry_run,
                 in_place: args.in_place,
-                shortest_path: args.shortest_path,
+                shortest_path: args.photos_delivery(),
                 retry: args.retry,
                 resume: args.resume,
                 no_resume: args.no_resume,
@@ -3133,6 +3158,14 @@ fn run_drag_drop_inner(
     if mode_needs_img_vid_binaries(&args.mode) {
         ensure_tools_ready(&root, &args.mode)?;
     }
+    if args.mode == LaunchMode::FastVid && args.dry_run {
+        // Let the worker inspect GIF contents so preview and import use the same admission rule.
+        let mut command = plan_cli_invocations(args, &root, session)?
+            .pop()
+            .context("GIF preview requires a worker command")?;
+        command.args.push("--dry-run".into());
+        return command.run(false);
+    }
     if !args.dry_run
         && mode_needs_db_health(&args.mode)
         && !(args.mode == LaunchMode::Auto && scan.as_ref().is_some_and(|scan| scan.vid_count == 0))
@@ -3149,7 +3182,7 @@ fn run_drag_drop_inner(
                 check_system_resources(&directory, minimum)?;
             }
         }
-    } else if !args.dry_run && !args.inputs.is_empty() && args.mode != LaunchMode::FastImg {
+    } else if !args.dry_run && !args.inputs.is_empty() && !args.mode.checkpointed() {
         check_system_resources(&args.inputs[0], minimum_free_disk_bytes(0)?)?;
     }
 
@@ -3200,7 +3233,7 @@ fn run_drag_drop_inner(
         println!("\n\x1B[34m🚀 Launching Rust Fast Mode Pipeline...\x1B[0m");
     }
 
-    if matches!(args.mode, LaunchMode::FastImg | LaunchMode::RestoreJpeg) && !args.dry_run {
+    if (args.mode.checkpointed() || args.mode == LaunchMode::RestoreJpeg) && !args.dry_run {
         if args.mode == LaunchMode::RestoreJpeg {
             let input = args.inputs.first().expect("input");
             let (output, is_photos_audit) =
@@ -3283,7 +3316,7 @@ fn run_drag_drop_inner(
                 }
             }
         } else {
-            draw_separator("Processing (fast-img)");
+            draw_separator(mode_label(&args.mode));
             // The worker can delete the input before historical output cleanup.
             let target = args.inputs.first().context("input required")?;
             let source_root = fast_img_source_root_for_run(target)?;
@@ -3344,7 +3377,7 @@ fn run_drag_drop_inner(
                                         &stats,
                                         &source_root,
                                         &output,
-                                        args.shortest_path,
+                                        args.photos_delivery(),
                                     )
                                     .then_some(
                                         FastImgPartialDelivery {
@@ -3363,9 +3396,9 @@ fn run_drag_drop_inner(
                                         &stats,
                                         &source_root,
                                         &output,
-                                        args.shortest_path,
+                                        args.photos_delivery(),
                                     );
-                                    if args.shortest_path {
+                                    if args.photos_delivery() {
                                         quarantine_blocked = report.as_ref().and_then(|report| {
                                             PhotosQuarantineBlocked::from_receipt(
                                                 report,
@@ -3427,7 +3460,7 @@ fn run_drag_drop_inner(
                             .context("resolve blocked output cleanup path")
                             .and_then(|path| {
                                 session.expect("session").record_output_cleanup(
-                                    if args.shortest_path && !retained_only_verified {
+                                    if args.photos_delivery() && !retained_only_verified {
                                         OutputCleanupReceipt::verification_blocked(&path)
                                     } else {
                                         OutputCleanupReceipt::not_requested(&path)
@@ -3557,7 +3590,7 @@ fn run_drag_drop_inner(
         if let Some(ref scan) = scan
             && first_error.is_none()
         {
-            let size_comparison = if matches!(args.mode, LaunchMode::FastImg) {
+            let size_comparison = if args.mode.checkpointed() {
                 let before = summary
                     .fast_img_session_source_bytes
                     .unwrap_or(scan.media_total_size);
@@ -3622,7 +3655,7 @@ fn run_drag_drop_inner(
         && session.is_some()
         && let Some(output_dir) = &args.output
     {
-        let sizes = if matches!(args.mode, LaunchMode::FastImg) {
+        let sizes = if args.mode.checkpointed() {
             summary
                 .fast_img_session_source_bytes
                 .zip(summary.fast_img_size_after_override)
@@ -3877,17 +3910,15 @@ fn execute_menu_selection(
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if matches!(filter, ProcessingFilter::VideosOnly) {
-                let shortest = dev::infra::drag_drop::choose_fast_vid_shortest_path(strategy)?;
-                let output = dev::infra::fastmode_paths::fast_vid_output_dir_for_target(target);
                 let args = build_run_args(
                     target,
                     LaunchMode::FastVid,
-                    Some(output),
+                    None,
                     false,
-                    true,
-                    shortest,
+                    false,
+                    false,
                     filter,
-                    Some(strategy.to_string()),
+                    None,
                     settings,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
@@ -4010,6 +4041,7 @@ fn build_run_args(
     } else {
         None
     };
+    let ultimate = DRAG_DROP_CHILD_ULTIMATE && mode_supports_ultimate(&mode);
     Args {
         inputs: vec![target.to_path_buf()],
         mode,
@@ -4030,7 +4062,7 @@ fn build_run_args(
         in_place,
         resume: false,
         no_resume: false,
-        ultimate: DRAG_DROP_CHILD_ULTIMATE,
+        ultimate,
         verbose: DRAG_DROP_CHILD_VERBOSE,
         watch: false,
         images_only: matches!(filter, ProcessingFilter::ImagesOnly),
@@ -4156,7 +4188,10 @@ fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
         print_menu_hint();
 
         // Show strategy hint when Fast Mode is selected
-        if selected == 0 && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2 {
+        if selected == 0
+            && filter == ProcessingFilter::ImagesOnly
+            && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2
+        {
             let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
             let dim = if colors_enabled() { "\x1b[2m" } else { "" };
             println!(
@@ -4186,7 +4221,10 @@ fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
             },
             NavKey::Char('s') | NavKey::Char('S') | NavKey::Char(' ') => {
                 // Toggle strategy when Fast Mode is selected
-                if selected == 0 && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2 {
+                if selected == 0
+                    && filter == ProcessingFilter::ImagesOnly
+                    && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2
+                {
                     strategy = if strategy == "jxl" {
                         "avif".to_string()
                     } else {
@@ -4231,15 +4269,8 @@ fn optimization_menu_labels(
     match filter {
         ProcessingFilter::VideosOnly => match sub {
             0 => (
-                format!(
-                    "Mode: Fast Video Mode ({}) [Tab to Switch]",
-                    if strategy == "avif" {
-                        "AVIF/Meme"
-                    } else {
-                        "JXL"
-                    }
-                ),
-                "Full LoopIntent path for videos and animated images.",
+                "Mode: Fast Video · Import GIF Originals to Photos [Tab to Switch]".to_owned(),
+                "Verify GIF content, then import the original bytes into Photos.",
             ),
             1 => (
                 "Mode: In-Place Optimization [Tab to Switch]".to_string(),
@@ -4345,7 +4376,7 @@ fn run_watch_loop(args: &Args, session: &AppSession) -> Result<()> {
 }
 
 fn validate_launcher_photos_working_copy_location(args: &Args) -> Result<()> {
-    if args.mode != LaunchMode::FastImg || !args.shortest_path {
+    if !args.mode.checkpointed() || !args.photos_delivery() {
         return Ok(());
     }
     let [input] = args.inputs.as_slice() else {
@@ -4390,7 +4421,7 @@ fn validate_launcher_photos_working_copy_location(args: &Args) -> Result<()> {
     }
     if !args.no_resume {
         let markers =
-            match matching_working_copy_markers(&source, args.strategy.as_deref().unwrap_or("jxl"))
+            match matching_working_copy_markers(&source, args.delivery_strategy().unwrap_or("jxl"))
             {
                 Ok(markers) => markers,
                 Err(error) if foundation::fast_img_store::is_state_migration_required(&error) => {
@@ -4492,7 +4523,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
         bail!("Fast IMG conflict preview requires exactly one input");
     };
     anyhow::ensure!(
-        args.mode == LaunchMode::FastImg
+        args.mode.checkpointed()
             && !args.in_place
             && args.backup.is_none()
             && args.photos_album_id.is_none()
@@ -4501,9 +4532,9 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
     );
     validate_media_options(args)?;
     input.to_str().context("Fast IMG input path is not UTF-8")?;
-    let strategy = args.strategy.as_deref().unwrap_or("jxl");
+    let strategy = args.delivery_strategy().unwrap_or("jxl");
     anyhow::ensure!(
-        matches!(strategy, "jxl" | "avif"),
+        matches!(strategy, "jxl" | "avif" | "gif"),
         "unsupported Fast IMG strategy"
     );
     let metadata = match fs::symlink_metadata(input) {
@@ -4536,7 +4567,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
             "input_path": input,
             "source_root": source,
             "strategy": strategy,
-            "photos": args.shortest_path,
+            "photos": args.photos_delivery(),
             "decision": decision,
         }))
     };
@@ -4616,7 +4647,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
     let (fresh_output, fresh_unavailable_reason, collisions) =
         match inspect_fresh_working_copy_dir_for_delivery(
             &source,
-            args.shortest_path,
+            args.photos_delivery(),
             OCCUPIED_OUTPUT_LIMIT,
         ) {
             Ok((output, collisions)) => (Some(output), None, collisions),
@@ -4628,7 +4659,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
                 return migration_required(&source);
             }
             Err(error)
-                if args.shortest_path
+                if args.photos_delivery()
                     && !args.no_resume
                     && saved_previous.is_some()
                     && is_photos_working_copy_unavailable(&error) =>
@@ -4680,10 +4711,12 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
         }) {
             Some(marker) => match inspect_failed_retry_parent_for_delivery(
                 &marker.working_copy,
-                args.shortest_path,
+                args.photos_delivery(),
             ) {
                 Ok(parent) => Some(parent),
-                Err(error) if args.shortest_path && is_photos_working_copy_unavailable(&error) => {
+                Err(error)
+                    if args.photos_delivery() && is_photos_working_copy_unavailable(&error) =>
+                {
                     None
                 }
                 Err(error) => return Err(error.into()),
@@ -4784,7 +4817,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
         output_resource_check_dir(proposed),
     );
     let mut unknown = vec!["current_media_verification"];
-    if args.shortest_path {
+    if args.photos_delivery() {
         unknown.push("photos_duplicate_count");
     }
     Ok(serde_json::json!({
@@ -4793,7 +4826,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
         "input_path": input,
         "source_root": source,
         "strategy": strategy,
-        "photos": args.shortest_path,
+        "photos": args.photos_delivery(),
         "decision": decision,
         "proposed_output": proposed,
         "storage": {"output_path": proposed, "observation": storage},
@@ -4813,12 +4846,16 @@ fn migrate_fast_img_state(args: &Args) -> Result<serde_json::Value> {
     let [input] = args.inputs.as_slice() else {
         bail!("Fast IMG state migration requires exactly one input");
     };
+    validate_media_options(args)?;
     anyhow::ensure!(
-        args.mode == LaunchMode::FastImg,
-        "Fast IMG state migration requires Fast IMG mode"
+        args.mode.checkpointed(),
+        "Shared media checkpoint migration requires Fast IMG or Fast VID"
     );
     anyhow::ensure!(
-        matches!(args.strategy.as_deref().unwrap_or("jxl"), "jxl" | "avif"),
+        matches!(
+            args.delivery_strategy().unwrap_or("jxl"),
+            "jxl" | "avif" | "gif"
+        ),
         "unsupported Fast IMG strategy"
     );
     input.to_str().context("Fast IMG input path is not UTF-8")?;
@@ -4875,8 +4912,8 @@ fn main() -> Result<std::process::ExitCode> {
     if args.plan_json {
         #[cfg(unix)]
         isolate_preflight_process_group()?;
-        if args.mode == LaunchMode::FastImg {
-            if args.shortest_path {
+        if args.mode.checkpointed() {
+            if args.photos_delivery() {
                 load_local_env()?;
             }
             println!(
@@ -5370,6 +5407,42 @@ mod tests {
         }
         assert!(!prospective.exists());
         assert_eq!(fs::read(&input)?.as_slice(), image);
+        Ok(())
+    }
+
+    #[test]
+    fn fast_vid_plans_original_gif_delivery_in_private_state() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
+        let input = tempfile::tempdir()?;
+        let source = input.path().join("renamed.bin");
+        fs::write(
+            &source,
+            b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;",
+        )?;
+        for selection in [input.path(), source.as_path()] {
+            let mut args = Args::try_parse_from(["mfb", "--mode", "fast-vid", "--no-resume"])?;
+            args.inputs.push(selection.to_path_buf());
+            let plan = inspect_fast_img_retry_plan(&args)?;
+            assert_eq!(plan["strategy"], "gif");
+            assert_eq!(plan["photos"], true);
+            assert_eq!(plan["decision"], "fresh");
+            let (command, output) = fast_img_launch_command(&args, Path::new("/repo"), selection)?;
+            assert_eq!(plan["proposed_output"].as_str(), output.to_str());
+            assert!(!output.starts_with(input.path()));
+            assert_eq!(command.args.first().map(String::as_str), Some("fast-img"));
+            assert!(command.args.windows(2).any(|p| p == ["--strategy", "gif"]));
+            assert!(command.args.iter().any(|arg| arg == "--shortest-path"));
+            assert!(command.args.iter().any(|arg| arg == "--no-resume"));
+            assert!(!output.exists());
+            args.strategy = Some("avif".into());
+            assert!(validate_media_options(&args).is_err());
+            args.strategy = None;
+            args.shortest_path = true;
+            assert!(validate_media_options(&args).is_err());
+        }
+        assert!(source.is_file());
         Ok(())
     }
 
@@ -8168,7 +8241,7 @@ mod tests {
         if isolated_state_test() {
             return;
         }
-        let (input, _guard) = fast_img_plan_fixture();
+        let input = tempfile::tempdir().unwrap();
         for mode in ["images", "videos", "fast-img", "fast-vid"] {
             let mut args = Args::try_parse_from([
                 "mfb",

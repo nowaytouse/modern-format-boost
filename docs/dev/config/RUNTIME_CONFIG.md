@@ -205,12 +205,14 @@ AV1 defaults to non-Apple delivery; an explicitly
 conflicting `--apple-compat` request is rejected. HEVC keeps Apple compatibility
 by default; `--no-apple-compat` still disables it. Video quality and preset are not exposed by the current
 CLI and therefore are not editable controls.
-Video settings apply only to standard `vid run` processing. Fast Video uses
-`vid fast-gif`, which does not use `vid.codec`, the standard error-mode override or
-long-video quality overrides; explicit launcher overrides and direct long-video
-quality flags there are rejected. Direct Fast VID
-configuration files can set its shared performance policy, not its GIF/AVIF
-strategy. The GUI disables the settings button for that operation.
+Video encoder settings apply to standard `vid run` processing. Fast VID uses
+`vid fast-vid INPUT` to import byte-exact GIF originals into Apple Photos.
+The worker decodes GIF frames during admission and uses the shared Photos
+checkpoint and original-resource verification. A GIF with a missing or
+misleading extension receives a private transport filename ending in `.gif`.
+Its receipt retains the selected source's relative path. An unverified
+external XMP or AAE companion retains the source and its companion.
+Use `--dry-run` to preview and `--retry` to continue a saved task.
 Fast IMG accepts the same typed `execution.error_mode` through its own GUI override
 and launcher `--img-error-mode`. The default is `log-and-continue` (record failures,
 preserve sources and continue independent work). Fail-fast drains and checkpoints
@@ -273,7 +275,7 @@ configuration loading rather than silently choosing a policy. Files and explicit
 flags retain higher priority. `config show --effective` includes the policy's winning
 source and ordered source chain; new captured history snapshots include its winning
 source. This is not a failure-count threshold. Fast IMG encoding waves and local
-verification use this policy; Fast GIF retains its own encoding loop. Shared Photos
+verification use this policy. Shared Photos
 import error handling continues to use the resolved policy.
 
 Gate 1 treats ExifTool's exact `Bad IFD1 directory` diagnostic as a rejected
@@ -579,7 +581,7 @@ remain subject to macOS behavior.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `execution.error_mode` | `log-and-continue` | IMG/VID recoverable failure policy, including Fast IMG encoding waves and independently isolatable local verification failures. `fail-fast` stops after draining current work; shared safety failures always block and intentional skips remain skips. `--error-mode` overrides files. Fast GIF keeps its own encoding loop. |
+| `execution.error_mode` | `log-and-continue` | IMG/VID recoverable failure policy, including Fast IMG encoding waves and independently isolatable local verification failures. `fail-fast` stops after draining current work; shared safety failures always block and intentional skips remain skips. `--error-mode` overrides files. |
 | `img.allow_database` | `false` | Permits the optional image-quality database stack. Quality inference must also be enabled. Does not suppress Photos custody verification or explicit database maintenance commands. |
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
 | `img.jpeg_effort` | `11` | Upper E2–E11 bound for adaptive reversible JPEG comparison. |
@@ -591,7 +593,7 @@ remain subject to macOS behavior.
 | `img.avif_speed` | `0` | Speed 0–10 for Fast AVIF final comparison. |
 | `img.avif_metadata_policy` | `clear` | Explicit private Fast AVIF removable-metadata policy; currently the only supported value. Does not change standard JXL preservation or authorize source/sidecar deletion. |
 | `img.fallback_policy` | `strict` | `strict`: no compatibility/repair retries for a requested encode. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. Full JPEG comparison never changes candidate parameters or repairs input. All delivery and exact reconstruction checks remain mandatory. |
-| `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. Does not select the Fast GIF strategy. |
+| `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. |
 | `tools.policy` | `fallback` | `single` forbids governed alternate image encoding/recovery tools. `fallback` permits alternatives only with the route's other required permissions; it does not itself authorize repair. Required detection, decoding, metadata and verification are unaffected. |
 | `tools.paths` | `{}` | Tool-name to absolute executable-path overrides, also accepted as repeated `--tool NAME=PATH` flags. Existing tool health checks still apply. |
 | `performance.mode` | `adaptive` | Shared IMG/VID memory-aware scheduling. `relaxed`, `balanced`, and `tight` request fixed tiers without removing memory safety caps. `--performance` overrides JSON; legacy `MFB_PERF_TIER` remains lower priority. |

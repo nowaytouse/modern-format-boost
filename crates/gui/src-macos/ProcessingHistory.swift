@@ -21,6 +21,13 @@ private struct HistoryContext: Decodable, Equatable {
     let output: String?
     let backup: String?
     let mode: String
+    var checkpointedMedia: Bool { mode == "fast-img" || (mode == "fast-vid-gif" && shortest_path && !in_place) }
+
+    func matches(strategy: String) -> Bool {
+        if mode == "fast-vid-gif" { return checkpointedMedia && strategy == "gif" }
+        return mode == "fast-img" && ["jxl", "avif"].contains(strategy)
+    }
+
     let dry_run: Bool
     let in_place: Bool
     let shortest_path: Bool
@@ -289,7 +296,7 @@ struct FastImgFailedRetryAvailable: Decodable, Equatable {
         let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
         let value = try decoder.decode(Self.self, from: data)
         guard value.schemaVersion == 1, value.failedCount > 0, hash(value.parentTaskKey),
-              path(value.sourceDirectory), path(value.parentWorkingCopy), ["jxl", "avif"].contains(value.strategy),
+              path(value.sourceDirectory), path(value.parentWorkingCopy), ["jxl", "avif", "gif"].contains(value.strategy),
               value.existingChildWorkingCopy.map(path) ?? !value.existingChildComplete,
               value.existingChildWorkingCopy != value.parentWorkingCopy
         else { throw HostError(message: localized("retry.invalid")) }
@@ -443,7 +450,7 @@ struct FastImgRetryReference: Decodable, Equatable {
         guard value.schemaVersion == 1, validHistoryIdentity(value.runId),
               FastImgFailedRetryAvailable.hash(value.parentTaskKey), FastImgFailedRetryAvailable.hash(value.requestKey),
               [value.sourceDirectory, value.parentWorkingCopy, value.childWorkingCopy].allSatisfy(FastImgFailedRetryAvailable.path),
-              value.parentWorkingCopy != value.childWorkingCopy, ["jxl", "avif"].contains(value.strategy),
+              value.parentWorkingCopy != value.childWorkingCopy, ["jxl", "avif", "gif"].contains(value.strategy),
               value.deliveryIntent.libraryPath.map(FastImgFailedRetryAvailable.path) ?? true,
               value.deliveryIntent.kind != "photos" || value.deliveryIntent.namingPolicy?.isEmpty == false,
                !extended || value.inputPath.map(FastImgFailedRetryAvailable.path) == true,
@@ -1247,7 +1254,7 @@ private struct HistorySourceSet: Decodable, Hashable {
 
     func matches(_ context: HistoryContext) -> Bool {
         schema_version == 1 && context.run_id.map(validHistoryIdentity) == true
-            && ["fast-img", "auto", "images", "videos"].contains(context.mode) && context.dry_run != true
+            && (context.checkpointedMedia || ["auto", "images", "videos"].contains(context.mode)) && context.dry_run != true
             && context.retry != true && context.inputs.count == 1
             && source_root.hasPrefix("/") && !source_root.contains("\0")
             && context.inputs.first.map {
@@ -1403,7 +1410,7 @@ private struct HistoryEntry {
     var hasPending: Bool { (summary?.img.unprocessed ?? 0) > 0 || (summary?.vid.unprocessed ?? 0) > 0 }
     var failedRetrySelection: FastImgFailedRetrySelection? {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !fastDeliveryInvalid, !failedRetryInvalid,
-              !hasVerificationFailure, let context, context.mode == "fast-img", !context.dry_run,
+              !hasVerificationFailure, let context, context.checkpointedMedia, !context.dry_run,
               context.inputs.count == 1, let source = context.inputs.first,
               finished?.outcome == "failed" || finished?.outcome == "completed",
               let summary, summary.img.complete, summary.img.failed.map({ $0 > 0 }) == true,
@@ -1414,7 +1421,7 @@ private struct HistoryEntry {
               let invocation = invocations.first(where: { $0.pipeline == "img" }),
               let strategyIndex = invocation.arguments.firstIndex(of: "--strategy"),
               invocation.arguments.indices.contains(strategyIndex + 1),
-              ["jxl", "avif"].contains(invocation.arguments[strategyIndex + 1]) else { return nil }
+              context.matches(strategy: invocation.arguments[strategyIndex + 1]) else { return nil }
         return FastImgFailedRetrySelection(sourceDirectory: source, parentWorkingCopy: output,
             strategy: invocation.arguments[strategyIndex + 1], shortestPath: context.shortest_path,
             archive: invocation.arguments.contains("--archive"))
@@ -1422,7 +1429,7 @@ private struct HistoryEntry {
     var recoveryCleanupReceipt: FastImgCleanupRecoveryResult? {
         guard !legacy, !cleanupRecoveryInvalid, !outputCleanupInvalid, !fastDeliveryInvalid,
               issues.isEmpty, contradictoryFields.isEmpty, let receipt = cleanupRecovery,
-              let context, context.mode == "fast-img", context.shortest_path, !context.dry_run,
+              let context, context.checkpointedMedia, context.shortest_path, !context.dry_run,
               !context.in_place, context.retry == true || context.resume == true, context.inputs.count == 1,
               context.run_id == receipt.run_id,
               finished?.completed_with_file_errors != true,
@@ -1454,7 +1461,7 @@ private struct HistoryEntry {
     var cleanupRecoverySelection: FastImgCleanupRecoverySelection? {
         func selection(_ source: String, _ output: String, _ strategy: String) -> FastImgCleanupRecoverySelection? {
             guard validFastImgCleanupPath(source), validFastImgCleanupPath(output),
-                  !FastImgDeliveryReceipt.samePath(source, output), ["jxl", "avif"].contains(strategy) else { return nil }
+                  !FastImgDeliveryReceipt.samePath(source, output), context?.matches(strategy: strategy) == true else { return nil }
             let value = FastImgCleanupRecoverySelection(sourceDirectory: source, workingCopy: output, strategy: strategy)
             return value.sourceIsAbsent ? value : nil
         }
@@ -1465,7 +1472,7 @@ private struct HistoryEntry {
         guard cleanupRecovery == nil, !cleanupRecoveryInvalid, !legacy, issues.isEmpty, contradictoryFields.isEmpty,
               !fastDeliveryInvalid, !outputCleanupInvalid, !failedRetryInvalid, failedRetryRequest == nil,
               !invocationEvidenceInvalid, !workerExecutionEvidenceInvalid, inputPlan == nil,
-              let context, context.mode == "fast-img", context.shortest_path, !context.dry_run, !context.in_place,
+              let context, context.checkpointedMedia, context.shortest_path, !context.dry_run, !context.in_place,
               context.inputs.count == 1, let source = context.inputs.first, let run = context.run_id,
               let finished, finished.completed_with_file_errors != true,
               fastDeliveries.count == 1, let delivery = fastDeliveries.first, delivery.isValid,
@@ -1503,7 +1510,7 @@ private struct HistoryEntry {
     private var hasValidRetryOutcome: Bool {
         guard !failedRetryInvalid, issues.isEmpty, contradictoryFields.isEmpty,
               let request = failedRetryRequest, let reused = retryOutcomeReference, request.sameRequest(as: reused),
-              let context, context.mode == "fast-img", !context.dry_run, context.run_id == reused.runId,
+              let context, context.checkpointedMedia, !context.dry_run, context.run_id == reused.runId,
               context.inputs.count == 1, reused.matchesInput(context.inputs.first),
               context.shortest_path == (reused.deliveryIntent.kind == "photos"),
               let outputStart = context.output_sequence, let outputEnd = finished?.output_sequence,
@@ -1530,7 +1537,7 @@ private struct HistoryEntry {
               finished?.photos_quarantine_blocked == nil,
               !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
               workerExecutions.values.allSatisfy({ $0.last?.state == "exited" && $0.last?.signal == nil && $0.last?.exit_code == 2 }),
-              !hasVerificationFailure, context?.dry_run == false, context?.mode == "fast-img",
+              !hasVerificationFailure, context?.dry_run == false, context?.checkpointedMedia == true,
               context?.inputs.count == 1, inputPlan == nil,
               context?.shortest_path == true, let summary, summary.valid, summary.img.complete,
               summary.integrity.state == nil || ["CLEAN", "WARNINGS"].contains(summary.integrity.state!),
@@ -1549,7 +1556,7 @@ private struct HistoryEntry {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure,
               !fastDeliveryInvalid, !outputCleanupInvalid,
               !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
-              context?.mode == "fast-img", context?.dry_run == false, context?.shortest_path == true,
+              context?.checkpointedMedia == true, context?.dry_run == false, context?.shortest_path == true,
               context?.inputs.count == 1, inputPlan == nil,
               verification == nil, inputVerifications.isEmpty,
               finished?.outcome == "failed", finished?.completed_with_file_errors != true,
@@ -1568,7 +1575,7 @@ private struct HistoryEntry {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty,
               !fastDeliveryInvalid, !outputCleanupInvalid, !hasVerificationFailure,
               !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
-              context?.mode == "fast-img", context?.dry_run == false,
+              context?.checkpointedMedia == true, context?.dry_run == false,
               finished?.completed_with_file_errors == true, finished?.outcome == "failed",
               let summary, summary.valid, summary.img.complete, !summary.vid.active,
               summary.img.exit_code == 1, summary.img.unprocessed == 0,
@@ -1589,7 +1596,7 @@ private struct HistoryEntry {
     var hasMixedDeliveryFacts: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure,
               !fastDeliveryInvalid, !outputCleanupInvalid, !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
-              context?.mode == "fast-img", context?.dry_run == false, context?.shortest_path == true,
+              context?.checkpointedMedia == true, context?.dry_run == false, context?.shortest_path == true,
               context?.inputs.count == 1, let summary, summary.valid, summary.img.complete, !summary.vid.active,
               summary.img.exit_code == 1, summary.img.unprocessed == 0,
               summary.integrity.state.map({ ["CLEAN", "WARNINGS"].contains($0) }) ?? true,
@@ -1608,7 +1615,7 @@ private struct HistoryEntry {
     var hasPartialSuccess: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure, context?.dry_run == false,
               let summary, summary.valid, summary.img.complete, summary.vid.complete, !hasPending,
-              context?.mode == "fast-img", context?.inputs.count == 1, !summary.vid.active,
+              context?.checkpointedMedia == true, context?.inputs.count == 1, !summary.vid.active,
               summary.img.exit_code == 1, let failed = summary.img.failed, failed > 0,
               let verification, verification.issue_count == 0, verification.failed_count == failed,
               verification.failed_sources_verified == failed, verification.primary_cleanup_complete == true,
@@ -1639,7 +1646,7 @@ private struct HistoryEntry {
     // through this run's independent verifier and child invocation before accepting the receipt.
     func verifiedSingleFileDelivery(_ receipt: FastImgDeliveryReceipt) -> Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, inputPlan == nil, inputVerifications.isEmpty,
-              let context, let runID = context.run_id, context.mode == "fast-img", !context.dry_run,
+              let context, let runID = context.run_id, context.checkpointedMedia, !context.dry_run,
               context.inputs.count == 1, let selected = context.inputs.first, FastImgDeliveryReceipt.absolute(selected),
               FastImgDeliveryReceipt.samePath((selected as NSString).deletingLastPathComponent, receipt.sourceDirectory),
               !invocationEvidenceInvalid, !workerExecutionEvidenceInvalid, invocations.count == 1,
@@ -1659,7 +1666,7 @@ private struct HistoryEntry {
 
     var hasConfirmedEmptyDiscovery: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty,
-              let context, context.mode == "fast-img", !context.dry_run, context.inputs.count == 1,
+              let context, context.checkpointedMedia, !context.dry_run, context.inputs.count == 1,
               finished?.outcome == "completed", finished?.error == nil, let runID = context.run_id,
               let summary, summary.valid, summary.img.complete, summary.img.exit_code == 0, !summary.vid.active,
               summary.integrity.state == nil, summary.integrity.issue_count == nil,
@@ -2120,8 +2127,8 @@ private enum HistoryStore {
                     }
                 } else if event.hasPrefix(FastImgRetryReference.historyRequestPrefix) {
                     guard let request = try FastImgRetryReference.decode(event, prefix: FastImgRetryReference.historyRequestPrefix, reused: false),
-                          let context = current.context, context.mode == "fast-img", !context.dry_run,
-                          context.run_id == request.runId, context.inputs.count == 1,
+                          let context = current.context, context.checkpointedMedia, !context.dry_run,
+                          context.run_id == request.runId, context.inputs.count == 1, context.matches(strategy: request.strategy),
                           request.matchesInput(context.inputs.first),
                           current.failedRetryRequest == nil, !current.failedRetryInvalid else { throw HistoryParseError.invalid }
                     current.failedRetryRequest = request
@@ -2136,7 +2143,7 @@ private enum HistoryStore {
                     if finalized { current.failedRetryFinalized = reused } else { current.failedRetryReused = reused }
                 } else if event.hasPrefix(FastImgDeliveryReceipt.historyPrefix) {
                     guard let receipt = try FastImgDeliveryReceipt.decode(event, prefix: FastImgDeliveryReceipt.historyPrefix),
-                          let context = current.context, context.mode == "fast-img", !context.dry_run,
+                          let context = current.context, context.checkpointedMedia, !context.dry_run,
                           context.run_id != nil, !current.fastDeliveryInvalid, current.fastDeliveries.count < 64,
                           !current.fastDeliveries.contains(where: { $0.sourceDirectory == receipt.sourceDirectory }) else {
                         throw HistoryParseError.invalid
@@ -2144,7 +2151,7 @@ private enum HistoryStore {
                     current.fastDeliveries.append(receipt)
                 } else if event.hasPrefix(OutputCleanupReceipt.historyPrefix) {
                     guard let receipt = try OutputCleanupReceipt.decode(event, prefix: OutputCleanupReceipt.historyPrefix),
-                          let context = current.context, context.mode == "fast-img", !context.dry_run,
+                          let context = current.context, context.checkpointedMedia, !context.dry_run,
                           let runID = context.run_id, receipt.run_id == runID,
                           !current.outputCleanupInvalid, current.outputCleanups.count < 64 else { throw HistoryParseError.invalid }
                     if let previous = current.outputCleanups.first(where: { Data($0.output_path.utf8) == Data(receipt.output_path.utf8) }) {
@@ -2152,8 +2159,8 @@ private enum HistoryStore {
                     } else { current.outputCleanups.append(receipt) }
                 } else if event.hasPrefix(FastImgCleanupRecoveryResult.historyPrefix) {
                     guard let receipt = try FastImgCleanupRecoveryResult.decode(event, prefix: FastImgCleanupRecoveryResult.historyPrefix),
-                          let context = current.context, context.mode == "fast-img", context.shortest_path, !context.dry_run,
-                          context.run_id == receipt.run_id, context.inputs.count == 1, current.finished == nil,
+                          let context = current.context, context.checkpointedMedia, context.shortest_path, !context.dry_run,
+                          context.run_id == receipt.run_id, context.inputs.count == 1, current.finished == nil, context.matches(strategy: receipt.strategy),
                           FastImgDeliveryReceipt.samePath(context.inputs.first, receipt.source_path),
                           FastImgDeliveryReceipt.samePath(context.output, receipt.output_path),
                           current.cleanupRecovery == nil, !current.cleanupRecoveryInvalid
@@ -2162,7 +2169,7 @@ private enum HistoryStore {
                 } else if event.hasPrefix(HistoricalOutputCleanup.prefix) {
                     guard event.utf8.count <= 64 * 1024 else { throw HistoryParseError.invalid }
                     let receipt = try decode(HistoricalOutputCleanup.self, from: event, prefix: HistoricalOutputCleanup.prefix)
-                    guard receipt.valid, let context = current.context, context.mode == "fast-img", !context.dry_run,
+                    guard receipt.valid, let context = current.context, context.checkpointedMedia, !context.dry_run,
                           context.shortest_path, receipt.run_id == context.run_id, current.finished == nil,
                           !current.historicalOutputCleanupInvalid,
                           current.historicalOutputCleanup.map({ $0 == receipt }) ?? true else { throw HistoryParseError.invalid }
@@ -2237,7 +2244,7 @@ private enum HistoryStore {
                           }) ?? true,
                           finished.verification_unavailable == nil || (finished.outcome == "failed"
                               && finished.error?.isEmpty == false && finished.completed_with_file_errors != true
-                              && finished.photos_quarantine_blocked == nil && current.context?.mode == "fast-img"
+                              && finished.photos_quarantine_blocked == nil && current.context?.checkpointedMedia == true
                               && current.context?.dry_run == false && current.context?.run_id != nil),
                           current.context?.output_sequence == nil || finished.output_sequence != nil,
                           finished.output_sequence.map({ $0 >= (current.context?.output_sequence ?? 0) }) ?? true,
@@ -4695,7 +4702,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 }
             }
         }
-        if entry.context?.mode == "fast-img" {
+        if entry.context?.checkpointedMedia == true {
             if entry.fastDeliveryInvalid { lines += ["", localized("result.delivery_invalid")] }
             for receipt in entry.fastDeliveries where receipt.isDeferred {
                 lines += ["", localized("result.delivery_record_title"), receipt.deferredDetails]
@@ -4765,7 +4772,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
         detailMode.setEnabled(single || pair, forSegment: 2)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 3)
-        detailMode.setEnabled(single && !privacyEnabled && selected?.hasStoredOutput == true && selected?.context?.mode == "fast-img", forSegment: 4)
+        detailMode.setEnabled(single && !privacyEnabled && selected?.hasStoredOutput == true && selected?.context?.checkpointedMedia == true, forSegment: 4)
         olderButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
         newerButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
         outputFilter.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
@@ -4776,7 +4783,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         copyButton.setAccessibilityLabel(copyButton.toolTip)
         exportButton.isEnabled = single && !privacyEnabled && !outputLoading && issueScanControl == nil && selected?.hasStoredOutput == true
         exportButton.toolTip = privacyEnabled ? localized("privacy.display.raw_disabled") : localized("history.export.scope")
-        cleanupButton.isEnabled = single && selected?.context?.mode == "fast-img" && (!privacyEnabled || selected?.hasCleanupAttention == true)
+        cleanupButton.isEnabled = single && selected?.context?.checkpointedMedia == true && (!privacyEnabled || selected?.hasCleanupAttention == true)
         retryFailedButton.isEnabled = single && canRetryFailed() && onRetryFailed != nil && selected?.failedRetrySelection != nil
         retryFailedButton.isHidden = ApplicationSession.current?.isDebug == true || onRetryFailed == nil
         let selection = selectedEntries
@@ -5227,7 +5234,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private static func cleanupInventoryPath(for entry: HistoryEntry) -> String? {
-        guard entry.context?.mode == "fast-img", entry.finished != nil, !entry.outputCleanupInvalid,
+        guard entry.context?.checkpointedMedia == true, entry.finished != nil, !entry.outputCleanupInvalid,
               let run = entry.context?.run_id, validHistoryIdentity(run),
               entry.outputCleanups.count == 1, let receipt = entry.outputCleanups.first,
               receipt.run_id == run, FastImgDeliveryReceipt.absolute(receipt.output_path) else { return nil }
@@ -5442,7 +5449,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                      localized("history.file_failure.detail.absolute_path") + ": " + (source.absolutePath ?? localized("result.unknown")),
                      localized("history.file_failure.detail.note"), ""]
         lines += try Self.failureWorkerDetails(for: source, entry: selected, privacy: privacyEnabled)
-        if let entry = selected, entry.context?.mode == "fast-img", entry.context?.run_id == source.runID,
+        if let entry = selected, entry.context?.checkpointedMedia == true, entry.context?.run_id == source.runID,
            source.pipeline == "img" {
             let verified = !entry.fastDeliveryInvalid && source.absolutePath.map { path in
                 entry.fastDeliveries.contains { $0.recordsVerifiedSource(path, invocationID: source.invocationID) }

@@ -17,29 +17,10 @@ fn adjacent_dir(target_dir: &Path, suffix_name: &str) -> PathBuf {
     target_dir.with_file_name(file_name)
 }
 
-fn unique_adjacent_dir(target_dir: &Path, suffix_name: &str) -> PathBuf {
-    let base = adjacent_dir(target_dir, suffix_name);
-    let mut candidate = base.clone();
-    let mut suffix = 2;
-    while candidate.exists() {
-        let mut file_name = base.file_name().unwrap_or_default().to_os_string();
-        file_name.push(format!("_{suffix}"));
-        candidate = base.with_file_name(file_name);
-        suffix += 1;
-    }
-    candidate
-}
-
 /// Resolve the adjacent JPEG restoration output directory.
 #[must_use]
 pub fn fast_img_restore_output_dir_for_target(target_dir: &Path) -> PathBuf {
     adjacent_dir(target_dir, "restored_jpeg")
-}
-
-/// Resolve the adjacent full-pipeline output directory for vid `FastMode`.
-#[must_use]
-pub fn fast_vid_output_dir_for_target(target_dir: &Path) -> PathBuf {
-    unique_adjacent_dir(target_dir, "optimized")
 }
 
 /// Build the Rust fast-img command for drag-and-drop launches.
@@ -110,39 +91,6 @@ pub fn build_fast_img_restore_command(
     if let Some(id) = photos_folder_id {
         command.extend(["--photos-folder-id".to_string(), id.to_string()]);
     }
-    command
-}
-
-/// Build the Rust animated-image/video `FastMode` command.
-#[must_use]
-pub fn build_fast_vid_command(
-    vid_binary: &Path,
-    target_dir: &Path,
-    output_dir: &Path,
-    shortest_path: bool,
-    strategy: Option<&str>,
-) -> Vec<String> {
-    let mut command = vec![
-        vid_binary.to_string_lossy().to_string(),
-        "fast-gif".to_string(),
-        target_dir.to_string_lossy().to_string(),
-        "--output".to_string(),
-        output_dir.to_string_lossy().to_string(),
-        "--recursive".to_string(),
-        "--apple-compat".to_string(),
-    ];
-    if shortest_path {
-        command.push("--shortest-path".to_string());
-    }
-    command.push("--strategy".to_string());
-    command.push(
-        if strategy == Some("avif") {
-            "avif"
-        } else {
-            "default"
-        }
-        .to_string(),
-    );
     command
 }
 
@@ -382,61 +330,6 @@ mod tests {
                 "--output".to_string(),
                 "/Users/example/Pictures/Album_restored_jpeg".to_string(),
             ]
-        );
-    }
-
-    #[test]
-    fn test_fast_vid_dirs_use_adjacent_suffixes() {
-        let src = Path::new("/Users/example/Movies/Clips");
-        assert_eq!(
-            fast_vid_output_dir_for_target(src),
-            PathBuf::from("/Users/example/Movies/Clips_optimized")
-        );
-    }
-
-    #[test]
-    fn test_fast_vid_command_uses_fast_gif_pipeline_and_maps_jxl_strategy() {
-        let command = build_fast_vid_command(
-            Path::new("/opt/mfb/vid"),
-            Path::new("/Users/example/Movies/Clips"),
-            Path::new("/Users/example/Movies/Clips_optimized"),
-            false,
-            Some("jxl"),
-        );
-        assert_eq!(
-            command,
-            vec![
-                "/opt/mfb/vid".to_string(),
-                "fast-gif".to_string(),
-                "/Users/example/Movies/Clips".to_string(),
-                "--output".to_string(),
-                "/Users/example/Movies/Clips_optimized".to_string(),
-                "--recursive".to_string(),
-                "--apple-compat".to_string(),
-                "--strategy".to_string(),
-                "default".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_fast_vid_shortest_path_enables_verified_import_and_avif_strategy() {
-        let command = build_fast_vid_command(
-            Path::new("/opt/mfb/vid"),
-            Path::new("/Users/example/Movies/Clips"),
-            Path::new("/Users/example/Movies/Clips_optimized"),
-            true,
-            Some("avif"),
-        );
-        assert!(command.iter().any(|i| i == "fast-gif"));
-        assert!(command.iter().any(|i| i == "--shortest-path"));
-        assert!(!command.iter().any(|i| i == "--auto-import"));
-        assert_eq!(
-            command
-                .windows(2)
-                .find(|pair| pair[0] == "--strategy")
-                .map(|pair| pair[1].as_str()),
-            Some("avif")
         );
     }
 }

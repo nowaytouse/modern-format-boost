@@ -6,6 +6,7 @@ pub mod fast_img_ignored;
 mod fast_img_publication;
 mod fast_img_publication_replay;
 mod fast_img_result;
+mod fast_vid_gif;
 mod resume_admission;
 mod runtime_cli;
 
@@ -120,6 +121,24 @@ fn command_requires_production_lease(command: &Commands) -> bool {
 }
 
 fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
+    if let Commands::FastImg {
+        strategy,
+        shortest_path,
+        archive,
+        allow_expert_options,
+        ..
+    } = command
+        && strategy == "gif"
+    {
+        anyhow::ensure!(
+            *shortest_path,
+            "Fast VID GIF originals require Apple Photos delivery"
+        );
+        anyhow::ensure!(
+            !archive && !allow_expert_options,
+            "Fast VID GIF originals do not take encoder options"
+        );
+    }
     if matches!(
         command,
         Commands::Run {
@@ -613,6 +632,10 @@ fn select_img_startup_tools(command: &Commands) -> anyhow::Result<Option<ImgTool
                         .flatten()
                 }
             };
+            if strategy == "gif" {
+                // This delivery uses the native GIF reader and exact original bytes.
+                return Ok(None);
+            }
             Ok(Some(ImgToolRuntimeRequest {
                 required: if strategy == "avif" {
                     &["avifenc", "avifdec", "exiftool"]
@@ -665,6 +688,7 @@ fn prepare_img_startup_with(
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     let mut cli = Cli::parse();
+    validate_command_strategy(&cli.command)?;
     cli.planned_source.verify_for_input(match &cli.command {
         Commands::Run { input, .. } => Some(input.as_path()),
         _ => None,
@@ -738,7 +762,6 @@ fn main_inner() -> anyhow::Result<()> {
         } => *allow_expert_options = allow_recovery,
         _ => {}
     }
-    validate_command_strategy(&cli.command)?;
     if matches!(
         &cli.command,
         Commands::Run { .. } | Commands::FastImg { .. } | Commands::RestoreJpeg { .. }
@@ -3977,6 +4000,9 @@ fn validate_fast_img_startup_photos_location(
     options: FastImgRunOptions<'_>,
     launcher_planned: bool,
 ) -> anyhow::Result<()> {
+    if options.strategy == "gif" {
+        fast_vid_gif::validate_selection(options.input)?;
+    }
     if !options.shortest_path.0 {
         return Ok(());
     }
@@ -4065,6 +4091,7 @@ fn fast_img_processing_contract(
             avif_metadata_policy: config.img.avif_metadata_policy,
             allow_expert_options,
         },
+        "gif" => FastImgEncodingParameters::Gif,
         _ => anyhow::bail!("unsupported fast-img strategy for processing contract: {strategy}"),
     };
     let contract = FastImgProcessingContract {
@@ -4730,7 +4757,7 @@ fn run_fast_img_failed_retry(options: FastImgRunOptions<'_>) -> anyhow::Result<(
                 );
                 return Ok(());
             }
-            let tools = if img_tool_snapshot_disabled() {
+            let tools = if options.strategy == "gif" || img_tool_snapshot_disabled() {
                 None
             } else {
                 let active = foundation::common_utils::active_tool_snapshot()
@@ -4861,9 +4888,16 @@ fn fast_img_validate_processing_contract(
     saved
         .validate(&marker.strategy)
         .map_err(anyhow::Error::msg)?;
+    if marker.strategy == "gif" {
+        anyhow::ensure!(
+            fast_img_marker_has_empty_primary_inventory(marker),
+            "GIF original task contains unexpected encoded delivery records"
+        );
+    }
     let current_strategy = match &current.encoding {
         FastImgEncodingParameters::Jxl { .. } => "jxl",
         FastImgEncodingParameters::Avif { .. } => "avif",
+        FastImgEncodingParameters::Gif => "gif",
     };
     current
         .validate(current_strategy)
@@ -5391,6 +5425,9 @@ fn scan_fast_img_sources_with_policy(
         Vec<foundation::image::format_identity::FormatIdentity>,
     >,
 ) -> anyhow::Result<FastImgSourceInventory> {
+    if strategy == "gif" {
+        return fast_vid_gif::scan_originals(observed, src_dir);
+    }
     if strategy == "avif" {
         println!(
             "[FASTIMG ] enumerating static image containers in {} (no quality scan)",
@@ -5826,7 +5863,7 @@ fn fast_img_confirm_resume_if_needed(
         *retry_requested = true;
     } else if fast_img_completed_marker_has_new_tier2_work(marker, modern_lossy_candidate_count) {
         fast_img_require_interactive_confirmation(
-            "[STATE   ] A completed fast-img task exists, and modern lossy static media are present at the same source path. Reconcile each file with Photos and run a new verified Tier-2 delivery? [y/N] ",
+            "[STATE   ] A completed task exists, and original-format media are present at the same source path. Reconcile each file with Photos and run a new verified Tier-2 delivery? [y/N] ",
             "MFB_RESUME_DECISION_REQUIRED: completed state was not reused for new Tier-2 media; no Photos import or source deletion was attempted. Rerun with --retry to proceed or --no-resume to isolate a new task",
         )?;
         *retry_requested = true;
@@ -5874,7 +5911,7 @@ fn fast_img_try_finish_tier2_delivery(
     }
     if dry_run.0 {
         println!(
-            "[DRY-RUN ] would reconcile/import and custody-verify {} modern lossy static source(s)",
+            "[DRY-RUN ] would reconcile/import and custody-verify {} original-format source(s)",
             context.modern_lossy_candidates.len()
         );
         return Ok(true);
@@ -6045,6 +6082,10 @@ fn run_fast_img_with_format_resolver(
     >,
 ) -> anyhow::Result<()> {
     foundation::batch_control::checkpoint()?;
+    anyhow::ensure!(
+        options.strategy != "gif" || options.shortest_path.0,
+        "Fast VID GIF originals require Apple Photos delivery"
+    );
     validate_fast_img_options(&options);
     if let Some((parent, child)) = fast_img_missing_source_retry_selection(options)? {
         return fast_img_complete_missing_source_retry(&parent, &child);
@@ -6070,7 +6111,11 @@ fn run_fast_img_with_format_resolver(
         strategy,
         extreme_precision: _,
     } = options;
-    let output_format_name = if strategy == "avif" { "AVIF" } else { "JXL" };
+    let output_format_name = match strategy {
+        "gif" => "GIF",
+        "avif" => "AVIF",
+        _ => "JXL",
+    };
     let mut retry_requested = retry.0;
 
     let src_dir = FastImgInputScope::source_root(input)?;
@@ -6273,6 +6318,9 @@ fn run_fast_img_with_format_resolver(
         witness.verify_unchanged().context(
             "Fast IMG input scope changed during worker media inspection; sources retained. Review the input and start again.",
         )?;
+        if strategy == "gif" {
+            fast_vid_gif::validate_selection(input)?;
+        }
     }
     if let Some(plan) = &admission_plan {
         for (rel, admission) in plan {
@@ -6411,7 +6459,7 @@ fn run_fast_img_with_format_resolver(
         {
             if modern_probe_failures.total > 0 {
                 eprintln!(
-                    "fast-img retained all sources because {} modern static candidate(s) could not be classified; no Photos import or cleanup was attempted",
+                    "All sources retained because {} original-format candidate(s) could not be admitted; no Photos import or cleanup was attempted",
                     modern_probe_failures.total
                 );
                 return Ok(());
@@ -6458,11 +6506,13 @@ fn run_fast_img_with_format_resolver(
             );
         }
         if dry_run.0 {
-            println!(
-                "[DRY-RUN ] would evaluate {planned_encode_count} static images from {} for {output_format_name} output {}",
-                src_dir.display(),
-                working_copy.display()
-            );
+            if strategy != "gif" {
+                println!(
+                    "[DRY-RUN ] would evaluate {planned_encode_count} static images from {} for {output_format_name} output {}",
+                    src_dir.display(),
+                    working_copy.display()
+                );
+            }
             if !modern_lossy_candidates.is_empty() {
                 println!(
                     "[DRY-RUN ] would reconcile/import and custody-verify {} byte-preserved Tier 2 source(s) in Photos",
@@ -6713,8 +6763,10 @@ fn run_fast_img_with_format_resolver(
     if dry_run.0 {
         return execution;
     }
-    let marker = existing_marker
-        .unwrap_or_else(|| WorkingCopyMarker::new(src_dir, working_copy, source_jpegs.len()));
+    let marker = existing_marker.unwrap_or_else(|| {
+        WorkingCopyMarker::new(src_dir, working_copy, source_jpegs.len())
+            .with_strategy(strategy.to_owned())
+    });
     fast_img_result::finish(
         &marker,
         failed_retry_context.as_ref(),
@@ -6818,6 +6870,11 @@ fn fast_img_delete_notice_message(
     src_dir: &Path,
     strategy: &str,
 ) -> String {
+    if strategy == "gif" {
+        return format!(
+            "[NOTICE  ] Fast VID will deliver {modern_lossy_count} unchanged GIF original(s) to Apple Photos. Each source is eligible for removal after fresh Photos original-byte verification."
+        );
+    }
     let mode_name = if strategy == "avif" {
         "AVIF-only (Meme Mode)"
     } else {
@@ -9844,6 +9901,13 @@ fn img_tool_snapshot_disabled() -> bool {
 fn fast_img_saved_tool_snapshot(
     marker: &WorkingCopyMarker,
 ) -> anyhow::Result<Option<(&Path, &str)>> {
+    if marker.strategy == "gif" {
+        anyhow::ensure!(
+            marker.tool_snapshot_manifest.is_none() && marker.tool_snapshot_identity.is_none(),
+            "GIF original delivery has an unexpected saved encoder snapshot"
+        );
+        return Ok(None);
+    }
     match (
         marker.tool_snapshot_disabled,
         marker.tool_snapshot_manifest.as_deref(),
@@ -13224,6 +13288,14 @@ fn fast_img_run_encode_wave(
 
 fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::Result<()> {
     runtime_cli::check_tool_runtime_after_failure()?;
+    if context.strategy == "gif" {
+        anyhow::ensure!(
+            context.source_jpegs.is_empty() && context.current_source_hashes.is_empty(),
+            "GIF original delivery unexpectedly contains encoder jobs"
+        );
+        fast_img_commit_transcode_complete(context.marker, context.strategy);
+        return Ok(write_marker_atomic(context.marker)?);
+    }
     fast_img_publication_replay::recover(&mut context)?;
     let total = context.source_jpegs.len();
     let (jobs, completed_from_resume) = context.plan_jobs()?;
@@ -13480,7 +13552,7 @@ fn fast_img_deliver_modern_lossy_static_tier(
         );
     } else {
         println!(
-            "[TIER 2  ] reconciling/importing {} modern lossy static source(s) with Photos",
+            "[TIER 2  ] reconciling/importing {} original-format source(s) with Photos",
             candidates.len()
         );
     }
@@ -14360,6 +14432,13 @@ fn fast_img_run_verification_and_delivery_pipeline(
         "fast-img deleted verified source files after fresh final Gate 2"
     );
 
+    if strategy == "gif" {
+        println!(
+            "[DONE    ] GIF originals in Photos: {} verified · source cleanup: {tier2_deleted} removed, {tier2_already_deleted} previously removed",
+            marker.tier2_imported_assets.len()
+        );
+        return Ok(());
+    }
     println!(
         "[DONE    ] {} {ext_name} files · {} source {source_type} deleted · {} Tier 2 originals deleted · {} empty source dirs pruned · {mode_name} output at {} · gates: ①② all ✅",
         expected_count,
@@ -16184,6 +16263,66 @@ mod fast_img_hardening_tests {
         assert_eq!(plan.src_root, root.path().canonicalize()?);
         assert_eq!(plan.candidates.len(), 1);
         assert_eq!(plan.candidates[0].path(), src.canonicalize()?);
+        Ok(())
+    }
+
+    #[test]
+    fn fast_vid_gif_completed_single_task_cannot_resume_its_identical_sibling() -> anyhow::Result<()>
+    {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let parent = temp.path().canonicalize()?;
+        let source = parent.join("gifs");
+        std::fs::create_dir(&source)?;
+        let first = source.join("first.gif");
+        let sibling = source.join("second.gif");
+        image::RgbImage::new(2, 1).save(&first)?;
+        std::fs::copy(&first, &sibling)?;
+        let hash = calculate_blake3_hash(&first)?;
+        let output =
+            foundation::pipeline::verification::resolve_fresh_working_copy_dir_for_delivery(
+                &source, true,
+            )?;
+        foundation::pipeline::verification::prepare_photos_working_copy_parent(&source, &output)?;
+        std::fs::create_dir(&output)?;
+        let mut marker =
+            WorkingCopyMarker::new(source.clone(), output, 0).with_strategy("gif".into());
+        let plan = super::fast_vid_gif::scan_originals(
+            &FastImgInputScope::observe(&first, true)?.candidates,
+            &source,
+        )?
+        .admission_plan(&source)?;
+        foundation::fast_img_store::initialize_with_admission(&mut marker, &plan)?;
+        marker
+            .tier2_imported_assets
+            .push(foundation::pipeline::verification::LibraryAssetRecord {
+                rel_path: "first.gif".to_owned(),
+                blake3: hash.clone(),
+                photos_uuid: Some("synthetic-original".to_owned()),
+                sync_status: "local".to_owned(),
+                quarantined: false,
+                library_blake3: None,
+                xmp_sidecar_blake3: None,
+            });
+        marker.stage = FastImgStageName::CleanupComplete;
+        super::write_marker_atomic(&marker)?;
+        let saved = super::read_marker(&marker.working_copy)?;
+        foundation::fast_img_store::verify_single_source_scope(&saved, &first, &hash)?;
+        assert!(
+            foundation::fast_img_store::verify_single_source_scope(&saved, &sibling, &hash)
+                .is_err()
+        );
+        let fresh = super::fast_img_resolve_requested_working_copy(
+            &source,
+            None,
+            super::FreshFlag(true),
+            "gif",
+            super::ShortestPathFlag(true),
+        )?;
+        assert_ne!(fresh, saved.working_copy);
+        assert_eq!(std::fs::read(&first)?, std::fs::read(&sibling)?);
         Ok(())
     }
 

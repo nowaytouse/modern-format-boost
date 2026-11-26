@@ -29,13 +29,13 @@ impl IgnoredReason {
     pub const fn message(self) -> &'static str {
         match self {
             Self::LivePhotoPairMember => {
-                "Live Photo pair member is not eligible for standalone fast-img processing"
+                "Live Photo pair member is not eligible for standalone processing"
             }
             Self::AnimatedImageContainer => {
                 "Animated image container is outside the static-only fast-img policy"
             }
             Self::OutsideCurrentPolicyScope => {
-                "Source format is outside the current fast-img strategy scope"
+                "Source format is outside the selected processing strategy"
             }
             Self::ModernTierNotAdmitted => {
                 "Modern-format source was not admitted for original-byte delivery by the current fast-img policy"

@@ -23,6 +23,12 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Fast VID GIF originals (2026-11-26)
+
+- Fast VID now imports verified GIF87a and GIF89a originals into Apple Photos
+  with the shared original-file receipts, resume checks and verified cleanup.
+  This replaces the previous Fast GIF conversion modes and their CLI options.
+
 ### Fast IMG delivery and session reporting (2026-11-26)
 
 - Fast IMG discovers the active Photos library from its open database. This

@@ -24,16 +24,6 @@ def default_mfb_state_root() -> Path:
     return Path(tempfile.gettempdir()) / MFB_DEFAULT_HOME_DIRNAME
 
 
-def _unique_adjacent_dir(target_dir: Path, suffix_name: str) -> Path:
-    base = _adjacent_dir(target_dir, suffix_name)
-    candidate = base
-    suffix = 2
-    while candidate.exists():
-        candidate = base.with_name(f"{base.name}_{suffix}")
-        suffix += 1
-    return candidate
-
-
 def _adjacent_dir(target_dir: Path, suffix_name: str) -> Path:
     target = target_dir.expanduser()
     return target.with_name(f"{target.name}_{suffix_name}")
@@ -42,11 +32,6 @@ def _adjacent_dir(target_dir: Path, suffix_name: str) -> Path:
 def fast_img_restore_output_dir_for_target(target_dir: Path) -> Path:
     """Resolve the stable adjacent JPEG restoration output directory."""
     return _adjacent_dir(target_dir, "restored_jpeg")
-
-
-def fast_vid_output_dir_for_target(target_dir: Path) -> Path:
-    """Resolve the adjacent full-pipeline output directory for vid FastMode."""
-    return _unique_adjacent_dir(target_dir, "optimized")
 
 
 def build_fast_img_command(
@@ -99,26 +84,6 @@ def build_fast_img_restore_command(
     return command
 
 
-def build_fast_vid_command(
-    vid_binary: Path,
-    target_dir: Path,
-    *,
-    output_dir: Path,
-    shortest_path: bool,
-) -> list[str]:
-    """Build the Rust full loop-intent video FastMode command."""
-    del shortest_path
-    command = [
-        str(vid_binary),
-        "run",
-        str(target_dir),
-        "--output",
-        str(output_dir),
-        "--base-dir",
-        str(target_dir),
-        "--recursive",
-        "--apple-compat",
-        "--ultimate",
-        "--archive",
-    ]
-    return command
+def build_fast_vid_command(vid_binary: Path, target: Path) -> list[str]:
+    """Import GIF originals through the video CLI's Photos workflow."""
+    return [str(vid_binary), "fast-vid", "--", str(target)]

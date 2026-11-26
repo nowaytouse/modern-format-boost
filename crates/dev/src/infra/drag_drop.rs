@@ -1,6 +1,5 @@
 //! Drag-and-drop session helpers — parity with `drag_and_drop_processor.py`.
 
-use crate::infra::fastmode_paths::fast_vid_output_dir_for_target;
 use crate::infra::hardening::delegated_exit_code;
 use crate::infra::log_paths::append_jsonl_audit_record;
 use crate::infra::rich_panel::draw_separator;
@@ -720,33 +719,6 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
     })
 }
 
-pub fn choose_fast_vid_shortest_path(strategy: &str) -> Result<bool> {
-    let green = if colors_enabled() { "\x1b[32m" } else { "" };
-    let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
-    let bold = if colors_enabled() { "\x1b[1m" } else { "" };
-    let dim = if colors_enabled() { "\x1b[2m" } else { "" };
-    let reset = if colors_enabled() { "\x1b[0m" } else { "" };
-    println!("\n{green}FAST VIDEO MODE SELECTED{reset}{cyan} [{strategy}]{reset}");
-    println!("   {bold}1{reset} - {green}Shortest Path (Default){reset}");
-    if strategy == "avif" {
-        println!(
-            "       {dim}Meme Mode skips loop-intent judgment. This launcher enables Apple \
-             compatibility, so delivery is forced to GIF even when AVIF is selected.{reset}"
-        );
-    } else {
-        println!("       {dim}LoopIntent-gated GIF delivery for animated images and video.{reset}");
-    }
-    println!("   {bold}2{reset} - {cyan}Normal Mode{reset}");
-    println!(
-        "       {dim}Verified adjacent GIF/AVIF output without automatic Photos import.{reset}"
-    );
-    let answer = read_line(&format!(
-        "\n   {bold}Choose Fast Video path [1/2] ({green}Enter = Shortest Path{reset}{bold}): \
-         {reset}"
-    ))?;
-    Ok(answer.trim() != "2")
-}
-
 pub fn confirm_in_place() -> Result<bool> {
     let red = if colors_enabled() { "\x1b[31m" } else { "" };
     let yellow = if colors_enabled() { "\x1b[33m" } else { "" };
@@ -1314,11 +1286,6 @@ pub fn adjacent_output_for_target(target: &Path) -> PathBuf {
         |n| n.to_string_lossy().into_owned(),
     );
     get_unique_output_path(&target.with_file_name(format!("{name}_optimized")))
-}
-
-#[must_use]
-pub fn resolve_output_for_fast_vid(target: &Path) -> PathBuf {
-    fast_vid_output_dir_for_target(target)
 }
 
 /// Parsed fast-img session size metrics from `[SIZE]` stdout lines.

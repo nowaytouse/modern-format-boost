@@ -506,7 +506,7 @@ security properties and binary export, preserving the distinction between an
 absent ACL and an explicitly empty ACL; access errors are not absence evidence.
 Restrictive ACLs are applied after other attributes.
 
-IMG, JPEG restoration, standard VID and Fast GIF capture initial directory times
+IMG, JPEG restoration and standard VID capture initial directory times
 before scanning or changing their inputs. Existing partial IMG/VID outputs also
 receive metadata finalization; a processing error remains an error. Controlled
 empty-directory pruning records actual removals and uses the existing directory

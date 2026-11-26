@@ -5,6 +5,50 @@
 
 use std::path::Path;
 
+/// Identify standalone GIF originals by signature and decode every frame before admission.
+///
+/// # Errors
+/// Returns an error for unreadable files and for incomplete or undecodable GIF data.
+pub fn is_verified_gif(path: &Path) -> std::io::Result<bool> {
+    use std::io::{self, BufRead, Read};
+
+    let mut file = crate::io_utils::open_regular_nofollow(path)?;
+    let mut signature = [0; 6];
+    if let Err(error) = file.read_exact(&mut signature) {
+        return if error.kind() == io::ErrorKind::UnexpectedEof {
+            Ok(false)
+        } else {
+            Err(error)
+        };
+    }
+    if !matches!(&signature, b"GIF87a" | b"GIF89a") {
+        return Ok(false);
+    }
+    let mut options = gif::DecodeOptions::new();
+    options.check_frame_consistency(true);
+    options.check_lzw_end_code(true);
+    let mut decoder = options
+        .read_info(signature.as_slice().chain(file))
+        .map_err(io::Error::other)?;
+    let mut saw_frame = false;
+    while let Some(frame) = decoder.read_next_frame().map_err(io::Error::other)? {
+        if frame.width == 0 || frame.height == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "empty GIF frame",
+            ));
+        }
+        saw_frame = true;
+    }
+    if !saw_frame || !decoder.into_inner().fill_buf()?.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected one complete GIF stream",
+        ));
+    }
+    Ok(true)
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GifHeaderScan {
     pub palette_size: Option<u32>,
@@ -367,6 +411,36 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn verified_gif_checks_pixels_and_trailer_independently_of_suffix() -> anyhow::Result<()> {
+        let dir = TempDir::new()?;
+        let path = dir.path().join("no-extension");
+        let mut data = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut data, 1, 1, &[0, 0, 0, 255, 255, 255])?;
+            for index in [0, 1] {
+                encoder.write_frame(&gif::Frame {
+                    width: 1,
+                    height: 1,
+                    delay: 5,
+                    buffer: std::borrow::Cow::Owned(vec![index]),
+                    ..Default::default()
+                })?;
+            }
+        }
+        fs::write(&path, &data)?;
+        assert!(is_verified_gif(&path)?);
+        fs::write(&path, &data[..data.len() - 1])?;
+        assert!(is_verified_gif(&path).is_err());
+        data.extend_from_slice(b"extra stream");
+        fs::write(&path, data)?;
+        assert!(is_verified_gif(&path).is_err());
+        let fake = dir.path().join("video.gif");
+        fs::write(&fake, b"\0\0\0\x18ftypisom")?;
+        assert!(!is_verified_gif(&fake)?);
+        Ok(())
+    }
 
     #[test]
     fn test_scan_gif_headers_invalid_too_small() {

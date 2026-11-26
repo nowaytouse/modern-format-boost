@@ -204,7 +204,11 @@ pub(crate) enum Commands {
         allow_expert_options: bool,
 
         /// Meme mode strategy. "jxl" (default) or "avif" (Meme Mode).
-        #[arg(long, value_parser = ["jxl", "avif"], default_value = "jxl")]
+        #[arg(long, value_parser = [
+            clap::builder::PossibleValue::new("jxl"),
+            clap::builder::PossibleValue::new("avif"),
+            clap::builder::PossibleValue::new("gif").hide(true),
+        ], default_value = "jxl")]
         strategy: String,
 
         /// Accepted for CLI compatibility. Meme Mode keeps its bounded coarse-plus-binary search.

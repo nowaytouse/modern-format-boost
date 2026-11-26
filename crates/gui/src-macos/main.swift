@@ -402,8 +402,20 @@ private enum OperationMode: String, CaseIterable {
         switch self {
         case .fastImgJxl: "jxl"
         case .fastImgAvif: "avif"
+        case .fastVid: "gif"
         default: nil
         }
+    }
+
+    var checkpointedMedia: Bool { strategy != nil }
+
+    static func forDelivery(strategy: String) -> Self? {
+        allCases.first { $0.strategy == strategy }
+    }
+
+    var explicitStrategyArguments: [String] {
+        guard self != .fastVid, let strategy else { return [] }
+        return ["--strategy", strategy]
     }
 
     var capabilities: OperationCapabilities {
@@ -426,7 +438,7 @@ private enum OperationMode: String, CaseIterable {
                 supportsRetry: true
             )
         case .fastVid:
-            OperationCapabilities(fixedProcessingMode: .videosOnly, supportsShortestPath: true)
+            OperationCapabilities(fixedProcessingMode: .videosOnly, supportsResume: true, supportsRetry: true)
         case .restoreJpeg:
             OperationCapabilities(fixedProcessingMode: .imagesOnly)
         case .collect, .compare, .mergeXmp, .iCloudImport, .diagnostic, .cacheClean, .databaseManager:
@@ -478,7 +490,7 @@ struct FastImgCleanupRecoveryResult: Decodable, Equatable {
         guard value.schema_version == 1, validHistoryIdentity(value.run_id),
               [value.source_path, value.output_path].allSatisfy(validFastImgCleanupPath),
               !FastImgDeliveryReceipt.samePath(value.source_path, value.output_path),
-              ["jxl", "avif"].contains(value.strategy),
+              ["jxl", "avif", "gif"].contains(value.strategy),
               FastImgFailedRetryAvailable.hash(value.checkpoint_blake3),
               ["removed", "already_absent", "residual", "failed", "verification_blocked"].contains(value.outcome),
               value.verified == (value.outcome != "verification_blocked") else {
@@ -509,6 +521,7 @@ private struct ProcessorRequest {
     var ultimate = true
     var verbose = false
     var shortestPath = false
+    var deliversToPhotos: Bool { operationMode == .fastVid || shortestPath }
     var resume = false
     var fresh = false
     var archive = false
@@ -569,7 +582,7 @@ private struct FastImgConflictPreview: Decodable {
             guard Set(fields.keys) == Set(["schema_version", "kind", "input_path", "source_root", "strategy", "photos", "decision"]),
                   value.schema_version == 1, FastImgDeliveryReceipt.samePath(value.input_path, request.targetPath),
                   FastImgFailedRetryAvailable.path(value.source_root), value.strategy == request.operationMode.strategy,
-                  value.photos == request.shortestPath, value.decision == FastImgConflictPreview.decision(for: request),
+                  value.photos == request.deliversToPhotos, value.decision == FastImgConflictPreview.decision(for: request),
                   value.decision != .failedOnly else { throw HostError(message: localized("preflight.fast.invalid")) }
             return value
         }
@@ -597,10 +610,10 @@ private struct FastImgConflictPreview: Decodable {
     }
 
     static func arguments(for request: ProcessorRequest) throws -> [String] {
-        guard let strategy = request.operationMode.strategy, request.operationMode.backendMode == "fast-img" else {
+        guard request.operationMode.checkpointedMedia, let mode = request.operationMode.backendMode else {
             throw HostError(message: localized("preflight.fast.invalid"))
         }
-        var arguments = ["--plan-json", "--mode", "fast-img", "--strategy", strategy]
+        var arguments = ["--plan-json", "--mode", mode] + request.operationMode.explicitStrategyArguments
         if request.shortestPath { arguments.append("--shortest-path") }
         switch decision(for: request) {
         case .automatic: break
@@ -642,7 +655,7 @@ private struct FastImgConflictPreview: Decodable {
         let samePath = FastImgDeliveryReceipt.samePath
         guard Set(fields.keys) == expectedFields, plan.kind == "fast_img_retry_plan",
               samePath(plan.input_path, request.targetPath), path(plan.source_root),
-              plan.strategy == request.operationMode.strategy, plan.photos == request.shortestPath,
+              plan.strategy == request.operationMode.strategy, plan.photos == request.deliversToPhotos,
               plan.decision == decision(for: request), path(plan.proposed_output),
               plan.unknown == (plan.photos ? ["current_media_verification", "photos_duplicate_count"] : ["current_media_verification"]),
               plan.occupied_outputs.count <= 128,
@@ -1176,8 +1189,9 @@ private struct MediaSettings {
         let fields = MediaSetting.allCases.filter {
             if $0.isFastImage && !$0.appliesToFast(avif: operation == .fastImgAvif) { return false }
             if $0 == .externalToolSnapshot { return images || fastImages || operation == .restoreJpeg }
-            if $0.isShared { return images || videos || fastImages || ($0.isCache && operation == .fastVid) }
-            return $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
+            if $0.isShared { return images || videos || operation.checkpointedMedia }
+            if $0.isPhotos { return operation.checkpointedMedia }
+            return $0.isImage ? images : ($0.isFastImage ? fastImages : videos)
         }
         try validate(fields)
         var arguments = fields.flatMap { field -> [String] in
@@ -1189,9 +1203,10 @@ private struct MediaSettings {
         return arguments
     }
 
-    func runtimeArguments(fast: Bool, inheritedOnly: Bool, avif: Bool = false) -> [String] {
+    func runtimeArguments(fast: Bool, inheritedOnly: Bool, avif: Bool = false, gifOriginals: Bool = false) -> [String] {
         var arguments = MediaSetting.allCases.filter {
-            ($0.isShared || $0 == .externalToolSnapshot || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
+            if gifOriginals { return !inheritedOnly && ($0.isShared || $0.isPhotos) }
+            return ($0.isShared || $0 == .externalToolSnapshot || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
                 && (!fast || !$0.isFastImage || $0.appliesToFast(avif: avif))
                 && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
@@ -1200,7 +1215,7 @@ private struct MediaSettings {
                 argument.hasPrefix("--img-") ? "--" + argument.dropFirst(6) : argument
             }
         }
-        if !inheritedOnly { arguments += toolArguments(fast ? .fastImage : .image) }
+        if !inheritedOnly && !gifOriginals { arguments += toolArguments(fast ? .fastImage : .image) }
         return arguments
     }
 
@@ -2238,6 +2253,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var avifMetadataRow: NSGridRow?
     private let developer: Bool
     private let fast: Bool
+    private let gifOriginals: Bool
     private let avif: Bool
     private let videos: Bool
     private let privacyCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -2287,10 +2303,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var validatingLayout = false
 
     init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, avif: Bool = false,
-         videos: Bool = false, interfaceOnly: Bool = false, applied: @escaping () -> Void) {
+         videos: Bool = false, gifOriginals: Bool = false, interfaceOnly: Bool = false, applied: @escaping () -> Void) {
         self.preferences = preferences
         self.applied = applied
         self.interfaceOnly = interfaceOnly
+        self.gifOriginals = gifOriginals
         self.developer = developer
         self.fast = fast
         self.avif = avif
@@ -2316,11 +2333,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         tabs.translatesAutoresizingMaskIntoConstraints = false
         tabs.delegate = self
         installTab("general", grid: generalSettingsGrid())
-        let mediaSections = ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"]
+        let mediaSections = gifOriginals ? ["photos", "performance", "cache"]
+            : ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"]
         for section in interfaceOnly ? ["performance"] : mediaSections {
             let fields = MediaSetting.allCases.filter { field in
                 if interfaceOnly { return field == .externalToolSnapshot }
-                if field == .externalToolSnapshot { return section == "performance" && !videos }
+                if field == .externalToolSnapshot { return section == "performance" && !videos && !gifOriginals }
                 if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
                 if field == .performance { return section == "performance" }
                 if field.isCache { return section == "cache" }
@@ -3365,7 +3383,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         let generation = inheritedGeneration
         let settings = draft()
         let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: true)
-        let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: true)
+        let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: true, gifOriginals: gifOriginals)
         let videoArgs = settings.videoRuntimeArguments(inheritedOnly: true)
         let needsStandard = interfaceOnly || (!fast && !videos)
         let needsFast = !interfaceOnly
@@ -3611,7 +3629,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 requests = [("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
             } else {
                 let useFast = field.isFastImage || field.isPhotos || ((field.isShared || field == .externalToolSnapshot) && fast)
-                requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false, avif: avif))]
+                requests = [(gifOriginals ? "Fast VID" : (useFast ? "Fast IMG" : "IMG"), "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false, avif: avif, gifOriginals: gifOriginals))]
             }
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let result = Result {
@@ -3713,7 +3731,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             applyGeneration = UUID()
             let generation = applyGeneration
             let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: false)
-            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif)
+            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif, gifOriginals: gifOriginals)
             let videoArgs = settings.videoRuntimeArguments(inheritedOnly: false)
             let needsStandard = interfaceOnly || (!fast && !videos)
             let needsFast = !interfaceOnly
@@ -5013,14 +5031,14 @@ private struct PhotosAuditContainer: Decodable, Equatable {
 private enum ProcessorCommand {
     static func arguments(from request: ProcessorRequest) throws -> [String] {
         if request.recoverPhotosCleanup {
-            guard request.operationMode.backendMode == "fast-img",
-                  let strategy = request.operationMode.strategy, let output = request.expectedFastImgOutput,
+            guard request.operationMode.checkpointedMedia, let mode = request.operationMode.backendMode,
+                  let output = request.expectedFastImgOutput,
                   [request.targetPath, output].allSatisfy(validFastImgCleanupPath),
                   !FastImgDeliveryReceipt.samePath(request.targetPath, output) else {
                 throw HostError(message: localized("cleanup.recovery.unconfirmed"))
             }
-            return ["--mode", "fast-img", "--strategy", strategy, "--shortest-path",
-                    "--retry", "--recover-photos-cleanup", "--output", output, "--", request.targetPath]
+            return ["--mode", mode] + request.operationMode.explicitStrategyArguments
+                + (request.operationMode == .fastVid ? [] : ["--shortest-path"]) + ["--retry", "--recover-photos-cleanup", "--output", output, "--", request.targetPath]
         }
         guard !request.targetPath.isEmpty else {
             throw HostError(message: localized("error.select_target"))
@@ -5039,7 +5057,7 @@ private enum ProcessorCommand {
         guard !((request.resume || request.retry) && request.fresh) else {
             throw HostError(message: localized("error.resume_conflict"))
         }
-        guard !request.retryFailed || (request.operationMode.backendMode == "fast-img"
+        guard !request.retryFailed || (request.operationMode.checkpointedMedia
             && !request.resume && !request.retry && !request.fresh && !request.watch),
               request.retryFailedParent == nil || request.retryFailed else {
             throw HostError(message: localized("error.resume_conflict"))
@@ -5049,6 +5067,7 @@ private enum ProcessorCommand {
               !(request.force || request.plain || request.inPlace) || capabilities.supportsStandardOptions
         else { throw HostError(message: localized("error.option_unavailable")) }
         if request.watch {
+            guard request.operationMode != .fastVid else { throw HostError(message: localized("error.option_unavailable")) }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: request.targetPath, isDirectory: &isDirectory),
                   isDirectory.boolValue
@@ -5088,9 +5107,7 @@ private enum ProcessorCommand {
             arguments.append(mode)
         }
         if let mode = request.operationMode.backendMode { arguments += ["--mode", mode] }
-        if let strategy = request.operationMode.strategy {
-            arguments += ["--strategy", strategy]
-        }
+        arguments += request.operationMode.explicitStrategyArguments
         if request.ultimate { arguments.append("--ultimate") }
         if request.verbose { arguments.append("--verbose") }
         if request.archive { arguments.append("--archive") }
@@ -5101,7 +5118,7 @@ private enum ProcessorCommand {
             arguments += ["--retry-failed-parent", parent]
         }
         if let output = request.expectedFastImgOutput {
-            guard request.operationMode.backendMode == "fast-img", FastImgFailedRetryAvailable.path(output) else {
+            guard request.operationMode.checkpointedMedia, FastImgFailedRetryAvailable.path(output) else {
                 throw HostError(message: localized("preflight.fast.invalid"))
             }
             arguments += ["--output", output]
@@ -5215,7 +5232,7 @@ private struct ImgStartupAdmission {
                   next.message.utf8.count <= 8_192, !next.message.utf8.contains(0),
                   next.requested_output.map(FastImgDeliveryReceipt.absolute) ?? true,
                   let input = next.input_path, FastImgDeliveryReceipt.absolute(input),
-                  let request, request.operationMode.backendMode == "fast-img", !request.dryRun,
+                  let request, request.operationMode.checkpointedMedia, !request.dryRun,
                   FastImgDeliveryReceipt.samePath(input, request.targetPath),
                   event == nil || event == next
             else { throw HostError(message: localized("admission.invalid")) }
@@ -6814,7 +6831,7 @@ private func isPhotosUUID(_ value: String) -> Bool {
 
 private func processingRequiresPhotosAutomation(_ request: ProcessorRequest) -> Bool {
     !request.dryRun && (request.operationMode == .iCloudImport
-        || (request.shortestPath && request.operationMode.capabilities.supportsShortestPath)
+        || (request.operationMode.checkpointedMedia && request.deliversToPhotos)
         || (request.operationMode == .restoreJpeg && isPhotosLibraryPath(request.targetPath)))
 }
 
@@ -7824,7 +7841,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         verboseCheck.state = .on
         if operation.capabilities.supportsResume {
-            let photos = operation.backendMode == "fast-img" && shortestPathCheck.state == .on
+            let photos = operation == .fastVid || (operation.capabilities.supportsShortestPath && shortestPathCheck.state == .on)
             let resuming = freshCheck.state != .on
                 && (resumeCheck.state == .on || retryCheck.state == .on)
             resumeCheck.state = resuming ? .on : .off
@@ -8538,8 +8555,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         } else if sender === resumeCheck || sender.state == .on {
             resumeCheck.state = .on
             freshCheck.state = .off
-            if selectedOperation.backendMode == "fast-img" { retryCheck.state = .on }
-        } else if selectedOperation.backendMode == "fast-img" {
+            if selectedOperation.checkpointedMedia { retryCheck.state = .on }
+        } else if selectedOperation.checkpointedMedia {
             resumeCheck.state = .off
             freshCheck.state = isFastImgPhotosSelection ? .off : .on
         }
@@ -8556,7 +8573,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               developerMode, configurationControlsEnabled, !privacyEnabled else { return }
         do {
             let request = try request()
-            if request.operationMode.backendMode == "fast-img", !request.dryRun {
+            if request.operationMode.checkpointedMedia, !request.dryRun {
                 previewFastImg(request) { [weak self] approved in
                     guard let self, !self.privacyEnabled else { return }
                     do { self.setStatus(try self.host.openInTerminal(approved)) }
@@ -8692,15 +8709,11 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func runHistoryCleanupRecovery(_ selection: FastImgCleanupRecoverySelection) {
         guard canRunHistoryCleanupRecovery else { return }
-        let operation: OperationMode
-        switch selection.strategy {
-        case "jxl": operation = .fastImgJxl
-        case "avif": operation = .fastImgAvif
-        default: return
-        }
-        var request = ProcessorRequest(targetPath: selection.sourceDirectory, processingMode: .imagesOnly,
+        guard let operation = OperationMode.forDelivery(strategy: selection.strategy),
+              let processing = operation.capabilities.fixedProcessingMode else { return }
+        var request = ProcessorRequest(targetPath: selection.sourceDirectory, processingMode: processing,
                                        operationMode: operation)
-        request.shortestPath = true
+        request.shortestPath = operation.capabilities.supportsShortestPath
         request.retry = true
         request.recoverPhotosCleanup = true
         request.expectedFastImgOutput = selection.workingCopy
@@ -8712,13 +8725,13 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard !isDebugWindow, !restoreFixture, !host.isRunning,
               !historyRemovalInProgress, configurationControlsEnabled else { return }
         do {
-            let operation: OperationMode = selection.strategy == "avif" ? .fastImgAvif : .fastImgJxl
-            guard let item = operationPopup.itemArray.first(where: { ($0.representedObject as? String) == operation.rawValue })
+            guard let operation = OperationMode.forDelivery(strategy: selection.strategy),
+                  let item = operationPopup.itemArray.first(where: { ($0.representedObject as? String) == operation.rawValue })
             else { throw HostError(message: localized("error.option_unavailable")) }
             operationPopup.select(item)
             operationChanged()
             targetField.stringValue = selection.sourceDirectory
-            shortestPathCheck.state = selection.shortestPath ? .on : .off
+            shortestPathCheck.state = operation.capabilities.supportsShortestPath && selection.shortestPath ? .on : .off
             dryRunCheck.state = .off; watchCheck.state = .off
             var selected = try request()
             selected.retryFailed = true; selected.retryFailedParent = selection.parentWorkingCopy
@@ -8799,7 +8812,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard configurationControlsEnabled, !host.isRunning, supportsPreflight, !privacyEnabled else { return }
         do {
             let request = try request()
-            if request.operationMode.backendMode == "fast-img" {
+            if request.operationMode.checkpointedMedia {
                 previewFastImg(request)
                 return
             }
@@ -8844,7 +8857,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private var supportsPreflight: Bool {
-        selectedOperation == .adjacent || selectedOperation.backendMode == "fast-img"
+        selectedOperation == .adjacent || selectedOperation.checkpointedMedia
     }
 
     private func previewFastImg(_ request: ProcessorRequest, context: String? = nil,
@@ -8944,8 +8957,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         let query = PreflightQuery()
         preflightQuery = query
         setLocalizedStatus("preflight.fast.migration_running")
-        let arguments = ["--migrate-fast-img-state", "--mode", "fast-img", "--strategy", migration.strategy,
-                         "--", migration.source_root]
+        guard let mode = request.operationMode.backendMode else { present(HostError(message: localized("preflight.fast.invalid"))); return }
+        let arguments = ["--migrate-fast-img-state", "--mode", mode]
+            + request.operationMode.explicitStrategyArguments + ["--", migration.source_root]
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Result { try query.run(binary, arguments: arguments, timeout: 120) }
             DispatchQueue.main.async { [weak self] in
@@ -9038,7 +9052,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         invalidatePreflight()
         do {
             let request = try request()
-            if request.operationMode.backendMode == "fast-img", !request.dryRun {
+            if request.operationMode.checkpointedMedia, !request.dryRun {
                 previewFastImg(request) { [weak self] in self?.startHere($0) }
             } else { startHere(request) }
         } catch { present(error) }
@@ -9069,7 +9083,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private var isFastImgPhotosSelection: Bool {
-        selectedOperation.backendMode == "fast-img" && shortestPathCheck.state == .on
+        selectedOperation == .fastVid || (selectedOperation.capabilities.supportsShortestPath && shortestPathCheck.state == .on)
     }
 
     private var hasExplicitPhotosFreshSelection: Bool {
@@ -9080,7 +9094,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var canResumeConfirmedPhotosQuarantine: Bool {
         hasConfirmedPhotosQuarantine && isFastImgPhotosSelection && !hasExplicitPhotosFreshSelection
             && dryRunCheck.state != .on && watchCheck.state != .on
-            && lastRequest?.shortestPath == true && lastRequest?.retryFailed == false
+            && lastRequest?.deliversToPhotos == true && lastRequest?.retryFailed == false
             && lastRequest?.operationMode == selectedOperation
             && FastImgDeliveryReceipt.samePath(lastRequest?.targetPath, targetField.stringValue)
     }
@@ -9124,7 +9138,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let exposesArchive = capabilities.supportsArchive && selectedOperation != .adjacent
         archiveCheck.isEnabled = configurationControlsEnabled && exposesArchive
         retryCheck.isEnabled = configurationControlsEnabled && capabilities.supportsRetry
-        if selectedOperation.backendMode == "fast-img", resumeCheck.state == .on {
+        if selectedOperation.checkpointedMedia, resumeCheck.state == .on {
             retryCheck.state = .on
         }
         for control in [forceCheck, plainCheck, inPlaceCheck] {
@@ -9141,9 +9155,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         for control in [forceCheck, plainCheck, inPlaceCheck] {
             control.isHidden = !developerMode || !capabilities.supportsStandardOptions
         }
-        watchCheck.isHidden = !developerMode
-        watchCheck.isEnabled = configurationControlsEnabled && developerMode
-        if !developerMode { watchCheck.state = .off }
+        watchCheck.isHidden = !developerMode || selectedOperation == .fastVid
+        watchCheck.isEnabled = configurationControlsEnabled && !watchCheck.isHidden
+        if watchCheck.isHidden { watchCheck.state = .off }
         copyButton.isHidden = !developerMode
         openButton.isHidden = !developerMode
         diagnosticsButton.isHidden = !developerMode
@@ -9193,6 +9207,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         switch selectedOperation {
         case .fastImgJxl:
             key = "metadata.fast_jxl"
+        case .fastVid:
+            key = "metadata.fast_gif"
         case .adjacent, .mergeXmp:
             key = "metadata.jxl_overlay"
         case .restoreJpeg:
@@ -9353,7 +9369,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             if control.hasPrefix(FastImgFailedRetryAvailable.prefix) {
                 do {
                     guard !failedRetryAvailabilityInvalid, let available = try FastImgFailedRetryAvailable.decode(control),
-                          let request = lastRequest, request.operationMode.backendMode == "fast-img",
+                          let request = lastRequest, request.operationMode.checkpointedMedia,
                           !request.dryRun, FastImgDeliveryReceipt.samePath(request.targetPath, available.sourceDirectory),
                           available.strategy == (request.operationMode.strategy ?? "jxl"),
                           failedRetryAvailable == nil || failedRetryAvailable == available
@@ -9371,7 +9387,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             let recoveryRequested = lastRequest.map { $0.retryFailed || $0.retry || $0.resume } ?? false
             if batchResults.ingestRetryReference(line, requested: recoveryRequested,
                 source: lastRequest?.targetPath, parent: lastRequest?.retryFailedParent,
-                strategy: lastRequest?.operationMode.strategy ?? "jxl", photos: lastRequest?.shortestPath, runID: workerExecution.singleSuccessfulImageRunID) {
+                strategy: lastRequest?.operationMode.strategy ?? "jxl", photos: lastRequest?.deliversToPhotos, runID: workerExecution.singleSuccessfulImageRunID) {
                 if batchResults.failedRetryInvalid {
                     let warning = "[WARN] " + localized("retry.invalid")
                     displayLines.append(warning); privateLines.append(warning)
@@ -9852,8 +9868,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         request.retryFailedParent = nil
         request.resume = !fresh
         request.fresh = fresh
-        request.retry = !fresh && (request.retry || request.operationMode.backendMode == "fast-img")
-        guard updateOptions, request.operationMode.backendMode != "fast-img" || !request.shortestPath else { return }
+        request.retry = !fresh && (request.retry || request.operationMode.checkpointedMedia)
+        guard updateOptions, !request.operationMode.checkpointedMedia || !request.deliversToPhotos else { return }
         resumeCheck.state = request.resume ? .on : .off
         freshCheck.state = request.fresh ? .on : .off
         retryCheck.state = request.retry ? .on : .off
@@ -10498,7 +10514,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         alert.alertStyle = .warning
         alert.messageText = startupAdmission.status
         alert.informativeText = toolModeInfo + localized("admission.fresh_info")
-            + (retry.shortestPath ? "\n\n" + localized("admission.photos_warning") : "")
+            + (retry.deliversToPhotos ? "\n\n" + localized("admission.photos_warning") : "")
         // Return and Escape both cancel. Starting another task always requires
         // an explicit choice; there is deliberately no continue-old-task action.
         alert.addButton(withTitle: localized("alert.cancel"))
@@ -10554,7 +10570,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
         if host.controlState == "cancelled", host.lastExitStatus == 130 {
-            if !batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
+            if !batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.deliversToPhotos ?? false,
                                                     processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal) {
                 photosDiagnostics.markFailed()
             }
@@ -10612,7 +10628,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 latestDiagnostics = LatestDiagnostics()
                 refreshLatestDiagnostics()
                 setProcessing(false)
-                if resumeDecision == nil, retry.operationMode.backendMode == "fast-img" {
+                if resumeDecision == nil, retry.operationMode.checkpointedMedia {
                     retry.expectedFastImgOutput = nil
                     previewFastImg(retry) { [weak self] in self?.startHere($0) }
                     return
@@ -10623,7 +10639,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 alert.informativeText = available.map { $0.existingChildComplete
                     ? localized("retry.reused.choice_info") : localized("retry.choice.info", String($0.failedCount)) }
                     ?? localized("alert.resume.info")
-                if retry.shortestPath, retry.operationMode.backendMode == "fast-img" {
+                if retry.deliversToPhotos, retry.operationMode.checkpointedMedia {
                     alert.informativeText += "\n\n" + localized("alert.resume.photos_fresh")
                 }
                 alert.addButton(withTitle: localized(available == nil ? "alert.resume.resume"
@@ -10662,15 +10678,15 @@ private final class AppController: NSObject, NSWindowDelegate {
                 host.startProcessing(retry)
                 return
             }
-            let deliveryConfirmed = batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
+            let deliveryConfirmed = batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.deliversToPhotos ?? false,
                 processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
             let mixedFacts = host.controlState != "cancelled" && batchResults.mixedDeliveryFacts(
-                photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
+                photos: lastRequest?.deliversToPhotos ?? false, source: lastRequest?.targetPath,
                 processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
             let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(
-                photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
+                photos: lastRequest?.deliversToPhotos ?? false, source: lastRequest?.targetPath,
                 processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
-            let quarantineBlocked = host.controlState != "cancelled" && lastRequest?.shortestPath == true
+            let quarantineBlocked = host.controlState != "cancelled" && lastRequest?.deliversToPhotos == true
                 && batchResults.confirmedPhotosQuarantine(source: lastRequest?.targetPath,
                     processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal) != nil
             if !deliveryConfirmed && !mixedFacts && !deferred {
@@ -10796,13 +10812,13 @@ private final class AppController: NSObject, NSWindowDelegate {
             return
         }
         let expectsFastDelivery = lastRequest.map {
-            !$0.dryRun && [.fastImgJxl, .fastImgAvif].contains($0.operationMode)
+            !$0.dryRun && $0.operationMode.checkpointedMedia
         } ?? batchResults.hasFastDelivery
         guard !host.isRunning, !batchResults.totals.isEmpty || batchResults.hasFastDelivery || expectsFastDelivery || processEndedWithError else {
             batchOverview.isHidden = true
             return
         }
-        let photos = lastRequest?.shortestPath ?? false
+        let photos = lastRequest?.deliversToPhotos ?? false
         let interrupted = interruptedWithoutFileSummary
         let terminalExit = processExit ?? host.lastExitStatus ?? (deliveryFixture ? 1 : nil)
         let normalExit = exitedNormally ?? (deliveryFixture || host.lastExitWasNormal)
@@ -11012,10 +11028,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func openSettings(section: String) {
         guard configurationControlsEnabled, window.attachedSheet == nil else { return }
         settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode,
-            fast: selectedOperation.backendMode == "fast-img",
+            fast: selectedOperation.checkpointedMedia,
             avif: selectedOperation == .fastImgAvif,
             videos: selectedOperation == .adjacent ? processingPopup.indexOfSelectedItem == 2
-                : selectedOperation.backendMode != "fast-img",
+                : !selectedOperation.checkpointedMedia,
+            gifOriginals: selectedOperation == .fastVid,
             interfaceOnly: selectedOperation == .restoreJpeg) { [weak self] in
             guard let self else { return }
             let language = self.preferences.string(forKey: languagePreferenceKey)
@@ -13924,7 +13941,8 @@ private func runSelfTest() -> Int32 {
               !configuredArguments.contains("--vid-codec"), configuredArguments.last == request.targetPath,
               try configured.mediaSettings.arguments(operation: .adjacent, processing: .videosOnly)
                 == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast", "--vid-force-ms-ssim-long=false"],
-              try configured.mediaSettings.arguments(operation: .fastVid, processing: .videosOnly).isEmpty,
+              try configured.mediaSettings.arguments(operation: .fastVid, processing: .videosOnly)
+                == ["--photos-backend", "native", "--photos-native-batch-size", "200", "--preserve-folder-structure=false"],
               try configured.mediaSettings.arguments(operation: .restoreJpeg, processing: .imagesOnly).isEmpty
         else { throw HostError(message: "Media settings leaked across processing modes") }
         let effective = try queryRuntimeSettings(arguments: ["--no-config"]
@@ -14246,9 +14264,19 @@ private func runSelfTest() -> Int32 {
             fputs("native-host self-test unsupported FastVid ultimate flag was accepted\n", stderr)
             return 1
         } catch {}
+        let gifImport = ProcessorRequest(targetPath: "/tmp/synthetic-gif.bin", processingMode: .both,
+                                         operationMode: .fastVid, ultimate: false, resume: true)
+        guard try ProcessorCommand.arguments(from: gifImport) == [
+            "--videos-only", "--mode", "fast-vid", "--resume", gifImport.targetPath
+        ], try FastImgConflictPreview.arguments(for: gifImport) == [
+            "--plan-json", "--mode", "fast-vid", "--retry", "--", gifImport.targetPath
+        ], gifImport.deliversToPhotos, OperationMode.forDelivery(strategy: "gif") == .fastVid else {
+            throw HostError(message: "GIF import and preview did not select the original Photos delivery workflow")
+        }
         guard processingRequiresPhotosAutomation(request),
               processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .iCloudImport)),
-              processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .videosOnly, operationMode: .fastVid, shortestPath: true)),
+              processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .videosOnly, operationMode: .fastVid)),
+              !processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .videosOnly, operationMode: .fastVid, dryRun: true)),
                !processingRequiresPhotosAutomation(restore),
                !processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .iCloudImport, dryRun: true)),
               processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/debug.photoslibrary", processingMode: .imagesOnly, operationMode: .restoreJpeg, ultimate: false)),

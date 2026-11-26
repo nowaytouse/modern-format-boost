@@ -21,6 +21,7 @@ Apple 照片图库集成仅限 macOS。当前开发版本为 **0.12.0**，开发
 | **Fast IMG · JXL** / `img fast-img --strategy jxl` | JPEG 可逐字节恢复。静态 PNG 和已确认无损的 WebP、AVIF 以 d=0 探索多个努力值。核验通过且完整文件小于或等于原件时采用 JXL，更大时保留原件。符合条件的有损静图沿用原格式图库交付。 | 归档 JPEG 和无损静图，或交付到 Apple 照片图库。 |
 | **Fast IMG · AVIF** / `img fast-img --strategy avif` | 使用独立的 AVIF 体积与质量策略；已有 AVIF 不再重新编码。 | 允许清理元数据的表情包等图片集合。 |
 | **视频** / `vid run` | 处理视频和动图，默认 HEVC，也可选择 AV1。 | 有动态语义的媒体，而不是静图转换。 |
+| **快速视频 · GIF 原件** / `vid fast-vid` | 按内容识别单帧和多帧 GIF，将原始字节导入 Apple 照片。通过图库原件核验后，源文件才可清理。 | 在 macOS 上导入 GIF 收藏。可用 `--dry-run` 预览。 |
 
 MFB 根据实际内容识别格式，不只看扩展名。图片和视频各有职责：`img` 不会把不适合的
 文件悄悄交给 `vid`。Fast IMG 表示处理范围更集中，不保证每个文件都比普通模式更快。
@@ -52,8 +53,8 @@ MFB 根据实际内容识别格式，不只看扩展名。图片和视频各有�
 1. 打开 `Modern Format Boost.app`，选择或拖入文件、文件夹。
 2. 选择对应的图片或视频处理方式，在**设置**中检查该模式自己的质量、搜索、工具和
    照片图库选项。
-3. 第一次运行前先用**预览**确认范围。只有确实要交付到当前选中图库时，才勾选
-   **导入到照片**。
+3. 用**预览**确认将处理哪些文件。快速视频会将 GIF 原件导入照片，并在核验后清理对应源文件。
+   快速图像可通过**导入到照片**选择是否交付到图库。
 4. 完成后先看摘要；通过**处理历史**查看当次的数量、路径、验证、清理和诊断记录，
    无需手动翻找日志文件夹。
 
@@ -130,7 +131,7 @@ vid config show --effective
 通过 `img --help`、`img run --help`、`img fast-img --help` 或 `vid run --help`
 查看对应模式的当前参数，不要直接把某种模式的参数套到另一种模式。
 普通 `vid run` 要求能连接到 PostgreSQL；数据库分析、训练还使用 pgvector。
-`vid config`、`vid fast-gif`、普通 IMG 的本地识别和 Fast IMG **不需要 PostgreSQL**。
+`vid config`、`vid fast-vid`、普通 IMG 的本地识别和 Fast IMG **不需要 PostgreSQL**。
 
 ## 设置、失败与恢复
 

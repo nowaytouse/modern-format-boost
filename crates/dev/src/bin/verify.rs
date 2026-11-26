@@ -161,7 +161,8 @@ struct Args {
     #[arg(
         long = "strategy",
         default_value = "jxl",
-        help = "Encoding strategy: jxl (default) or avif (Meme Mode 表情包模式)."
+        value_parser = ["jxl", "avif", "gif"],
+        help = "Delivery strategy: jxl, avif, or gif (original GIFs in Apple Photos)."
     )]
     strategy: String,
 }
@@ -542,6 +543,11 @@ fn verified_fast_img_aae_outputs(
         WorkingCopyMarker, validate_no_symlink_components, verify_regular_file_blake3,
     };
 
+    // GIF originals have no encoded work-copy media. Any local AAE is unowned.
+    if strategy == "gif" {
+        return Ok((HashSet::new(), false, Vec::new()));
+    }
+
     let sidecars: Vec<_> = unexpected
         .iter()
         .filter(|(_, reason)| reason == "unverified AAE companion")
@@ -723,6 +729,84 @@ fn run_fast_img_delivery_check_with(
     )
 }
 
+/// GIFs are delivered as originals. Bind every Photos receipt or retained failure to
+/// exactly one immutable source admission, including the smaller scope of a retry.
+fn verify_gif_original_admissions(
+    marker: &foundation::pipeline::verification::WorkingCopyMarker,
+    retry: Option<&foundation::fast_img_store::FailedRetryContext>,
+) -> Result<usize> {
+    use foundation::fast_img_store::{
+        FailedRetryDeliveryIntent, FailedRetrySourceRoute, FastImgAdmissionRoute,
+        read_admission_plan,
+    };
+    use foundation::pipeline::verification::FastImgEncodingParameters;
+
+    anyhow::ensure!(
+        marker.is_terminal()
+            && marker.primary_source_count() == 0
+            && marker.recorded_source_count() == 0
+            && marker.photos_imported_assets.is_empty()
+            && marker
+                .processing_contract
+                .as_ref()
+                .is_some_and(|contract| matches!(
+                    contract.encoding,
+                    FastImgEncodingParameters::Gif
+                )),
+        "GIF delivery requires a completed original-only checkpoint"
+    );
+    anyhow::ensure!(
+        marker.tier2_imported_assets.iter().all(|asset| {
+            asset.xmp_sidecar_blake3.is_none()
+                && asset
+                    .library_blake3
+                    .as_deref()
+                    .is_none_or(|hash| hash == asset.blake3)
+        }),
+        "GIF delivery requires the unmodified original Photos bytes"
+    );
+    let outcomes: HashMap<_, _> = marker
+        .tier2_imported_assets
+        .iter()
+        .map(|asset| (asset.rel_path.as_str(), asset.blake3.as_str()))
+        .chain(
+            marker
+                .tier2_failed_sources
+                .iter()
+                .map(|(path, failure)| (path.as_str(), failure.src.as_str())),
+        )
+        .collect();
+    anyhow::ensure!(
+        outcomes.len() == marker.tier2_imported_assets.len() + marker.tier2_failed_sources.len()
+            && (marker.tier2_imported_assets.is_empty() || marker.photos_library_path.is_some()),
+        "GIF original outcomes have conflicting or unbound receipts"
+    );
+    let exact = if let Some(retry) = retry {
+        matches!(
+            retry.requested_delivery(),
+            FailedRetryDeliveryIntent::Photos { .. }
+        ) && retry.admissions().len() == outcomes.len()
+            && retry.admissions().iter().all(|(path, admission)| {
+                admission.route == Some(FailedRetrySourceRoute::Original)
+                    && outcomes.get(path.as_str()).copied()
+                        == Some(admission.admitted_source_blake3.as_str())
+            })
+    } else {
+        let plan = read_admission_plan(marker)?.context("missing GIF original admission plan")?;
+        plan.len() == outcomes.len()
+            && plan.iter().all(|(path, admission)| {
+                admission.route == FastImgAdmissionRoute::Original
+                    && outcomes.get(path.as_str()).copied()
+                        == Some(admission.source_blake3.as_str())
+            })
+    };
+    anyhow::ensure!(
+        exact,
+        "GIF original outcomes do not cover the exact admitted bytes"
+    );
+    Ok(outcomes.len())
+}
+
 fn run_fast_img_delivery_check_for_scope(
     source_dir: &Path,
     optimized_dir: &Path,
@@ -842,7 +926,36 @@ fn run_fast_img_delivery_check_for_scope(
         None
     };
 
-    report.push_str("── FAST-IMG DELIVERY VERIFICATION ─────────────────────────────\n");
+    let gif_admissions = if strategy == "gif" {
+        let marker: foundation::pipeline::verification::WorkingCopyMarker =
+            serde::Deserialize::deserialize(
+                marker_opt
+                    .as_ref()
+                    .context(IntegrityUnavailableReason::Checkpoint)?,
+            )
+            .context(IntegrityUnavailableReason::Checkpoint)?;
+        anyhow::ensure!(
+            marker.working_copy == optimized_dir
+                && marker.src_dir == source_dir
+                && marker.strategy == strategy,
+            IntegrityUnavailableReason::Checkpoint
+        );
+        Some(
+            verify_gif_original_admissions(&marker, failed_retry.as_ref())
+                .context(IntegrityUnavailableReason::Checkpoint)?,
+        )
+    } else {
+        None
+    };
+    let (delivery_name, ext_name, count_label) = match strategy {
+        "jxl" => ("FAST-IMG", "JXL", "FAST_IMG_JXL_ONLY_DELIVERY"),
+        "avif" => ("FAST-IMG", "AVIF", "FAST_IMG_AVIF_MEME_DELIVERY"),
+        "gif" => ("FAST-VID", "GIF", "FAST_VID_GIF_ORIGINAL_DELIVERY"),
+        _ => anyhow::bail!("unknown delivery strategy"),
+    };
+    report.push_str(&format!(
+        "── {delivery_name} DELIVERY VERIFICATION ─────────────────────────────\n"
+    ));
     report.push_str(&format!("Source:    {}\n", displayed_source.display()));
     report.push_str(&format!("Optimized: {}\n\n", optimized_dir.display()));
 
@@ -851,22 +964,27 @@ fn run_fast_img_delivery_check_for_scope(
         optimized: optimized_dir.to_string_lossy().to_string(),
         scope: processing_mode.to_string(),
         optimized_path_label: "Optimized".to_string(),
-        source_files_label: if routed_child.is_some() {
+        source_files_label: if gif_admissions.is_some() {
+            "Admitted GIF originals".to_string()
+        } else if routed_child.is_some() {
             "Recorded failed-only admissions".to_string()
         } else {
             "Recorded source static images".to_string()
         },
-        optimized_files_label: if strategy == "avif" {
-            "Optimized AVIF files".to_string()
+        optimized_files_label: if gif_admissions.is_some() {
+            "Verified GIF originals in Photos".to_string()
         } else {
-            "Optimized JXL files".to_string()
+            format!("Optimized {ext_name} files")
         },
         ..Default::default()
     };
 
     let mut source_true_jpegs = Vec::new();
     let mut source_probe_errors = Vec::new();
-    let source_files = if let Some((path, present, _marker)) = &selected_source {
+    let source_files = if gif_admissions.is_some() {
+        // The original-format checks below inspect only the immutable GIF admissions.
+        Vec::new()
+    } else if let Some((path, present, _marker)) = &selected_source {
         present.then(|| path.to_path_buf()).into_iter().collect()
     } else if source_dir_exists {
         if let Some(context) = &failed_retry {
@@ -970,7 +1088,10 @@ fn run_fast_img_delivery_check_for_scope(
                 unexpected_outputs.push((path, "unrecognized file name".to_owned()));
             } else {
                 match foundation::image::format_detect::detect_regular_file_format(&path) {
-                    Ok(format) if format.canonical_extension() == Some(strategy) => {
+                    Ok(format)
+                        if gif_admissions.is_none()
+                            && format.canonical_extension() == Some(strategy) =>
+                    {
                         optimized_outputs.push(path)
                     }
                     Ok(format) => unexpected_outputs.push((
@@ -1401,6 +1522,7 @@ fn run_fast_img_delivery_check_for_scope(
     }
 
     let count_matches = marker_ok
+        && (gif_admissions.is_none() || unexpected_outputs.is_empty())
         && expected_delivery_count == accounted_delivery_count
         && missing_recorded_outputs.is_empty()
         && unresolved_aae.is_empty()
@@ -1419,11 +1541,7 @@ fn run_fast_img_delivery_check_for_scope(
     stats.count_matches_with_handoff = count_matches;
     stats.count_fully_explained = count_matches;
     stats.count_status_label = if count_matches {
-        Some(if strategy == "avif" {
-            "FAST_IMG_AVIF_MEME_DELIVERY".to_string()
-        } else {
-            "FAST_IMG_JXL_ONLY_DELIVERY".to_string()
-        })
+        Some(count_label.to_string())
     } else {
         None
     };
@@ -1437,9 +1555,14 @@ fn run_fast_img_delivery_check_for_scope(
         report.push_str(&format!("  Error:                  {err}\n"));
     }
     let source_kind = "static images";
-    report.push_str(&format!(
-        "Recorded source {source_kind}:       {recorded_source_jpegs}\n"
-    ));
+    if let Some(count) = gif_admissions {
+        stats.source_files = count;
+        report.push_str(&format!("Admitted GIF originals:      {count}\n"));
+    } else {
+        report.push_str(&format!(
+            "Recorded source {source_kind}:       {recorded_source_jpegs}\n"
+        ));
+    }
     report.push_str(&format!(
         "Recorded skipped sources:    {}\n",
         skipped_source_rels.len()
@@ -1448,14 +1571,15 @@ fn run_fast_img_delivery_check_for_scope(
         "Recorded failed sources:     {}\n",
         stats.failed_sources
     ));
-    let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
-    report.push_str(&format!(
-        "Expected optimized {ext_name}s:     {expected_delivery_count}\n"
-    ));
-    report.push_str(&format!(
-        "Optimized {ext_name} files:         {}\n",
-        optimized_outputs.len()
-    ));
+    if gif_admissions.is_none() {
+        report.push_str(&format!(
+            "Expected optimized {ext_name}s:     {expected_delivery_count}\n"
+        ));
+        report.push_str(&format!(
+            "Optimized {ext_name} files:         {}\n",
+            optimized_outputs.len()
+        ));
+    }
     report.push_str(&format!(
         "Source probe errors:         {}\n",
         source_probe_errors.len()
@@ -1479,8 +1603,7 @@ fn run_fast_img_delivery_check_for_scope(
     }
     if tier2_recorded > 0 {
         report.push_str(&format!(
-            "Recorded tier-2 lossy files: {}\n",
-            tier2_recorded
+            "Recorded original-format Photos receipts: {tier2_recorded}\n"
         ));
     }
     if tier2_failed_count > 0 || routed_child.is_some() {
@@ -1531,7 +1654,6 @@ fn run_fast_img_delivery_check_for_scope(
             ));
         }
         if marker_opt.is_some() && expected_delivery_count != accounted_delivery_count {
-            let ext_name = if strategy == "avif" { "AVIF" } else { "JXL" };
             report.push_str(&format!(
                 "  - Delivered {ext_name} count mismatch: expected {expected_delivery_count} but accounted for {accounted_delivery_count}\n",
             ));
@@ -1585,7 +1707,7 @@ fn run_fast_img_delivery_check_for_scope(
         }
         if !tier2_missing_proof.is_empty() {
             report.push_str(&format!(
-                "  - {} tier-2 modern lossy files are absent without a Photos UUID receipt:\n",
+                "  - {} original-format files are absent without a Photos UUID receipt:\n",
                 tier2_missing_proof.len()
             ));
             for rel in &tier2_missing_proof {
@@ -1594,7 +1716,7 @@ fn run_fast_img_delivery_check_for_scope(
         }
         if !tier2_unexpected_remaining.is_empty() {
             report.push_str(&format!(
-                "  - {} tier-2 modern lossy files remained under source (not deleted):\n",
+                "  - {} original-format files remained under source (not deleted):\n",
                 tier2_unexpected_remaining.len()
             ));
             for rel in &tier2_unexpected_remaining {
@@ -1658,10 +1780,15 @@ fn run_fast_img_delivery_check_for_scope(
         stats.tier2_verified_deleted =
             foundation::fast_img_store::verify_tier2_cleanup_completion_count(&typed)
                 .context(IntegrityUnavailableReason::Checkpoint)?;
+        if gif_admissions.is_some() {
+            stats.optimized_files = tier2_recorded;
+            stats.matched = tier2_recorded;
+            stats.verified_deleted_sources = stats.tier2_verified_deleted;
+        }
         stats.tier2_verified_absent_without_unlink =
             tier2_recorded.saturating_sub(stats.tier2_verified_deleted);
         report.push_str(&format!(
-            "{} FAST-IMG DELIVERY INVARIANTS PASS\n",
+            "{} {delivery_name} DELIVERY INVARIANTS PASS\n",
             pick_symbol("✓", "[OK]")
         ));
         if recovery_marker.is_some() {
@@ -1669,7 +1796,7 @@ fn run_fast_img_delivery_check_for_scope(
             report.push_str(&format!(
                 "  - Recorded local outputs absent now: {observed_absent_outputs}. Current Photos originals cover them.\n"
             ));
-        } else {
+        } else if gif_admissions.is_none() {
             report.push_str(&format!(
                 "  - All non-skipped/non-failed primary source {source_kind} were successfully deleted\n"
             ));
@@ -3084,6 +3211,10 @@ fn report_integrity_unavailable<T>(result: Result<T>, requested: bool) -> Result
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    anyhow::ensure!(
+        args.strategy != "gif" || args.fast_img_delivery,
+        "GIF originals use Photos delivery verification (--fast-img-delivery)"
+    );
     if args.fast_img_jpeg_scratch_list {
         let report = foundation::jxl_effort_policy::list_jpeg_effort_scratch()?;
         serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
@@ -3401,7 +3532,7 @@ fn main() -> Result<()> {
             if stats.tier2_recorded > 0 {
                 println!(
                     "   {:<34}{}",
-                    "Recorded tier-2 modern lossy:", stats.tier2_recorded
+                    "Original-format Photos receipts:", stats.tier2_recorded
                 );
                 println!(
                     "   {:<34}{}",
@@ -3415,7 +3546,7 @@ fn main() -> Result<()> {
             if stats.skipped_sources > 0 {
                 println!(
                     "   {:<34}{}",
-                    "Recorded skipped JPEGs:", stats.skipped_sources
+                    "Recorded skipped sources:", stats.skipped_sources
                 );
             }
             if stats.failed_sources > 0 {
@@ -4075,6 +4206,169 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.optimized_files, 1);
         assert_eq!(stats.integrity_failures, 0);
         assert!(!stats.has_warnings);
+    }
+
+    #[test]
+    #[serial]
+    fn gif_delivery_binds_original_receipts_and_retained_failures_to_the_exact_scope() -> Result<()>
+    {
+        use foundation::fast_img_store::{
+            FastImgAdmissionRoute, FastImgSourceAdmission, initialize_with_admission,
+        };
+        use foundation::pipeline::verification::{
+            FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+            LibraryAssetRecord, SkippedSourceEntry, WorkingCopyMarker, write_marker_atomic,
+        };
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let _state = marker_test_state(&root);
+        let source = root.join("mixed");
+        let output = root.join("working");
+        fs::create_dir(&source)?;
+        fs::create_dir(&output)?;
+        let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
+        let hash = blake3::hash(gif).to_hex().to_string();
+        fs::write(source.join("retained.gif"), gif)?;
+        fs::write(
+            source.join("unrelated.jpg"),
+            b"\xff\xd8\xff\xe0unrelated JPEG",
+        )?;
+        let mut marker =
+            WorkingCopyMarker::new(source.clone(), output.clone(), 0).with_strategy("gif".into());
+        marker.processing_contract = Some(FastImgProcessingContract {
+            schema: 1,
+            tool_policy: foundation::runtime_config::ToolPolicy::Single,
+            fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
+            encoding: FastImgEncodingParameters::Gif,
+        });
+        marker.photos_library_path = Some(root.join("synthetic.photoslibrary"));
+        let plan = ["animation.mp4", "retained.gif"]
+            .into_iter()
+            .map(|path| {
+                (
+                    path.to_owned(),
+                    FastImgSourceAdmission {
+                        source_blake3: hash.clone(),
+                        route: FastImgAdmissionRoute::Original,
+                        xmp: None,
+                        aae: None,
+                    },
+                )
+            })
+            .collect();
+        initialize_with_admission(&mut marker, &plan)?;
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.tier2_imported_assets.push(LibraryAssetRecord {
+            rel_path: "animation.mp4".into(),
+            blake3: hash.clone(),
+            photos_uuid: Some("synthetic-uuid".into()),
+            sync_status: "photos_local".into(),
+            ..Default::default()
+        });
+        marker.tier2_failed_sources.insert(
+            "retained.gif".into(),
+            SkippedSourceEntry {
+                src: hash.clone(),
+                reason: "synthetic rejected import".into(),
+            },
+        );
+        write_marker_atomic(&marker)?;
+        let mut verified = false;
+        let mut report = String::new();
+        let stats = run_fast_img_delivery_check_with(
+            &source,
+            &output,
+            &mut report,
+            "videos_only",
+            "gif",
+            |saved| {
+                verified = true;
+                anyhow::ensure!(saved.tier2_imported_assets == marker.tier2_imported_assets);
+                Ok(())
+            },
+        )?;
+        assert!(verified);
+        assert_eq!(
+            (
+                stats.source_files,
+                stats.optimized_files,
+                stats.failed_sources,
+                stats.source_remaining_files
+            ),
+            (2, 1, 1, 1)
+        );
+        assert_eq!(
+            stats.count_status_label.as_deref(),
+            Some("FAST_VID_GIF_ORIGINAL_DELIVERY")
+        );
+        assert!(!stats.has_warnings);
+        assert!(report.contains("FAST-VID DELIVERY INVARIANTS PASS"));
+        assert!(!report.contains("JXL"));
+
+        fs::write(output.join("unclaimed.gif"), gif)?;
+        let residual =
+            delivery_inventory_fixture(&source, &output, &mut String::new(), "videos_only", "gif")?;
+        assert!(residual.has_warnings);
+        assert!(!residual.count_fully_explained);
+        fs::remove_file(output.join("unclaimed.gif"))?;
+
+        let saved_receipts = std::mem::take(&mut marker.tier2_imported_assets);
+        write_marker_atomic(&marker)?;
+        let missing =
+            delivery_inventory_fixture(&source, &output, &mut String::new(), "videos_only", "gif");
+        assert!(
+            matches!(missing, Err(error) if format!("{error:#}").contains("exact admitted bytes"))
+        );
+        marker.tier2_imported_assets = saved_receipts;
+        write_marker_atomic(&marker)?;
+
+        // A failed-only child owns only the retained GIF, even with successful siblings.
+        use foundation::fast_img_store::{
+            FailedRetryDeliveryIntent, FailedRetrySourceRoute, capture_failed_retry_admissions,
+            create_or_resume_failed_retry, inspect_failed_retry_parent_for_delivery,
+        };
+        let parent = inspect_failed_retry_parent_for_delivery(&output, true)?;
+        let mut admissions = capture_failed_retry_admissions(&parent)?;
+        assert_eq!(admissions.len(), 1);
+        admissions[0].route = Some(FailedRetrySourceRoute::Original);
+        let intent = FailedRetryDeliveryIntent::Photos {
+            library_path: marker.photos_library_path.clone(),
+            naming_policy: foundation::fast_img::photos_import_naming_policy_for(
+                &foundation::runtime_config::RuntimeConfig::default().photos,
+            ),
+        };
+        let mut child = create_or_resume_failed_retry(&parent, &admissions, &intent, None)?;
+        foundation::pipeline::verification::prepare_photos_working_copy_parent(
+            &source,
+            &child.working_copy,
+        )?;
+        fs::create_dir(&child.working_copy)?;
+        child.stage = FastImgStageName::CleanupComplete;
+        child.tier2_failed_sources = marker.tier2_failed_sources.clone();
+        write_marker_atomic(&child)?;
+        let child_stats = run_fast_img_delivery_check_for_scope(
+            &source.join("retained.gif"),
+            &child.working_copy,
+            &mut String::new(),
+            "videos_only",
+            "gif",
+            FastImgDeliveryScope::SelectedFile(&hash),
+            |_| anyhow::bail!("retained-only GIF retry must not query Photos"),
+        )?;
+        assert_eq!(
+            (
+                child_stats.source_files,
+                child_stats.failed_sources,
+                child_stats.source_remaining_files
+            ),
+            (1, 1, 1)
+        );
+        assert!(!child_stats.has_warnings);
+        assert_eq!(fs::read(source.join("retained.gif"))?, gif);
+        Ok(())
     }
 
     #[test]
@@ -5922,7 +6216,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.tier2_verified_absent_without_unlink, 1);
         assert_eq!(stats.integrity_failures, 0);
         assert!(!stats.has_warnings);
-        assert!(report.contains("Recorded tier-2 lossy files: 1"));
+        assert!(report.contains("Recorded original-format Photos receipts: 1"));
         assert!(report.contains("Tier-2 sources with verified absence and no recorded unlink: 1"));
 
         #[cfg(unix)]

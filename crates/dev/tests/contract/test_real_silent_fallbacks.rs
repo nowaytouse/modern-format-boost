@@ -9312,7 +9312,7 @@ fn media_conversion_processed_list_m215() {
             && drag.contains("rust_run_command")
             && drag.contains("build_fast_img_command")
             && drag.contains("build_fast_img_restore_command")
-            && drag.contains("build_fast_vid_command"),
+            && drag.contains("LaunchMode::FastImg | LaunchMode::FastVid"),
         "drag_and_drop must invoke Rust CLI/fastmode implementations directly"
     );
     assert!(

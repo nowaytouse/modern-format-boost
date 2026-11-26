@@ -3,7 +3,7 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use foundation::log_detail;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use foundation::analysis_cache::AnalysisCache;
 use foundation::conversion_types::SelectedCodec;
@@ -122,27 +122,43 @@ enum Commands {
     )]
     DbHealth,
 
-    /// Fast animated-image mode: output GIF by default or AVIF for meme mode.
-    /// Apple compatibility always delivers GIF, regardless of the requested strategy.
-    #[command(name = "fast-gif")]
-    FastGif {
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-        #[arg(long)]
-        originals: Option<PathBuf>,
-        #[arg(short, long, default_value_t = true)]
-        recursive: bool,
-        #[arg(short, long, default_value_t = false)]
-        force: bool,
-        #[arg(long = "shortest-path", default_value_t = false)]
-        shortest_path: bool,
-        #[arg(long, default_value_t = false)]
-        apple_compat: bool,
-        #[arg(long, value_parser = ["default", "avif"], default_value = "default")]
-        strategy: String,
-    },
+    /// Import original GIF files into Apple Photos and verify delivery before cleanup.
+    #[command(name = "fast-vid")]
+    FastVid(FastVidArgs),
+}
+
+#[derive(clap::Args)]
+struct FastVidArgs {
+    /// GIF file or directory to scan recursively; identity is checked from content.
+    #[arg(value_name = "INPUT")]
+    input: PathBuf,
+    /// Exact private working copy for this task.
+    #[arg(short, long, value_name = "WORKING_COPY")]
+    output: Option<PathBuf>,
+    /// Preview the admission without importing, deleting, or writing a checkpoint.
+    #[arg(long)]
+    dry_run: bool,
+    #[command(flatten)]
+    resume: FastVidResumeArgs,
+    /// Exact parent checkpoint for a failed-only retry.
+    #[arg(long, value_name = "WORKING_COPY", requires = "retry_failed")]
+    retry_failed_parent: Option<PathBuf>,
+    #[command(flatten)]
+    photos: foundation::runtime_config::photos_args::PhotosArgs,
+}
+
+#[derive(clap::Args)]
+#[group(multiple = false)]
+struct FastVidResumeArgs {
+    /// Continue a matching task from its verified checkpoint.
+    #[arg(long)]
+    retry: bool,
+    /// Start a fresh task with its own working copy.
+    #[arg(long)]
+    no_resume: bool,
+    /// Retry retained failures from a completed task.
+    #[arg(long)]
+    retry_failed: bool,
 }
 
 #[derive(Subcommand)]
@@ -219,7 +235,7 @@ fn inspect_config(cli: &Cli, command: &ConfigCommand) -> anyhow::Result<()> {
 }
 
 const fn command_requires_database(command: &Commands) -> bool {
-    !matches!(command, Commands::Config { .. } | Commands::FastGif { .. })
+    !matches!(command, Commands::Config { .. } | Commands::FastVid(_))
 }
 
 fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
@@ -230,696 +246,78 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
             ..
         } if strategy == "avif"
     ) {
-        anyhow::bail!(
-            "manual AVIF selection is unavailable in vid run; AVIF is reserved for animated \
-             Meme Mode. Use vid fast-gif --strategy avif <input>"
-        );
+        anyhow::bail!("manual AVIF selection is unavailable in vid run");
     }
     Ok(())
 }
 
-#[cfg(test)]
-const fn fast_gif_shortest_path_supported() -> bool {
-    true
-}
-
-#[derive(Debug, Clone)]
-struct FastGifDelivery {
-    input: PathBuf,
-    output: PathBuf,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FastGifItemOutcome {
-    Succeeded,
-    Skipped,
-    Ignored,
-    Failed,
-}
-
-#[derive(Debug, Default, PartialEq, Eq)]
-struct FastGifBatchStats {
-    succeeded: usize,
-    skipped: usize,
-    ignored: usize,
-    failed: usize,
-    unprocessed: usize,
-}
-
-impl FastGifBatchStats {
-    fn reconcile_delivery(&mut self, photos: bool, verified: usize) -> anyhow::Result<()> {
-        if photos {
-            let pending = self.succeeded.checked_sub(verified).ok_or_else(|| {
-                anyhow::anyhow!("fast-gif verified Photos receipts exceed ready output count")
-            })?;
-            self.unprocessed = self
-                .unprocessed
-                .checked_add(pending)
-                .context("fast-gif pending delivery count overflow")?;
-            self.succeeded = verified;
-        }
-        Ok(())
-    }
-}
-
-fn process_fast_gif_batch<E>(
-    files: &[PathBuf],
-    mut process: impl FnMut(&Path) -> anyhow::Result<FastGifItemOutcome, E>,
-) -> (FastGifBatchStats, Option<E>)
-where
-    E: std::fmt::Display,
-{
-    let mut stats = FastGifBatchStats::default();
-    for (index, file) in files.iter().enumerate() {
-        match process(file) {
-            Ok(FastGifItemOutcome::Succeeded) => stats.succeeded += 1,
-            Ok(FastGifItemOutcome::Skipped) => stats.skipped += 1,
-            Ok(FastGifItemOutcome::Ignored) => stats.ignored += 1,
-            Ok(FastGifItemOutcome::Failed) => stats.failed += 1,
-            Err(error) => {
-                println!("[FAIL    ] {} {error}", file.display());
-                stats.failed += 1;
-                stats.unprocessed = files.len().saturating_sub(index + 1);
-                return (stats, Some(error));
-            }
-        }
-    }
-    (stats, None)
-}
-
-fn print_fast_gif_batch_counts(stats: &FastGifBatchStats) {
-    println!("Succeeded: {}", stats.succeeded);
-    println!("Skipped: {}", stats.skipped);
-    println!("Ignored: {}", stats.ignored);
-    println!("Failed: {}", stats.failed);
-    println!("Unprocessed: {}", stats.unprocessed);
-}
-
-fn fast_gif_default_output_dir(input: &Path) -> anyhow::Result<PathBuf> {
-    fast_gif_adjacent_dir(input, "gif")
-}
-
-fn fast_gif_default_originals_dir(input: &Path) -> anyhow::Result<PathBuf> {
-    fast_gif_adjacent_dir(input, "originals")
-}
-
-// FIX-REVIEW: fast-gif default dirs have no collision/resume policy, unlike
-// fast-img (resolve_working_copy_dir: suffix bump unless a resume marker exists)
-// and Python _unique_adjacent_dir (always bumps). Launcher always passes
-// --output/--originals so defaults only matter for direct CLI runs — should
-// they adopt the fast-img marker-aware policy?
-fn fast_gif_adjacent_dir(input: &Path, suffix: &str) -> anyhow::Result<PathBuf> {
-    let naming_path = if input.is_file() {
-        input.parent().ok_or_else(|| {
-            anyhow::anyhow!(
-                "fast-gif single-file input has no parent: {}",
-                input.display()
-            )
-        })?
-    } else {
-        input
-    };
-    let name = naming_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "fast-gif input has no valid directory name: {}",
-                naming_path.display()
-            )
-        })?;
-    Ok(naming_path.with_file_name(format!("{name}_{suffix}")))
-}
-
-fn fast_gif_input_root(input: &Path) -> anyhow::Result<PathBuf> {
-    if input.is_file() {
-        let parent = input.parent().ok_or_else(|| {
-            anyhow::anyhow!(
-                "fast-gif single-file input has no parent: {}",
-                input.display()
-            )
-        })?;
-        return Ok(parent.to_path_buf());
-    }
-    Ok(input.to_path_buf())
-}
-
-#[cfg(test)]
-fn fast_gif_output_path_for(
-    input: &Path,
-    input_root: &Path,
-    output_root: &Path,
-) -> anyhow::Result<PathBuf> {
-    let relative = input.strip_prefix(input_root).with_context(|| {
-        format!(
-            "fast-gif input {} is outside root {}",
-            input.display(),
-            input_root.display()
-        )
-    })?;
-    let mut output = output_root.join(relative);
-    output.set_extension("GIF");
-    Ok(output)
-}
-
-#[cfg(test)]
-fn fast_gif_avif_output_path_for(
-    input: &Path,
-    input_root: &Path,
-    output_root: &Path,
-) -> anyhow::Result<PathBuf> {
-    let mut output = fast_gif_output_path_for(input, input_root, output_root)?;
-    output.set_extension("avif");
-    Ok(output)
-}
-
-fn fast_gif_original_path_for(
-    input: &Path,
-    input_root: &Path,
-    originals_root: &Path,
-) -> anyhow::Result<PathBuf> {
-    let relative = input.strip_prefix(input_root).with_context(|| {
-        format!(
-            "fast-gif input {} is outside root {}",
-            input.display(),
-            input_root.display()
-        )
-    })?;
-    Ok(originals_root.join(relative))
-}
-
-fn fast_gif_candidate_files(input: &Path, recursive: bool) -> anyhow::Result<Vec<PathBuf>> {
-    if input.is_file() {
-        if fast_gif_is_supported_input(input)? {
-            return Ok(vec![input.to_path_buf()]);
-        }
-        anyhow::bail!(
-            "fast-gif input is not a true animated-image/video candidate: {}",
-            input.display()
+// Fast VID shares the source admission, Photos custody and cleanup worker with Fast IMG.
+fn fast_vid_worker(cli: &Cli, args: &FastVidArgs) -> anyhow::Result<std::process::Command> {
+    anyhow::ensure!(
+        cli.codec.is_none() && cli.force_ms_ssim_long.is_none(),
+        "Video encoding options do not apply to original GIF import"
+    );
+    for (name, _) in &cli.tools.tools {
+        anyhow::ensure!(
+            name == "osxphotos",
+            "Original GIF import supports only the osxphotos tool override (received {name})"
         );
     }
-
-    let mut files = Vec::new();
-    for path in fast_gif_scan_regular_files(input, recursive)? {
-        if fast_gif_is_supported_input(&path)? {
-            files.push(path);
-        }
+    let worker =
+        std::env::current_exe()?.with_file_name(format!("img{}", std::env::consts::EXE_SUFFIX));
+    let mut command = std::process::Command::new(worker);
+    command.args(["fast-img", "--strategy", "gif", "--shortest-path"]);
+    if let Some(config) = &cli.config {
+        command.arg("--config").arg(config);
     }
-    Ok(files)
+    if cli.no_config {
+        command.arg("--no-config");
+    }
+    command.args(cli.performance.cli_arguments());
+    command.args(cli.execution.cli_arguments());
+    command.args(cli.cache.cli_arguments());
+    command.args(cli.tools.cli_arguments()?);
+    command.args(args.photos.cli_arguments());
+    if let Some(output) = &args.output {
+        command.arg("--output").arg(output);
+    }
+    if args.dry_run {
+        command.arg("--dry-run");
+    }
+    if args.resume.retry {
+        command.arg("--retry");
+    }
+    if args.resume.no_resume {
+        command.arg("--no-resume");
+    }
+    if args.resume.retry_failed {
+        command.arg("--retry-failed");
+    }
+    if let Some(parent) = &args.retry_failed_parent {
+        command.arg("--retry-failed-parent").arg(parent);
+    }
+    command.arg("--").arg(&args.input);
+    Ok(command)
 }
 
-fn fast_gif_is_supported_input(path: &Path) -> anyhow::Result<bool> {
-    if let Some(codec) = foundation::quality_matcher::SourceCodec::identify_by_content(path)
-        .with_context(|| format!("fast-gif failed to identify {}", path.display()))?
+fn run_fast_vid(cli: &Cli, args: &FastVidArgs) -> anyhow::Result<()> {
+    let mut worker = fast_vid_worker(cli, args)?;
+    #[cfg(unix)]
     {
-        return Ok(codec.is_video() || codec.can_be_animated());
+        use std::os::unix::process::CommandExt;
+        Err(worker.exec()).context("could not start the co-installed img worker for GIF import")
     }
-
-    let format = foundation::image::format_detect::detect_true_format(path).with_context(|| {
-        format!(
-            "fast-gif failed to detect true format for {}",
-            path.display()
+    #[cfg(not(unix))]
+    {
+        let status = worker
+            .status()
+            .context("could not start the co-installed img worker for GIF import")?;
+        std::process::exit(
+            status
+                .code()
+                .context("GIF import worker exited without a status code")?,
         )
-    })?;
-    Ok(matches!(
-        format,
-        foundation::image::format_detect::FormatKind::Gif
-            | foundation::image::format_detect::FormatKind::Mp4
-            | foundation::image::format_detect::FormatKind::Mov
-            | foundation::image::format_detect::FormatKind::Mkv
-            | foundation::image::format_detect::FormatKind::Webm
-            | foundation::image::format_detect::FormatKind::Jxl
-            | foundation::image::format_detect::FormatKind::Avif
-            | foundation::image::format_detect::FormatKind::Heic
-            | foundation::image::format_detect::FormatKind::Heif
-            | foundation::image::format_detect::FormatKind::WebP
-    ))
-}
-
-fn fast_gif_scan_regular_files(root: &Path, recursive: bool) -> anyhow::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut pending_dirs = vec![root.to_path_buf()];
-    while let Some(dir) = pending_dirs.pop() {
-        let entries = std::fs::read_dir(&dir)
-            .with_context(|| format!("fast-gif scan read dir {}", dir.display()))?;
-        for entry in entries {
-            let entry =
-                entry.with_context(|| format!("fast-gif scan entry under {}", dir.display()))?;
-            let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .with_context(|| format!("fast-gif scan file type {}", path.display()))?;
-            if file_type.is_dir() {
-                if recursive {
-                    pending_dirs.push(path);
-                }
-                continue;
-            }
-            if file_type.is_file() {
-                files.push(path);
-            }
-        }
     }
-    files.sort();
-    Ok(files)
-}
-
-fn fast_gif_convert_options(
-    output_root: &Path,
-    input_root: &Path,
-    force: bool,
-    apple_compat: bool,
-    quality_label: &str,
-) -> foundation::conversion::ConvertOptions {
-    foundation::conversion::ConvertOptions {
-        output_dir: Some(output_root.to_path_buf()),
-        base_dir: Some(input_root.to_path_buf()),
-        size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-        flags: foundation::conversion::ConvertFlags::ALLOW_SIZE_TOLERANCE
-            | if apple_compat {
-                foundation::conversion::ConvertFlags::APPLE_COMPAT
-            } else {
-                foundation::conversion::ConvertFlags::empty()
-            }
-            | if force {
-                foundation::conversion::ConvertFlags::FORCE
-            } else {
-                foundation::conversion::ConvertFlags::empty()
-            },
-        codec: SelectedCodec::Hevc,
-        child_threads: foundation::thread_manager::get_balanced_thread_config(
-            foundation::thread_manager::WorkloadType::Video,
-        )
-        .child_threads,
-        input_format: None,
-        quality_label: Some(quality_label.to_string()),
-    }
-}
-
-fn fast_gif_verify_output(output: &Path) -> anyhow::Result<()> {
-    let format = foundation::image::format_detect::detect_true_format(output)
-        .with_context(|| format!("fast-gif failed to verify output {}", output.display()))?;
-    if format != foundation::image::format_detect::FormatKind::Gif {
-        anyhow::bail!(
-            "fast-gif output is not a true GIF: {} (detected {:?})",
-            output.display(),
-            format
-        );
-    }
-    Ok(())
-}
-
-fn fast_gif_verify_avif_output(output: &Path) -> anyhow::Result<()> {
-    let format = foundation::image::format_detect::detect_true_format(output)
-        .with_context(|| format!("fast-gif failed to verify AVIF output {}", output.display()))?;
-    if format != foundation::image::format_detect::FormatKind::Avif {
-        anyhow::bail!(
-            "fast-gif output is not a true AVIF: {} (detected {:?})",
-            output.display(),
-            format
-        );
-    }
-    Ok(())
-}
-
-fn fast_gif_required_tools(effective_strategy: &str) -> Vec<&'static str> {
-    if effective_strategy == "avif" {
-        vec![
-            "ffmpeg", "ffprobe", "exiftool", "avifdec", "djxl", "webpmux",
-        ]
-    } else {
-        vec!["ffmpeg", "ffprobe", "exiftool", "gifski", "djxl", "webpmux"]
-    }
-}
-
-const fn fast_gif_effective_strategy(apple_compat: bool, requested_strategy: &str) -> &str {
-    if apple_compat {
-        "gif"
-    } else {
-        requested_strategy
-    }
-}
-
-fn fast_gif_requires_loop_intent(requested_strategy: &str) -> bool {
-    requested_strategy != "avif"
-}
-
-fn fast_gif_delivery_label(effective_strategy: &str) -> &'static str {
-    if effective_strategy == "avif" {
-        "AVIF"
-    } else {
-        "GIF"
-    }
-}
-
-fn fast_gif_delivery_output_path(
-    result: &foundation::TaskResult,
-) -> anyhow::Result<Option<PathBuf>> {
-    let valid_delivery = result.success
-        && !result.ignored
-        && (!result.skipped || result.skip_reason.as_deref() == Some("already_gif"));
-    if !valid_delivery {
-        return Ok(None);
-    }
-    let output = result
-        .output_path
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("fast-gif delivery succeeded but output path is missing"))?;
-    let output = PathBuf::from(output);
-    fast_gif_verify_output(&output)?;
-    Ok(Some(output))
-}
-
-fn fast_gif_avif_delivery_output_path(
-    result: &foundation::TaskResult,
-) -> anyhow::Result<Option<PathBuf>> {
-    if !result.success || result.ignored || result.skipped {
-        return Ok(None);
-    }
-    let output = result.output_path.as_deref().ok_or_else(|| {
-        anyhow::anyhow!("fast-gif AVIF delivery succeeded but output path is missing")
-    })?;
-    let output = PathBuf::from(output);
-    fast_gif_verify_avif_output(&output)?;
-    Ok(Some(output))
-}
-
-fn fast_gif_strip_import_suffixes(folder_name: &str) -> String {
-    let mut cleaned = folder_name;
-    for suffix in [
-        "_gif",
-        "_optimized_collected",
-        "_collected_optimized",
-        "_optimized",
-        "_collected",
-    ] {
-        if let Some(stripped) = cleaned.strip_suffix(suffix) {
-            cleaned = stripped;
-        }
-    }
-    cleaned.to_string()
-}
-
-fn fast_gif_import_album_name(output_root: &Path, rel_path: &str) -> String {
-    let rel_parent_leaf = Path::new(rel_path)
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str());
-    let output_root_leaf = output_root.file_name().and_then(|name| name.to_str());
-    let cleaned = rel_parent_leaf
-        .or(output_root_leaf)
-        .map(fast_gif_strip_import_suffixes)
-        .filter(|name| !name.is_empty());
-    match cleaned {
-        Some(name) if name.starts_with('✨') => name,
-        Some(name) => format!("✨{name}"),
-        None => "✨Imported".to_string(),
-    }
-}
-
-fn fast_gif_photos_import_candidates(
-    deliveries: &[FastGifDelivery],
-    output_root: &Path,
-) -> anyhow::Result<Vec<foundation::image::fast_img::PhotosImportCandidate>> {
-    let mut candidates = Vec::with_capacity(deliveries.len());
-    for delivery in deliveries {
-        let rel = delivery.output.strip_prefix(output_root).with_context(|| {
-            format!(
-                "fast-gif output {} is outside output root {}",
-                delivery.output.display(),
-                output_root.display()
-            )
-        })?;
-        let rel_path = rel.to_string_lossy().to_string();
-        let blake3 =
-            foundation::common_utils::calculate_blake3_hash(&delivery.output).map_err(|err| {
-                anyhow::anyhow!(
-                    "fast-gif failed to hash output for Photos import {}: {err}",
-                    delivery.output.display()
-                )
-            })?;
-        candidates.push(foundation::image::fast_img::PhotosImportCandidate {
-            album_name: fast_gif_import_album_name(output_root, &rel_path),
-            rel_path,
-            path: delivery.output.clone(),
-            blake3,
-        });
-    }
-    Ok(candidates)
-}
-
-fn fast_gif_move_original(
-    input: &Path,
-    input_root: &Path,
-    originals_root: &Path,
-) -> anyhow::Result<PathBuf> {
-    let dest = fast_gif_original_path_for(input, input_root, originals_root)?;
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("fast-gif failed to create {}", parent.display()))?;
-    }
-    if dest.exists() {
-        anyhow::bail!(
-            "fast-gif originals destination already exists; refusing overwrite: {}",
-            dest.display()
-        );
-    }
-
-    let xmp_sidecar = foundation::metadata::find_xmp_sidecar(input)?;
-    foundation::io_utils::robust_move(input, &dest).with_context(|| {
-        format!(
-            "fast-gif failed to move original {} to {}",
-            input.display(),
-            dest.display()
-        )
-    })?;
-    if let Some(sidecar) = xmp_sidecar {
-        let sidecar_name = sidecar.file_name().ok_or_else(|| {
-            anyhow::anyhow!(
-                "fast-gif XMP sidecar has no filename: {}",
-                sidecar.display()
-            )
-        })?;
-        let sidecar_dest = dest.with_file_name(sidecar_name);
-        foundation::io_utils::robust_move(&sidecar, &sidecar_dest).with_context(|| {
-            format!(
-                "fast-gif failed to move XMP sidecar {} to {}",
-                sidecar.display(),
-                sidecar_dest.display()
-            )
-        })?;
-    }
-    Ok(dest)
-}
-
-#[allow(clippy::fn_params_excessive_bools)]
-fn run_fast_gif(
-    input: &Path,
-    output_dir: Option<&Path>,
-    originals_dir: Option<&Path>,
-    recursive: bool,
-    force: bool,
-    shortest_path: bool,
-    apple_compat: bool,
-    strategy: &str,
-) -> anyhow::Result<()> {
-    // Fast GIF moves originals only after all conversions/imports; keep that
-    // delivery sequence intact before honoring a GUI pause or cancellation.
-    let _batch_transaction = foundation::batch_control::begin_transaction()?;
-    let effective_strategy = fast_gif_effective_strategy(apple_compat, strategy);
-    let delivery_label = fast_gif_delivery_label(effective_strategy);
-    let required_tools = fast_gif_required_tools(effective_strategy);
-    if let Err(err) = foundation::tools::require(&required_tools) {
-        foundation::log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &err);
-        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-    }
-
-    let input_root = fast_gif_input_root(input)?;
-    foundation::check_dangerous_directory(&input_root).map_err(|err| anyhow::anyhow!(err))?;
-    let saved_dir_timestamps = foundation::save_directory_timestamps(&input_root)
-        .context("snapshot Fast GIF source directory metadata before scanning")?;
-    let output_root = match output_dir {
-        Some(path) => path.to_path_buf(),
-        None => fast_gif_default_output_dir(input)?,
-    };
-    let originals_root = match originals_dir {
-        Some(path) => path.to_path_buf(),
-        None => fast_gif_default_originals_dir(input)?,
-    };
-    let files = fast_gif_candidate_files(input, recursive)?;
-    println!(
-        "[SCAN    ] Found {} animated/video candidates in {}",
-        files.len(),
-        input_root.display()
-    );
-
-    let options = fast_gif_convert_options(
-        &output_root,
-        &input_root,
-        force,
-        apple_compat,
-        if effective_strategy == "avif" {
-            "Meme Mode"
-        } else {
-            "Fast GIF"
-        },
-    );
-    let mut deliveries = Vec::new();
-    let (mut stats, batch_error) = process_fast_gif_batch(&files, |file| {
-        if effective_strategy == "avif" {
-            let result = vid::animated_image::convert_to_avif_meme(file, &options)
-                .map_err(|err| anyhow::anyhow!(err))?;
-            if let Some(output) = fast_gif_avif_delivery_output_path(&result)? {
-                println!("[READY   ] {} -> {}", file.display(), output.display());
-                deliveries.push(FastGifDelivery {
-                    input: file.to_path_buf(),
-                    output,
-                });
-                Ok(FastGifItemOutcome::Succeeded)
-            } else if result.ignored {
-                println!("[IGNORE  ] {} {}", file.display(), result.message);
-                Ok(FastGifItemOutcome::Ignored)
-            } else if !result.success {
-                println!("[FAIL    ] {} {}", file.display(), result.message);
-                Ok(FastGifItemOutcome::Failed)
-            } else {
-                println!("[SKIP    ] {} {}", file.display(), result.message);
-                Ok(FastGifItemOutcome::Skipped)
-            }
-        } else {
-            if fast_gif_requires_loop_intent(strategy) {
-                let verdict = vid::animated_image::assess_loop_intent_for_fast_gif(file)?;
-                if !verdict.is_keep_gif() {
-                    println!(
-                        "[SKIP    ] {} loop-intent is not GIF: {}",
-                        file.display(),
-                        verdict.reason()
-                    );
-                    return Ok(FastGifItemOutcome::Skipped);
-                }
-            }
-
-            let result = vid::animated_image::convert_to_gif_apple_compat(file, &options)
-                .map_err(|err| anyhow::anyhow!(err))?;
-            if let Some(output) = fast_gif_delivery_output_path(&result)? {
-                println!("[READY   ] {} -> {}", file.display(), output.display());
-                deliveries.push(FastGifDelivery {
-                    input: file.to_path_buf(),
-                    output,
-                });
-                Ok(FastGifItemOutcome::Succeeded)
-            } else if result.ignored {
-                println!("[IGNORE  ] {} {}", file.display(), result.message);
-                Ok(FastGifItemOutcome::Ignored)
-            } else if !result.success {
-                println!("[FAIL    ] {} {}", file.display(), result.message);
-                Ok(FastGifItemOutcome::Failed)
-            } else {
-                println!("[SKIP    ] {} {}", file.display(), result.message);
-                Ok(FastGifItemOutcome::Skipped)
-            }
-        }
-    });
-    let encoded = stats.succeeded;
-    let mut photos_verified = 0;
-    let finalization = if let Some(error) = batch_error {
-        Err(error)
-    } else {
-        (|| -> anyhow::Result<()> {
-            foundation::apply_delivery_directory_metadata(
-                &saved_dir_timestamps,
-                &input_root,
-                &output_root,
-            )
-            .with_context(|| {
-                format!(
-                    "fast-gif failed to preserve output directory metadata {} -> {}",
-                    input_root.display(),
-                    output_root.display()
-                )
-            })?;
-            if shortest_path {
-                let candidates = fast_gif_photos_import_candidates(&deliveries, &output_root)?;
-                if !candidates.is_empty() {
-                    let library =
-                        foundation::image::fast_img::import_media_outputs_with_library_verifier(
-                            &candidates,
-                        )
-                        .map_err(|err| anyhow::anyhow!(err))?;
-                    photos_verified = library.imported_assets.len();
-                    if library.imported_assets.len() != candidates.len() {
-                        anyhow::bail!(
-                            "fast-gif Photos import proof count mismatch: expected {} got {}",
-                            candidates.len(),
-                            library.imported_assets.len()
-                        );
-                    }
-                    println!(
-                        "[IMPORT  ] verified {} {} output(s) in Photos library",
-                        library.imported_assets.len(),
-                        delivery_label
-                    );
-                }
-            }
-            let source_dirs = deliveries
-                .iter()
-                .filter_map(|delivery| delivery.input.parent().map(Path::to_path_buf))
-                .collect::<Vec<_>>();
-            for delivery in deliveries {
-                let moved = fast_gif_move_original(&delivery.input, &input_root, &originals_root)?;
-                println!(
-                    "[DONE    ] {} -> {} | original moved to {}",
-                    delivery.input.display(),
-                    delivery.output.display(),
-                    moved.display()
-                );
-            }
-            foundation::apply_delivery_directory_metadata(
-                &saved_dir_timestamps,
-                &input_root,
-                &originals_root,
-            )
-            .with_context(|| {
-                format!(
-                    "fast-gif failed to preserve originals directory metadata {} -> {}",
-                    input_root.display(),
-                    originals_root.display()
-                )
-            })?;
-            if input.is_dir() {
-                foundation::io_utils::prune_empty_directories_within(&input_root, &source_dirs)
-                    .with_context(|| {
-                        format!(
-                            "fast-gif refused unsafe empty-directory cleanup under {}",
-                            input_root.display()
-                        )
-                    })?;
-            }
-            Ok(())
-        })()
-    };
-    stats.reconcile_delivery(shortest_path, photos_verified)?;
-    println!(
-        "[RESULT  ] encoded={encoded} Photos-verified={photos_verified} finalization-complete={}",
-        finalization.is_ok()
-    );
-    print_fast_gif_batch_counts(&stats);
-    finalization?;
-    println!(
-        "[DONE    ] fast-gif converted {} {delivery_label} output(s) into {} ({} skipped, {} failed)",
-        stats.succeeded,
-        output_root.display(),
-        stats.skipped,
-        stats.failed
-    );
-    if stats.failed > 0 {
-        anyhow::bail!(
-            "fast-gif failed to convert {} file(s); see [FAIL] lines above",
-            stats.failed
-        );
-    }
-    Ok(())
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
@@ -934,9 +332,12 @@ fn main() -> anyhow::Result<()> {
     if let Commands::Config { command } = &cli.command {
         return inspect_config(&cli, command);
     }
+    if let Commands::FastVid(args) = &cli.command {
+        return run_fast_vid(&cli, args);
+    }
     let _production_lease = matches!(
         &cli.command,
-        Commands::Run { .. } | Commands::FastGif { .. } | Commands::IngestSamples { .. }
+        Commands::Run { .. } | Commands::IngestSamples { .. }
     )
     .then(foundation::production_lock::acquire_production_lease)
     .transpose()?;
@@ -944,10 +345,7 @@ fn main() -> anyhow::Result<()> {
     let runtime = resolve_runtime(&cli)?;
     let configured_codec = runtime.config.vid.codec;
     let force_ms_ssim_long = runtime.config.vid.force_ms_ssim_long;
-    if matches!(
-        &cli.command,
-        Commands::Run { .. } | Commands::FastGif { .. }
-    ) {
+    if matches!(&cli.command, Commands::Run { .. }) {
         runtime.emit_history_marker_if_session("vid")?;
     }
     foundation::runtime_config::install(runtime.config)?;
@@ -960,8 +358,6 @@ fn main() -> anyhow::Result<()> {
 
     if command_requires_database(&cli.command) {
         // Enforce PostgreSQL dependency as mandatory for the DB-backed video toolchain.
-        // Fast GIF mode is excluded: it performs content-aware scanning, LoopIntent
-        // classification, GIF output, and source isolation without DB/cache state.
         if let Err(e) = foundation::database::open_pg_client() {
             foundation::log_fatal!(
                 "Infrastructure",
@@ -982,7 +378,6 @@ fn main() -> anyhow::Result<()> {
             delete_original,
             ..
         } if *in_place || *delete_original => Some(input),
-        Commands::FastGif { input, .. } => Some(input),
         _ => None,
     };
 
@@ -1232,27 +627,7 @@ fn main() -> anyhow::Result<()> {
             foundation::progress_mode::flush_log_file();
         }
 
-        Commands::FastGif {
-            input,
-            output,
-            originals,
-            recursive,
-            force,
-            shortest_path,
-            apple_compat,
-            strategy,
-        } => {
-            run_fast_gif(
-                &input,
-                output.as_deref(),
-                originals.as_deref(),
-                recursive,
-                force,
-                shortest_path,
-                apple_compat,
-                &strategy,
-            )?;
-        }
+        Commands::FastVid(_) => unreachable!("GIF import handed off before video initialization"),
 
         Commands::Strategy { input } => {
             let detection = detect_video(&input)?;
@@ -1554,7 +929,7 @@ fn build_conversion_config(
 }
 
 #[cfg(test)]
-mod fast_gif_tests {
+mod cli_tests {
     #![allow(
         clippy::unwrap_used,
         clippy::expect_used,
@@ -1562,145 +937,88 @@ mod fast_gif_tests {
         clippy::panic
     )]
     use super::{
-        Cli, Commands, FastGifBatchStats, FastGifDelivery, FastGifItemOutcome,
-        command_requires_database, fast_gif_avif_delivery_output_path,
-        fast_gif_avif_output_path_for, fast_gif_candidate_files, fast_gif_convert_options,
-        fast_gif_delivery_output_path, fast_gif_effective_strategy, fast_gif_original_path_for,
-        fast_gif_output_path_for, fast_gif_photos_import_candidates, fast_gif_required_tools,
-        fast_gif_requires_loop_intent, fast_gif_shortest_path_supported, process_fast_gif_batch,
-        resolve_run_apple_compat, resolve_runtime, validate_command_strategy,
+        Cli, Commands, command_requires_database, fast_vid_worker, resolve_run_apple_compat,
+        resolve_runtime, validate_command_strategy,
     };
     use clap::Parser;
-    use clap::error::ErrorKind;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn write_gif(path: &std::path::Path) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(
-            path,
-            b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!",
-        )?;
-        Ok(())
-    }
-
-    fn write_jpeg(path: &std::path::Path) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, [0xff, 0xd8, 0xff, 0xe0, b'f', b'a', b'k', b'e'])?;
-        Ok(())
-    }
-
-    fn write_avif(path: &std::path::Path) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Structurally exact ftyp box: size 0x14 = 8-byte header + major/minor/
-        // compatible brands (3×4 bytes). The previous 0x18 length declared
-        // 4 bytes beyond EOF, which made detect_true_format fail closed to
-        // Unknown before the brand check could run.
-        std::fs::write(
-            path,
-            [
-                0x00, 0x00, 0x00, 0x14, b'f', b't', b'y', b'p', b'a', b'v', b'i', b's', 0x00, 0x00,
-                0x00, 0x00, b'a', b'v', b'i', b's',
-            ],
-        )?;
-        Ok(())
-    }
-
     #[test]
-    fn fast_gif_retains_original_when_xmp_association_is_ambiguous() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
-        let source = root.path().join("original.gif");
-        let full = root.path().join("original.gif.xmp");
-        let stem = root.path().join("original.xmp");
-        std::fs::write(&source, b"original media bytes")?;
-        std::fs::write(&full, b"first metadata")?;
-        std::fs::write(&stem, b"second metadata")?;
-        let error = super::fast_gif_move_original(&source, root.path(), &root.path().join("saved"))
-            .expect_err("ambiguous metadata must block moving the source");
-        assert!(error.to_string().contains("ambiguous XMP"));
-        assert_eq!(std::fs::read(source)?, b"original media bytes");
-        assert_eq!(std::fs::read(full)?, b"first metadata");
-        assert_eq!(std::fs::read(stem)?, b"second metadata");
-        Ok(())
-    }
-
-    #[test]
-    fn fast_gif_command_accepts_output_originals_and_shortest_path_flags() -> anyhow::Result<()> {
-        let parsed = Cli::try_parse_from([
+    fn fast_vid_forwards_original_gif_custody_and_preview_to_its_sibling() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from([
             "vid",
-            "fast-gif",
-            "/media/in",
+            "--no-config",
+            "fast-vid",
+            "--dry-run",
+            "--retry",
             "--output",
-            "/media/in_gif",
-            "--originals",
-            "/media/in_originals",
-            "--recursive",
-            "--shortest-path",
+            "checkpoint",
+            "--photos-import-root",
+            "GIF Originals",
+            "--",
+            "--strategy",
         ])?;
-
-        let Commands::FastGif {
-            input,
-            output,
-            originals,
-            recursive,
-            force,
-            shortest_path,
-            apple_compat,
-            strategy,
-        } = parsed.command
-        else {
-            anyhow::bail!("expected fast-gif command");
+        let Commands::FastVid(args) = &cli.command else {
+            anyhow::bail!("expected Fast VID")
         };
-        assert_eq!(input, PathBuf::from("/media/in"));
-        assert_eq!(output, Some(PathBuf::from("/media/in_gif")));
-        assert_eq!(originals, Some(PathBuf::from("/media/in_originals")));
-        assert!(recursive);
-        assert!(!force);
-        assert!(shortest_path);
-        assert!(!apple_compat);
-        assert_eq!(strategy, "default");
+        assert!(!command_requires_database(&cli.command));
+        let command = fast_vid_worker(&cli, args)?;
+        assert_eq!(
+            std::path::Path::new(command.get_program()).parent(),
+            std::env::current_exe()?.parent()
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                "fast-img",
+                "--strategy",
+                "gif",
+                "--shortest-path",
+                "--no-config",
+                "--photos-import-root",
+                "GIF Originals",
+                "--output",
+                "checkpoint",
+                "--dry-run",
+                "--retry",
+                "--",
+                "--strategy",
+            ]
+        );
         Ok(())
     }
 
     #[test]
-    fn fast_gif_command_does_not_require_database_preflight() {
-        let command = Commands::FastGif {
-            input: PathBuf::from("/media/in"),
-            output: Some(PathBuf::from("/media/in_gif")),
-            originals: Some(PathBuf::from("/media/in_originals")),
-            recursive: true,
-            force: false,
-            shortest_path: false,
-            apple_compat: false,
-            strategy: "default".to_string(),
-        };
-
-        assert!(!command_requires_database(&command));
-    }
-
-    #[test]
-    fn fast_gif_command_accepts_meme_mode_strategy() -> anyhow::Result<()> {
-        let parsed = Cli::try_parse_from(["vid", "fast-gif", "/media/in", "--strategy", "avif"])?;
-
-        let Commands::FastGif { strategy, .. } = parsed.command else {
-            anyhow::bail!("expected fast-gif command");
-        };
-        assert_eq!(strategy, "avif");
+    fn retired_fast_vid_routes_and_conflicting_retry_flags_are_rejected() -> anyhow::Result<()> {
+        assert!(Cli::try_parse_from(["vid", "fast-gif", "."]).is_err());
+        for option in [
+            "--strategy",
+            "--shortest-path",
+            "--originals",
+            "--force",
+            "--apple-compat",
+            "--recursive",
+            "--external-tool-snapshot",
+            "--external-tool-snapshot=false",
+        ] {
+            assert!(
+                Cli::try_parse_from(["vid", "fast-vid", ".", option]).is_err(),
+                "{option}"
+            );
+        }
+        assert!(Cli::try_parse_from(["vid", "fast-vid", ".", "--retry", "--no-resume"]).is_err());
+        assert!(
+            Cli::try_parse_from(["vid", "fast-vid", ".", "--retry-failed-parent", "old"]).is_err()
+        );
+        for options in [["--codec", "av1"], ["--tool", "cjxl=/unused/cjxl"]] {
+            let cli = Cli::try_parse_from(["vid", "fast-vid", "."].into_iter().chain(options))?;
+            let Commands::FastVid(args) = &cli.command else {
+                anyhow::bail!("expected Fast VID")
+            };
+            assert!(fast_vid_worker(&cli, args).is_err(), "{options:?}");
+        }
         Ok(())
-    }
-
-    #[test]
-    fn fast_gif_command_rejects_unknown_strategy() {
-        assert!(matches!(
-            Cli::try_parse_from(["vid", "fast-gif", "/media/in", "--strategy", "jpeg"]),
-            Err(err) if err.kind() == ErrorKind::InvalidValue
-        ));
     }
 
     #[test]
@@ -1738,7 +1056,7 @@ mod fast_gif_tests {
     }
 
     #[test]
-    fn shared_tool_paths_reach_video_inspection_run_and_fast_gif_without_execution()
+    fn shared_tool_paths_reach_video_inspection_run_and_fast_vid_without_execution()
     -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let file = root.path().join("tools.json");
@@ -1750,7 +1068,7 @@ mod fast_gif_tests {
         for (command, tail) in [
             ("config", "show"),
             ("run", "/unused"),
-            ("fast-gif", "/unused"),
+            ("fast-vid", "/unused"),
         ] {
             let inherited = Cli::try_parse_from(["vid", command, tail, "--config", file])?;
             assert_eq!(
@@ -1829,7 +1147,7 @@ mod fast_gif_tests {
         assert!(!resolve_runtime(&default)?.config.vid.force_ms_ssim_long);
         let fast = Cli::try_parse_from([
             "vid",
-            "fast-gif",
+            "fast-vid",
             "/synthetic",
             "--force-ms-ssim-long=false",
         ])?;
@@ -1869,7 +1187,7 @@ mod fast_gif_tests {
         for (command, tail) in [
             ("config", "show"),
             ("run", "/unused"),
-            ("fast-gif", "/unused"),
+            ("fast-vid", "/unused"),
         ] {
             for mode in [
                 foundation::BatchErrorMode::LogAndContinue,
@@ -1975,61 +1293,17 @@ mod fast_gif_tests {
     }
 
     #[test]
-    fn fast_gif_avif_strategy_uses_ffmpeg_animation_tools() {
-        let avif_tools = fast_gif_required_tools("avif");
-        assert!(avif_tools.contains(&"ffmpeg"));
-        assert!(avif_tools.contains(&"ffprobe"));
-        assert!(avif_tools.contains(&"avifdec"));
-        assert!(!avif_tools.contains(&"avifenc"));
-        assert!(!avif_tools.contains(&"gifski"));
-        assert!(fast_gif_required_tools("default").contains(&"gifski"));
-    }
-
-    #[test]
-    fn fast_gif_apple_compat_forces_gif_delivery() {
-        assert_eq!(fast_gif_effective_strategy(true, "avif"), "gif");
-        assert_eq!(fast_gif_effective_strategy(true, "default"), "gif");
-        assert_eq!(fast_gif_effective_strategy(false, "avif"), "avif");
-        assert!(!fast_gif_requires_loop_intent("avif"));
-        assert!(fast_gif_requires_loop_intent("default"));
-    }
-
-    #[test]
-    fn fast_gif_convert_options_only_enable_apple_compat_when_requested() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let without_apple =
-            fast_gif_convert_options(root.path(), root.path(), false, false, "Meme Mode");
-        let with_apple =
-            fast_gif_convert_options(root.path(), root.path(), false, true, "Fast GIF");
-
-        assert!(
-            !without_apple
-                .flags
-                .contains(foundation::conversion::ConvertFlags::APPLE_COMPAT)
-        );
-        assert!(
-            with_apple
-                .flags
-                .contains(foundation::conversion::ConvertFlags::APPLE_COMPAT)
-        );
-        for options in [&without_apple, &with_apple] {
-            assert_eq!(
-                options.size_tolerance_bytes,
-                foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES
-            );
-            assert!(!options.effective_allow_size_tolerance());
-        }
-        Ok(())
-    }
-
-    #[test]
     fn normal_vid_run_rejects_manual_avif_strategy() -> anyhow::Result<()> {
         let parsed = Cli::try_parse_from(["vid", "run", "/media/in", "--strategy", "avif"])?;
 
         let Err(error) = validate_command_strategy(&parsed.command) else {
             anyhow::bail!("normal vid run unexpectedly accepted --strategy avif");
         };
-        assert!(error.to_string().contains("vid fast-gif --strategy avif"));
+        assert!(
+            error
+                .to_string()
+                .contains("manual AVIF selection is unavailable in vid run")
+        );
         Ok(())
     }
 
@@ -2041,207 +1315,6 @@ mod fast_gif_tests {
             anyhow::bail!("expected run command");
         };
         assert!(archive);
-        Ok(())
-    }
-
-    #[test]
-    fn fast_gif_paths_preserve_nested_folder_structure() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let input_root = root.path().join("media");
-        let output_root = root.path().join("media_gif");
-        let originals_root = root.path().join("media_originals");
-        let source = input_root.join("nested/day1/clip.mp4");
-
-        let output = fast_gif_output_path_for(&source, &input_root, &output_root)?;
-        let original = fast_gif_original_path_for(&source, &input_root, &originals_root)?;
-
-        assert_eq!(output, output_root.join("nested/day1/clip.GIF"));
-        assert_eq!(original, originals_root.join("nested/day1/clip.mp4"));
-        Ok(())
-    }
-
-    #[test]
-    fn fast_gif_avif_path_preserves_nested_folder_structure() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let input_root = root.path().join("media");
-        let output_root = root.path().join("media_gif");
-        let source = input_root.join("nested/day1/clip.mp4");
-
-        let output = fast_gif_avif_output_path_for(&source, &input_root, &output_root)?;
-
-        assert_eq!(output, output_root.join("nested/day1/clip.avif"));
-        Ok(())
-    }
-
-    #[test]
-    fn fast_gif_candidates_are_content_aware_not_extension_only() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let input_root = root.path().join("media");
-        let gif_without_extension = input_root.join("nested/loop_asset");
-        let spoofed_gif = input_root.join("not_loop.gif");
-        write_gif(&gif_without_extension)?;
-        write_jpeg(&spoofed_gif)?;
-
-        let files = fast_gif_candidate_files(&input_root, true)?;
-
-        assert_eq!(files, vec![gif_without_extension]);
-        Ok(())
-    }
-
-    #[test]
-    fn fast_gif_shortest_path_import_is_supported_by_verified_photos_proof() {
-        assert!(fast_gif_shortest_path_supported());
-    }
-
-    #[test]
-    fn fast_gif_accepts_verified_successful_skipped_copy_delivery() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let output = root.path().join("media_gif/nested/clip.gif");
-        write_gif(&output)?;
-        let result = foundation::TaskResult {
-            success: true,
-            input_path: root
-                .path()
-                .join("media/nested/clip.gif")
-                .display()
-                .to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size: 32,
-            output_size: Some(32),
-            size_reduction: None,
-            message: "Skipped: Already GIF".to_string(),
-            skipped: true,
-            ignored: false,
-            skip_reason: Some("already_gif".to_string()),
-            blake3: None,
-            explore_final_crf: None,
-            explore_iterations: None,
-            optimization_outcome: Some(foundation::exploration_policy::ExplorationOutcome::Adopted),
-        };
-
-        assert_eq!(fast_gif_delivery_output_path(&result)?, Some(output));
-        Ok(())
-    }
-
-    #[test]
-    fn fast_gif_batch_counts_returned_outcomes_and_hard_error_once() {
-        let files = (0..6)
-            .map(|index| PathBuf::from(format!("candidate-{index}.gif")))
-            .collect::<Vec<_>>();
-        let mut next = 0;
-
-        let (stats, error) = process_fast_gif_batch(&files, |_| {
-            let outcome = match next {
-                0 => Ok(FastGifItemOutcome::Succeeded),
-                1 => Ok(FastGifItemOutcome::Skipped),
-                2 => Ok(FastGifItemOutcome::Ignored),
-                3 => Ok(FastGifItemOutcome::Failed),
-                4 => Err("probe failed"),
-                _ => unreachable!("batch stops after a hard error"),
-            };
-            next += 1;
-            outcome
-        });
-
-        assert_eq!(error, Some("probe failed"));
-        assert_eq!(
-            next, 5,
-            "the item after the hard error must remain untouched"
-        );
-        assert_eq!(
-            stats,
-            FastGifBatchStats {
-                succeeded: 1,
-                skipped: 1,
-                ignored: 1,
-                failed: 2,
-                unprocessed: 1,
-            }
-        );
-    }
-
-    #[test]
-    fn fast_gif_delivery_counts_do_not_confuse_ready_outputs_with_photos_proofs()
-    -> anyhow::Result<()> {
-        let ready = || FastGifBatchStats {
-            succeeded: 3,
-            skipped: 1,
-            ignored: 1,
-            failed: 2,
-            unprocessed: 1,
-        };
-        let mut pending = ready();
-        pending.reconcile_delivery(true, 1)?;
-        assert_eq!((pending.succeeded, pending.unprocessed), (1, 3));
-        assert_eq!(
-            pending.skipped
-                + pending.ignored
-                + pending.failed
-                + pending.succeeded
-                + pending.unprocessed,
-            8
-        );
-
-        let mut local = ready();
-        local.reconcile_delivery(false, 0)?;
-        assert_eq!((local.succeeded, local.unprocessed), (3, 1));
-
-        let mut invalid = ready();
-        assert!(invalid.reconcile_delivery(true, 4).is_err());
-        assert_eq!((invalid.succeeded, invalid.unprocessed), (3, 1));
-        Ok(())
-    }
-
-    #[test]
-    fn fast_gif_accepts_verified_avif_delivery() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let output = root.path().join("media_gif/nested/clip.avif");
-        write_avif(&output)?;
-        let result = foundation::TaskResult {
-            success: true,
-            input_path: root
-                .path()
-                .join("media/nested/clip.gif")
-                .display()
-                .to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size: 32,
-            output_size: Some(24),
-            size_reduction: None,
-            message: "Converted to AVIF".to_string(),
-            skipped: false,
-            ignored: false,
-            skip_reason: None,
-            blake3: None,
-            explore_final_crf: None,
-            explore_iterations: None,
-            optimization_outcome: Some(foundation::exploration_policy::ExplorationOutcome::Adopted),
-        };
-
-        assert_eq!(fast_gif_avif_delivery_output_path(&result)?, Some(output));
-        Ok(())
-    }
-
-    #[test]
-    fn fast_gif_photos_import_candidates_use_gif_hash_and_nested_album() -> anyhow::Result<()> {
-        let root = TempDir::new()?;
-        let output_root = root.path().join("media_gif");
-        let output = output_root.join("nested/day1/clip.GIF");
-        write_gif(&output)?;
-        let delivery = FastGifDelivery {
-            input: root.path().join("media/nested/day1/clip.mp4"),
-            output: output.clone(),
-        };
-
-        let candidates = fast_gif_photos_import_candidates(&[delivery], &output_root)?;
-
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].rel_path, "nested/day1/clip.GIF");
-        assert_eq!(
-            candidates[0].blake3,
-            foundation::common_utils::calculate_blake3_hash(&output)?
-        );
-        assert_eq!(candidates[0].album_name, "✨day1");
         Ok(())
     }
 }

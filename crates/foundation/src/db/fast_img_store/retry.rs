@@ -195,7 +195,7 @@ fn metadata_policy_version(marker: &WorkingCopyMarker) -> Result<u32> {
             .context("Retry processing intent is missing")?
             .encoding
         {
-            FastImgEncodingParameters::Jxl { .. } => 0,
+            FastImgEncodingParameters::Jxl { .. } | FastImgEncodingParameters::Gif => 0,
             FastImgEncodingParameters::Avif {
                 avif_metadata_policy,
                 ..

@@ -115,7 +115,7 @@ pub fn resolve_cli_img_static_delivery(
     ImgStaticDelivery::parse_cli_label(label).map_err(anyhow::Error::msg)
 }
 
-/// Parse a fast-img strategy string (`"jxl"` / `"avif"`) into the
+/// Parse a fast workflow strategy (`"jxl"`, `"avif"` or original `"gif"`) into the
 /// corresponding [`crate::image::format_detect::FormatKind`].
 ///
 /// Returns `None` for unknown / empty strategy strings so callers can fall
@@ -125,6 +125,7 @@ pub fn strategy_to_format_kind(strategy: &str) -> Option<crate::image::format_de
     match strategy.trim().to_ascii_lowercase().as_str() {
         "jxl" | "hevc" | "h265" | "x265" => Some(crate::image::format_detect::FormatKind::Jxl),
         "avif" | "av1" | "av01" => Some(crate::image::format_detect::FormatKind::Avif),
+        "gif" => Some(crate::image::format_detect::FormatKind::Gif),
         _ => None,
     }
 }
