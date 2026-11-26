@@ -25,6 +25,12 @@ areas of change are:
 
 ### Fast IMG delivery and session reporting (2026-11-26)
 
+- Fast IMG discovers the active Photos library from its open database. This
+  avoids an AppleEvent that counted every asset before import. Temporary
+  target-proof failures retain their cause in the delivery receipt.
+- Parallel encoding saves each verified result as it finishes. Continuing a
+  post-Gate-1 JXL job checks the saved output bytes once during resume setup.
+  Gate 2 independently verifies local files and Photos resources before cleanup.
 - Lossless PNG-to-JXL delivery carries the PNG creation time in XMP and
   verifies the time, fractional seconds and offset. Conflicting source dates
   retain the original. Copying sparse EXIF from a lossless still into JXL no

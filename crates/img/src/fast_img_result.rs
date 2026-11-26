@@ -842,15 +842,25 @@ mod tests {
         let mut marker = partial_marker(root.path(), 1);
         marker.stage = FastImgStageName::Importing;
         let mut report = Report::from_marker(&marker, true, &[], 0, None)?;
-        let deferred = Err(anyhow::Error::new(PhotosDeliveryDeferred {
-            detail: "target unavailable".into(),
-        }));
+        let backend = foundation::unified_error::UnifiedError::Other(
+            PhotosDeliveryDeferred {
+                detail: "target unavailable".into(),
+            }
+            .into(),
+        );
+        let deferred = Err(anyhow::Error::new(backend).context("import verifier failed"));
         report.record_execution(&deferred, true);
         assert!(report.photos_delivery_deferred);
         assert!(report.primary_verification_complete);
         assert_eq!(report.succeeded, 0);
         assert_eq!(report.unprocessed, 1);
-        assert!(report.finalization_error.is_some());
+        assert!(
+            report
+                .finalization_error
+                .as_deref()
+                .is_some_and(|detail| detail.contains("import verifier failed")
+                    && detail.contains("target unavailable"))
+        );
         assert_eq!(report.output_directory, marker.working_copy);
         report.record_execution(&Err(anyhow::anyhow!("Photos delivery deferred")), true);
         assert!(!report.photos_delivery_deferred);

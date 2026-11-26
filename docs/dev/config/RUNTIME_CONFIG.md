@@ -791,9 +791,15 @@ eligible for a separate `--retry-failed` attempt.
 
 ### Deferred Photos Delivery
 
+On macOS, Fast IMG identifies the active library from the database held open
+by Photos. With a saved library binding, that database must match the saved
+path. If Photos is closed, Fast IMG requests one launch and waits for its
+database to open. If Photos is already starting, Fast IMG waits for that
+selection. Native import still checks an asset witness before submission.
+
 `photos_delivery_deferred` is a typed target-preparation outcome, not a verdict
 inferred from an error message. It applies after primary verification when a
-temporary native witness/activation failure leaves pending delivery before
+temporary discovery, witness or activation failure leaves pending delivery before
 primary source cleanup. Permission errors, invalid target evidence,
 cancellation, unrelated finalization errors and
 unreconciled native journals do not qualify. The worker and launcher still exit

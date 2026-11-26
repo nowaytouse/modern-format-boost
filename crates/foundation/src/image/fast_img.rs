@@ -2400,21 +2400,44 @@ fn selected_photos_library(bound: Option<&Path>) -> Result<Option<PathBuf>> {
 
 fn checkpoint_photos_library_with(
     marker: &WorkingCopyMarker,
-    discover: impl FnOnce() -> Result<PathBuf>,
+    discover: impl FnOnce(Option<&Path>) -> Result<BTreeSet<PathBuf>>,
 ) -> Result<Option<PathBuf>> {
     let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
-    if selected.is_none() {
-        return discover().map(Some);
+    let databases = discover(selected.as_deref()).map_err(|error| {
+        let no_prior_submission = marker.photos_submission_history().is_some_and(|history| {
+            history.complete_from_creation && history.intents.is_empty()
+        }) && marker.photos_imported_assets.is_empty()
+            && marker.tier2_imported_assets.is_empty()
+            && !marker.tier2_in_progress;
+        if !no_prior_submission
+            && matches!(&error, ImgQualityError::Other(cause) if cause.is::<crate::unified_error::PhotosDeliveryDeferred>())
+        {
+            return ImgQualityError::AnalysisError(format!(
+                "Photos target unavailable while earlier submissions need reconciliation: {error}"
+            ));
+        }
+        error
+    })?;
+    if let Some(library) = selected {
+        require_selected_photos_database(&library, &databases)?;
+        Ok(Some(library))
+    } else {
+        active_photos_library_from_databases(&databases).map(Some)
     }
-    Ok(selected)
 }
 
 fn checkpoint_photos_library(marker: &WorkingCopyMarker) -> Result<Option<PathBuf>> {
-    checkpoint_photos_library_with(marker, || {
-        #[cfg(target_os = "macos")]
-        native_checkpoint::prepare_library_discovery()?;
-        active_photos_library_from_databases(&active_photos_library_databases()?)
-    })
+    #[cfg(target_os = "macos")]
+    let discover = |selected: Option<&Path>| {
+        native_checkpoint::discover_open_databases(selected).map_err(ImgQualityError::from)
+    };
+    #[cfg(not(target_os = "macos"))]
+    if let Some(selected) = selected_photos_library(marker.photos_library_path.as_deref())? {
+        return Ok(Some(selected));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let discover = |_: Option<&Path>| active_photos_library_databases();
+    checkpoint_photos_library_with(marker, discover)
 }
 
 fn require_selected_photos_database(
@@ -2446,11 +2469,21 @@ fn active_photos_library_command() -> std::process::Command {
 }
 
 fn active_photos_library_databases() -> Result<BTreeSet<PathBuf>> {
+    Ok(probe_photos_library_databases()?.unwrap_or_default())
+}
+
+// None means lsof found no Photos process. Some(empty) means Photos is running
+// but has not yet exposed an identifiable library; opening another could switch it.
+fn probe_photos_library_databases() -> Result<Option<BTreeSet<PathBuf>>> {
     let output = run_fast_img_command_with_timeout(
         &mut active_photos_library_command(),
         Duration::from_secs(30),
         "verify selected Photos library",
     )?;
+    if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
+        // lsof reports no matching process with a silent exit 1. This is not target proof.
+        return Ok(None);
+    }
     if !output.status.success() {
         return Err(ImgQualityError::AnalysisError(
             "cannot prove the active Photos library; open the selected library before importing"
@@ -2469,7 +2502,7 @@ fn active_photos_library_databases() -> Result<BTreeSet<PathBuf>> {
     if let Some(home) = std::env::var_os("HOME") {
         remove_photos_system_side_database(&mut databases, Path::new(&home))?;
     }
-    Ok(databases)
+    Ok(Some(databases))
 }
 
 fn active_photos_library_from_databases(databases: &BTreeSet<PathBuf>) -> Result<PathBuf> {
@@ -2701,6 +2734,7 @@ pub fn import_media_outputs_with_checkpointed_library_verifier(
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = checkpoint_photos_library(marker)?;
+    #[cfg(not(target_os = "macos"))]
     require_active_photos_library(selected.as_deref())?;
     let output_paths = fast_img_marker_output_paths(marker)?;
     validate_fast_img_marker_output_hashes(marker)?;
@@ -12561,7 +12595,7 @@ end mfbResolveAlbumComponent
     }
 
     #[test]
-    fn default_library_is_proved_and_bound_before_checkpointed_import() -> Result<()> {
+    fn default_library_is_proved_and_bound_before_checkpointed_import() -> anyhow::Result<()> {
         if crate::common_utils::isolated_test_process() {
             return Ok(());
         }
@@ -12580,6 +12614,28 @@ end mfbResolveAlbumComponent
         let mut marker =
             WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
         let before = marker.clone();
+        let deferred = |_: Option<&Path>| {
+            Err(ImgQualityError::Other(
+                crate::unified_error::PhotosDeliveryDeferred {
+                    detail: "synthetic timeout".into(),
+                }
+                .into(),
+            ))
+        };
+        assert!(matches!(
+            checkpoint_photos_library_with(&marker, deferred),
+            Err(ImgQualityError::Other(_))
+        ));
+        let mut legacy = serde_json::to_value(&marker)?;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("photos_submission_history");
+        let legacy: WorkingCopyMarker = serde_json::from_value(legacy)?;
+        assert!(matches!(
+            checkpoint_photos_library_with(&legacy, deferred),
+            Err(ImgQualityError::AnalysisError(_))
+        ));
         for databases in [
             BTreeSet::new(),
             BTreeSet::from([
@@ -12588,22 +12644,18 @@ end mfbResolveAlbumComponent
                     .join("Other.photoslibrary/database/Photos.sqlite"),
             ]),
         ] {
-            assert!(
-                checkpoint_photos_library_with(&marker, || active_photos_library_from_databases(
-                    &databases
-                ))
-                .is_err()
-            );
+            assert!(checkpoint_photos_library_with(&marker, |_| Ok(databases)).is_err());
             assert_eq!(marker, before);
         }
         assert!(
-            checkpoint_photos_library_with(&marker, || Err(ImgQualityError::AnalysisError(
+            checkpoint_photos_library_with(&marker, |_| Err(ImgQualityError::AnalysisError(
                 "synthetic query denied".into()
             )))
             .is_err()
         );
-        let selected = checkpoint_photos_library_with(&marker, || {
-            active_photos_library_from_databases(&BTreeSet::from([database]))
+        let selected = checkpoint_photos_library_with(&marker, |target| {
+            assert!(target.is_none());
+            Ok(BTreeSet::from([database.clone()]))
         })?;
         assert_eq!(selected.as_deref(), Some(library.as_path()));
         let persisted = Cell::new(false);
@@ -12632,9 +12684,10 @@ end mfbResolveAlbumComponent
             Some(library.as_path())
         );
         assert_eq!(
-            checkpoint_photos_library_with(&marker, || panic!(
-                "a bound import must not rediscover another target"
-            ))?,
+            checkpoint_photos_library_with(&marker, |target| {
+                assert_eq!(target, Some(library.as_path()));
+                Ok(BTreeSet::from([database]))
+            })?,
             Some(library)
         );
         Ok(())

@@ -12,6 +12,7 @@ use crate::image::photos_native::{Client, committed_pairs};
 use crate::pipeline::verification::PhotosSubmissionKind;
 use crate::progress::{PhotosImportPhase, PhotosImportProgress};
 use crate::unified_error::PhotosDeliveryDeferred;
+use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 
 const WITNESS_QUERY_CONTEXT: &str = "selected Photos library witness";
@@ -102,28 +103,26 @@ fn selected_library_witness_with_recovery(
     query: impl FnMut(Duration) -> std::io::Result<std::process::Output>,
     activate: impl FnMut() -> anyhow::Result<()>,
 ) -> anyhow::Result<String> {
-    readonly_library_query_with_recovery(query, activate, |bytes| {
-        let witness = String::from_utf8(bytes)?;
-        let witness = witness.trim();
-        let uuid = super::osxphotos_uuid_from_photos_import_identifier(witness)?;
-        anyhow::ensure!(
-            !witness.contains(['\r', '\n'])
-                && uuid.len() == 36
-                && uuid.bytes().enumerate().all(|(index, byte)| match index {
-                    8 | 13 | 18 | 23 => byte == b'-',
-                    _ => byte.is_ascii_hexdigit(),
-                }),
-            "Photos witness query returned an invalid asset identifier; target cannot be proven"
-        );
-        Ok(witness.to_owned())
-    })
+    let bytes = readonly_library_query_with_recovery(query, activate)?;
+    let witness = String::from_utf8(bytes)?;
+    let witness = witness.trim();
+    let uuid = super::osxphotos_uuid_from_photos_import_identifier(witness)?;
+    anyhow::ensure!(
+        !witness.contains(['\r', '\n'])
+            && uuid.len() == 36
+            && uuid.bytes().enumerate().all(|(index, byte)| match index {
+                8 | 13 | 18 | 23 => byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            }),
+        "Photos witness query returned an invalid asset identifier; target cannot be proven"
+    );
+    Ok(witness.to_owned())
 }
 
-fn readonly_library_query_with_recovery<T>(
+fn readonly_library_query_with_recovery(
     mut query: impl FnMut(Duration) -> std::io::Result<std::process::Output>,
     mut activate: impl FnMut() -> anyhow::Result<()>,
-    decode: impl Fn(Vec<u8>) -> anyhow::Result<T>,
-) -> anyhow::Result<T> {
+) -> anyhow::Result<Vec<u8>> {
     // Read-only cold-start retries stop at eight minutes per query.
     let mut budget = Duration::from_secs(120);
     for attempt in 1..=3 {
@@ -136,13 +135,12 @@ fn readonly_library_query_with_recovery<T>(
             !crate::batch_control::is_cancelled()?,
             "Photos witness query cancelled; delivery deferred, checkpoints and outputs retained"
         );
-        let error = match output {
+        let (error, disconnected) = match output {
             Ok(output) if output.status.success() => {
-                let decoded = decode(output.stdout)?;
                 if attempt > 1 {
                     tracing::info!(target: "photos_import", attempt, "Photos read-only library query recovered; resuming target proof before import");
                 }
-                return Ok(decoded);
+                return Ok(output.stdout);
             }
             Ok(output) => {
                 let detail = String::from_utf8_lossy(&output.stderr);
@@ -153,10 +151,15 @@ fn readonly_library_query_with_recovery<T>(
                             .any(|code| detail.contains(code)),
                     "Photos witness query rejected: {detail}; target cannot be proven, sources retained"
                 );
-                detail.into_owned()
+                let disconnected = detail.contains("(-609)") || detail.contains("(-600)");
+                (detail.into_owned(), disconnected)
             }
             Err(error) if photos_command_is_transient(&error, WITNESS_QUERY_CONTEXT) => {
-                error.to_string()
+                let disconnected = matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                );
+                (error.to_string(), disconnected)
             }
             Err(error) => return Err(error.into()),
         };
@@ -169,9 +172,10 @@ fn readonly_library_query_with_recovery<T>(
             !crate::batch_control::is_cancelled()?,
             "Photos witness recovery cancelled; delivery deferred, outputs and checkpoints retained"
         );
-        tracing::warn!(target: "photos_import", attempt, budget_secs = budget.as_secs(), %error,
-            "Photos witness temporarily unavailable; activating Photos and retrying the read-only query with a larger budget");
-        let recovery = activate();
+        tracing::warn!(target: "photos_import", attempt, budget_secs = budget.as_secs(), disconnected, %error,
+            "Photos witness temporarily unavailable; retrying read-only target proof");
+        // A busy AppleEvent target (-1712) is still running. Reopening it can interrupt recovery.
+        let recovery = if disconnected { activate() } else { Ok(()) };
         anyhow::ensure!(
             !crate::batch_control::is_cancelled()?,
             "Photos witness recovery cancelled; delivery deferred, outputs and checkpoints retained"
@@ -185,18 +189,20 @@ fn readonly_library_query_with_recovery<T>(
 }
 
 fn selected_library_witness(library: Option<&Path>) -> anyhow::Result<String> {
-    selected_library_witness_with_recovery(
-        |budget| query_photos_library("return id of first media item", budget),
-        || activate_photos_library(library),
-    )
+    selected_library_witness_with_recovery(query_photos_asset_witness, || {
+        let active = discover_open_databases(library)?;
+        if let Some(library) = library {
+            super::require_selected_photos_database(library, &active)?;
+        } else {
+            super::active_photos_library_from_databases(&active)?;
+        }
+        Ok(())
+    })
 }
 
-fn query_photos_library(
-    statement: &str,
-    budget: Duration,
-) -> std::io::Result<std::process::Output> {
+fn query_photos_asset_witness(budget: Duration) -> std::io::Result<std::process::Output> {
     let script = format!(
-        "with timeout of {} seconds\ntell application \"Photos\" to {statement}\nend timeout",
+        "with timeout of {} seconds\ntell application \"Photos\" to return id of first media item\nend timeout",
         budget.as_secs()
     );
     crate::process_runner::run_command_with_liveness_timeout(
@@ -222,32 +228,53 @@ fn activate_photos_library(library: Option<&Path>) -> anyhow::Result<()> {
     .map_err(photos_activation_error)?;
     anyhow::ensure!(
         output.status.success(),
-        "Photos activation failed: {}; delivery deferred, outputs retained",
-        String::from_utf8_lossy(&output.stderr)
+        "Photos activation failed ({}): {}; outputs and checkpoints retained",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
     );
-    require_active_photos_library(library)?;
     Ok(())
 }
 
-/// Establish read-only readiness before inspecting Photos' actual open database.
-/// A count of zero is valid; this is not an asset or delivery witness.
-pub(super) fn prepare_library_discovery() -> anyhow::Result<()> {
-    readonly_library_query_with_recovery(
-        |budget| query_photos_library("return count of media items", budget),
-        || activate_photos_library(None),
-        decode_library_readiness,
+/// The open database identifies the library. Counting assets can hang on a busy library.
+pub(super) fn discover_open_databases(
+    selected: Option<&Path>,
+) -> anyhow::Result<BTreeSet<PathBuf>> {
+    discover_open_databases_with(
+        super::probe_photos_library_databases,
+        || activate_photos_library(selected),
+        std::thread::sleep,
     )
 }
 
-fn decode_library_readiness(bytes: Vec<u8>) -> anyhow::Result<()> {
-    let count = String::from_utf8(bytes)?;
-    let count = count.trim();
-    anyhow::ensure!(
-        !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()),
-        "Photos library readiness query returned invalid evidence"
-    );
-    count.parse::<u64>()?;
-    Ok(())
+fn discover_open_databases_with(
+    mut probe: impl FnMut() -> Result<Option<BTreeSet<PathBuf>>>,
+    activate: impl FnOnce() -> anyhow::Result<()>,
+    mut wait: impl FnMut(Duration),
+) -> anyhow::Result<BTreeSet<PathBuf>> {
+    match probe()? {
+        Some(active) if !active.is_empty() => return Ok(active),
+        Some(_) => {} // Already starting; preserve its library selection.
+        None => {
+            if crate::batch_control::is_cancelled()? {
+                anyhow::bail!("Photos discovery cancelled");
+            }
+            activate()?;
+        }
+    }
+    for delay in [0, 1, 2, 4, 8, 8, 8] {
+        wait(Duration::from_secs(delay));
+        if crate::batch_control::is_cancelled()? {
+            anyhow::bail!("Photos discovery cancelled");
+        }
+        if let Some(active) = probe()?
+            && !active.is_empty()
+        {
+            return Ok(active);
+        }
+    }
+    Err(PhotosDeliveryDeferred {
+        detail: "Photos has not opened a library database; no new import was submitted, outputs and checkpoints retained".into(),
+    }.into())
 }
 
 struct ImportTask {
@@ -1053,23 +1080,44 @@ mod tests {
     }
 
     #[test]
-    fn library_discovery_readiness_accepts_an_empty_library_but_not_query_failures()
-    -> anyhow::Result<()> {
-        readonly_library_query_with_recovery(
-            |_| Ok(witness_reply(0, "0\n")),
-            || panic!("an empty library is ready without activation"),
-            decode_library_readiness,
+    fn library_discovery_only_activates_photos_for_absent_database_evidence() -> anyhow::Result<()>
+    {
+        let active = BTreeSet::from([PathBuf::from(
+            "synthetic.photoslibrary/database/Photos.sqlite",
+        )]);
+        let recovered = discover_open_databases_with(
+            || Ok(Some(active.clone())),
+            || panic!("already open"),
+            |_| panic!("already open"),
         )?;
-        for (code, text) in [(1, "Not authorized (-1743)"), (0, ""), (0, "0\n1")] {
-            assert!(
-                readonly_library_query_with_recovery(
-                    |_| Ok(witness_reply(code, text)),
-                    || panic!("a rejected query cannot be treated as a missing library"),
-                    decode_library_readiness,
-                )
-                .is_err()
-            );
-        }
+        assert_eq!(recovered, active);
+        let mut observations = [None, Some(BTreeSet::new()), Some(active.clone())].into_iter();
+        let mut activations = 0;
+        let recovered = discover_open_databases_with(
+            || Ok(observations.next().unwrap()),
+            || {
+                activations += 1;
+                Ok(())
+            },
+            |_| {},
+        )?;
+        assert_eq!(recovered, active);
+        assert_eq!(activations, 1);
+        let error = discover_open_databases_with(
+            || Ok(Some(BTreeSet::new())),
+            || panic!("already starting"),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(error.is::<PhotosDeliveryDeferred>());
+        assert!(
+            discover_open_databases_with(
+                || Err(ImgQualityError::AnalysisError("permission denied".into())),
+                || panic!("failed probe"),
+                |_| panic!("failed probe"),
+            )
+            .is_err()
+        );
         Ok(())
     }
 
@@ -1096,7 +1144,7 @@ mod tests {
         )?;
         assert_eq!(result, identifier);
         assert_eq!(budgets, [120, 240, 480]);
-        assert_eq!(activations, 2);
+        assert_eq!(activations, 1);
         Ok(())
     }
 
@@ -1156,10 +1204,11 @@ mod tests {
         let error = selected_library_witness_with_recovery(
             |_| {
                 queries += 1;
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "synthetic timeout",
-                ))
+                if queries == 1 {
+                    Err(std::io::ErrorKind::TimedOut.into())
+                } else {
+                    Ok(witness_reply(1, "Photos got an AppleEvent timeout (-1712)"))
+                }
             },
             || {
                 activations += 1;
@@ -1167,15 +1216,16 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!((queries, activations), (3, 2));
+        assert_eq!((queries, activations), (3, 0));
         assert!(error.is::<PhotosDeliveryDeferred>());
+        assert!(error.to_string().contains("(-1712)"));
         assert!(error.to_string().contains("delivery deferred"));
         assert!(error.to_string().contains("checkpoints retained"));
         let mut queries = 0;
         let error = selected_library_witness_with_recovery(
             |_| {
                 queries += 1;
-                Ok(witness_reply(1, "AppleEvent timed out (-1712)"))
+                Ok(witness_reply(1, "Photos connection invalid (-609)"))
             },
             || anyhow::bail!("selected library changed"),
         )
@@ -1183,7 +1233,7 @@ mod tests {
         assert_eq!(queries, 1);
         assert!(!error.is::<PhotosDeliveryDeferred>());
         assert!(format!("{error:#}").contains("selected library changed"));
-        assert!(format!("{error:#}").contains("(-1712)"));
+        assert!(format!("{error:#}").contains("(-609)"));
     }
 
     #[test]
