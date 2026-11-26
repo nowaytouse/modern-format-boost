@@ -720,7 +720,7 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
 }
 
 pub fn choose_gif_photos_import() -> Result<bool> {
-    println!("  1 - Verify GIF originals and keep them in place");
+    println!("  1 - Verify animated GIF originals and keep them in place");
     println!("  2 - Import original GIFs into Photos and clean up verified sources");
     match read_line("Choose GIF action [1/2] (Enter = keep in place): ")?.trim() {
         "" | "1" => Ok(false),

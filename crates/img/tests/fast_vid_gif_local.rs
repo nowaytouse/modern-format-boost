@@ -10,9 +10,11 @@ fn local_gif_selection_reports_exact_dispositions_without_writing_state() -> any
     let source = root.join("selection");
     fs::create_dir(&source)?;
     let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
-    let padded = [gif.as_slice(), b"\0\r\n"].concat();
-    let inputs: [(&str, &[u8]); 4] = [
+    let frame = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4c\x01\x00";
+    let padded = [&gif[..gif.len() - 1], frame.as_slice(), b";\0\r\n"].concat();
+    let inputs: [(&str, &[u8]); 5] = [
         ("selected", &padded),
+        ("static.gif", gif),
         ("selected.xmp", b"sidecar"),
         ("pretend.gif", b"unrelated file"),
         ("damaged.gif", &gif[..gif.len() - 1]),
@@ -46,10 +48,19 @@ fn local_gif_selection_reports_exact_dispositions_without_writing_state() -> any
         assert_eq!(output.status.code(), Some(1));
         let text = String::from_utf8(output.stdout)?;
         assert!(
-            text.contains("Succeeded: 0\nSkipped: 1\nFailed: 1\nIgnored: 2\nUnprocessed: 0"),
+            text.contains("Succeeded: 0\nSkipped: 1\nFailed: 1\nIgnored: 3\nUnprocessed: 0"),
             "{text}"
         );
         assert!(text.contains("[FAIL    ]   damaged.gif:"));
+        let static_entry = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("MFB_FAST_IMG_IGNORED="))
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .find(|entry| entry["source_path"] == "static.gif")
+            .ok_or_else(|| anyhow::anyhow!("missing ignored receipt for static GIF"))?;
+        assert_eq!(static_entry["reason_code"], "static_gif");
         #[cfg(unix)]
         {
             let failures: Vec<_> = text

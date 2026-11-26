@@ -220,142 +220,8 @@ pub fn is_animated_jxl(path: &Path) -> Result<bool> {
 }
 
 pub fn is_animated_gif(path: &Path) -> Result<bool> {
-    let data = fs::read(path)?;
-    if data.len() < 13 || (&data[0..6] != b"GIF87a" && &data[0..6] != b"GIF89a") {
-        return Err(anyhow!(
-            "GIF animation probe failed for {}: malformed or truncated header",
-            path.display()
-        ));
-    }
-
-    let mut pos = 6;
-    if pos + 7 > data.len() {
-        return Err(anyhow!(
-            "GIF animation probe failed for {}: truncated logical screen",
-            path.display()
-        ));
-    }
-    let packed = data[pos + 4];
-    let has_gct = (packed & 0x80) != 0;
-    let gct_size = if has_gct {
-        3 * (1 << ((packed & 0x07) + 1))
-    } else {
-        0
-    };
-    pos += 7 + gct_size;
-    if pos > data.len() {
-        return Err(anyhow!(
-            "GIF animation probe failed for {}: truncated global color table",
-            path.display()
-        ));
-    }
-
-    let mut image_descriptors = 0;
-    let mut gce_count = 0;
-    let mut saw_trailer = false;
-
-    while pos < data.len() {
-        let byte = data[pos];
-        if byte == 0x2C {
-            image_descriptors += 1;
-            if pos + 10 > data.len() {
-                return Err(anyhow!(
-                    "GIF animation probe failed for {}: truncated image descriptor",
-                    path.display()
-                ));
-            }
-            let img_packed = data[pos + 9];
-            let has_local_color_table = (img_packed & 0x80) != 0;
-            let lct_size = if has_local_color_table {
-                3 * (1 << ((img_packed & 0x07) + 1))
-            } else {
-                0
-            };
-            pos += 10 + lct_size;
-            if pos >= data.len() {
-                return Err(anyhow!(
-                    "GIF animation probe failed for {}: missing image data",
-                    path.display()
-                ));
-            }
-            pos += 1;
-            loop {
-                if pos >= data.len() {
-                    return Err(anyhow!(
-                        "GIF animation probe failed for {}: unterminated image data",
-                        path.display()
-                    ));
-                }
-                let block_size = data[pos] as usize;
-                pos += 1;
-                if block_size == 0 {
-                    break;
-                }
-                if pos + block_size > data.len() {
-                    return Err(anyhow!(
-                        "GIF animation probe failed for {}: truncated image data block",
-                        path.display()
-                    ));
-                }
-                pos += block_size;
-            }
-        } else if byte == 0x21 {
-            if pos + 2 > data.len() {
-                return Err(anyhow!(
-                    "GIF animation probe failed for {}: truncated extension block",
-                    path.display()
-                ));
-            }
-            let label = data[pos + 1];
-            if label == 0xF9 {
-                gce_count += 1;
-            }
-            pos += 2;
-            loop {
-                if pos >= data.len() {
-                    return Err(anyhow!(
-                        "GIF animation probe failed for {}: unterminated extension block",
-                        path.display()
-                    ));
-                }
-                let block_size = data[pos] as usize;
-                pos += 1;
-                if block_size == 0 {
-                    break;
-                }
-                if pos + block_size > data.len() {
-                    return Err(anyhow!(
-                        "GIF animation probe failed for {}: truncated extension data",
-                        path.display()
-                    ));
-                }
-                pos += block_size;
-            }
-        } else if byte == 0x3B {
-            saw_trailer = true;
-            break;
-        } else {
-            return Err(anyhow!(
-                "GIF animation probe failed for {}: unexpected block byte 0x{:02x}",
-                path.display(),
-                byte
-            ));
-        }
-    }
-
-    if !saw_trailer {
-        return Err(anyhow!(
-            "GIF animation probe failed for {}: missing trailer",
-            path.display()
-        ));
-    }
-
-    let frame_count = if gce_count > 1 {
-        gce_count
-    } else {
-        image_descriptors
-    };
-    Ok(frame_count > 1)
+    foundation::media_meta_utils::gif_has_displayed_motion(path)
+        .with_context(|| format!("GIF animation probe failed for {}", path.display()))
 }
 
 pub fn true_format_owner(path: &Path, true_format: &str) -> Result<Option<String>> {
@@ -1863,6 +1729,24 @@ mod tests {
             Some(PIPELINE_IMAGE.to_string())
         );
         assert_eq!(classify_media_owner(&fake_jpg).unwrap(), None);
+    }
+
+    #[test]
+    fn gif_owner_and_label_follow_displayed_motion() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("misnamed.mp4");
+        let header = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff";
+        let black = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00";
+        let white = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4c\x01\x00";
+        for (last, owner, animated) in [
+            (black, PIPELINE_IMAGE, false),
+            (white, PIPELINE_VIDEO, true),
+        ] {
+            fs::write(&path, [header.as_slice(), black, last, b";"].concat())?;
+            assert_eq!(classify_media_owner(&path)?.as_deref(), Some(owner));
+            assert_eq!(animation_label(&path)?.is_some(), animated);
+        }
+        Ok(())
     }
 
     #[test]

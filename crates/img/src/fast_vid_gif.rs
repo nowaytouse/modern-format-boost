@@ -13,6 +13,7 @@ use foundation::ModernLossyStaticCandidate;
 use foundation::batch::AdmittedImageFile;
 use foundation::fast_img_store::FastImgAdmissionPlan;
 use foundation::image::format_detect::FormatKind;
+use foundation::media_meta_utils::GifMotion;
 use foundation::metadata::XmpSidecarIndex;
 use foundation::pipeline::verification::fast_img_relative_key;
 use foundation::pipeline::verification::{FastImgStageName, WorkingCopyMarker};
@@ -34,7 +35,7 @@ pub(super) fn validate_selection(input: &Path) -> Result<()> {
 /// Use the same full stream decoder for both local retention and Photos admission.
 fn inspect_gifs<'a>(
     observed: &'a [AdmittedImageFile],
-    mut classify: impl FnMut(&'a AdmittedImageFile, std::io::Result<bool>) -> Result<()>,
+    mut classify: impl FnMut(&'a AdmittedImageFile, std::io::Result<GifMotion>) -> Result<()>,
 ) -> Result<()> {
     let progress = foundation::progress::FileStageProgress::new(
         observed.len() as u64,
@@ -44,7 +45,7 @@ fn inspect_gifs<'a>(
         foundation::batch_control::checkpoint()?;
         classify(
             source,
-            foundation::media_meta_utils::is_verified_gif(source.path()),
+            foundation::media_meta_utils::gif_motion(source.path()),
         )?;
         progress.set((index + 1) as u64);
     }
@@ -73,14 +74,17 @@ pub(super) fn verify_local(options: FastImgRunOptions<'_>) -> Result<()> {
         let path = source.path();
         let rel = fast_img_relative_key(path, &root, "GIF original").map_err(anyhow::Error::msg)?;
         match result {
-            Ok(true) => {
+            Ok(GifMotion::Animated) => {
                 skipped += 1;
                 println!(
-                    "[SKIP    ]   {}: valid GIF original retained in place",
+                    "[SKIP    ]   {}: animated GIF original retained in place",
                     rel.replace(char::is_control, "�")
                 );
             }
-            Ok(false) => ignored.push((path.to_owned(), IgnoredReason::OutsideCurrentPolicyScope)),
+            Ok(GifMotion::Still) => ignored.push((path.to_owned(), IgnoredReason::StaticGif)),
+            Ok(GifMotion::NotGif) => {
+                ignored.push((path.to_owned(), IgnoredReason::OutsideCurrentPolicyScope));
+            }
             Err(error) => {
                 failed += 1;
                 report_failure(path, &rel, &error.to_string());
@@ -157,7 +161,7 @@ pub(super) fn scan_originals(
         let path = source.path();
         // Files outside the old admission can neither expand this recovery nor add new failures.
         if let Some(saved) = saved_scope
-            && !matches!(result, Ok(false))
+            && !matches!(result, Ok(GifMotion::NotGif | GifMotion::Still))
         {
             let rel =
                 fast_img_relative_key(path, root, "GIF original").map_err(anyhow::Error::msg)?;
@@ -168,11 +172,14 @@ pub(super) fn scan_originals(
             }
         }
         match result {
-            Ok(false) => ignored.push((path.to_owned(), IgnoredReason::OutsideCurrentPolicyScope)),
-            Ok(true) if live_photos.is_live(path)? => {
+            Ok(GifMotion::Still) => ignored.push((path.to_owned(), IgnoredReason::StaticGif)),
+            Ok(GifMotion::NotGif) => {
+                ignored.push((path.to_owned(), IgnoredReason::OutsideCurrentPolicyScope));
+            }
+            Ok(GifMotion::Animated) if live_photos.is_live(path)? => {
                 ignored.push((path.to_owned(), IgnoredReason::LivePhotoPairMember));
             }
-            Ok(true) => verified.push(source),
+            Ok(GifMotion::Animated) => verified.push(source),
             Err(error) => {
                 let rel = fast_img_relative_key(path, root, "GIF original")
                     .map_err(anyhow::Error::msg)?;
@@ -226,7 +233,7 @@ pub(super) fn scan_originals(
         );
     }
     println!(
-        "[FASTVID ] selected {} verified GIF original(s) for Apple Photos",
+        "[FASTVID ] selected {} verified animated GIF original(s) for Apple Photos",
         originals.len()
     );
     Ok(FastImgSourceInventory {
@@ -278,17 +285,20 @@ mod tests {
 
     const HEADER: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff";
     const FRAME: &[u8] = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00";
+    const FRAME_2: &[u8] = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4c\x01\x00";
 
     #[test]
     fn valid_gifs_alone_enter_original_delivery_without_any_encoder_probe() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = fs::canonicalize(dir.path())?;
         let single = [HEADER, FRAME, b";"].concat();
-        let animated = [HEADER, FRAME, FRAME, b";"].concat();
+        let animated = [HEADER, FRAME, FRAME_2, b";"].concat();
+        let repeated = [HEADER, FRAME, FRAME, b";"].concat();
         let inputs = [
             ("no-extension", single.as_slice()),
             ("animated.mp4", animated.as_slice()),
             ("original.GIF", single.as_slice()),
+            ("repeated.gif", repeated.as_slice()),
             ("movie.MOV", animated.as_slice()),
             ("still.jpeg", animated.as_slice()),
             ("web.webp", animated.as_slice()),
@@ -297,9 +307,9 @@ mod tests {
             ("disguised-a.aae", animated.as_slice()),
             ("broken.gif", HEADER),
             ("pretend.gif", b"not an image".as_slice()),
-            ("with-xmp.gif", single.as_slice()),
+            ("with-xmp.gif", animated.as_slice()),
             ("with-xmp.xmp", b"<xmp/>".as_slice()),
-            ("with-aae.gif", single.as_slice()),
+            ("with-aae.gif", animated.as_slice()),
             ("with-aae.AAE", b"<plist/>".as_slice()),
         ];
         let mut observed = Vec::new();
@@ -318,17 +328,21 @@ mod tests {
             (inventory.source_files.len(), inventory.planned_encode_count),
             (0, 0)
         );
-        assert_eq!(inventory.ignored.count(), 3);
+        assert_eq!(inventory.ignored.count(), 6);
         assert_eq!(inventory.modern_probe_failures.total, 2);
         assert_eq!(inventory.modern_probe_failures.hashes.len(), 2);
         let plan = inventory.admission_plan(&root)?;
-        assert_eq!(plan.len(), 10);
+        assert_eq!(plan.len(), 8);
         assert!(matches!(
             &plan["with-xmp.gif"].xmp,
             Some(foundation::fast_img_store::FastImgAdmissionSidecar::Present { blake3, .. })
                 if blake3 == &foundation::common_utils::blake3_hex(b"<xmp/>")
         ));
-        for (name, contents) in inputs.iter().take(9) {
+        for (name, contents) in inputs
+            .iter()
+            .take(10)
+            .filter(|(_, contents)| *contents == animated.as_slice())
+        {
             let admitted = &plan[*name];
             assert_eq!(
                 admitted.route,
@@ -378,7 +392,7 @@ mod tests {
     fn single_gif_never_admits_its_sibling_or_a_selected_link() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = fs::canonicalize(dir.path())?;
-        let gif = [HEADER, FRAME, b";"].concat();
+        let gif = [HEADER, FRAME, FRAME_2, b";"].concat();
         let selected = root.join("selected");
         fs::write(&selected, &gif)?;
         fs::write(root.join("sibling.gif"), &gif)?;

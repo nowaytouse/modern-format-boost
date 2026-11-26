@@ -976,6 +976,40 @@ pub fn determine_strategy_with_apple_compat(
     }
 }
 
+fn ignored_static_output(
+    input: &Path,
+    reason: &str,
+    ignore_class: Option<&'static str>,
+) -> Result<ConversionOutput> {
+    let file_size = std::fs::metadata(input)
+        .map_err(|e| {
+            VidQualityError::ConversionError(format!("Failed to read metadata for size: {e}"))
+        })?
+        .len();
+    foundation::progress_mode::video_ignored(input, reason, ignore_class);
+    Ok(ConversionOutput {
+        input_path: input.display().to_string(),
+        output_path: String::new(),
+        strategy: ConversionStrategy {
+            target: TargetVideoFormat::Ignored,
+            reason: reason.to_string(),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        },
+        input_size: file_size,
+        output_size: 0,
+        size_ratio: 0.0,
+        success: false,
+        message: format!("IGNORED: {reason}"),
+        final_crf: 0.0,
+        exploration_attempts: 0,
+        blake3: None,
+        ignored: true,
+    })
+}
+
 /// Automatically convert video with caching.
 ///
 /// # Errors
@@ -1004,6 +1038,30 @@ pub fn auto_convert_with_cache(
     let label = foundation::media_conversion_gate::path_file_name_for_log(input);
     foundation::progress_mode::set_log_context(&label);
     let _log_guard = foundation::progress_mode::LogContextGuard;
+
+    let detected_input_format = foundation::image_detection::detect_format_from_bytes(input)
+        .map_err(|err| {
+            foundation::media_conversion_gate::probe_image_format_audit(
+                "vid_conversion_format_detect_failed",
+                input,
+                format!("vid conversion refused routing guess after format detection error: {err}"),
+            );
+            VidQualityError::ConversionError(format!(
+                "Failed to detect true input format for {}: {err}",
+                input.display()
+            ))
+        })?;
+    if detected_input_format == foundation::image_detection::DetectedFormat::GIF
+        && !foundation::media_meta_utils::gif_has_displayed_motion(input).map_err(|err| {
+            VidQualityError::ConversionError(format!("GIF motion verification failed: {err}"))
+        })?
+    {
+        return ignored_static_output(
+            input,
+            "GIF has no displayed motion; use IMG",
+            Some(foundation::infra::static_logs::audit_ignore_class::VID_OUT_OF_DOMAIN),
+        );
+    }
 
     // Skip Live Photos in Apple compat mode
     if config.apple_compat() && foundation::live_photo::is_live(input) {
@@ -1051,26 +1109,10 @@ pub fn auto_convert_with_cache(
     }
     let mut detection = crate::detection_api::detect_video_with_cache(input, cache)?;
 
-    let mut static_image_forced = false;
-    let detected_input_format = foundation::image_detection::detect_format_from_bytes(input)
-        .map_err(|err| {
-            foundation::media_conversion_gate::probe_image_format_audit(
-                "vid_conversion_format_detect_failed",
-                input,
-                format!("vid conversion refused routing guess after format detection error: {err}"),
-            );
-            VidQualityError::ConversionError(format!(
-                "Failed to detect true input format for {}: {err}",
-                input.display()
-            ))
-        })?;
-
-    // Safety override: if an animation-capable image is proven static, force
-    // single-frame so vid ignores it without producing or copying output.
+    // Return on verified stills before any cached video probe can promote them.
     match &detected_input_format {
         foundation::image_detection::DetectedFormat::PNG
         | foundation::image_detection::DetectedFormat::JPEG
-        | foundation::image_detection::DetectedFormat::GIF
         | foundation::image_detection::DetectedFormat::WebP
         | foundation::image_detection::DetectedFormat::AVIF
         | foundation::image_detection::DetectedFormat::JXL
@@ -1092,9 +1134,7 @@ pub fn auto_convert_with_cache(
                                 input.display()
                             )
                         );
-                        detection.frame_count = Some(u64::from(n));
-                        detection.duration_secs = None;
-                        static_image_forced = true;
+                        return ignored_static_output(input, "Static image detected - vid ignores static media", Some(foundation::infra::static_logs::audit_ignore_class::VID_STATIC_SINGLE_FRAME));
                     }
                     None => {
                         log_info!(
@@ -1104,9 +1144,7 @@ pub fn auto_convert_with_cache(
                                 input.display()
                             )
                         );
-                        detection.frame_count = None;
-                        detection.duration_secs = None;
-                        static_image_forced = true;
+                        return ignored_static_output(input, "Static image confirmed - vid ignores static media", Some(foundation::infra::static_logs::audit_ignore_class::VID_OUT_OF_DOMAIN));
                     }
                     Some(n) => {
                         foundation::media_conversion_gate::probe_layer_audit(
@@ -1148,10 +1186,7 @@ pub fn auto_convert_with_cache(
             ))
         })?;
     let content_codec_can_be_animated = content_codec.is_some_and(|codec| codec.can_be_animated());
-    if !static_image_forced
-        && detection.frame_count.is_none_or(|fc| fc <= 1)
-        && content_codec_can_be_animated
-    {
+    if detection.frame_count.is_none_or(|fc| fc <= 1) && content_codec_can_be_animated {
         if matches!(
             &detected_input_format,
             foundation::image_detection::DetectedFormat::PNG
@@ -1284,33 +1319,7 @@ pub fn auto_convert_with_cache(
             )
         };
 
-        let file_size = std::fs::metadata(input)
-            .map_err(|e| {
-                VidQualityError::ConversionError(format!("Failed to read metadata for size: {e}"))
-            })?
-            .len();
-        foundation::progress_mode::video_ignored(input, reason, ignore_class);
-        return Ok(ConversionOutput {
-            input_path: input.display().to_string(),
-            output_path: String::new(),
-            strategy: ConversionStrategy {
-                target: TargetVideoFormat::Ignored,
-                reason: reason.to_string(),
-                command: String::new(),
-                preserve_audio: false,
-                crf: 0.0,
-                lossless: false,
-            },
-            input_size: file_size,
-            output_size: 0,
-            size_ratio: 0.0,
-            success: false,
-            message: format!("IGNORED: {reason}"),
-            final_crf: 0.0,
-            exploration_attempts: 0,
-            blake3: None,
-            ignored: true,
-        });
+        return ignored_static_output(input, reason, ignore_class);
     }
 
     // Warn about dynamic HDR metadata that will be stripped during re-encode
@@ -3889,6 +3898,22 @@ mod tests {
             hdr_pix_fmt(&detection),
             foundation::constants::PIX_FMT_YUV420P10LE
         );
+    }
+
+    #[test]
+    fn vid_ignores_visually_static_gif_with_video_extension_before_processing() -> anyhow::Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("repeated.mp4");
+        let header = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff";
+        let frame = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00";
+        let data = [header.as_slice(), frame, frame, b";"].concat();
+        std::fs::write(&path, &data)?;
+        let result = auto_convert_with_cache(&path, &ConversionConfig::default(), None)?;
+        assert!(result.ignored);
+        assert_eq!(result.output_path, "");
+        assert_eq!(std::fs::read(&path)?, data);
+        Ok(())
     }
 
     #[test]

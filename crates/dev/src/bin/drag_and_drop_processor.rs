@@ -4304,7 +4304,7 @@ fn optimization_menu_labels(
         ProcessingFilter::VideosOnly => match sub {
             0 => (
                 "Mode: Fast Video · GIF Originals [Tab to Switch]".to_owned(),
-                "Check GIF originals in place, or choose to import them into Photos.",
+                "Check animated GIF originals in place, or choose to import them into Photos. Use IMG for static images.",
             ),
             1 => (
                 "Mode: In-Place Optimization [Tab to Switch]".to_string(),

@@ -26,7 +26,10 @@ areas of change are:
 ### Fast VID GIF originals (2026-11-27)
 
 - Fast VID now imports verified GIF87a and GIF89a originals into Apple Photos
-  with the shared original-file receipts, resume checks and verified cleanup.
+  when at least two decoded frames display different pixels. Single-frame GIFs
+  and animations that display the same canvas throughout stay on the IMG side.
+  The same check applies to local verification, the private copy submitted to
+  Photos, and the hash-verified Photos original before source cleanup.
   This replaces the previous Fast GIF conversion modes and their CLI options.
 - Fast VID embeds verified XMP sidecars in the private GIF submitted to Photos,
   with separate source, sidecar and delivery hashes for verified cleanup.
@@ -42,8 +45,9 @@ areas of change are:
   originals. A completed local check with damaged GIFs reports the individual
   failures and keeps a nonzero exit status. The CLI selects Photos delivery
   with `--shortest-path`.
-- GIF inspection accepts a missing LZW end code when every frame still decodes
-  to its declared pixel count and the data blocks and file terminate correctly.
+- New GIF admissions require complete frame data, valid palette indices, LZW end
+  codes and a verified GIF trailer. Generic integrity checks for previously
+  preserved bytes still recognize complete legacy rasters without an LZW end code.
   Fresh Photos verification also recognizes a managed GIF carrying Photos'
   own sandbox mark, including when rechecking a saved import before cleanup.
 - Original GIF delivery can now verify a quarantine mark inherited from the

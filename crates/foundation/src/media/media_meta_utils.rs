@@ -13,34 +13,126 @@ pub fn is_verified_gif(path: &Path) -> std::io::Result<bool> {
     verify_gif_reader(crate::io_utils::open_regular_nofollow(path)?)
 }
 
-pub(crate) fn verify_gif_reader(mut file: impl std::io::Read) -> std::io::Result<bool> {
+pub(crate) fn verify_gif_reader(file: impl std::io::Read) -> std::io::Result<bool> {
+    Ok(verified_gif_frame_count(file, false)? > 0)
+}
+
+/// Displayed motion of a fully decoded standalone GIF.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum GifMotion {
+    NotGif,
+    Still,
+    Animated,
+}
+
+/// Classify GIF content independently of its filename for IMG and VID routing.
+///
+/// # Errors
+/// Returns an error if the source cannot be opened or a GIF cannot be verified.
+pub fn gif_motion(path: &Path) -> std::io::Result<GifMotion> {
+    gif_motion_reader(crate::io_utils::open_regular_nofollow(path)?)
+}
+
+/// Decide whether an input already identified as GIF has visible frame changes.
+///
+/// # Errors
+/// Returns an error if the content is no longer a GIF or cannot be verified.
+pub fn gif_has_displayed_motion(path: &Path) -> std::io::Result<bool> {
+    match gif_motion(path)? {
+        GifMotion::Animated => Ok(true),
+        GifMotion::Still => Ok(false),
+        GifMotion::NotGif => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "expected GIF content during motion verification",
+        )),
+    }
+}
+
+/// Verify the full stream before comparing composited frames on the same file handle.
+///
+/// # Errors
+/// Returns an error for incomplete or undecodable GIF content.
+pub(crate) fn gif_motion_reader(
+    mut file: impl std::io::Read + std::io::Seek,
+) -> std::io::Result<GifMotion> {
+    use std::io::{self, BufReader};
+
+    let frame_count = verified_gif_frame_count(&mut file, true)?;
+    match frame_count {
+        0 => return Ok(GifMotion::NotGif),
+        1 => return Ok(GifMotion::Still),
+        _ => {}
+    }
+    file.rewind()?;
+    let reader =
+        image::ImageReaderOptions::with_format(BufReader::new(file), image::ImageFormat::Gif);
+    let mut frames = reader
+        .into_reader()
+        .map_err(io::Error::other)?
+        .into_frames();
+    let mut next_frame = || {
+        frames
+            .next()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::UnexpectedEof, "missing verified GIF frame")
+            })?
+            .map_err(io::Error::other)
+    };
+    // Compare the displayed canvas. Palette indices, transparency, offsets and disposal
+    // can all differ between frames without changing a single displayed pixel.
+    let first = next_frame()?.into_buffer();
+    for _ in 1..frame_count {
+        if next_frame()?.buffer() != &first {
+            return Ok(GifMotion::Animated);
+        }
+    }
+    Ok(GifMotion::Still)
+}
+
+fn verified_gif_frame_count(mut file: impl std::io::Read, strict: bool) -> std::io::Result<u64> {
     use std::io::{self, BufRead, Read};
     let mut signature = [0; 6];
     if let Err(error) = file.read_exact(&mut signature) {
         return if error.kind() == io::ErrorKind::UnexpectedEof {
-            Ok(false)
+            Ok(0)
         } else {
             Err(error)
         };
     }
     if !matches!(&signature, b"GIF87a" | b"GIF89a") {
-        return Ok(false);
+        return Ok(0);
     }
     let mut options = gif::DecodeOptions::new();
     options.check_frame_consistency(true);
-    // Some encoders end the LZW stream with the GIF sub-block terminator alone.
-    // read_next_frame still requires every pixel, and fill_buffer below drains the
-    // final codes so an overlong raster cannot pass as a complete frame.
-    options.check_lzw_end_code(false);
+    // Generic byte-preservation checks also support complete legacy rasters lacking an
+    // LZW end code. New motion-based admissions require the frame terminator.
+    options.check_lzw_end_code(strict);
     let mut decoder = options
         .read_info(signature.as_slice().chain(file))
         .map_err(io::Error::other)?;
-    let mut saw_frame = false;
+    let global_colors = decoder
+        .global_palette()
+        .map_or(0, |palette| palette.len() / 3);
+    let mut frame_count = 0u64;
     while let Some(frame) = decoder.read_next_frame().map_err(io::Error::other)? {
         if frame.width == 0 || frame.height == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "empty GIF frame",
+            ));
+        }
+        let colors = frame
+            .palette
+            .as_ref()
+            .map_or(global_colors, |p| p.len() / 3);
+        if strict
+            && colors < 256
+            && (frame.transparent.is_some_and(|i| usize::from(i) >= colors)
+                || frame.buffer.iter().any(|&i| usize::from(i) >= colors))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "GIF palette index out of bounds",
             ));
         }
         if decoder
@@ -52,9 +144,9 @@ pub(crate) fn verify_gif_reader(mut file: impl std::io::Read) -> std::io::Result
                 "GIF frame contains more pixels than its declared dimensions",
             ));
         }
-        saw_frame = true;
+        frame_count += 1;
     }
-    if !saw_frame {
+    if frame_count == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "GIF contains no image frames",
@@ -66,7 +158,7 @@ pub(crate) fn verify_gif_reader(mut file: impl std::io::Read) -> std::io::Result
     loop {
         let chunk = tail.fill_buf()?;
         if chunk.is_empty() {
-            return Ok(true);
+            return Ok(frame_count);
         }
         if !chunk
             .iter()
@@ -476,6 +568,58 @@ mod tests {
     }
 
     #[test]
+    fn gif_motion_compares_displayed_pixels_and_checks_the_entire_stream() -> anyhow::Result<()> {
+        use gif::DisposalMethod::{Background, Keep, Previous};
+        use std::io::Cursor;
+        let encode = |disposal, index, palette, transparent| -> anyhow::Result<Vec<u8>> {
+            let mut data = Vec::new();
+            {
+                let mut encoder = gif::Encoder::new(&mut data, 2, 1, &[0, 0, 0, 255, 255, 255])?;
+                encoder.write_frame(&gif::Frame {
+                    width: 2,
+                    height: 1,
+                    dispose: disposal,
+                    buffer: (&[0, 1][..]).into(),
+                    ..Default::default()
+                })?;
+                encoder.write_frame(&gif::Frame {
+                    left: 1,
+                    width: 1,
+                    height: 1,
+                    delay: 7,
+                    palette,
+                    transparent,
+                    buffer: vec![index].into(),
+                    ..Default::default()
+                })?;
+            }
+            Ok(data)
+        };
+        // Different local index and frame rectangle, same displayed white pixel.
+        let same = encode(Keep, 0, Some(vec![255; 6]), None)?;
+        assert_eq!(gif_motion_reader(Cursor::new(same))?, GifMotion::Still);
+        let transparent = encode(Keep, 0, None, Some(0))?;
+        assert_eq!(
+            gif_motion_reader(Cursor::new(transparent))?,
+            GifMotion::Still
+        );
+        for animated in [
+            encode(Keep, 1, Some(vec![0; 6]), None)?,
+            encode(Previous, 0, None, Some(0))?,
+            encode(Background, 1, None, None)?,
+        ] {
+            assert_eq!(
+                gif_motion_reader(Cursor::new(&animated))?,
+                GifMotion::Animated
+            );
+            assert!(gif_motion_reader(Cursor::new(&animated[..animated.len() - 1])).is_err());
+        }
+        let bad_index = encode(Keep, 2, None, None)?;
+        assert!(gif_motion_reader(Cursor::new(bad_index)).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn verified_gif_accepts_only_padding_after_a_decoded_image() -> anyhow::Result<()> {
         let image = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
         let mut padded = image.to_vec();
@@ -516,6 +660,10 @@ mod tests {
         .concat();
         fs::write(&path, &animation)?;
         assert!(is_verified_gif(&path)?);
+        assert!(
+            gif_motion(&path).is_err(),
+            "new GIF admissions require a complete LZW stream"
+        );
         for invalid in [
             [
                 screen.as_slice(),

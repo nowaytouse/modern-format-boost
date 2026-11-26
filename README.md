@@ -24,7 +24,7 @@ Development currently targets **0.12.0** on the `nightly` branch.
 | **Fast IMG, JXL** / `img fast-img --strategy jxl` | Reversibly transcodes JPEGs. For still PNGs and confirmed lossless WebP or AVIF, compares every pixel effort E1–E10 by default at d=0 and keeps the verified JXL when its complete size is at most the source size. Eligible lossy originals retain their separate Photos-delivery path. | JPEG and lossless still-image archiving, including Photos delivery. |
 | **Fast IMG, AVIF** / `img fast-img --strategy avif` | Uses a separate AVIF size/quality policy. Existing AVIF is not re-encoded. | Meme/image collections whose policy permits metadata cleanup. |
 | **Videos** / `vid run` | Handles video and animation, with HEVC by default and optional AV1. | Time-based media, not static-image conversion. |
-| **Fast VID · GIF originals** / `vid fast-vid` | Checks single-frame and animated GIFs by content and keeps them in place. Add `--shortest-path` to import the original bytes into Apple Photos and clean up verified sources. | Checking a GIF collection locally or importing it on macOS. Use `--dry-run` to preview. |
+| **Fast VID · GIF originals** / `vid fast-vid` | Checks animated GIFs by content and keeps them in place; static GIFs belong to IMG. Add `--shortest-path` to import the original bytes into Apple Photos and clean up verified sources. | Checking a GIF collection locally or importing it on macOS. Use `--dry-run` to preview. |
 
 MFB identifies media from its contents, not just its extension. Images and videos
 have separate owners: `img` does not silently hand an unsuitable file to `vid`.

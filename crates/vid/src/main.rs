@@ -122,7 +122,7 @@ enum Commands {
     )]
     DbHealth,
 
-    /// Verify GIF originals in place or deliver them to Apple Photos with --shortest-path.
+    /// Verify animated GIF originals in place or deliver them to Apple Photos with --shortest-path. Use IMG for static images.
     #[command(name = "fast-vid")]
     FastVid(FastVidArgs),
 }

@@ -1582,87 +1582,13 @@ fn check_png_animation(path: &Path) -> Result<bool> {
 fn check_gif_animation(path: &Path) -> Result<bool> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
-    let bytes = std::fs::read(path)?;
-
-    // Stage 1: Structural Count (spec-compliant chunk walking)
-    let structural_count = crate::image_formats::gif::count_frames_from_bytes(&bytes)?;
-    if structural_count > 1 {
-        return Ok(true);
-    }
-
-    // Stage 2: Feature Scan (Signal B)
-    // Look for GCE markers [0x21, 0xF9, 0x04] globally
-    let gce_marker = &[0x21, 0xF9, 0x04];
-    let gce_hints = crate::numeric_cast::usize_to_u32_strict(
-        bytes.windows(3).filter(|w| *w == gce_marker).count(),
-        "gce_hints",
-    )
-    .ok_or_else(|| {
-        ImgQualityError::AnalysisError(
-            "Numerical anomaly in GCE hint count; information invalidated".to_string(),
-        )
-    })?;
-
-    if gce_hints > structural_count {
-        // [Disagreement] Internal Deep Research
-        if deep_research_gif_animation(&bytes, gce_hints) {
-            crate::log_detail!(format!(
-                "Analyzer Audit: Initiating GIF deep frame research \
-                 (structural={structural_count}, gce_hints={gce_hints}) for {path_display}",
-                path_display = path.display(),
-            ));
-            return Ok(true);
-        }
-    }
-
-    // Stage 3: Penetrating decode fallback (ground-truth frame count)
-    // Some edge GIFs can bypass structural/GCE heuristics; use decode-based
-    // verification only when metadata is suspiciously static to keep cost
-    // bounded.
-    if structural_count <= 1
-        && let crate::media_penetration::PenetrationResult::Verified(real_count) =
-            crate::media_penetration::detect_real_frame_count(
-                path,
-                Some(u64::from(structural_count)),
-            )
-        && real_count > 1
-    {
-        crate::log_detail!(format!(
-            "Analyzer Audit: Deep GIF penetration testing active (structural={structural_count}, \
-             real={real_count}) for {path_display}",
-            path_display = path.display(),
-        ));
-        return Ok(true);
-    }
-
-    Ok(structural_count > 1)
+    Ok(crate::media_meta_utils::gif_has_displayed_motion(path)?)
 }
 
 fn check_webp_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
     let structural_count = crate::image_formats::webp::count_frames_from_bytes(&bytes)?;
     Ok(structural_count > 1)
-}
-
-/// Internal Deep Research: GIF
-/// Validates if GCE markers are consistent with GIF block structure.
-fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
-    if gce_hints <= 1 {
-        return false;
-    }
-
-    // Look for GCE patterns and verify if they are followed by valid block
-    // terminators GCE = [21 F9 04 ... 00]
-    let mut confirmed = 0_i32;
-    let mut i = 0;
-    while i + 7 < bytes.len() {
-        if bytes.get(i..i + 3) == Some(&[0x21, 0xF9, 0x04]) && bytes.get(i + 7) == Some(&0x00) {
-            confirmed += 1_i32;
-        }
-        i += 1;
-    }
-
-    confirmed > 1
 }
 
 /// Public entry for retrying animation duration (e.g. from main when
@@ -3306,6 +3232,20 @@ mod tests {
             try_ffprobe_json(&missing).expect_err("missing ffprobe JSON target must be an error");
 
         assert!(err.to_string().contains("missing.webp"));
+    }
+
+    #[test]
+    fn gif_analyzer_uses_displayed_motion() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("repeated.gif");
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(std::fs::File::create(&path)?);
+            for _ in 0..2 {
+                encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
+            }
+        }
+        assert!(!super::check_gif_animation(&path)?);
+        Ok(())
     }
 
     #[test]

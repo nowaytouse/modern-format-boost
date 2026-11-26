@@ -127,7 +127,8 @@ mod tests {
         let sidecar = base.join("animation.xmp");
         let first = base.join("first.gif");
         let merged = base.join("merged.gif");
-        let raw = [HEADER, GCE, FRAME, GCE, FRAME, b";\0\r\n"].concat();
+        let white = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4c\x01\x00";
+        let raw = [HEADER, GCE, FRAME, GCE, white, b";\0\r\n"].concat();
         fs::write(&source, &raw)?;
         let embed = |src: &Path, dst: &Path, xml: &str| -> anyhow::Result<()> {
             fs::write(&sidecar, xml)?;
@@ -147,6 +148,7 @@ mod tests {
         )?;
         let overlay = packet(r#"xmp:Rating="4" xmp:Label="overlay""#);
         embed(&first, &merged, &overlay)?;
+        assert!(crate::media_meta_utils::gif_has_displayed_motion(&merged)?);
         let merged_bytes = fs::read(&merged)?;
         let mut spans = Vec::new();
         let scan =

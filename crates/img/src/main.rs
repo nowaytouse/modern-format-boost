@@ -29,7 +29,7 @@ use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
 use foundation::fast_img::{
     FinalJxlVerificationTimings, IntegrityResult, PhotosImportCandidate,
     apply_library_assets_to_marker, apply_tier2_library_assets_to_marker,
-    build_fast_img_output_import_candidates, delete_verified_modern_lossy_static_sources_recorded,
+    build_fast_img_output_import_candidates,
     import_media_outputs_with_checkpointed_library_verifier,
     prune_empty_source_dirs_for_tier2_assets, reverify_media_outputs_in_library_with_quarantine,
     safe_delete_jpeg_source_recorded, safe_delete_matching_xmp_sidecar_recorded,
@@ -1443,6 +1443,19 @@ fn fast_static_skip_or_ignore(
             )
         })?;
 
+    if detected_format == DetectedFormat::GIF
+        && foundation::media_meta_utils::gif_has_displayed_motion(input)?
+    {
+        let reason = "Animated GIF stays in VID scope; source retained";
+        let file_size = foundation::io_utils::metadata_with_retry(input)?.len();
+        foundation::progress_mode::image_ignored(input, reason, None);
+        return Ok(Some(conversion_output_ignored(
+            input,
+            reason.to_string(),
+            file_size,
+        )));
+    }
+
     if detected_format_is_video(&detected_format) {
         return match foundation::probe_single_frame_video_still(input)? {
             foundation::SingleFrameVideoStillProbe::Ineligible(reason) => {
@@ -2322,6 +2335,86 @@ mod conversion_result_adapter_tests {
             std::fs::read(collision.join("IMG_0084.MOV"))?,
             b"unrelated motion"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn gif_preflight_routes_motion_away_and_allows_stills() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let still = temp.path().join("still.gif");
+        let motion = temp.path().join("motion.jpg");
+        let repeated = temp.path().join("repeated.gif");
+        {
+            let mut encoder =
+                image::codecs::gif::GifEncoder::new(std::fs::File::create(&repeated)?);
+            for _ in 0..2 {
+                encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
+            }
+        }
+        for (path, animated) in [(&still, false), (&motion, true)] {
+            let mut encoder = image::codecs::gif::GifEncoder::new(std::fs::File::create(path)?);
+            encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
+            if animated {
+                encoder.encode_frame(image::Frame::new(image::RgbaImage::from_pixel(
+                    1,
+                    1,
+                    image::Rgba([255, 0, 0, 255]),
+                )))?;
+            }
+        }
+        let original = std::fs::read(&motion)?;
+        let config = AutoConvertConfig {
+            output_dir: None,
+            base_dir: None,
+            flags: ConfigFlags::empty(),
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+            child_threads: 1,
+            cache: None,
+            tool_preflight: Arc::default(),
+            error_mode: foundation::BatchErrorMode::FailFast,
+        };
+        assert!(fast_static_skip_or_ignore(&still, &config)?.is_none());
+        assert!(fast_static_skip_or_ignore(&repeated, &config)?.is_none());
+        let mut analysis = foundation::image_analyzer::ImageAnalysis {
+            format: "GIF".into(),
+            is_animated: true,
+            ..Default::default()
+        };
+        foundation::media_conversion_gate::reconcile_analysis_animation_flag(
+            &repeated,
+            &mut analysis,
+        );
+        assert!(!analysis.is_animated);
+        foundation::media_conversion_gate::reconcile_analysis_animation_flag(
+            &motion,
+            &mut analysis,
+        );
+        assert!(analysis.is_animated);
+        let broken = temp.path().join("broken.gif");
+        std::fs::write(&broken, b"GIF89a")?;
+        foundation::media_conversion_gate::reconcile_analysis_animation_flag(
+            &broken,
+            &mut analysis,
+        );
+        assert!(analysis.is_animated);
+        assert!(
+            foundation::media_conversion_gate::animation_reject_outcome(&broken, &analysis)
+                .is_some()
+        );
+        assert!(
+            foundation::media_conversion_gate::animation_reject_outcome(&repeated, &analysis)
+                .is_none()
+        );
+        assert!(
+            foundation::media_conversion_gate::animation_reject_outcome(&motion, &analysis)
+                .is_some()
+        );
+        assert!(
+            fast_static_skip_or_ignore(&motion, &config)?
+                .expect("motion is ignored")
+                .ignored
+        );
+        assert_eq!(std::fs::read(&motion)?, original);
         Ok(())
     }
 
@@ -4954,7 +5047,15 @@ fn fast_img_container_is_static(path: &Path, format: FormatKind) -> anyhow::Resu
         FormatKind::Heic => foundation::image_detection::DetectedFormat::HEIC,
         FormatKind::Heif => foundation::image_detection::DetectedFormat::HEIF,
         FormatKind::Avif => foundation::image_detection::DetectedFormat::AVIF,
-        FormatKind::Gif => foundation::image_detection::DetectedFormat::GIF,
+        FormatKind::Gif => {
+            return foundation::media_meta_utils::gif_has_displayed_motion(path)
+                .map(|animated| !animated)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "Fast IMG could not verify GIF static-container metadata: {error}"
+                    )
+                });
+        }
         FormatKind::Bmp => foundation::image_detection::DetectedFormat::BMP,
         FormatKind::Jxl => foundation::image_detection::DetectedFormat::JXL,
         FormatKind::Tiff => foundation::image_detection::DetectedFormat::TIFF,
@@ -13646,21 +13747,29 @@ fn fast_img_deliver_modern_lossy_static_tier(
         import_error_count: 0,
         photos_library_path: marker.photos_library_path.clone(),
     };
+    let mode = if marker.strategy == "gif" {
+        foundation::fast_img::Tier2CleanupMode::AnimatedGif
+    } else {
+        foundation::fast_img::Tier2CleanupMode::Original
+    };
     let (deleted, already_deleted) = if complete_library_handle.imported_assets.is_empty() {
         Ok((0, 0))
     } else if marker.tier2_cleanup_journal {
         let mut journal = foundation::fast_img_store::Tier2CleanupJournal::open(marker)?;
-        foundation::fast_img::delete_verified_modern_lossy_static_sources_observed(
+        foundation::fast_img::delete_verified_tier2_sources(
             src_dir,
             &complete_library_handle,
             removed_files,
-            &mut journal,
+            Some(&mut journal),
+            mode,
         )
     } else {
-        delete_verified_modern_lossy_static_sources_recorded(
+        foundation::fast_img::delete_verified_tier2_sources(
             src_dir,
             &complete_library_handle,
             removed_files,
+            None,
+            mode,
         )
     }
     .map_err(|err| anyhow::anyhow!("fast-img modern lossy source delete gate failed: {err}"))?;
@@ -16354,7 +16463,16 @@ mod fast_img_hardening_tests {
         std::fs::create_dir(&source)?;
         let first = source.join("first.gif");
         let sibling = source.join("second.gif");
-        image::RgbImage::new(2, 1).save(&first)?;
+        std::fs::write(
+            &first,
+            [
+                b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff".as_slice(),
+                b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00",
+                b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4c\x01\x00",
+                b";",
+            ]
+            .concat(),
+        )?;
         std::fs::copy(&first, &sibling)?;
         let hash = calculate_blake3_hash(&first)?;
         let output =
@@ -16418,8 +16536,12 @@ mod fast_img_hardening_tests {
         let working = super::resolve_fresh_working_copy_dir_for_delivery(&source, true)?;
         super::prepare_photos_working_copy_parent(&source, &working)?;
         std::fs::create_dir(&working)?;
+        let header = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff";
+        let frame = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00";
+        let frame_2 = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4c\x01\x00";
+        let animated = [header.as_slice(), frame, frame_2, b";"].concat();
         for name in ["already-1.gif", "already-2.gif"] {
-            image::RgbImage::new(2, 1).save(source.join(name))?;
+            std::fs::write(source.join(name), &animated)?;
         }
         let scan = |scope: Option<&foundation::fast_img_store::FastImgAdmissionPlan>| {
             super::fast_vid_gif::scan_originals(
@@ -16450,8 +16572,7 @@ mod fast_img_hardening_tests {
         let marker = super::read_marker(&marker.working_copy)?;
         let saved =
             super::fast_vid_gif::pending_receipt_scope(&marker)?.context("saved GIF plan")?;
-        // Complete 1-pixel LZW payload with a sub-block terminator and GIF trailer, no explicit end code.
-        let legacy = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x01\x04\x00;";
+        let legacy = &animated;
         for index in 0..25 {
             std::fs::write(source.join(format!("legacy-{index}.gif")), legacy)?;
         }
@@ -23000,7 +23121,11 @@ esac
             let mut encoder =
                 image::codecs::gif::GifEncoder::new(std::fs::File::create(&animated_gif)?);
             encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
-            encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
+            encoder.encode_frame(image::Frame::new(image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([255, 0, 0, 255]),
+            )))?;
         }
         std::fs::write(&corrupt_gif, b"GIF89a")?;
 

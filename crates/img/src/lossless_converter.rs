@@ -7210,6 +7210,13 @@ fn prepare_input_for_cjxl(
         literal_ext
     };
 
+    if ext == foundation::constants::EXT_GIF
+        && foundation::media_meta_utils::gif_has_displayed_motion(input)?
+    {
+        return Err(ImgQualityError::ConversionError(
+            "Animated GIF stays in VID scope; source retained".into(),
+        ));
+    }
     if ext == foundation::constants::EXT_AVIF {
         ensure_avif_jxl_metadata_preservable(input)?;
     }
@@ -9170,6 +9177,29 @@ exit 1
     #[test]
     fn test_is_not_high_quality_480p() {
         assert!(!is_high_quality_animated(854, 480));
+    }
+
+    #[test]
+    fn animated_gif_cannot_reach_static_jxl_preprocessing() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let input = dir.path().join("animation.jpg");
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(std::fs::File::create(&input)?);
+            encoder.encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))?;
+            encoder.encode_frame(image::Frame::new(image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([255, 0, 0, 255]),
+            )))?;
+        }
+        let error = prepare_input_for_cjxl(&input, &ConvertOptions::default(), None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Animated GIF stays in VID scope")
+        );
+        assert!(input.exists());
+        Ok(())
     }
 
     #[test]

@@ -1564,6 +1564,14 @@ fn reverify_modern_lossy_static_photos_custody_excluding(
     library_handle: &LibraryHandle,
     deletion_targets: &BTreeSet<PathBuf>,
 ) -> Result<()> {
+    reverify_tier2_photos_custody_excluding(library_handle, deletion_targets, false)
+}
+
+fn reverify_tier2_photos_custody_excluding(
+    library_handle: &LibraryHandle,
+    deletion_targets: &BTreeSet<PathBuf>,
+    require_animated_gif: bool,
+) -> Result<()> {
     use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState, LogPhase};
     crate::ui::progress::emit_log_phase(LogPhase::Verification);
     let activity = GateActivity::new(GateActivityKind::PhotosCustody);
@@ -1576,6 +1584,7 @@ fn reverify_modern_lossy_static_photos_custody_excluding(
         }
     };
     reverify_modern_lossy_static_photos_custody_with(
+        require_animated_gif,
         library_handle,
         &mut |uuids| {
             let probes = query_selected_photos_asset_probes(uuids, selected.as_deref())?;
@@ -1691,6 +1700,7 @@ pub(crate) fn check_absent_tier2_source_xmp(source: &Path) -> Result<()> {
 }
 
 fn reverify_modern_lossy_static_photos_custody_with(
+    require_animated_gif: bool,
     library_handle: &LibraryHandle,
     query_assets: &mut impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     is_quarantined: &mut impl FnMut(&LibraryAssetRecord, &Path) -> Result<bool>,
@@ -1798,19 +1808,30 @@ fn reverify_modern_lossy_static_photos_custody_with(
                     probe.path.display()
                 )));
             }
-            let library_blake3 =
-                crate::common_utils::calculate_blake3_hash(&probe.path).map_err(|err| {
-                    ImgQualityError::AnalysisError(format!(
-                        "tier-2 delete gate Photos BLAKE3 failed for {}: {err}",
-                        probe.path.display()
-                    ))
-                })?;
             let expected_library_blake3 = crate::fast_img_store::tier2_library_hash(asset)?;
-            if library_blake3 != expected_library_blake3 {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 delete gate Photos BLAKE3 drift for {} (uuid={uuid}): expected={expected_library_blake3} library={library_blake3}",
-                    asset.rel_path
-                )));
+            if require_animated_gif {
+                verify_animated_gif_source(&probe.path, expected_library_blake3).map_err(
+                    |error| {
+                        ImgQualityError::AnalysisError(format!(
+                            "GIF Photos original is not the verified animation for {}: {error}",
+                            asset.rel_path
+                        ))
+                    },
+                )?;
+            } else {
+                let library_blake3 = crate::common_utils::calculate_blake3_hash(&probe.path)
+                    .map_err(|err| {
+                        ImgQualityError::AnalysisError(format!(
+                            "tier-2 delete gate Photos BLAKE3 failed for {}: {err}",
+                            probe.path.display()
+                        ))
+                    })?;
+                if library_blake3 != expected_library_blake3 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "tier-2 delete gate Photos BLAKE3 drift for {} (uuid={uuid}): expected={expected_library_blake3} library={library_blake3}",
+                        asset.rel_path
+                    )));
+                }
             }
             if is_quarantined(asset, &probe.path)? {
                 return Err(ImgQualityError::AnalysisError(
@@ -2047,6 +2068,38 @@ pub fn delete_verified_modern_lossy_static_sources_observed(
         removed_files,
         Some(observer),
         reverify_modern_lossy_static_photos_custody_excluding,
+    )
+}
+
+/// Select the original-format custody proof required before cleanup.
+#[derive(Clone, Copy)]
+pub enum Tier2CleanupMode {
+    /// Preserve the existing original-format custody policy.
+    Original,
+    /// Require the hash-bound Photos original to be an animated GIF.
+    AnimatedGif,
+}
+
+/// Clean up verified originals using the selected custody policy and optional journal.
+pub fn delete_verified_tier2_sources(
+    src_dir: &Path,
+    library_handle: &LibraryHandle,
+    removed_files: &mut Vec<PathBuf>,
+    observer: Option<&mut dyn Tier2CleanupObserver>,
+    mode: Tier2CleanupMode,
+) -> Result<(usize, usize)> {
+    delete_verified_modern_lossy_static_sources_with(
+        src_dir,
+        library_handle,
+        removed_files,
+        observer,
+        |handle, targets| {
+            reverify_tier2_photos_custody_excluding(
+                handle,
+                targets,
+                matches!(mode, Tier2CleanupMode::AnimatedGif),
+            )
+        },
     )
 }
 
@@ -3674,6 +3727,7 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                     &source_hash_before,
                     &xmp_hash_before,
                 )?;
+                require_animated_gif(&staged_path)?;
             } else {
                 stage_original_with_xmp(&candidate, &staged_path, &xmp_path, &source_hash_before)?;
             }
@@ -5910,23 +5964,41 @@ fn gif_transport_name(
     Ok(name)
 }
 
+fn verify_animated_gif_source(path: &Path, expected_hash: &str) -> std::io::Result<()> {
+    use std::io::Seek as _;
+    let mut file = crate::io_utils::open_regular_nofollow(path)?;
+    if crate::media_meta_utils::gif_motion_reader(&mut file)?
+        != crate::media_meta_utils::GifMotion::Animated
+    {
+        return Err(std::io::Error::other("expected an animated GIF original"));
+    }
+    file.rewind()?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(&mut file)?;
+    if hasher.finalize().to_hex().as_str() != expected_hash {
+        return Err(std::io::Error::other(
+            "GIF original changed after admission",
+        ));
+    }
+    Ok(())
+}
+
+fn require_animated_gif(staged: &Path) -> std::io::Result<()> {
+    if crate::media_meta_utils::gif_has_displayed_motion(staged)? {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("expected an animated GIF original"))
+    }
+}
+
 fn gif_original_transport(
     candidate: &PhotosImportCandidate,
     staging: &Path,
     index: usize,
     corrected_name: Option<&str>,
 ) -> std::io::Result<PathBuf> {
-    if !crate::media_meta_utils::is_verified_gif(&candidate.path)? {
-        return Err(std::io::Error::other("expected a complete GIF original"));
-    }
-    if candidate
-        .path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
-    {
-        return Ok(candidate.path.clone());
-    }
-    // Two different originals may have the same stem in one album.
+    // Photos can read later in the batch. Even a correctly named GIF needs a private,
+    // hash-checked copy so a replacement at the source cannot enter the import.
     let parent = staging.join(index.to_string());
     #[cfg(unix)]
     {
@@ -5962,6 +6034,7 @@ fn gif_original_transport(
     .map_err(std::io::Error::other)?;
     #[cfg(not(target_os = "macos"))]
     copy_photos_transport(&candidate.path, &staged, &candidate.blake3)?;
+    require_animated_gif(&staged)?;
     Ok(staged)
 }
 
@@ -10609,6 +10682,65 @@ mod tests {
     }
 
     #[test]
+    fn gif_motion_cleanup_proof_rejects_static_and_replaced_sources() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let source = dir.path().join("source.gif");
+        let still = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
+        std::fs::write(&source, still)?;
+        assert!(
+            verify_animated_gif_source(&source, blake3::hash(still).to_hex().as_str()).is_err()
+        );
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut bytes, 1, 1, &[0, 0, 0, 255, 255, 255])?;
+            for pixel in 0..2 {
+                encoder.write_frame(&gif::Frame {
+                    width: 1,
+                    height: 1,
+                    buffer: vec![pixel].into(),
+                    ..Default::default()
+                })?;
+            }
+        }
+        std::fs::write(&source, &bytes)?;
+        let hash = blake3::hash(&bytes).to_hex().to_string();
+        verify_animated_gif_source(&source, &hash)?;
+        let probe = FastImgLibraryAssetProbe {
+            uuid: "UUID".into(),
+            path: source.clone(),
+            ismissing: false,
+            iscloudasset: false,
+            incloud: Some(false),
+        };
+        let verify = |gif_only, receipt_hash: &str| {
+            let handle = LibraryHandle {
+                imported_assets: vec![LibraryAssetRecord {
+                    rel_path: "source.gif".into(),
+                    blake3: receipt_hash.into(),
+                    photos_uuid: Some("UUID".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            reverify_modern_lossy_static_photos_custody_with(
+                gif_only,
+                &handle,
+                &mut |_| Ok(vec![probe.clone()]),
+                &mut |_, _| Ok(false),
+                &mut |_, _, _, _| (),
+            )
+        };
+        verify(true, &hash)?;
+        assert!(verify(true, blake3::hash(still).to_hex().as_str()).is_err());
+        std::fs::write(&source, still)?;
+        assert!(verify_animated_gif_source(&source, &hash).is_err());
+        let still_hash = blake3::hash(still).to_hex().to_string();
+        assert!(verify(true, &still_hash).is_err());
+        verify(false, &still_hash)?;
+        Ok(())
+    }
+
+    #[test]
     fn gif_transport_keeps_exact_bytes_and_source_key_for_a_misnamed_original() -> anyhow::Result<()>
     {
         let dir = tempfile::tempdir()?;
@@ -10649,10 +10781,10 @@ mod tests {
         assert_eq!(legacy.file_name().unwrap(), "animation.mp4.gif");
         assert_eq!(std::fs::read(&source)?, std::fs::read(&transport)?);
         candidate.path = transport.clone();
-        assert_eq!(
-            gif_original_transport(&candidate, staging.path(), 1, None)?,
-            transport
-        );
+        let named_copy = gif_original_transport(&candidate, staging.path(), 1, None)?;
+        assert_ne!(named_copy, transport);
+        assert_eq!(named_copy.file_name(), transport.file_name());
+        assert_eq!(std::fs::read(&named_copy)?, std::fs::read(&transport)?);
         let mut marker =
             WorkingCopyMarker::new(dir.path().to_owned(), staging.path().to_owned(), 1);
         marker.strategy = "gif".into();
@@ -10741,7 +10873,7 @@ mod tests {
 
         let dir = tempfile::tempdir()?;
         let source = dir.path().join("untitled");
-        let bytes = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;\0\n";
+        let bytes = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4c\x01\x00;\0\n";
         std::fs::write(&source, bytes)?;
         let mark = b"0081;61ee20ff;SyntheticGIF;";
         xattr::set(&source, ATTRIBUTE, mark)?;
@@ -12028,6 +12160,7 @@ mod tests {
         probes: &[FastImgLibraryAssetProbe],
     ) -> Result<()> {
         reverify_modern_lossy_static_photos_custody_with(
+            false,
             handle,
             &mut |ids| {
                 let found: Vec<_> = probes
@@ -12301,6 +12434,7 @@ mod tests {
         };
         let reverify = |receipt: &LibraryAssetRecord, library: Option<&Path>| {
             reverify_modern_lossy_static_photos_custody_with(
+                false,
                 &LibraryHandle {
                     imported_assets: vec![receipt.clone()],
                     photos_library_path: library.map(Path::to_owned),
@@ -12518,6 +12652,7 @@ mod tests {
                 None,
                 |batch, targets| {
                     reverify_modern_lossy_static_photos_custody_with(
+                        false,
                         batch,
                         &mut |ids| {
                             assert_eq!(ids, ["UUID-A"]);
@@ -12854,6 +12989,7 @@ mod tests {
             }
             let mut events = Vec::new();
             let result = reverify_modern_lossy_static_photos_custody_with(
+                false,
                 &LibraryHandle {
                     imported_assets: assets,
                     ..Default::default()
@@ -12951,6 +13087,7 @@ mod tests {
             let mut calls = 0;
             let mut events = Vec::new();
             let result = reverify_modern_lossy_static_photos_custody_with(
+                false,
                 &LibraryHandle {
                     imported_assets: assets.to_vec(),
                     ..Default::default()
@@ -12993,6 +13130,7 @@ mod tests {
         }
         let mut events = Vec::new();
         reverify_modern_lossy_static_photos_custody_with(
+            false,
             &LibraryHandle::default(),
             &mut |_| panic!("empty inventory must not query Photos"),
             &mut |_, _| panic!("empty inventory must not read quarantine state"),

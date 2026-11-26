@@ -11,6 +11,7 @@ const MAX_MARKER_BYTES: usize = 64 * 1024;
 pub enum IgnoredReason {
     LivePhotoPairMember,
     AnimatedImageContainer,
+    StaticGif,
     OutsideCurrentPolicyScope,
     OutsideSavedGifTask,
     ModernTierNotAdmitted,
@@ -22,6 +23,7 @@ impl IgnoredReason {
             Self::LivePhotoPairMember => "live_photo_pair_member",
             Self::AnimatedImageContainer => "animated_image_container",
             Self::OutsideCurrentPolicyScope => "outside_current_policy_scope",
+            Self::StaticGif => "static_gif",
             Self::OutsideSavedGifTask => "outside_saved_gif_task",
             Self::ModernTierNotAdmitted => "modern_tier_not_admitted_for_original_delivery",
         }
@@ -39,6 +41,7 @@ impl IgnoredReason {
             Self::OutsideCurrentPolicyScope => {
                 "Source format is outside the selected processing strategy"
             }
+            Self::StaticGif => "GIF has no displayed motion; use IMG",
             Self::OutsideSavedGifTask => {
                 "File retained for a new task; outside the saved GIF Photos delivery"
             }

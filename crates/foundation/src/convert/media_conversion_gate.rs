@@ -7827,6 +7827,18 @@ pub fn reconcile_analysis_animation_flag(path: &Path, analysis: &mut ImageAnalys
         return;
     };
 
+    if matches!(detected_format, crate::image_detection::DetectedFormat::GIF) {
+        match crate::media_meta_utils::gif_has_displayed_motion(path) {
+            Ok(animated) => analysis.is_animated = animated,
+            Err(err) => probe_layer_audit(
+                "analysis_animation_detect",
+                path,
+                format!("GIF motion verification failed; preserving analyzer flag: {err}"),
+            ),
+        }
+        return;
+    }
+
     match crate::image_detection::detect_animation(path, &detected_format) {
         Ok((detected_animated, frame_count, _)) => {
             let confirmed_static =
@@ -7973,6 +7985,20 @@ pub fn animation_reject_outcome(
     }
 
     let detected_format = detected_format_for_animation(&analysis.format)?;
+
+    if matches!(detected_format, crate::image_detection::DetectedFormat::GIF) {
+        return match crate::media_meta_utils::gif_has_displayed_motion(input) {
+            Ok(false) => None,
+            Ok(true) => Some(ImgIgnoreOutcome {
+                reason: format!("Animated GIF verified — {IMG_STATIC_ONLY}"),
+                class: IMG_ANIMATED_HANDOFF,
+            }),
+            Err(err) => Some(ImgIgnoreOutcome {
+                reason: format!("GIF animation verification failed ({err}) — {IMG_STATIC_ONLY}"),
+                class: IMG_ANIMATION_AMBIGUITY,
+            }),
+        };
+    }
 
     match crate::image_detection::detect_animation(input, &detected_format) {
         Ok((true, frame_count, _)) => Some(ImgIgnoreOutcome {
