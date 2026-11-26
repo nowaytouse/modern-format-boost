@@ -10,9 +10,11 @@ use std::path::Path;
 /// # Errors
 /// Returns an error for unreadable files and for incomplete or undecodable GIF data.
 pub fn is_verified_gif(path: &Path) -> std::io::Result<bool> {
-    use std::io::{self, BufRead, Read};
+    verify_gif_reader(crate::io_utils::open_regular_nofollow(path)?)
+}
 
-    let mut file = crate::io_utils::open_regular_nofollow(path)?;
+pub(crate) fn verify_gif_reader(mut file: impl std::io::Read) -> std::io::Result<bool> {
+    use std::io::{self, BufRead, Read};
     let mut signature = [0; 6];
     if let Err(error) = file.read_exact(&mut signature) {
         return if error.kind() == io::ErrorKind::UnexpectedEof {
@@ -26,7 +28,10 @@ pub fn is_verified_gif(path: &Path) -> std::io::Result<bool> {
     }
     let mut options = gif::DecodeOptions::new();
     options.check_frame_consistency(true);
-    options.check_lzw_end_code(true);
+    // Some encoders end the LZW stream with the GIF sub-block terminator alone.
+    // read_next_frame still requires every pixel, and fill_buffer below drains the
+    // final codes so an overlong raster cannot pass as a complete frame.
+    options.check_lzw_end_code(false);
     let mut decoder = options
         .read_info(signature.as_slice().chain(file))
         .map_err(io::Error::other)?;
@@ -36,6 +41,15 @@ pub fn is_verified_gif(path: &Path) -> std::io::Result<bool> {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "empty GIF frame",
+            ));
+        }
+        if decoder
+            .fill_buffer(&mut [0u8; 1])
+            .map_err(io::Error::other)?
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "GIF frame contains more pixels than its declared dimensions",
             ));
         }
         saw_frame = true;
@@ -439,6 +453,45 @@ mod tests {
         let fake = dir.path().join("video.gif");
         fs::write(&fake, b"\0\0\0\x18ftypisom")?;
         assert!(!is_verified_gif(&fake)?);
+        Ok(())
+    }
+
+    #[test]
+    fn verified_gif_accepts_legacy_lzw_termination_only_for_complete_frames() -> anyhow::Result<()>
+    {
+        let dir = TempDir::new()?;
+        let path = dir.path().join("animation.gif");
+        let screen = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff";
+        let frame = b",\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02";
+        let without_end_code = b"\x01\x04\x00"; // clear + one pixel + sub-block terminator
+        let with_end_code = b"\x01\x44\x01\x01\x00"; // end code split across sub-blocks
+        let animation = [
+            screen.as_slice(),
+            frame,
+            without_end_code,
+            frame,
+            with_end_code,
+            b";",
+        ]
+        .concat();
+        fs::write(&path, &animation)?;
+        assert!(is_verified_gif(&path)?);
+        for invalid in [
+            [
+                screen.as_slice(),
+                frame,
+                without_end_code,
+                frame,
+                b"\x01\x2c\x00;",
+            ]
+            .concat(), // no pixels in last frame
+            [screen.as_slice(), frame, b"\x02\x04\x01\x00;"].concat(), // extra decoded pixel
+            [screen.as_slice(), frame, b"\x01\x04;"].concat(), // missing sub-block terminator
+            animation[..animation.len() - 1].to_vec(),         // missing GIF trailer
+        ] {
+            fs::write(&path, invalid)?;
+            assert!(is_verified_gif(&path).is_err());
+        }
         Ok(())
     }
 

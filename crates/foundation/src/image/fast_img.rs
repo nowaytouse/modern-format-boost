@@ -9080,7 +9080,17 @@ fn tier2_import_quarantined(
         )?,
         None => is_quarantined(original)?,
     };
-    Ok(submitted_marked || original_marked)
+    let blocked = submitted_marked || original_marked;
+    if blocked {
+        tracing::info!(
+            target: "fast_img_delete",
+            submitted_copy_blocked = submitted_marked,
+            photos_original_blocked = original_marked,
+            checked_managed_provenance = direct_library.is_some() && !submitted_marked,
+            "Tier-2 import quarantine observation"
+        );
+    }
+    Ok(blocked)
 }
 
 #[cfg(all(target_os = "macos", test))]
@@ -9182,8 +9192,14 @@ fn inspect_managed_photos_quarantine(
                 }),
             ManagedOriginalKind::Tier2Original => {
                 let format = super::format_detect::detect_open_format(path, file)?;
-                super::modern_lossy_static::is_modern_static_image_format(format)
-                    && format.extension_matches_path(path)
+                if !format.extension_matches_path(path) {
+                    false
+                } else if format == super::format_detect::FormatKind::Gif {
+                    file.rewind()?;
+                    crate::media_meta_utils::verify_gif_reader(&mut *file)?
+                } else {
+                    super::modern_lossy_static::is_modern_static_image_format(format)
+                }
             }
         };
         if !supported_format {
@@ -11305,6 +11321,102 @@ mod tests {
         });
         assert!(result.is_err());
         assert!(path_has_quarantine_xattr(&moved)?);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn gif_quarantine_resume_verifies_managed_original_without_resubmission() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let src = root.join("source");
+        let library = root.join("Synthetic.photoslibrary");
+        let originals = library.join("originals/A");
+        std::fs::create_dir(&src)?;
+        std::fs::create_dir_all(&originals)?;
+        let mut marker = WorkingCopyMarker::new(src.clone(), root.join("work"), 0);
+        marker.strategy = "gif".into();
+        marker.photos_library_path = Some(library.clone());
+
+        let key = "com.apple.quarantine";
+        let photos_mark = b"0082;6af525b4;Photos;";
+        let other_mark = b"0083;6af525b4;Browser;download";
+        let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x01\x04\x00;";
+        let mut probes = Vec::new();
+        for (name, managed, bytes, mark) in [
+            (
+                "good.gif",
+                originals.join("good.gif"),
+                gif.as_slice(),
+                photos_mark.as_slice(),
+            ),
+            (
+                "browser.gif",
+                originals.join("browser.gif"),
+                gif.as_slice(),
+                other_mark.as_slice(),
+            ),
+            (
+                "outside.gif",
+                root.join("outside.gif"),
+                gif.as_slice(),
+                photos_mark.as_slice(),
+            ),
+            (
+                "fake.gif",
+                originals.join("fake.gif"),
+                b"GIF89a".as_slice(),
+                photos_mark.as_slice(),
+            ),
+        ] {
+            std::fs::write(src.join(name), bytes)?;
+            std::fs::write(&managed, bytes)?;
+            xattr::set(&managed, key, mark)?;
+            marker.tier2_imported_assets.push(LibraryAssetRecord {
+                rel_path: name.into(),
+                blake3: blake3::hash(bytes).to_hex().to_string(),
+                photos_uuid: Some(name.into()),
+                quarantined: true,
+                ..Default::default()
+            });
+            probes.push(FastImgLibraryAssetProbe {
+                path: managed,
+                uuid: name.into(),
+                ismissing: false,
+                iscloudasset: true,
+                incloud: Some(true),
+            });
+        }
+        let refreshed = refresh_tier2_quarantine_receipts_with(&mut marker, &library, |ids| {
+            assert_eq!(ids.len(), probes.len());
+            Ok(probes)
+        })?;
+        assert_eq!(refreshed, 1);
+        let resume = original_photos_checkpoint_plan(
+            &marker,
+            &[PhotosImportCandidate {
+                path: src.join("good.gif"),
+                rel_path: "good.gif".into(),
+                album_name: "Synthetic".into(),
+                blake3: blake3::hash(gif).to_hex().to_string(),
+            }],
+        )?;
+        assert!(resume.pending_entries.is_empty());
+        for asset in &marker.tier2_imported_assets {
+            assert_eq!(asset.quarantined, asset.rel_path != "good.gif");
+        }
+        assert_eq!(
+            read_quarantine_xattr(&originals.join("good.gif"))?.as_deref(),
+            Some(photos_mark.as_slice())
+        );
+        assert!(!tier2_import_quarantined(
+            &src.join("good.gif"),
+            &originals.join("good.gif"),
+            &marker.tier2_imported_assets[0].blake3,
+            Some(&library),
+            &mut strict_photos_quarantine
+        )?);
         Ok(())
     }
 
