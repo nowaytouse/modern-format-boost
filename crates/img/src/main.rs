@@ -4111,7 +4111,11 @@ fn fast_img_processing_contract(
         _ => anyhow::bail!("unsupported fast-img strategy for processing contract: {strategy}"),
     };
     let contract = FastImgProcessingContract {
-        schema: if strategy == "jxl" { 2 } else { 1 },
+        schema: if matches!(strategy, "jxl" | "gif") {
+            2
+        } else {
+            1
+        },
         tool_policy: config.tools.policy,
         fallback_policy: config.img.fallback_policy,
         encoding,
@@ -14702,6 +14706,13 @@ mod fast_img_hardening_tests {
         let config = RuntimeConfig::default();
         let jxl = super::fast_img_processing_contract(&config, "jxl", false, false)?;
         let avif = super::fast_img_processing_contract(&config, "avif", false, false)?;
+        let gif = super::fast_img_processing_contract(&config, "gif", false, false)?;
+        assert_eq!(gif.schema, 2);
+        let mut legacy_gif = gif.clone();
+        legacy_gif.schema = 1;
+        legacy_gif.validate("gif").map_err(anyhow::Error::msg)?;
+        assert!(legacy_gif.matches_current_settings(&gif));
+        assert!(!gif.matches_current_settings(&legacy_gif));
         let mut saved = serde_json::to_value(&jxl)?;
         saved["schema"] = serde_json::json!(1);
         saved["encoding"]

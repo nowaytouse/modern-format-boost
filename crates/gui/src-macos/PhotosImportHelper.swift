@@ -2,6 +2,8 @@
 import Foundation
 import Photos
 import Darwin
+import ImageIO
+import UniformTypeIdentifiers
 
 private struct ImportResource: Codable {
     let path: String
@@ -19,6 +21,31 @@ private struct ImportResource: Codable {
             default: throw failure("Unsupported resource composition: \(kind)")
             }
         }
+    }
+
+    func creationOptions() throws -> PHAssetResourceCreationOptions {
+        let options = PHAssetResourceCreationOptions()
+        options.shouldMoveFile = false
+        options.originalFilename = originalFilename
+        let file = URL(fileURLWithPath: path)
+        let gifFile = file.pathExtension.lowercased() == "gif"
+        let gifName = (originalFilename as NSString).pathExtension.lowercased() == "gif"
+        if gifFile || gifName {
+            guard gifFile && gifName, kind == "photo" || kind == "alternatePhoto",
+                  let image = CGImageSourceCreateWithURL(file as CFURL, nil),
+                  CGImageSourceGetType(image) as String? == UTType.gif.identifier,
+                  CGImageSourceGetCount(image) > 0 else {
+                throw failure("GIF resource name, image data and Photos resource type must agree")
+            }
+            #if compiler(>=6.2)
+            if #available(macOS 26.0, *) {
+                options.contentType = .gif
+                return options
+            }
+            #endif
+            options.uniformTypeIdentifier = UTType.gif.identifier
+        }
+        return options
     }
 }
 
@@ -207,6 +234,29 @@ private func testAlbumTargets() throws {
     }
 }
 
+private func testGIFResource() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                            attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.gif")
+    // Two synthetic 1x1 frames with distinct pixel values.
+    let data = Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///yH5BAAKAAAALAAAAAABAAEAAAICRAEAIfkEAAoAAAAsAAAAAAEAAQAAAgJMAQA7")!
+    try data.write(to: url)
+    let gif = ImportResource(path: url.path, kind: "photo", originalFilename: "clip.gif", blake3: "")
+    let options = try gif.creationOptions()
+    guard try gif.photoType == .photo, options.originalFilename == "clip.gif",
+          options.uniformTypeIdentifier == UTType.gif.identifier,
+          let image = CGImageSourceCreateWithURL(url as CFURL, nil), CGImageSourceGetCount(image) == 2,
+          CGImageSourceCreateImageAtIndex(image, 1, nil) != nil else {
+        throw failure("Synthetic animated GIF was not prepared as a GIF photo")
+    }
+    let wrongName = ImportResource(path: url.path, kind: "photo", originalFilename: "clip.mp4", blake3: "")
+    guard (try? wrongName.creationOptions()) == nil else { throw failure("GIF accepted a video filename") }
+    try Data("not a GIF".utf8).write(to: url)
+    guard (try? gif.creationOptions()) == nil else { throw failure("GIF type assigned to invalid data") }
+}
+
 private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
     guard let assets = request.assets, !assets.isEmpty, assets.count <= 1000,
           Set(assets.map(\.entryID)).count == assets.count,
@@ -214,7 +264,7 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
         throw failure("Import requires 1...1000 unique task entries and a durable journal")
     }
     // Validate all local inputs before creating any PhotoKit change request.
-    for asset in assets {
+    let preparedOptions = try assets.map { asset in
         guard !asset.resources.isEmpty, asset.resources.count <= 4 else {
             throw failure("Asset requires 1...4 explicit original resources")
         }
@@ -223,7 +273,7 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
               kinds == ["video"] || (kinds.contains("photo") && !kinds.contains("video")) else {
             throw failure("Ambiguous or incomplete original resource composition")
         }
-        for resource in asset.resources {
+        return try asset.resources.map { resource in
             _ = try resource.photoType
             guard resource.path.hasPrefix("/"), !resource.originalFilename.isEmpty,
                   resource.blake3.utf8.count == 64,
@@ -231,6 +281,7 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
                   try FileManager.default.attributesOfItem(atPath: resource.path)[.type] as? FileAttributeType == .typeRegular else {
                 throw failure("Invalid file-backed original resource")
             }
+            return try resource.creationOptions()
         }
     }
     try verifyWitness(request.witnessIdentifiers ?? [])
@@ -253,12 +304,9 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
                 albumChanges[id] = change
             }
             var albumAssets: [String: [PHObjectPlaceholder]] = [:]
-            for asset in assets {
+            for (asset, resourceOptions) in zip(assets, preparedOptions) {
                 let creation = PHAssetCreationRequest.forAsset()
-                for resource in asset.resources {
-                    let options = PHAssetResourceCreationOptions()
-                    options.shouldMoveFile = false
-                    options.originalFilename = resource.originalFilename
+                for (resource, options) in zip(asset.resources, resourceOptions) {
                     do {
                         creation.addResource(with: try resource.photoType, fileURL: URL(fileURLWithPath: resource.path), options: options)
                     } catch {
@@ -312,6 +360,7 @@ private struct PhotosImportHelper {
         if Array(args.dropFirst()) == ["--self-test"] {
             do {
                 try testAlbumTargets()
+                try testGIFResource()
             }
             catch { fputs("\(error.localizedDescription)\n", stderr); Darwin.exit(1) }
             return

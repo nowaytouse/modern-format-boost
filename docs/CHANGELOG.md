@@ -28,6 +28,9 @@ areas of change are:
 - Fast VID now imports verified GIF87a and GIF89a originals into Apple Photos
   with the shared original-file receipts, resume checks and verified cleanup.
   This replaces the previous Fast GIF conversion modes and their CLI options.
+- New imports give verified GIFs a corrected filename in Photos, including
+  animated GIFs received with a video extension. PhotoKit receives an explicit
+  GIF content type. The local source name remains available for verification and resume.
 - Fast VID shares Fast IMG's **Import into Photos** checkbox and remembers its
   setting separately. With import off, it checks GIFs in place and retains the
   originals. A completed local check with damaged GIFs reports the individual

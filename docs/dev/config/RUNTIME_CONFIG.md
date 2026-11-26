@@ -209,8 +209,11 @@ Video encoder settings apply to standard `vid run` processing.
 `vid fast-vid INPUT` checks GIF frames and retains the files in place.
 `vid fast-vid --shortest-path INPUT` selects Apple Photos delivery and
 uses the shared Photos checkpoint and original-resource verification. This
-is the GUI's **Import into Photos** checkbox. A GIF with a missing or
-misleading extension receives a private transport filename ending in `.gif`.
+is the GUI's **Import into Photos** checkbox. For a verified GIF, a new task
+replaces a misleading extension on the private import copy (`clip.mp4` becomes
+`clip.gif`) or adds a missing extension. PhotoKit receives a GIF photo resource;
+AppleScript imports the same corrected filename. Existing tasks keep their saved
+naming rules so interrupted submissions can be reconciled.
 Its receipt retains the selected source's relative path. For a marked GIF,
 Fast VID verifies the source mark and reads the complete managed Photos original
 at its saved resource ID. A receipt stores the digest of the inherited mark and,

@@ -3450,6 +3450,26 @@ fn import_modern_lossy_static_tier_with_checkpoint(
         .map(crate::fast_img_store::read_admission_plan)
         .transpose()?
         .flatten();
+    let gif_names = if gif_originals
+        && checkpoint
+            .as_deref()
+            .and_then(|marker| marker.processing_contract.as_ref())
+            .is_some_and(|contract| contract.schema == 2)
+    {
+        // Use the complete saved inventory so that removing a sibling cannot rename a pending import.
+        let sources = admissions.as_ref().map_or_else(
+            || {
+                base_candidates
+                    .iter()
+                    .map(|candidate| candidate.rel_path.as_str())
+                    .collect()
+            },
+            |plan| plan.keys().map(String::as_str).collect(),
+        );
+        corrected_gif_import_names(src_dir, sources)?
+    } else {
+        BTreeMap::new()
+    };
 
     for (index, mut candidate) in base_candidates.into_iter().enumerate() {
         let relative = crate::pipeline::verification::fast_img_relative_key(
@@ -3525,7 +3545,14 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                         "GIF original has an external XMP sidecar",
                     ));
                 }
-                gif_original_transport(&candidate, staging.path(), index)
+                gif_original_transport(
+                    &candidate,
+                    staging.path(),
+                    index,
+                    gif_names
+                        .get(candidate.rel_path.as_str())
+                        .map(String::as_str),
+                )
             });
             match transport {
                 Ok(path) => {
@@ -5785,10 +5812,69 @@ where
     Ok(())
 }
 
+fn corrected_gif_import_names(
+    root: &Path,
+    mut sources: Vec<&str>,
+) -> std::io::Result<BTreeMap<String, String>> {
+    // Reserve existing GIF names first, then allocate corrected names in a stable order.
+    sources.sort_unstable_by_key(|rel| {
+        (
+            !Path::new(rel)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("gif")),
+            *rel,
+        )
+    });
+    let mut used = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut corrected = BTreeMap::new();
+    for rel in sources {
+        let path = Path::new(rel);
+        let basename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| std::io::Error::other("GIF source has no filename"))?;
+        let names = used
+            .entry(photos_import_album_name(root, rel).to_lowercase())
+            .or_default();
+        if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
+        {
+            names.insert(basename.to_lowercase());
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| std::io::Error::other("GIF source has no filename stem"))?;
+        let mut name = if Path::new(stem)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
+        {
+            stem.to_owned()
+        } else {
+            format!("{stem}.gif")
+        };
+        if name.len() > 255 || !names.insert(name.to_lowercase()) {
+            let digest = blake3::hash(rel.as_bytes()).to_hex();
+            name = format!("{digest}.gif");
+            for suffix in 2.. {
+                if names.insert(name.clone()) {
+                    break;
+                }
+                name = format!("{digest}-{suffix}.gif");
+            }
+        }
+        corrected.insert(rel.to_owned(), name);
+    }
+    Ok(corrected)
+}
+
 fn gif_original_transport(
     candidate: &PhotosImportCandidate,
     staging: &Path,
     index: usize,
+    corrected_name: Option<&str>,
 ) -> std::io::Result<PathBuf> {
     if !crate::media_meta_utils::is_verified_gif(&candidate.path)? {
         return Err(std::io::Error::other("expected a complete GIF original"));
@@ -5809,16 +5895,21 @@ fn gif_original_transport(
     }
     #[cfg(not(unix))]
     std::fs::create_dir(&parent)?;
-    let basename = candidate
-        .path
-        .file_name()
-        .ok_or_else(|| std::io::Error::other("GIF source has no filename"))?;
-    let mut filename = basename.to_os_string();
-    filename.push(".gif");
-    if filename.as_encoded_bytes().len() > 255 {
-        filename = format!("{}.gif", candidate.blake3).into();
-    }
-    let staged = parent.join(filename);
+    let staged = if let Some(name) = corrected_name {
+        parent.join(name)
+    } else {
+        // Existing submissions and their journals bind the old double-extension name.
+        let mut name = candidate
+            .path
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("GIF source has no filename"))?
+            .to_os_string();
+        name.push(".gif");
+        if name.as_encoded_bytes().len() > 255 {
+            name = format!("{}.gif", candidate.blake3).into();
+        }
+        parent.join(name)
+    };
     #[cfg(target_os = "macos")]
     observe_file_quarantine(&candidate.path, |_, _, source_mark| {
         use crate::metadata::quarantine::{read_quarantine, verify_quarantine_file_identity};
@@ -10450,21 +10541,26 @@ mod tests {
             album_name: "Synthetic".into(),
             blake3: crate::common_utils::calculate_blake3_hash(&source)?,
         };
-        let transport = gif_original_transport(&candidate, staging.path(), 0)?;
-        assert_eq!(
-            transport.file_name(),
-            Some(std::ffi::OsStr::new("animation.mp4.gif"))
-        );
+        let names = corrected_gif_import_names(dir.path(), vec![&candidate.rel_path])?;
+        let transport =
+            gif_original_transport(&candidate, staging.path(), 0, Some(&names["animation.mp4"]))?;
+        assert_eq!(transport.file_name().unwrap(), "animation.gif");
+        let legacy = gif_original_transport(&candidate, staging.path(), 2, None)?;
+        assert_eq!(legacy.file_name().unwrap(), "animation.mp4.gif");
         assert_eq!(std::fs::read(&source)?, std::fs::read(&transport)?);
         candidate.path = transport.clone();
         assert_eq!(
-            gif_original_transport(&candidate, staging.path(), 1)?,
+            gif_original_transport(&candidate, staging.path(), 1, None)?,
             transport
         );
         let mut marker =
             WorkingCopyMarker::new(dir.path().to_owned(), staging.path().to_owned(), 1);
         marker.strategy = "gif".into();
         let originals = [candidate];
+        assert_eq!(
+            photos_import_candidate_manifest_entries(&originals)[0].0,
+            transport
+        );
         let plan = original_photos_checkpoint_plan(&marker, &originals)?;
         assert_eq!(plan.pending_entries[0].source_rel, "animation.mp4");
         assert_eq!(plan.pending_entries[0].path, transport);
@@ -10507,6 +10603,34 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn corrected_gif_names_preserve_existing_names_and_disambiguate_stems() -> anyhow::Result<()> {
+        let long = format!("{}.x", "a".repeat(253));
+        let mut files = vec![
+            "a/clip.mp4",
+            "a/CLIP.GIF",
+            "a/clip.mov",
+            "b/clip.mp4",
+            "a/art.gif.mp4",
+            "a/no-extension",
+            &long,
+        ];
+        let names = corrected_gif_import_names(Path::new("/synthetic"), files.clone())?;
+        assert!(!names.contains_key("a/CLIP.GIF"));
+        assert_ne!(names["a/clip.mp4"], names["a/clip.mov"]);
+        assert_ne!(names["a/clip.mp4"].to_lowercase(), "clip.gif");
+        assert_eq!(names["b/clip.mp4"], "clip.gif");
+        assert_eq!(names["a/art.gif.mp4"], "art.gif");
+        assert_eq!(names["a/no-extension"], "no-extension.gif");
+        assert!(names[&long].len() <= 255);
+        files.reverse();
+        assert_eq!(
+            corrected_gif_import_names(Path::new("/synthetic"), files)?,
+            names
+        );
+        Ok(())
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn gif_transport_preserves_readonly_source_quarantine_and_refuses_conflicting_marks()
@@ -10530,7 +10654,8 @@ mod tests {
             blake3: blake3::hash(bytes).to_hex().to_string(),
         };
         let staging = tempfile::tempdir()?;
-        let transport = gif_original_transport(&candidate, staging.path(), 0)?;
+        let transport =
+            gif_original_transport(&candidate, staging.path(), 0, Some("untitled.gif"))?;
         assert_eq!(std::fs::read(&transport)?, bytes);
         assert_eq!(
             xattr::get(&source, ATTRIBUTE)?.as_deref(),

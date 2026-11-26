@@ -4372,6 +4372,14 @@ impl FastImgProcessingContract {
     #[must_use]
     pub fn matches_current_settings(&self, current: &Self) -> bool {
         let mut effective = current.clone();
+        // Existing GIF imports keep the staged filenames bound to their saved Photos requests.
+        if self.encoding == FastImgEncodingParameters::Gif
+            && effective.encoding == self.encoding
+            && self.schema == 1
+            && effective.schema == 2
+        {
+            effective.schema = self.schema;
+        }
         if let (
             FastImgEncodingParameters::Jxl {
                 pixel_effort_ceiling: None,
@@ -4403,7 +4411,7 @@ impl FastImgProcessingContract {
             ));
         }
         match &self.encoding {
-            FastImgEncodingParameters::Gif if self.schema == 1 && strategy == "gif" => Ok(()),
+            FastImgEncodingParameters::Gif if strategy == "gif" => Ok(()),
             FastImgEncodingParameters::Jxl {
                 jpeg_effort,
                 pixel_effort_ceiling,
