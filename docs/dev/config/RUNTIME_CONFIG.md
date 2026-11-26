@@ -210,16 +210,20 @@ Video encoder settings apply to standard `vid run` processing.
 `vid fast-vid --shortest-path INPUT` selects Apple Photos delivery and
 uses the shared Photos checkpoint and original-resource verification. This
 is the GUI's **Import into Photos** checkbox. For a verified GIF, a new task
-replaces a misleading extension on the private import copy (`clip.mp4` becomes
-`clip.gif`) or adds a missing extension. PhotoKit receives a GIF photo resource;
+replaces any misleading extension on the private import copy (video, image or
+unknown suffix) or adds a missing extension. File contents determine admission. PhotoKit receives a GIF photo resource;
 AppleScript imports the same corrected filename. Existing tasks keep their saved
 naming rules so interrupted submissions can be reconciled.
 Its receipt retains the selected source's relative path. For a marked GIF,
 Fast VID verifies the source mark and reads the complete managed Photos original
 at its saved resource ID. A receipt stores the digest of the inherited mark and,
 if Photos applied its own recognized mark during import, the digest of that value.
-Cleanup verifies both files against the recorded evidence. An unverified
-external XMP or AAE companion retains the source and its companion.
+For a unique valid UTF-8 XMP sidecar, Fast VID prepares a GIF with the complete
+packet embedded or merges it with existing XMP using the Tier 2 field policy.
+Sidecar fields take precedence, and embedded-only fields are preserved. Fast VID
+verifies the metadata and the source, sidecar and delivered GIF hashes. Frames,
+timing and trailing padding are preserved. Ambiguous XMP packets, a signed GIF
+requiring a rewrite, or an AAE edit without custody retain the original and its companion. Cleanup requires fresh verification of the Photos resource.
 Use `--dry-run` to preview, or `--shortest-path --retry` to continue a saved import.
 If all previously admitted GIFs already have Photos receipts, continuing can
 recheck those assets and finish their cleanup. Additional GIFs recognized by

@@ -1550,6 +1550,49 @@ impl XmpMerger {
         })
     }
 
+    pub(crate) fn combined_xmp_packet(
+        xmp_path: &Path,
+        media_path: &Path,
+        xmp_hash: &str,
+    ) -> Result<tempfile::TempPath> {
+        let packet = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "modern_xmp_packet",
+            Some(".mfb-modern-xmp-"),
+            Some(".xmp"),
+        )?
+        .into_temp_path();
+        std::fs::copy(xmp_path, &packet).context("failed to stage XMP sidecar")?;
+        anyhow::ensure!(
+            crate::common_utils::calculate_blake3_hash(&packet)? == xmp_hash,
+            "XMP sidecar changed while staging native merge"
+        );
+        // Create only missing tags; rewriting sidecar GPS rationals loses precision.
+        let mut command = ExiftoolBuilder::new()
+            .tags_from_file(media_path)
+            .arg("-XMP:all")
+            .arg("-n")
+            .arg("-wm")
+            .arg("cg")
+            .overwrite_original()
+            .input(&packet)
+            .build();
+        let output = crate::process_runner::run_command_with_liveness_timeout(
+            &mut command,
+            Duration::from_secs(120),
+            crate::process_runner::image_process_hard_timeout(),
+            "modern container XMP packet overlay",
+        )?;
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to preserve existing XMP fields in staged sidecar: {}",
+            crate::infra::logging::combined_tool_output(
+                &String::from_utf8_lossy(&output.stdout),
+                &String::from_utf8_lossy(&output.stderr)
+            )
+        );
+        Ok(packet)
+    }
+
     /// Merge a sidecar into AVIF/HEIC/WebP/JP2 using the format-aware `ExifTool`
     /// writer, then commit only after a before/after proof succeeds. This keeps
     /// the positive native path for modern containers while retaining a strict
@@ -1573,42 +1616,7 @@ impl XmpMerger {
             .context("failed to hash XMP sidecar before modern merge")?;
         let before = Self::capture_modern_container_proof(media_path, format)?;
         let merged_packet = if before.has_xmp {
-            let packet = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
-                "modern_xmp_packet",
-                Some(".mfb-modern-xmp-"),
-                Some(".xmp"),
-            )?
-            .into_temp_path();
-            std::fs::copy(xmp_path, &packet).context("failed to stage XMP sidecar")?;
-            anyhow::ensure!(
-                crate::common_utils::calculate_blake3_hash(&packet)? == xmp_hash,
-                "XMP sidecar changed while staging native merge"
-            );
-            // Create only missing tags; rewriting sidecar GPS rationals loses precision.
-            let mut command = ExiftoolBuilder::new()
-                .tags_from_file(media_path)
-                .arg("-XMP:all")
-                .arg("-n")
-                .arg("-wm")
-                .arg("cg")
-                .overwrite_original()
-                .input(&packet)
-                .build();
-            let output = crate::process_runner::run_command_with_liveness_timeout(
-                &mut command,
-                Duration::from_secs(120),
-                crate::process_runner::image_process_hard_timeout(),
-                "modern container XMP packet overlay",
-            )?;
-            anyhow::ensure!(
-                output.status.success(),
-                "failed to preserve existing XMP fields in staged sidecar: {}",
-                crate::infra::logging::combined_tool_output(
-                    &String::from_utf8_lossy(&output.stdout),
-                    &String::from_utf8_lossy(&output.stderr)
-                )
-            );
-            Some(packet)
+            Some(Self::combined_xmp_packet(xmp_path, media_path, &xmp_hash)?)
         } else {
             None
         };

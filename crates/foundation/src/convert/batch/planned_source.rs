@@ -254,16 +254,14 @@ impl<'a> PlannedXmpIndex<'a> {
         else {
             return encode_xmp_claim(None, false);
         };
-        let mut candidates = directory.get(&stem).into_iter().flatten();
-        let first = candidates.next().copied();
-        let second = candidates.next().is_some();
-        let exact = if filename != stem {
-            directory.get(&filename).map_or(&[][..], Vec::as_slice)
-        } else {
-            &[]
-        };
-        let ambiguous = second || exact.len() > 1 || (first.is_some() && !exact.is_empty());
-        encode_xmp_claim(first.or_else(|| exact.first().copied()), ambiguous)
+        let mut candidates = std::iter::once(&stem)
+            .chain((filename != stem).then_some(&filename))
+            .filter_map(|key| directory.get(key))
+            .flatten()
+            .copied()
+            .filter(|candidate| candidate.path().file_name() != input.file_name());
+        let first = candidates.next();
+        encode_xmp_claim(first, candidates.next().is_some())
     }
 }
 

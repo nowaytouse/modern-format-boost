@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 mod delivery_policy;
 mod exif;
+mod gif_xmp;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -2258,7 +2259,9 @@ pub fn find_aae_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
     })? {
         let entry = entry?;
         let path = entry.path();
-        if aae_candidate_key(&path).is_some_and(|candidate| candidate == stem_lower) {
+        if path.file_name() != src.file_name()
+            && aae_candidate_key(&path).is_some_and(|candidate| candidate == stem_lower)
+        {
             matches.push(path);
         }
     }
@@ -3805,7 +3808,9 @@ pub fn find_xmp_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
         )
     })? {
         let path = entry?.path();
-        if !xmp_candidate_matches_source(&path, &stem, &full_name) {
+        if path.file_name() == src.file_name()
+            || !xmp_candidate_matches_source(&path, &stem, &full_name)
+        {
             continue;
         }
         let path = require_regular_sidecar(path, "XMP")?;

@@ -637,7 +637,7 @@ fn select_img_startup_tools(command: &Commands) -> anyhow::Result<Option<ImgTool
                 }
             };
             if strategy == "gif" {
-                // This delivery uses the native GIF reader and exact original bytes.
+                // Only the optional XMP delivery needs a metadata tool, resolved when used.
                 return Ok(None);
             }
             Ok(Some(ImgToolRuntimeRequest {
@@ -6908,7 +6908,7 @@ fn fast_img_delete_notice_message(
 ) -> String {
     if strategy == "gif" {
         return format!(
-            "[NOTICE  ] Fast VID will deliver {modern_lossy_count} unchanged GIF original(s) to Apple Photos. Each source is eligible for removal after fresh Photos original-byte verification."
+            "[NOTICE  ] Fast VID will deliver {modern_lossy_count} GIF original(s) to Apple Photos, merging eligible XMP sidecars before import. Cleanup requires fresh verification of the delivered bytes."
         );
     }
     let mode_name = if strategy == "avif" {

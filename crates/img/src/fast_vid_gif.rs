@@ -11,7 +11,7 @@ use super::{
 use anyhow::{Context, Result};
 use foundation::ModernLossyStaticCandidate;
 use foundation::batch::AdmittedImageFile;
-use foundation::fast_img_store::{FastImgAdmissionPlan, FastImgAdmissionRoute};
+use foundation::fast_img_store::FastImgAdmissionPlan;
 use foundation::image::format_detect::FormatKind;
 use foundation::metadata::XmpSidecarIndex;
 use foundation::pipeline::verification::fast_img_relative_key;
@@ -134,15 +134,9 @@ pub(super) fn pending_receipt_scope(
                 .photos_uuid
                 .as_ref()
                 .is_some_and(|uuid| !uuid.is_empty())
-                && asset.xmp_sidecar_blake3.is_none()
-                && asset
-                    .library_blake3
-                    .as_ref()
-                    .is_none_or(|hash| hash == &asset.blake3)
-                && plan.get(&asset.rel_path).is_some_and(|entry| {
-                    entry.route == FastImgAdmissionRoute::Original
-                        && entry.source_blake3 == asset.blake3
-                }),
+                && plan
+                    .get(&asset.rel_path)
+                    .is_some_and(|entry| entry.matches_gif_receipt(asset)),
             "saved GIF Photos receipt differs from its original admission; sources retained"
         );
     }
@@ -199,9 +193,12 @@ pub(super) fn scan_originals(
         let rel = fast_img_relative_key(path, root, "GIF original").map_err(anyhow::Error::msg)?;
         let admission = (|| -> Result<String> {
             anyhow::ensure!(
-                sidecars.find(path)?.is_none() && sidecars.find_aae(path)?.is_none(),
-                "companion XMP or AAE cannot be delivered with an unchanged GIF; source and companion retained"
+                sidecars.find_aae(path)?.is_none(),
+                "GIF has an AAE edit companion without a Photos adjustment receipt; source and companion retained"
             );
+            if let Some(xmp) = sidecars.find(path)? {
+                foundation::metadata::validate_xmp_sidecar(&xmp)?;
+            }
             Ok(source.content_blake3()?)
         })();
         match admission {
@@ -292,6 +289,12 @@ mod tests {
             ("no-extension", single.as_slice()),
             ("animated.mp4", animated.as_slice()),
             ("original.GIF", single.as_slice()),
+            ("movie.MOV", animated.as_slice()),
+            ("still.jpeg", animated.as_slice()),
+            ("web.webp", animated.as_slice()),
+            ("unknown.anything", animated.as_slice()),
+            ("disguised-x.xmp", animated.as_slice()),
+            ("disguised-a.aae", animated.as_slice()),
             ("broken.gif", HEADER),
             ("pretend.gif", b"not an image".as_slice()),
             ("with-xmp.gif", single.as_slice()),
@@ -316,11 +319,16 @@ mod tests {
             (0, 0)
         );
         assert_eq!(inventory.ignored.count(), 3);
-        assert_eq!(inventory.modern_probe_failures.total, 3);
-        assert_eq!(inventory.modern_probe_failures.hashes.len(), 3);
+        assert_eq!(inventory.modern_probe_failures.total, 2);
+        assert_eq!(inventory.modern_probe_failures.hashes.len(), 2);
         let plan = inventory.admission_plan(&root)?;
-        assert_eq!(plan.len(), 3);
-        for (name, contents) in inputs.iter().take(3) {
+        assert_eq!(plan.len(), 10);
+        assert!(matches!(
+            &plan["with-xmp.gif"].xmp,
+            Some(foundation::fast_img_store::FastImgAdmissionSidecar::Present { blake3, .. })
+                if blake3 == &foundation::common_utils::blake3_hex(b"<xmp/>")
+        ));
+        for (name, contents) in inputs.iter().take(9) {
             let admitted = &plan[*name];
             assert_eq!(
                 admitted.route,

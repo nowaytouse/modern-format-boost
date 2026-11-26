@@ -108,6 +108,25 @@ pub struct FastImgSourceAdmission {
     pub aae: Option<FastImgAdmissionSidecar>,
 }
 
+impl FastImgSourceAdmission {
+    #[must_use]
+    pub fn matches_gif_receipt(
+        &self,
+        asset: &crate::pipeline::verification::LibraryAssetRecord,
+    ) -> bool {
+        self.route == FastImgAdmissionRoute::Original
+            && self.source_blake3 == asset.blake3
+            && matches!(self.aae, None | Some(FastImgAdmissionSidecar::Absent))
+            && match &self.xmp {
+                Some(FastImgAdmissionSidecar::Present { blake3, .. }) => {
+                    asset.matches_original_xmp(Some(blake3))
+                }
+                None | Some(FastImgAdmissionSidecar::Absent) => asset.matches_original_xmp(None),
+                Some(FastImgAdmissionSidecar::Unresolved) => false,
+            }
+    }
+}
+
 /// Admissions are keyed by exact, normalized relative path.
 pub type FastImgAdmissionPlan = BTreeMap<String, FastImgSourceAdmission>;
 

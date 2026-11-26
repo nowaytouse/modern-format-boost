@@ -755,25 +755,21 @@ fn verify_gif_original_admissions(
                 )),
         "GIF delivery requires a completed original-only checkpoint"
     );
-    anyhow::ensure!(
-        marker.tier2_imported_assets.iter().all(|asset| {
-            asset.xmp_sidecar_blake3.is_none()
-                && asset
-                    .library_blake3
-                    .as_deref()
-                    .is_none_or(|hash| hash == asset.blake3)
-        }),
-        "GIF delivery requires the unmodified original Photos bytes"
-    );
+
     let outcomes: HashMap<_, _> = marker
         .tier2_imported_assets
         .iter()
-        .map(|asset| (asset.rel_path.as_str(), asset.blake3.as_str()))
+        .map(|asset| {
+            (
+                asset.rel_path.as_str(),
+                (asset.blake3.as_str(), Some(asset)),
+            )
+        })
         .chain(
             marker
                 .tier2_failed_sources
                 .iter()
-                .map(|(path, failure)| (path.as_str(), failure.src.as_str())),
+                .map(|(path, failure)| (path.as_str(), (failure.src.as_str(), None))),
         )
         .collect();
     anyhow::ensure!(
@@ -788,16 +784,27 @@ fn verify_gif_original_admissions(
         ) && retry.admissions().len() == outcomes.len()
             && retry.admissions().iter().all(|(path, admission)| {
                 admission.route == Some(FailedRetrySourceRoute::Original)
-                    && outcomes.get(path.as_str()).copied()
-                        == Some(admission.admitted_source_blake3.as_str())
+                    && outcomes.get(path.as_str()).is_some_and(|&(src, receipt)| {
+                        use foundation::fast_img_store::FailedRetrySidecar;
+                        src == admission.admitted_source_blake3
+                            && receipt.is_none_or(|asset| {
+                                matches!(admission.aae, FailedRetrySidecar::Absent)
+                                    && asset.matches_original_xmp(match &admission.xmp {
+                                        FailedRetrySidecar::Absent => None,
+                                        FailedRetrySidecar::Present { blake3, .. } => Some(blake3),
+                                    })
+                            })
+                    })
             })
     } else {
         let plan = read_admission_plan(marker)?.context("missing GIF original admission plan")?;
         plan.len() == outcomes.len()
             && plan.iter().all(|(path, admission)| {
                 admission.route == FastImgAdmissionRoute::Original
-                    && outcomes.get(path.as_str()).copied()
-                        == Some(admission.source_blake3.as_str())
+                    && outcomes.get(path.as_str()).is_some_and(|&(src, receipt)| {
+                        src == admission.source_blake3
+                            && receipt.is_none_or(|asset| admission.matches_gif_receipt(asset))
+                    })
             })
     };
     anyhow::ensure!(
@@ -4253,7 +4260,14 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                     FastImgSourceAdmission {
                         source_blake3: hash.clone(),
                         route: FastImgAdmissionRoute::Original,
-                        xmp: None,
+                        xmp: Some(if path == "animation.mp4" {
+                            foundation::fast_img_store::FastImgAdmissionSidecar::Present {
+                                relative_path: "animation.xmp".into(),
+                                blake3: blake3::hash(b"sidecar").to_hex().to_string(),
+                            }
+                        } else {
+                            foundation::fast_img_store::FastImgAdmissionSidecar::Absent
+                        }),
                         aae: None,
                     },
                 )
@@ -4264,6 +4278,8 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         marker.tier2_imported_assets.push(LibraryAssetRecord {
             rel_path: "animation.mp4".into(),
             blake3: hash.clone(),
+            library_blake3: Some(blake3::hash(b"delivered GIF").to_hex().to_string()),
+            xmp_sidecar_blake3: Some(blake3::hash(b"sidecar").to_hex().to_string()),
             photos_uuid: Some("synthetic-uuid".into()),
             sync_status: "photos_local".into(),
             ..Default::default()
@@ -4315,6 +4331,11 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert!(!residual.count_fully_explained);
         fs::remove_file(output.join("unclaimed.gif"))?;
 
+        let mut mismatched = marker.clone();
+        mismatched.tier2_imported_assets[0].xmp_sidecar_blake3 =
+            Some(blake3::hash(b"other").to_hex().to_string());
+        write_marker_atomic(&mismatched)?;
+        assert!(verify_gif_original_admissions(&mismatched, None).is_err());
         let saved_receipts = std::mem::take(&mut marker.tier2_imported_assets);
         write_marker_atomic(&marker)?;
         let missing =

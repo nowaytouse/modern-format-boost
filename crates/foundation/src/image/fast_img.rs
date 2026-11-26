@@ -3538,22 +3538,10 @@ fn import_modern_lossy_static_tier_with_checkpoint(
             }
             Ok(observed)
         });
-        if gif_originals {
-            let transport = traced_xmp.and_then(|sidecar| {
-                if sidecar.is_some() {
-                    return Err(std::io::Error::other(
-                        "GIF original has an external XMP sidecar",
-                    ));
-                }
-                gif_original_transport(
-                    &candidate,
-                    staging.path(),
-                    index,
-                    gif_names
-                        .get(candidate.rel_path.as_str())
-                        .map(String::as_str),
-                )
-            });
+        let gif_name = gif_names.get(&candidate.rel_path).map(String::as_str);
+        if gif_originals && !matches!(traced_xmp, Ok(Some(_))) {
+            let transport = traced_xmp
+                .and_then(|_| gif_original_transport(&candidate, staging.path(), index, gif_name));
             match transport {
                 Ok(path) => {
                     candidate.path = path;
@@ -3614,7 +3602,14 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                 continue;
             }
         };
-        let staged_path = staging.path().join(&candidate.rel_path);
+        let staged_path = if gif_originals {
+            staging
+                .path()
+                .join(index.to_string())
+                .join(gif_transport_name(&candidate, gif_name)?)
+        } else {
+            staging.path().join(&candidate.rel_path)
+        };
         let prepare = (|| -> Result<(String, String)> {
             let source_metadata = std::fs::symlink_metadata(&candidate.path).map_err(|error| {
                 ImgQualityError::AnalysisError(format!(
@@ -3647,7 +3642,6 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                     candidate.rel_path, candidate.blake3
                 )));
             }
-            let source_image_data_hash = image_data_sha256(&candidate.path)?;
             let xmp_hash_before =
                 crate::common_utils::calculate_blake3_hash(&xmp_path).map_err(|error| {
                     ImgQualityError::AnalysisError(format!(
@@ -3672,60 +3666,16 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                     ))
                 })?;
             }
-            let copied = std::fs::copy(&candidate.path, &staged_path).map_err(|error| {
-                ImgQualityError::AnalysisError(format!(
-                    "tier-2 XMP staging copy failed for {}: {error}",
-                    candidate.rel_path
-                ))
-            })?;
-            let source_len = std::fs::metadata(&candidate.path)
-                .map_err(|error| {
-                    ImgQualityError::AnalysisError(format!(
-                        "tier-2 XMP source stat failed for {}: {error}",
-                        candidate.rel_path
-                    ))
-                })?
-                .len();
-            if copied != source_len {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 XMP staging copy length mismatch for {}: source={source_len} copied={copied}",
-                    candidate.rel_path
-                )));
-            }
-            let staged_source_hash = crate::common_utils::calculate_blake3_hash(&staged_path)
-                .map_err(|error| {
-                    ImgQualityError::AnalysisError(format!(
-                        "tier-2 staged source hash failed for {}: {error}",
-                        candidate.rel_path
-                    ))
-                })?;
-            if staged_source_hash != source_hash_before {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 source changed while it was copied for {}; source and sidecar retained",
-                    candidate.rel_path
-                )));
-            }
-            let staged_image_data_hash = image_data_sha256(&staged_path)?;
-            if staged_image_data_hash != source_image_data_hash {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 staging changed the admitted image payload for {}; source and sidecar retained",
-                    candidate.rel_path
-                )));
-            }
-            crate::XmpMerger::new(crate::XmpMergerConfig::default())
-                .merge_xmp(&xmp_path, &staged_path)
-                .map_err(|error| {
-                    ImgQualityError::AnalysisError(format!(
-                        "tier-2 XMP merge failed for {}: {error}",
-                        candidate.rel_path
-                    ))
-                })?;
-            let merged_image_data_hash = image_data_sha256(&staged_path)?;
-            if merged_image_data_hash != source_image_data_hash {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 XMP merge changed the image payload for {}; source and sidecar retained",
-                    candidate.rel_path
-                )));
+            if gif_originals {
+                crate::XmpMerger::write_gif_delivery(
+                    &candidate.path,
+                    &xmp_path,
+                    &staged_path,
+                    &source_hash_before,
+                    &xmp_hash_before,
+                )?;
+            } else {
+                stage_original_with_xmp(&candidate, &staged_path, &xmp_path, &source_hash_before)?;
             }
             let metadata_report =
                 crate::metadata::preserve_filesystem_for_delivery(&candidate.path, &staged_path)
@@ -3787,7 +3737,6 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                 rel_path = %candidate.rel_path,
                 source_blake3 = %source_hash_before,
                 xmp_blake3 = %xmp_hash_before,
-                image_data_sha256 = %source_image_data_hash,
                 delivery_blake3 = %delivery_hash,
                 "tier-2 XMP delivery proved A-to-X-to-C custody and unchanged image payload"
             );
@@ -3885,6 +3834,71 @@ fn import_modern_lossy_static_tier_with_checkpoint(
         metadata_failures,
         candidates.len(),
     )
+}
+
+fn stage_original_with_xmp(
+    candidate: &PhotosImportCandidate,
+    staged_path: &Path,
+    xmp_path: &Path,
+    source_hash_before: &str,
+) -> Result<()> {
+    let source_image_data_hash = image_data_sha256(&candidate.path)?;
+    let copied = std::fs::copy(&candidate.path, staged_path).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "tier-2 XMP staging copy failed for {}: {error}",
+            candidate.rel_path
+        ))
+    })?;
+    let source_len = std::fs::metadata(&candidate.path)
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "tier-2 XMP source stat failed for {}: {error}",
+                candidate.rel_path
+            ))
+        })?
+        .len();
+    if copied != source_len {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "tier-2 XMP staging copy length mismatch for {}: source={source_len} copied={copied}",
+            candidate.rel_path
+        )));
+    }
+    let staged_source_hash =
+        crate::common_utils::calculate_blake3_hash(staged_path).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "tier-2 staged source hash failed for {}: {error}",
+                candidate.rel_path
+            ))
+        })?;
+    if staged_source_hash != source_hash_before {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "tier-2 source changed while it was copied for {}; source and sidecar retained",
+            candidate.rel_path
+        )));
+    }
+    let staged_image_data_hash = image_data_sha256(staged_path)?;
+    if staged_image_data_hash != source_image_data_hash {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "tier-2 staging changed the admitted image payload for {}; source and sidecar retained",
+            candidate.rel_path
+        )));
+    }
+    crate::XmpMerger::new(crate::XmpMergerConfig::default())
+        .merge_xmp(xmp_path, staged_path)
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "tier-2 XMP merge failed for {}: {error}",
+                candidate.rel_path
+            ))
+        })?;
+    let merged_image_data_hash = image_data_sha256(staged_path)?;
+    if merged_image_data_hash != source_image_data_hash {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "tier-2 XMP merge changed the image payload for {}; source and sidecar retained",
+            candidate.rel_path
+        )));
+    }
+    Ok(())
 }
 
 fn reconcile_uncertain_tier2_imports(
@@ -5870,6 +5884,32 @@ fn corrected_gif_import_names(
     Ok(corrected)
 }
 
+fn gif_transport_name(
+    candidate: &PhotosImportCandidate,
+    corrected_name: Option<&str>,
+) -> std::io::Result<std::ffi::OsString> {
+    if let Some(name) = corrected_name {
+        return Ok(name.into());
+    }
+    let mut name = candidate
+        .path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("GIF source has no filename"))?
+        .to_os_string();
+    if !candidate
+        .path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
+    {
+        // Existing submissions and their journals bind the old double-extension name.
+        name.push(".gif");
+        if name.as_encoded_bytes().len() > 255 {
+            name = format!("{}.gif", candidate.blake3).into();
+        }
+    }
+    Ok(name)
+}
+
 fn gif_original_transport(
     candidate: &PhotosImportCandidate,
     staging: &Path,
@@ -5895,21 +5935,7 @@ fn gif_original_transport(
     }
     #[cfg(not(unix))]
     std::fs::create_dir(&parent)?;
-    let staged = if let Some(name) = corrected_name {
-        parent.join(name)
-    } else {
-        // Existing submissions and their journals bind the old double-extension name.
-        let mut name = candidate
-            .path
-            .file_name()
-            .ok_or_else(|| std::io::Error::other("GIF source has no filename"))?
-            .to_os_string();
-        name.push(".gif");
-        if name.as_encoded_bytes().len() > 255 {
-            name = format!("{}.gif", candidate.blake3).into();
-        }
-        parent.join(name)
-    };
+    let staged = parent.join(gif_transport_name(candidate, corrected_name)?);
     #[cfg(target_os = "macos")]
     observe_file_quarantine(&candidate.path, |_, _, source_mark| {
         use crate::metadata::quarantine::{read_quarantine, verify_quarantine_file_identity};
@@ -12202,6 +12228,81 @@ mod tests {
         std::fs::write(&original, b"changed bytes")?;
         let error = reverify(&receipt, Some(&library)).expect_err("fresh bytes must match");
         assert!(error.to_string().contains("BLAKE3 drift"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn gif_xmp_cleanup_requires_current_sidecar_and_delivered_photos_bytes() -> anyhow::Result<()> {
+        if !crate::ExiftoolBuilder::check_available() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let input = root.join("input");
+        let library = root.join("Synthetic.photoslibrary");
+        let originals = library.join("originals/A");
+        std::fs::create_dir(&input)?;
+        std::fs::create_dir_all(&originals)?;
+        let source = input.join("clip.unknown");
+        let sidecar = input.join("clip.unknown.xmp");
+        let original = originals.join("clip.gif");
+        let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
+        let packet = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#;
+        std::fs::write(&source, gif)?;
+        std::fs::write(&sidecar, packet)?;
+        let source_hash = blake3::hash(gif).to_hex().to_string();
+        let sidecar_hash = blake3::hash(packet).to_hex().to_string();
+        let staged = root.join("clip.gif");
+        crate::XmpMerger::write_gif_delivery(
+            &source,
+            &sidecar,
+            &staged,
+            &source_hash,
+            &sidecar_hash,
+        )?;
+        let delivered = std::fs::read(staged)?;
+        std::fs::write(&original, &delivered)?;
+        let handle = LibraryHandle {
+            photos_library_path: Some(library),
+            imported_assets: vec![LibraryAssetRecord {
+                rel_path: "clip.unknown".into(),
+                photos_uuid: Some("synthetic".into()),
+                blake3: source_hash,
+                xmp_sidecar_blake3: Some(sidecar_hash),
+                library_blake3: Some(blake3::hash(&delivered).to_hex().to_string()),
+                sync_status: "photos_local".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let probes = [FastImgLibraryAssetProbe {
+            path: original.clone(),
+            uuid: "synthetic".into(),
+            ismissing: false,
+            iscloudasset: true,
+            incloud: Some(true),
+        }];
+        let mut removed = Vec::new();
+        let cleanup = |removed: &mut Vec<PathBuf>| {
+            delete_verified_modern_lossy_static_sources_with(
+                &input,
+                &handle,
+                removed,
+                None,
+                |assets, targets| reverify_synthetic_photos_custody(assets, targets, &probes),
+            )
+        };
+        std::fs::write(&sidecar, b"<changed/>")?;
+        assert!(cleanup(&mut removed).is_err());
+        std::fs::write(&sidecar, packet)?;
+        std::fs::write(&original, gif)?;
+        assert!(cleanup(&mut removed).is_err());
+        assert!(removed.is_empty() && source.is_file() && sidecar.is_file());
+        std::fs::write(&original, &delivered)?;
+        assert_eq!(cleanup(&mut removed)?, (1, 0));
+        assert_eq!(removed, [source, sidecar]);
+        assert_eq!(std::fs::read(original)?, delivered);
         Ok(())
     }
 

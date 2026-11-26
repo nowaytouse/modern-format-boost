@@ -101,15 +101,15 @@ pub struct GifHeaderScan {
 /// # Errors
 /// Returns an error if the file cannot be read or if the `GIF` header is
 /// malformed.
-// Rationale: This function handles complex, sequential initialization or business logic where
-// further fragmentation would hinder readability and maintainability.
-#[allow(
-    clippy::too_many_lines,
-    reason = "Complex orchestration logic where fragmenting state into smaller helpers would \
-              decrease readability and increase cognitive overhead."
-)]
 pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
-    let buf = std::fs::read(path)?;
+    scan_gif_headers_from_bytes(&std::fs::read(path)?, |_| {})
+}
+
+#[allow(clippy::too_many_lines, reason = "Sequential GIF block reader")]
+pub(crate) fn scan_gif_headers_from_bytes(
+    buf: &[u8],
+    mut on_xmp: impl FnMut(std::ops::Range<usize>),
+) -> std::io::Result<GifHeaderScan> {
     let n = buf.len();
 
     if n < 13 {
@@ -226,8 +226,12 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                                 }
                             }
                         }
-                        pos = pos.saturating_add(3).saturating_add(block_size);
-                        pos = skip_sub_blocks(&buf, pos);
+                        let start = pos;
+                        pos =
+                            skip_sub_blocks(buf, pos.saturating_add(3).saturating_add(block_size));
+                        if buf[start..pos].starts_with(b"\x21\xFF\x0BXMP DataXMP") {
+                            on_xmp(start..pos);
+                        }
                     }
                     crate::constants::GIF_BLOCK_GRAPHICS_CONTROL_EXTENSION
                         if pos + 7 < buf.len() =>
@@ -255,12 +259,8 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                         frame_delays_cs.push(delay);
                         pos += 8;
                     }
-                    0xFE | 0x01 => {
-                        pos += 2;
-                        pos = skip_sub_blocks(&buf, pos);
-                    }
                     _ => {
-                        pos += 1;
+                        pos = skip_sub_blocks(buf, pos + 2);
                     }
                 }
             }
@@ -287,7 +287,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 pos += 1;
                 let payload_start = pos;
                 // Use original skip_sub_blocks to correctly handle image data blocks
-                pos = skip_sub_blocks(&buf, pos);
+                pos = skip_sub_blocks(buf, pos);
                 let payload_size = pos.saturating_sub(payload_start);
                 // Always count frames when we encounter an image descriptor
                 frame_payload_sizes.push(payload_size.max(1));

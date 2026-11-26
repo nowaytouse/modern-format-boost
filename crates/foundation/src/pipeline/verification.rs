@@ -59,6 +59,19 @@ pub struct LibraryAssetRecord {
 }
 
 impl LibraryAssetRecord {
+    /// Match original or XMP-enriched Photos bytes to the admitted sidecar.
+    #[must_use]
+    pub fn matches_original_xmp(&self, expected: Option<&str>) -> bool {
+        self.xmp_sidecar_blake3.as_deref() == expected
+            && match expected {
+                Some(_) => self.library_blake3.is_some(),
+                None => self
+                    .library_blake3
+                    .as_ref()
+                    .is_none_or(|hash| hash == &self.blake3),
+            }
+    }
+
     pub(crate) fn validate_gif_quarantine_binding(&self, original_gif: bool) -> Result<(), String> {
         if let Some(photos) = &self.gif_photos_quarantine_blake3 {
             validate_submission_blake3("Photos GIF quarantine", photos)?;

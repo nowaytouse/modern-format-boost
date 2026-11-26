@@ -54,6 +54,9 @@ impl XmpSidecarIndex {
         let mut selected: Option<PathBuf> = None;
         for name in [&stem, &full_name] {
             for candidate in view.candidates.get(name).into_iter().flatten() {
+                if candidate.file_name() == src.file_name() {
+                    continue;
+                }
                 let path = super::require_regular_sidecar(candidate.clone(), "XMP")?;
                 if let Some(previous) = &selected {
                     if previous == &path {
@@ -90,9 +93,12 @@ impl XmpSidecarIndex {
         let Some(candidates) = view.aae_candidates.get(&stem) else {
             return Ok(None);
         };
-        match candidates.as_slice() {
-            [] => Ok(None),
-            [path] => {
+        let mut companions = candidates
+            .iter()
+            .filter(|path| path.file_name() != src.file_name());
+        match (companions.next(), companions.next()) {
+            (None, _) => Ok(None),
+            (Some(path), None) => {
                 let path = path.clone();
                 drop(view);
                 super::require_regular_sidecar(path, "AAE").map(Some)
