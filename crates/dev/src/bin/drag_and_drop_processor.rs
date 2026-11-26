@@ -3610,7 +3610,7 @@ fn run_drag_drop_inner(
     print_elapsed(started.elapsed());
     eprintln!(
         "{} Session stamp: {}",
-        pick_symbol("✓", "[DONE]"),
+        pick_symbol("📋", "[LOG]"),
         session.map_or("-", |s| s.stamp())
     );
 
@@ -6588,6 +6588,15 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(error.to_string(), "synthetic processing failure");
+        let log = fs::read_to_string(session.session_log()).unwrap();
+        let outcomes: Vec<_> = log
+            .lines()
+            .filter_map(|line| {
+                line.split_once("Processing outcome: ")
+                    .map(|(_, outcome)| outcome)
+            })
+            .collect();
+        assert_eq!(outcomes, ["completed.", "failed."]);
         let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
         assert_eq!(contexts.len(), 2);
         assert_eq!(
@@ -8502,6 +8511,7 @@ mod tests {
         let log = fs::read_to_string(session.session_log()).unwrap();
         assert!(log.contains("Total: unknown succeeded, unknown skipped, unknown ignored, unknown failed, unknown unprocessed"));
         assert!(log.contains("Conversion Success Rate: N/A"));
+        assert!(!log.contains("Session completed."));
         assert!(!log.contains("1 failed"));
     }
 

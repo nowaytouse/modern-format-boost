@@ -177,8 +177,9 @@ fn verify_output_embedded_metadata_with_discovery(
             let src_sidecar = find_sidecar(src)?;
             let dst_sidecar = find_sidecar(dst)?;
             let source_format = detect_true_format(src).map_err(io::Error::other)?;
+            let output_format = detect_true_format(dst).map_err(io::Error::other)?;
             let paired_jxl_custody = matches!(source_format, FormatKind::Jpeg | FormatKind::Jxl)
-                && detect_true_format(dst).map_err(io::Error::other)? == FormatKind::Jxl;
+                && output_format == FormatKind::Jxl;
             let [mut src_tags, mut dst_tags, mut source_xmp, output_xmp] =
                 preservable_delivery_tag_maps(
                     [
@@ -193,6 +194,17 @@ fn verify_output_embedded_metadata_with_discovery(
                 overlay_metadata(&mut src_tags, &source_xmp);
             } else {
                 source_xmp.clear();
+            }
+            if source_format == FormatKind::Png
+                && output_format == FormatKind::Jxl
+                && src_tags.contains_key("PNG:CreationTime")
+                && !src_tags
+                    .keys()
+                    .any(|key| metadata_comparison_key(key) == "XMP-xmp:CreateDate")
+                && let Some(created) = src_tags.remove("PNG:CreationTime")
+            {
+                // Compare the value in its JXL carrier; never collapse two source timestamps.
+                src_tags.insert("XMP-xmp:CreateDate".into(), png_date_in_xmp_format(created));
             }
             let mut reconstruction = None;
             if paired_jxl_custody && source_format == FormatKind::Jpeg {
@@ -524,6 +536,18 @@ fn jpeg_reconstruction_tag_key(location: &str) -> Option<String> {
     } else {
         format!("{specific}:{instance}:{tag}")
     })
+}
+
+fn png_date_in_xmp_format(created: String) -> String {
+    // ExifTool reports XMP dates with colon-separated dates. Preserve the entire time suffix,
+    // including fractional seconds and the original offset, for exact verification.
+    if let Some((day, rest)) = created.split_at_checked(10)
+        && let Some(time) = rest.strip_prefix(['T', ' '])
+        && chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok()
+    {
+        return format!("{} {time}", day.replace('-', ":"));
+    }
+    created
 }
 
 fn preserve_mismatches(
@@ -1417,6 +1441,67 @@ mod tests {
             Vec::<String>::new()
         );
         Ok(())
+    }
+
+    #[test]
+    fn png_creation_time_roundtrips_to_jxl_and_rejects_changed_or_colliding_dates() {
+        if !crate::CjxlBuilder::check_available() || !crate::ExiftoolBuilder::check_available() {
+            eprintln!("SKIP: cjxl/exiftool unavailable for PNG creation time test");
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("source.png");
+        let dst = temp.path().join("converted.jxl");
+        image::RgbImage::from_pixel(16, 16, image::Rgb([8, 12, 32]))
+            .save(&src)
+            .unwrap();
+        write_metadata_tag(&src, "-PNG:CreationTime#=2026-09-19T15:10:31.1234+02:00");
+        let encoded = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&dst)
+            .distance(0.0)
+            .effort(1)
+            .build()
+            .output()
+            .unwrap();
+        assert!(encoded.status.success());
+        // Exercise creation of a sparse ExifIFD on the destination after encoding.
+        let written = crate::ExiftoolBuilder::new()
+            .arg("-api")
+            .arg("NoMandatory=1")
+            .arg("-ExifIFD:DateTimeOriginal=2020:01:02 03:04:05")
+            .overwrite_original()
+            .input(&src)
+            .build()
+            .output()
+            .unwrap();
+        assert!(written.status.success());
+        crate::metadata::exif::preserve_internal(&src, &dst).unwrap();
+        assert_eq!(
+            preservable_tag_map(&dst).unwrap()["XMP-xmp:CreateDate"],
+            "2026:09:19 15:10:31.1234+02:00"
+        );
+        for policy in [
+            MetadataOutputPolicy::Preserve,
+            MetadataOutputPolicy::PreserveSource,
+        ] {
+            verify_output_embedded_metadata(&src, &dst, policy).unwrap();
+        }
+        write_metadata_tag(&dst, "-XMP-xmp:CreateDate=2026:09:19 15:10:31.1234+01:00");
+        assert!(
+            verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::PreserveSource)
+                .is_err()
+        );
+        write_metadata_tag(&src, "-XMP-xmp:CreateDate=2020:01:02 00:00:00Z");
+        crate::metadata::exif::preserve_internal(&src, &dst).unwrap();
+        assert_eq!(
+            preservable_tag_map(&dst).unwrap()["XMP-xmp:CreateDate"],
+            "2020:01:02 00:00:00Z"
+        );
+        assert!(
+            verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::PreserveSource)
+                .is_err()
+        );
     }
 
     #[test]

@@ -657,7 +657,7 @@ impl AppSession {
             )?;
         }
         if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
-            writeln!(file, "Retained files (source preserved):")?;
+            writeln!(file, "Failed and skipped files:")?;
             for name in &summary.failed_file_names {
                 writeln!(file, "  [FAIL] {name}")?;
             }
@@ -675,10 +675,6 @@ impl AppSession {
         if let Some(block) = size_summary {
             writeln!(file, "{block}")?;
         }
-        writeln!(
-            file,
-            "\n========================================\nSession completed.\n========================================"
-        )?;
         append_jsonl_audit_record(
             &self.session_audit,
             &format!(
@@ -863,10 +859,17 @@ pub fn run_with_history(
                 .and_then(|error| error.downcast_ref::<FastImgIndependentVerificationUnavailable>())
                 .map(|error| error.0)
         };
+        let outcome = if cancelled {
+            "cancelled"
+        } else if result.is_err() {
+            "failed"
+        } else {
+            "completed"
+        };
         let finished = (|| {
             session.append_history_event("MFB_HISTORY_FINISHED", serde_json::json!({
                 "schema_version": 1,
-                "outcome": if cancelled { "cancelled" } else if result.is_err() { "failed" } else { "completed" },
+                "outcome": outcome,
                 "completed_with_file_errors": completed_with_file_errors,
                 "photos_quarantine_blocked": photos_quarantine_blocked,
                 "verification_unavailable": verification_unavailable,
@@ -883,7 +886,15 @@ pub fn run_with_history(
                 )
                 .context("write independent verification unavailable marker")?;
             }
-            Ok::<_, anyhow::Error>(())
+            let description = if completed_with_file_errors {
+                "completed with file errors"
+            } else {
+                outcome
+            };
+            session.append_line(
+                session.session_log(),
+                &format!("Processing outcome: {description}."),
+            )
         })();
         if let Err(error) = finished {
             if result.is_ok() || completed_with_file_errors || photos_quarantine_blocked.is_some() {

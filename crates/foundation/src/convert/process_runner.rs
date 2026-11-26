@@ -118,6 +118,16 @@ pub const fn video_process_hard_timeout() -> Duration {
     Duration::from_secs(crate::constants::VIDEO_PROCESS_HARD_TIMEOUT_SECS)
 }
 
+fn report_process_still_running(context: &str, soft_timeout: Duration, hard_timeout: Duration) {
+    tracing::info!(
+        target: "mfb::process",
+        context,
+        ?soft_timeout,
+        ?hard_timeout,
+        "Subprocess is still running; continuing to wait"
+    );
+}
+
 /// Wait for a raw child process with a hard timeout.
 ///
 /// # Errors
@@ -157,13 +167,7 @@ pub fn wait_child_with_liveness_timeout(
         let elapsed = start.elapsed();
         if !soft_deadline_reported && elapsed >= soft_timeout {
             soft_deadline_reported = true;
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "process_soft_timeout_alive",
-                format!(
-                    "{context}: subprocess is still alive after {soft_timeout:?}; allowing it to \
-                     continue until hard timeout {hard_timeout:?}"
-                ),
-            );
+            report_process_still_running(context, soft_timeout, hard_timeout);
         }
         if elapsed >= hard_timeout {
             kill_child_after_timeout(child, context)?;
@@ -634,13 +638,7 @@ impl ManagedProcess {
             let elapsed = start.elapsed();
             if !soft_deadline_reported && elapsed >= soft_timeout {
                 soft_deadline_reported = true;
-                crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "process_soft_timeout_alive",
-                    format!(
-                        "{context}: subprocess is still alive after {soft_timeout:?}; allowing it \
-                         to continue until hard timeout {hard_timeout:?}"
-                    ),
-                );
+                report_process_still_running(context, soft_timeout, hard_timeout);
             }
             if elapsed >= hard_timeout {
                 let child_id = this.child.id();

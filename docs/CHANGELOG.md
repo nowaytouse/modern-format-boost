@@ -23,6 +23,16 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Fast IMG delivery and session reporting (2026-11-26)
+
+- Lossless PNG-to-JXL delivery carries the PNG creation time in XMP and
+  verifies the time, fractional seconds and offset. Conflicting source dates
+  retain the original. Copying sparse EXIF from a lossless still into JXL no
+  longer asks ExifTool to generate mandatory defaults absent from the source.
+- The archived processing outcome follows the terminal receipt, including
+  cancellation and completed runs with file errors. Crossing a soft process
+  deadline logs progress once. The hard timeout still terminates the process.
+
 ### Complete JXL pixel effort exploration (2026-11-24)
 
 - Direct pixel effort comparisons now cover E1–E10, including E9. E11 remains

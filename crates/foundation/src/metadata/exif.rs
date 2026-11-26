@@ -382,8 +382,21 @@ fn append_source_metadata_copy_args(
     src: &Path,
     is_jxl_output: bool,
 ) {
+    builder.tags_from_file(src);
+    if is_jxl_output {
+        use crate::image::format_detect::{FormatKind, detect_true_format};
+        if let Ok(format @ (FormatKind::Png | FormatKind::WebP | FormatKind::Avif)) =
+            detect_true_format(src)
+        {
+            // Rebuilding a sparse ExifIFD must not invent version, components or color tags.
+            builder.arg("-api").arg("NoMandatory=1");
+            if format == FormatKind::Png {
+                // Copy first so an existing source XMP date takes precedence.
+                builder.arg("-XMP-xmp:CreateDate<PNG:CreationTime");
+            }
+        }
+    }
     builder
-        .tags_from_file(src)
         .arg("-all:all")
         .arg(crate::constants::EXIFTOOL_ARG_UNSAFE);
     if is_jxl_output {
