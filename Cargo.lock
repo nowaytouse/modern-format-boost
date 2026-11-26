@@ -457,8 +457,8 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.9"
-source = "git+https://github.com/clap-rs/clap#487474f013d3e0cbffc911934575f7ebcc72a6d4"
+version = "4.6.10"
+source = "git+https://github.com/clap-rs/clap#4201754a400f676c9744da66383c89eb9f41af88"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -466,8 +466,8 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#487474f013d3e0cbffc911934575f7ebcc72a6d4"
+version = "4.6.10"
+source = "git+https://github.com/clap-rs/clap#4201754a400f676c9744da66383c89eb9f41af88"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.9"
-source = "git+https://github.com/clap-rs/clap#487474f013d3e0cbffc911934575f7ebcc72a6d4"
+source = "git+https://github.com/clap-rs/clap#4201754a400f676c9744da66383c89eb9f41af88"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.2"
-source = "git+https://github.com/clap-rs/clap#487474f013d3e0cbffc911934575f7ebcc72a6d4"
+source = "git+https://github.com/clap-rs/clap#4201754a400f676c9744da66383c89eb9f41af88"
 
 [[package]]
 name = "cmake"
@@ -564,8 +564,8 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.5"
-source = "git+https://github.com/srijs/rust-crc32fast#bf120c3ac0c28e5d999de2df8139f47f4486f622"
+version = "1.5.6"
+source = "git+https://github.com/srijs/rust-crc32fast#1cc840080a9f59b95018683890a0bf870fb64526"
 dependencies = [
  "cfg-if",
 ]
@@ -2252,7 +2252,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.42.0"
-source = "git+https://github.com/tafia/quick-xml#d0e87c1cd5f113c56e3f2ead4b92dca85a1ec3aa"
+source = "git+https://github.com/tafia/quick-xml#c0d031ac1dc27a75c267e9e35a172e48022b45d6"
 dependencies = [
  "memchr",
 ]
@@ -2631,9 +2631,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.1"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
+checksum = "5b0e5c7d67bc53f435386b2130fdc900488c5703770f6d8a4633060e34288a27"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -2663,12 +2663,9 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "simd_helpers"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95890f873bec569a0362c235787f3aca6e1e887302ba4840839bcc6459c42da6"
-dependencies = [
- "quote",
-]
+checksum = "f48ea32978b7ad365bd1ecce83827746d5d50dc006a8c85112b7acc3c716e3e7"
 
 [[package]]
 name = "similar"
@@ -2950,9 +2947,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.2.2+spec-1.1.0"
+version = "1.2.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5426cb1b964690d913f6c5c1a1ae0b42f428ec506bb4d452876d7a209c9bca3b"
+checksum = "26b1f26e9485c1fa43ee89fe76e9f3fb9e2e52bb227f8594b4d687496b83d073"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -2974,9 +2971,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.25.20+spec-1.1.0"
+version = "0.25.21+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e76360e201d6dbd6583e17795ba71a88f47365a9139c8450a7979c32303b8e73"
+checksum = "88497dab46de5bf343ec66b05c251e48c6213f3e9170c70a70a823f7abe886a4"
 dependencies = [
  "indexmap",
  "toml_datetime",
@@ -2986,9 +2983,9 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.1.6+spec-1.1.0"
+version = "1.1.7+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6769c452d71ba30696c6b37770c439a9cc9110f47f7d5cdbeda79840ef5ea31"
+checksum = "0bb28d6e049a9766c3bd91a8326e6179f5b132dec87906bb97018ef7a2f3431a"
 dependencies = [
  "winnow",
 ]
@@ -3529,16 +3526,16 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.64"
-source = "git+https://github.com/google/zerocopy#e8dcb7f08edbc19485c9e7980333607ebbff5f48"
+version = "0.8.65"
+source = "git+https://github.com/google/zerocopy#dce0b3f856ba0493335eb6bf543ff213edc108fa"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.64"
-source = "git+https://github.com/google/zerocopy#e8dcb7f08edbc19485c9e7980333607ebbff5f48"
+version = "0.8.65"
+source = "git+https://github.com/google/zerocopy#dce0b3f856ba0493335eb6bf543ff213edc108fa"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3547,9 +3544,9 @@ dependencies = [
 
 [[package]]
 name = "zlib-rs"
-version = "0.6.8"
+version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
+checksum = "aa76918995d776d9dd34d371030be228d021137449771493d56e29f77e4148ac"
 
 [[package]]
 name = "zmij"
