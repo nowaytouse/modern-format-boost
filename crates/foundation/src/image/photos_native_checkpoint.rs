@@ -2,7 +2,7 @@
 use super::{
     BTreeMap, Duration, FastImgLibraryAssetProbe, ImgQualityError, LibraryHandle, Path, PathBuf,
     PhotosImportCheckpointPlan, PhotosImportPendingEntry, Result, WorkingCopyMarker,
-    checkpoint_photos_import_window, library_records_from_pending_import,
+    checkpoint_photos_import_window, library_records_from_pending_import_partial,
     osxphotos_uuid_from_photos_import_identifier, require_active_photos_library,
     resolve_osascript_command, run_photos_import_applescript_session_mode_in_library,
 };
@@ -17,6 +17,53 @@ use std::os::unix::fs::PermissionsExt;
 
 const WITNESS_QUERY_CONTEXT: &str = "selected Photos library witness";
 const WITNESS_ACTIVATION_CONTEXT: &str = "activate Photos for read-only witness recovery";
+
+fn verify_checkpoint_window<'a, Q, P, C>(
+    entries: &[PhotosImportPendingEntry],
+    pairs: &[(String, String)],
+    query: &mut Q,
+    quarantined: &mut P,
+    direct_library: impl FnMut(&str) -> Option<&'a Path>,
+    checkpoint: &mut C,
+    progress: &mut PhotosImportProgress,
+) -> anyhow::Result<Vec<super::LibraryAssetRecord>>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+    C: for<'b> FnMut(&[PhotosImportPendingEntry], PhotosImportCheckpointUpdate<'b>) -> Result<()>,
+{
+    let (proofs, error) = library_records_from_pending_import_partial(
+        entries,
+        pairs,
+        query,
+        quarantined,
+        direct_library,
+    )?;
+    if !proofs.is_empty() {
+        if error.is_none() {
+            checkpoint_with_progress(entries, &proofs, checkpoint, progress)?;
+        } else {
+            let paths = proofs
+                .iter()
+                .map(|asset| asset.rel_path.as_str())
+                .collect::<BTreeSet<_>>();
+            let verified = entries
+                .iter()
+                .filter(|entry| paths.contains(entry.rel_path.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            checkpoint_with_progress(&verified, &proofs, checkpoint, progress)?;
+        }
+    }
+    if let Some(error) = error {
+        anyhow::bail!(
+            "Photos verification unresolved: {error}; saved {} of {} receipts in this window; resume will reverify committed IDs",
+            proofs.len(),
+            entries.len()
+        );
+    }
+    Ok(proofs)
+}
 
 fn photos_command_is_transient(error: &std::io::Error, context: &str) -> bool {
     matches!(
@@ -628,6 +675,34 @@ fn require_checkpointed_journal_identity(
     Ok(())
 }
 
+fn journal_pending_entries(
+    request: &serde_json::Value,
+    pairs: Vec<(String, String)>,
+    pending: &BTreeMap<String, PhotosImportPendingEntry>,
+    imported: &BTreeMap<String, super::LibraryAssetRecord>,
+    relocated_originals: bool,
+) -> anyhow::Result<(Vec<PhotosImportPendingEntry>, Vec<(String, String)>)> {
+    let mut recovered_entries = Vec::new();
+    let mut recovered_pairs = Vec::new();
+    for (entry_id, identifier) in pairs {
+        if let Some(entry) = pending.get(&entry_id) {
+            let asset = request["assets"]
+                .as_array()
+                .and_then(|assets| assets.iter().find(|asset| asset["entryID"] == entry_id))
+                .ok_or_else(|| anyhow::anyhow!("journal is missing requested asset {entry_id}"))?;
+            anyhow::ensure!(
+                resource_matches(&asset["resources"], entry, relocated_originals)?,
+                "journal source/hash binding changed"
+            );
+            recovered_entries.push(entry.clone());
+            recovered_pairs.push((entry_id, identifier));
+        } else {
+            require_checkpointed_journal_identity(imported, &entry_id, &identifier)?;
+        }
+    }
+    Ok((recovered_entries, recovered_pairs))
+}
+
 fn try_import_inner<Q, P, C>(
     task: &ImportTask,
     plan: &PhotosImportCheckpointPlan,
@@ -751,36 +826,24 @@ where
             "journal location binding changed"
         );
         let pairs = committed_pairs(request, &record)?;
-        let mut recovered_entries = Vec::new();
-        let mut recovered_pairs = Vec::new();
-        for (entry_id, identifier) in pairs {
-            if let Some(entry) = pending.get(&entry_id) {
-                let asset = request["assets"]
-                    .as_array()
-                    .and_then(|assets| assets.iter().find(|asset| asset["entryID"] == entry_id))
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("journal is missing requested asset {entry_id}")
-                    })?;
-                anyhow::ensure!(
-                    resource_matches(&asset["resources"], entry, task.relocated_originals)?,
-                    "journal source/hash binding changed"
-                );
-                recovered_entries.push(entry.clone());
-                recovered_pairs.push((entry_id, identifier));
-            } else {
-                require_checkpointed_journal_identity(&imported, &entry_id, &identifier)?;
-            }
-        }
+        let (recovered_entries, recovered_pairs) = journal_pending_entries(
+            request,
+            pairs,
+            &pending,
+            &imported,
+            task.relocated_originals,
+        )?;
         if !recovered_entries.is_empty() {
             let _transaction = crate::batch_control::begin_transaction()?;
-            let proofs = library_records_from_pending_import(
+            let proofs = verify_checkpoint_window(
                 &recovered_entries,
                 &recovered_pairs,
                 query,
                 quarantined,
                 direct_library,
+                checkpoint,
+                &mut progress,
             )?;
-            checkpoint_with_progress(&recovered_entries, &proofs, checkpoint, &mut progress)?;
             for entry in recovered_entries {
                 pending.remove(&entry.rel_path);
             }
@@ -881,14 +944,15 @@ where
                             Ok((entry.rel_path.clone(), identifier.clone()))
                         })
                         .collect::<anyhow::Result<Vec<_>>>()?;
-                    let mut proofs = library_records_from_pending_import(
+                    let mut proofs = verify_checkpoint_window(
                         entries,
                         &pairs,
                         query,
                         quarantined,
                         direct_library,
+                        checkpoint,
+                        &mut progress,
                     )?;
-                    checkpoint_with_progress(entries, &proofs, checkpoint, &mut progress)?;
                     for entry in entries {
                         identifiers.remove(&entry.rel_path);
                     }
@@ -1022,6 +1086,257 @@ mod tests {
             },
         )?;
         assert_eq!(sends.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn committed_batch_checkpoints_verified_peers_and_resumes_by_uuid() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut entries = Vec::new();
+        let mut probes = BTreeMap::new();
+        let staging = root.path().join("new");
+        std::fs::create_dir(&staging)?;
+        for i in 0..35 {
+            let path = staging.join(format!("{i}.gif"));
+            let original = root.path().join(format!("{i}.original"));
+            std::fs::write(&path, b"synthetic")?;
+            std::fs::write(&original, b"synthetic")?;
+            let id = format!("uuid-{i:02}");
+            let rel = format!("{i:02}.gif");
+            let mut hash = super::super::Blake3Entry::default();
+            hash.out = blake3::hash(b"synthetic").to_hex().to_string();
+            hash.src = blake3::hash(b"original-before-xmp").to_hex().to_string();
+            entries.push(PhotosImportPendingEntry {
+                source_rel: rel.clone(),
+                rel_path: rel,
+                path,
+                album_name: "Synthetic".into(),
+                blake3_entry: hash,
+            });
+            probes.insert(
+                id.clone(),
+                FastImgLibraryAssetProbe {
+                    uuid: id,
+                    path: original,
+                    ismissing: false,
+                    iscloudasset: true,
+                    incloud: Some(true),
+                },
+            );
+        }
+        let assets = entries
+            .iter()
+            .map(|entry| {
+                let mut old_resource = resource(entry)?;
+                old_resource["path"] = serde_json::json!(
+                    root.path()
+                        .join("old")
+                        .join(entry.path.file_name().unwrap())
+                );
+                Ok(serde_json::json!({"entryID": entry.rel_path, "resources": [old_resource]}))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let request = serde_json::json!({"batchID": "old-batch", "assets": assets});
+        let journal = serde_json::json!({
+            "version": 1, "batchID": "old-batch", "state": "committed", "request": request,
+            "identities": entries.iter().enumerate().map(|(i, e)| serde_json::json!({
+                "entryID": e.rel_path, "localIdentifier": format!("uuid-{i:02}/L0/001")
+            })).collect::<Vec<_>>()
+        });
+        let pairs = committed_pairs(&request, &journal)?;
+        let all_pending = entries
+            .iter()
+            .map(|entry| (entry.rel_path.clone(), entry.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let (recovered, recovered_pairs) = journal_pending_entries(
+            &request,
+            pairs.clone(),
+            &all_pending,
+            &BTreeMap::new(),
+            true,
+        )?;
+        assert_eq!(recovered.len(), 35);
+        let mut invalid_progress =
+            PhotosImportProgress::new(entries.iter().map(|e| e.rel_path.as_str()))?;
+        let invalid = probes["uuid-00"].clone();
+        assert!(
+            verify_checkpoint_window(
+                &entries,
+                &pairs,
+                &mut |_| Ok(vec![invalid.clone(), invalid.clone()]),
+                &mut |_| Ok(false),
+                |_| None,
+                &mut |_, _| panic!("invalid query cannot checkpoint"),
+                &mut invalid_progress,
+            )
+            .is_err()
+        );
+        assert!(invalid_progress.complete().is_err());
+
+        let queried_ids = Cell::new(0);
+        let mut query = |ids: &[String]| {
+            queried_ids.set(queried_ids.get() + ids.len());
+            Ok(ids.iter().map(|id| probes[id].clone()).collect())
+        };
+        let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(
+            root.path().join("state.sqlite"),
+        );
+        let work = root.path().join("work");
+        std::fs::create_dir(&work)?;
+        let mut marker = WorkingCopyMarker::new(root.path().join("source"), work, 0);
+        let xmp_hash = blake3::hash(b"synthetic-xmp").to_hex().to_string();
+        let enriched = entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.rel_path.clone(),
+                    (
+                        entry.blake3_entry.src.clone(),
+                        entry.blake3_entry.out.clone(),
+                        xmp_hash.clone(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut progress = PhotosImportProgress::new(entries.iter().map(|e| e.rel_path.as_str()))?;
+        let failed_original = root.path().join("17.original");
+        let error = verify_checkpoint_window(
+            &recovered,
+            &recovered_pairs,
+            &mut query,
+            &mut |path| {
+                if path == failed_original {
+                    Err(ImgQualityError::AnalysisError(
+                        "synthetic observation drift".into(),
+                    ))
+                } else {
+                    Ok(false)
+                }
+            },
+            |_| None,
+            &mut |verified, update| {
+                let PhotosImportCheckpointUpdate::Verified(assets) = update else {
+                    panic!("unexpected submission")
+                };
+                assert_eq!(verified.len(), assets.len());
+                super::super::checkpoint_tier2_library_assets(
+                    &mut marker,
+                    &LibraryHandle {
+                        imported_assets: assets.to_vec(),
+                        import_error_count: 0,
+                        photos_library_path: None,
+                    },
+                    &enriched,
+                )
+            },
+            &mut progress,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("synthetic observation drift"));
+        assert!(error.to_string().contains("saved 34 of 35 receipts"));
+        assert!(
+            error
+                .to_string()
+                .contains("resume will reverify committed IDs")
+        );
+        marker = crate::fast_img_store::read_marker(&marker.working_copy)?;
+        assert_eq!(marker.tier2_imported_assets.len(), 34);
+        let persisted = marker
+            .tier2_imported_assets
+            .iter()
+            .find(|a| a.rel_path == "00.gif")
+            .unwrap();
+        assert_eq!(persisted.blake3, entries[0].blake3_entry.src);
+        assert_eq!(
+            persisted.library_blake3.as_deref(),
+            Some(entries[0].blake3_entry.out.as_str())
+        );
+        assert_eq!(
+            persisted.xmp_sidecar_blake3.as_deref(),
+            Some(xmp_hash.as_str())
+        );
+        let receipts = marker
+            .tier2_imported_assets
+            .iter()
+            .map(|asset| (asset.rel_path.clone(), asset.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(queried_ids.get(), 35);
+        assert!(progress.complete().is_err());
+
+        let candidates = entries
+            .iter()
+            .map(|entry| super::super::PhotosImportCandidate {
+                rel_path: entry.rel_path.clone(),
+                path: entry.path.clone(),
+                blake3: entry.blake3_entry.out.clone(),
+                album_name: entry.album_name.clone(),
+            })
+            .collect::<Vec<_>>();
+        let plan = super::super::original_photos_checkpoint_plan(&marker, &candidates)?;
+        assert_eq!(plan.proven_assets.len(), 34);
+        let pending_index = plan
+            .pending_entries
+            .into_iter()
+            .map(|entry| (entry.rel_path.clone(), entry))
+            .collect::<BTreeMap<_, _>>();
+        let (pending, pending_pairs) =
+            journal_pending_entries(&request, pairs.clone(), &pending_index, &receipts, true)?;
+        assert!(
+            journal_pending_entries(&request, pairs.clone(), &pending_index, &receipts, false)
+                .is_err()
+        );
+        for field in ["blake3", "originalFilename"] {
+            let mut altered = request.clone();
+            altered["assets"][17]["resources"][0][field] = serde_json::json!("drift");
+            assert!(
+                journal_pending_entries(&altered, pairs.clone(), &pending_index, &receipts, true)
+                    .is_err()
+            );
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending_pairs[0].1, "uuid-17/L0/001");
+        let mut resumed = PhotosImportProgress::new(pending.iter().map(|e| e.rel_path.as_str()))?;
+        verify_checkpoint_window(
+            &pending,
+            &pending_pairs,
+            &mut query,
+            &mut |_| Ok(false),
+            |_| None,
+            &mut |_, update| {
+                let PhotosImportCheckpointUpdate::Verified(assets) = update else {
+                    panic!("unexpected submission")
+                };
+                super::super::checkpoint_tier2_library_assets(
+                    &mut marker,
+                    &LibraryHandle {
+                        imported_assets: assets.to_vec(),
+                        import_error_count: 0,
+                        photos_library_path: None,
+                    },
+                    &enriched,
+                )
+            },
+            &mut resumed,
+        )?;
+        resumed.complete()?;
+        let reloaded = crate::fast_img_store::read_marker(&marker.working_copy)?;
+        assert_eq!(reloaded.tier2_imported_assets.len(), 35);
+        let recovered_asset = reloaded
+            .tier2_imported_assets
+            .iter()
+            .find(|a| a.rel_path == "17.gif")
+            .unwrap();
+        assert_eq!(recovered_asset.photos_uuid.as_deref(), Some("uuid-17"));
+        assert_eq!(recovered_asset.blake3, entries[17].blake3_entry.src);
+        assert_eq!(
+            recovered_asset.library_blake3.as_deref(),
+            Some(entries[17].blake3_entry.out.as_str())
+        );
+        assert_eq!(
+            recovered_asset.xmp_sidecar_blake3.as_deref(),
+            Some(xmp_hash.as_str())
+        );
+        assert_eq!(queried_ids.get(), 36);
         Ok(())
     }
 

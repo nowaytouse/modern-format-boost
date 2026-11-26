@@ -1948,7 +1948,9 @@ fn check_decode_probe_with_probe(
         );
     }
 
-    progress(0, detected.len());
+    if !detected.is_empty() {
+        progress(0, detected.len());
+    }
     let failures = detected
         .into_iter()
         .enumerate()
@@ -2914,6 +2916,18 @@ mod tests {
             &mut |n, total| attempts.push((n, total)),
         );
         assert!(!failed.passed);
+        assert_eq!(attempts, Vec::<(usize, usize)>::new());
+    }
+
+    #[test]
+    fn empty_decode_output_set_does_not_report_file_progress() {
+        let mut attempts = Vec::new();
+        let check = super::check_decode_probe_with_probe(
+            &[],
+            &mut |done, total| attempts.push((done, total)),
+            |_, _| panic!("empty output must not be probed"),
+        );
+        assert!(check.passed);
         assert_eq!(attempts, Vec::<(usize, usize)>::new());
     }
 

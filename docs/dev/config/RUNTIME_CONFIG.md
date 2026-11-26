@@ -225,8 +225,12 @@ verifies the metadata and the source, sidecar and delivered GIF hashes. Frames,
 timing and trailing padding are preserved. Ambiguous XMP packets, a signed GIF
 requiring a rewrite, or an AAE edit without custody retain the original and its companion. Cleanup requires fresh verification of the Photos resource.
 Use `--dry-run` to preview, or `--shortest-path --retry` to continue a saved import.
-If all previously admitted GIFs already have Photos receipts, continuing can
-recheck those assets and finish their cleanup. Additional GIFs recognized by
+For a committed native import, continuing reads the saved Photos resource IDs and
+checks any outstanding receipts before submitting new files. If an original changes
+during the check, verification retries on the same open file and checks the full
+delivery hash. An unstable original stays pending while verified peers keep their
+receipts. Once all admitted GIFs have receipts, continuing can recheck their
+custody and finish cleanup. Additional GIFs recognized by
 the current decoder stay in place for a fresh import with `--shortest-path --no-resume`.
 Fast IMG accepts the same typed `execution.error_mode` through its own GUI override
 and launcher `--img-error-mode`. The default is `log-and-continue` (record failures,

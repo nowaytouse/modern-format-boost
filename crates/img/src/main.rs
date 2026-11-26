@@ -12730,18 +12730,25 @@ fn print_photos_verifier_proof_summary(library: &LibraryHandle, expected_count: 
         quarantined,
         library.import_error_count
     );
-    if other_sync > 0 {
-        println!(
-            "[PHOTOS ] verifier policy: unrecognized Photos sync state present; Gate 2 must fail unless every asset has accepted custody proof"
-        );
+    println!(
+        "[PHOTOS ] verifier policy: {}",
+        photos_verifier_policy(library.imported_assets.len(), photos_local, other_sync)
+    );
+}
+
+const fn photos_verifier_policy(
+    imported: usize,
+    photos_local: usize,
+    other_sync: usize,
+) -> &'static str {
+    if imported == 0 {
+        "this stage has no imported assets to verify"
+    } else if other_sync > 0 {
+        "unrecognized Photos sync state present; Gate 2 must fail unless every asset has accepted custody proof"
     } else if photos_local > 0 {
-        println!(
-            "[PHOTOS ] verifier policy: local Photos custody accepted; set MFB_FAST_IMG_REQUIRE_ICLOUD_UPLOAD_PROOF=1 for slower iCloud-upload proof"
-        );
+        "local Photos custody accepted; set MFB_FAST_IMG_REQUIRE_ICLOUD_UPLOAD_PROOF=1 for slower iCloud-upload proof"
     } else {
-        println!(
-            "[PHOTOS ] verifier policy: iCloud-upload proof established for all imported assets"
-        );
+        "iCloud-upload proof established for all imported assets"
     }
 }
 
@@ -14697,6 +14704,24 @@ mod fast_img_hardening_tests {
         clippy::panic,
         clippy::assertions_on_constants
     )]
+    #[test]
+    fn photos_policy_distinguishes_empty_and_uploaded_imports() {
+        assert_eq!(
+            super::photos_verifier_policy(0, 0, 0),
+            "this stage has no imported assets to verify"
+        );
+        assert_eq!(
+            super::photos_verifier_policy(1, 0, 0),
+            "iCloud-upload proof established for all imported assets"
+        );
+        assert!(
+            super::photos_verifier_policy(1, 1, 0).starts_with("local Photos custody accepted")
+        );
+        assert!(
+            super::photos_verifier_policy(1, 0, 1).starts_with("unrecognized Photos sync state")
+        );
+    }
+
     #[test]
     fn fast_img_processing_contract_tracks_effective_route_parameters() -> anyhow::Result<()> {
         use foundation::runtime_config::{

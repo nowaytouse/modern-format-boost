@@ -849,14 +849,19 @@ struct OutputCleanupReceipt: Decodable, Equatable {
 
     func detailText(privacy: Bool) -> String {
         let unknown = localized("cleanup.not_measured")
-        var lines = [statusText, output_path,
-            localized("cleanup.counts", removed_files.map(String.init) ?? unknown,
-                already_absent_files.map(String.init) ?? unknown, pruned_directories.map(String.init) ?? unknown)]
+        var lines = [statusText, output_path]
+        let hasCleanupCounts = !["not_requested", "verification_blocked", "already_absent"].contains(outcome)
+        if hasCleanupCounts {
+            lines.append(localized("cleanup.counts", removed_files.map(String.init) ?? unknown,
+                already_absent_files.map(String.init) ?? unknown, pruned_directories.map(String.init) ?? unknown))
+        }
         if let error { lines.append(error) }
         if outcome == "residual" {
             lines += residual_inventory?.detail(privacy: privacy) ?? [localized("cleanup.residual.not_recorded")]
         }
-        lines.append(localized("cleanup.scope"))
+        if hasCleanupCounts {
+            lines.append(localized("cleanup.scope"))
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -8074,8 +8079,9 @@ func runProcessingHistorySelfTests() throws {
                 : cleanupContext
             let recorded = try parsed([operationContext, noAttempt, end]).entries[0]
             try require(recorded.outputCleanups.first?.removed_files == nil
-                        && recorded.outputCleanups.first?.detailText.contains(localized("cleanup.not_measured")) == true,
-                        "An unmeasured cleanup invented zero counts")
+                        && recorded.outputCleanups.first?.detailText.contains(localized("cleanup.not_measured")) == false
+                        && recorded.outputCleanups.first?.detailText.contains("/synthetic/output") == true,
+                        "An unattempted cleanup displayed counts or lost its path")
             let contradictory = try parsed([outcome == "not_requested" ? cleanupContext
                 : try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
                     "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": false]),
@@ -8090,6 +8096,7 @@ func runProcessingHistorySelfTests() throws {
         let partial = try parsed([cleanupContext, try bound("MFB_HISTORY_OUTPUT_CLEANUP", failedCleanup), end]).entries[0]
         try require(partial.outputCleanups.first?.removed_files == 2
                     && partial.outputCleanups.first?.pruned_directories == nil
+                    && partial.outputCleanups.first?.detailText.contains(localized("cleanup.not_measured")) == true
                     && partial.outputCleanups.first?.error == failedCleanup["error"] as? String,
                     "Partial cleanup erased completed work or invented an unmeasured directory count")
     }

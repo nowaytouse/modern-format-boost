@@ -30,6 +30,10 @@ areas of change are:
   This replaces the previous Fast GIF conversion modes and their CLI options.
 - Fast VID embeds verified XMP sidecars in the private GIF submitted to Photos,
   with separate source, sidecar and delivery hashes for verified cleanup.
+- If Photos updates a managed original during verification, Fast VID rechecks
+  the same file and its full delivery hash. Verified peers keep their receipts
+  when another asset needs attention. Continuing the task reuses the resource
+  IDs from the committed PhotoKit journal.
 - New imports give verified GIFs a corrected filename in Photos, including
   animated GIFs received with a video extension. PhotoKit receives an explicit
   GIF content type. The local source name remains available for verification and resume.
