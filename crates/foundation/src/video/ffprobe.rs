@@ -545,7 +545,7 @@ pub fn probe_single_frame_video_still(
 /// Audio and other non-video streams are allowed; filenames are not consulted.
 ///
 /// # Errors
-/// Returns an error when a claimed QuickTime file cannot be read or probed reliably.
+/// Returns an error when a claimed `QuickTime` file cannot be read or probed reliably.
 pub fn is_hevc_quicktime_mov(path: &Path) -> Result<bool, FFprobeError> {
     validate_probe_target(path)?;
     let mut file = std::fs::File::open(path)?;
@@ -2082,8 +2082,11 @@ mod tests {
             .position(|bytes| bytes == b"stco")
             .unwrap();
         let entries = u32::from_be_bytes(padded[stco + 8..stco + 12].try_into().unwrap()) as usize;
-        for entry in padded[stco + 12..stco + 12 + entries * 4].chunks_exact_mut(4) {
-            let offset = u32::from_be_bytes(entry.try_into().unwrap());
+        for entry in padded[stco + 12..stco + 12 + entries * 4]
+            .as_chunks_mut::<4>()
+            .0
+        {
+            let offset = u32::from_be_bytes(*entry);
             entry.copy_from_slice(&(offset + 8).to_be_bytes());
         }
         let padded_mov = dir.path().join("padded.mov");

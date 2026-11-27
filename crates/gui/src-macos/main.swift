@@ -13302,9 +13302,11 @@ private final class AppController: NSObject, NSWindowDelegate {
             throw HostError(message: "Log background lost native light/dark contrast")
         }
         guard let content = window.contentView else { throw HostError(message: "Missing content view") }
+        let standardOperations: [OperationMode] = [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid, .fastVidMov, .restoreJpeg, .mergeXmp]
+        func visibleOperations() -> [String?] { operationPopup.itemArray.map { $0.representedObject as? String } }
         guard !developerMode, copyButton.isHidden, openButton.isHidden, diagnosticsButton.isHidden,
               commandField.isHidden, watchCheck.isHidden,
-              !watchCheck.isEnabled, operationPopup.itemArray.count == 6,
+              !watchCheck.isEnabled, visibleOperations() == standardOperations.map(\.rawValue),
               !verboseCheck.isEnabled,
               verboseCheck.state == .on, archiveCheck.state == .off, freshCheck.state == .on,
               !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume")
@@ -13543,7 +13545,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             else { throw HostError(message: "Option clipped or overlapped: \(button.title)") }
         }
         setDeveloperMode(false)
-        guard operationPopup.itemArray.count == 6, diagnosticsButton.isHidden,
+        guard visibleOperations() == standardOperations.map(\.rawValue), diagnosticsButton.isHidden,
               diagnosticsPanel?.isVisible == false,
               watchCheck.isHidden, !watchCheck.isEnabled,
               !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume") else {

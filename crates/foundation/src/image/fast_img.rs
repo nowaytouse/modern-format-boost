@@ -2103,7 +2103,7 @@ pub enum Tier2CleanupMode {
     Original,
     /// Require the hash-bound Photos original to be an animated GIF.
     AnimatedGif,
-    /// Require the hash-bound Photos original to be an HEVC QuickTime movie.
+    /// Require the hash-bound Photos original to be an HEVC `QuickTime` movie.
     HevcMov,
 }
 
@@ -10989,7 +10989,7 @@ mod tests {
         assert_eq!(std::fs::read(&source)?, std::fs::read(&output)?);
         let probe = FastImgLibraryAssetProbe {
             uuid: "UUID".into(),
-            path: output.clone(),
+            path: output,
             ismissing: false,
             iscloudasset: false,
             incloud: Some(false),

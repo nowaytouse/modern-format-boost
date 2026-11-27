@@ -1,7 +1,7 @@
 //! GAP-1: §`DetectionUniversal` — content-based format detection via magic
 //! bytes.
 //!
-//! Reads a bounded prefix for fixed signatures and seeks over leading QuickTime
+//! Reads a bounded prefix for fixed signatures and seeks over leading `QuickTime`
 //! padding atoms. Ambiguous `mif1`/`msf1` files scan the `ftyp` brands.
 
 use crate::unified_error::{ImgQualityError, Result};
@@ -134,7 +134,7 @@ pub fn detect_regular_file_format(path: &Path) -> Result<FormatKind> {
     detect_open_format(path, &mut crate::io_utils::open_regular_nofollow(path)?)
 }
 
-/// Returns the structural validity of a QuickTime `ftyp`, or None for other content.
+/// Returns the structural validity of a `QuickTime` `ftyp`, or None for other content.
 pub(crate) fn quicktime_brand(file: &mut std::fs::File) -> std::io::Result<Option<bool>> {
     use std::io::{Read, Seek, SeekFrom};
     let length = file.metadata()?.len();
