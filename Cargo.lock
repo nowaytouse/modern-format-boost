@@ -265,8 +265,8 @@ dependencies = [
 
 [[package]]
 name = "blake3"
-version = "1.8.7"
-source = "git+https://github.com/BLAKE3-team/BLAKE3#657284b1fa4c4378aa7422b4450dcb5c2c9052fc"
+version = "1.8.8"
+source = "git+https://github.com/BLAKE3-team/BLAKE3#282d06646f0f47d90091e3413d0be2ba5bee3b1e"
 dependencies = [
  "arrayvec",
  "cc",
@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.10"
-source = "git+https://github.com/clap-rs/clap#4201754a400f676c9744da66383c89eb9f41af88"
+source = "git+https://github.com/clap-rs/clap#f733b73a1ca3d815aa76681b96838adfab16f6a1"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.10"
-source = "git+https://github.com/clap-rs/clap#4201754a400f676c9744da66383c89eb9f41af88"
+source = "git+https://github.com/clap-rs/clap#f733b73a1ca3d815aa76681b96838adfab16f6a1"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.9"
-source = "git+https://github.com/clap-rs/clap#4201754a400f676c9744da66383c89eb9f41af88"
+source = "git+https://github.com/clap-rs/clap#f733b73a1ca3d815aa76681b96838adfab16f6a1"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.2"
-source = "git+https://github.com/clap-rs/clap#4201754a400f676c9744da66383c89eb9f41af88"
+source = "git+https://github.com/clap-rs/clap#f733b73a1ca3d815aa76681b96838adfab16f6a1"
 
 [[package]]
 name = "cmake"
@@ -537,9 +537,12 @@ checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
 
 [[package]]
 name = "constant_time_eq"
-version = "0.4.2"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+checksum = "144e7f1de087984240b7816d47f698b414979faa6f40839c5b86d6bd47db57b7"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "core-foundation-sys"
@@ -1313,7 +1316,7 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 [[package]]
 name = "jpegxl-rs"
 version = "0.17.0+libjxl-0.13.0"
-source = "git+https://github.com/inflation/jpegxl-rs#314b4f4268a8bcd2b514740e5593853f41603d90"
+source = "git+https://github.com/inflation/jpegxl-rs#1bd62cd5bf947124d4ded844b2d4a04334c0bcd2"
 dependencies = [
  "bon",
  "byteorder",
@@ -1325,7 +1328,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.13.0"
-source = "git+https://github.com/inflation/jpegxl-rs#314b4f4268a8bcd2b514740e5593853f41603d90"
+source = "git+https://github.com/inflation/jpegxl-rs#1bd62cd5bf947124d4ded844b2d4a04334c0bcd2"
 dependencies = [
  "cmake",
 ]
@@ -1333,7 +1336,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.14.0+libjxl-0.13.0"
-source = "git+https://github.com/inflation/jpegxl-rs#314b4f4268a8bcd2b514740e5593853f41603d90"
+source = "git+https://github.com/inflation/jpegxl-rs#1bd62cd5bf947124d4ded844b2d4a04334c0bcd2"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -2252,7 +2255,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.42.0"
-source = "git+https://github.com/tafia/quick-xml#c0d031ac1dc27a75c267e9e35a172e48022b45d6"
+source = "git+https://github.com/tafia/quick-xml#e3c3e3a28b23d40093abc881c0da39cb94869a87"
 dependencies = [
  "memchr",
 ]
@@ -3526,16 +3529,16 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.65"
-source = "git+https://github.com/google/zerocopy#dce0b3f856ba0493335eb6bf543ff213edc108fa"
+version = "0.8.66"
+source = "git+https://github.com/google/zerocopy#45a1ffc1a1056fc4211aa7e00fa51fe1f9b86678"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.65"
-source = "git+https://github.com/google/zerocopy#dce0b3f856ba0493335eb6bf543ff213edc108fa"
+version = "0.8.66"
+source = "git+https://github.com/google/zerocopy#45a1ffc1a1056fc4211aa7e00fa51fe1f9b86678"
 dependencies = [
  "proc-macro2",
  "quote",
