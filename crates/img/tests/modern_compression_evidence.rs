@@ -137,8 +137,12 @@ fn jxl_compression_evidence_from_real_cjxl_output() -> anyhow::Result<()> {
         "positive libjxl evidence must admit modular-lossy JXL"
     );
     let tier2_scan =
-        scan_modern_lossy_static_candidates(dir.path(), &[modular, modular_lossy.clone()])?;
+        scan_modern_lossy_static_candidates(dir.path(), &[modular.clone(), modular_lossy.clone()])?;
     assert_eq!(tier2_scan.probe_failures, Vec::new());
+    assert_eq!(
+        tier2_scan.retained.get(&modular),
+        Some(&foundation::image::modern_lossy_static::ModernRetention::CompressionUnproven)
+    );
     assert_eq!(tier2_scan.candidates.len(), 1);
     assert_eq!(tier2_scan.candidates[0].path, modular_lossy);
     let imports = foundation::fast_img::build_modern_lossy_static_import_candidates(
@@ -277,8 +281,12 @@ fn avif_compression_evidence_from_real_avifenc_output() -> anyhow::Result<()> {
     )?;
     assert_eq!(
         detect_compression(&DetectedFormat::AVIF, &mono)?,
-        CompressionType::Unknown,
-        "monochrome AV1 has no chroma plane to discard"
+        if tool_available("avifdec") && tool_available("ffmpeg") {
+            CompressionType::Lossless
+        } else {
+            CompressionType::Unknown
+        },
+        "monochrome AV1 requires frame-level lossless evidence"
     );
     if tool_available("avifdec") {
         let scan = scan_modern_lossy_static_candidates(dir.path(), &[mono])?;
@@ -286,6 +294,55 @@ fn avif_compression_evidence_from_real_avifenc_output() -> anyhow::Result<()> {
             scan.is_empty(),
             "monochrome AVIF must be retained outside the destructive lossy route"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn avif_quantized_gray_and_444_are_detected_from_real_frame_headers() -> anyhow::Result<()> {
+    if !["avifenc", "avifdec", "ffmpeg"]
+        .into_iter()
+        .all(tool_available)
+    {
+        eprintln!("Skipping AVIF frame evidence test: encoder or forensic tools unavailable");
+        return Ok(());
+    }
+    let dir = tempfile::tempdir()?;
+    let gray = dir.path().join("gray.png");
+    image::GrayImage::from_raw(16, 16, (0..=u8::MAX).collect())
+        .ok_or_else(|| anyhow::anyhow!("invalid grayscale fixture"))?
+        .save(&gray)?;
+    let color = dir.path().join("color.png");
+    image::RgbImage::from_fn(16, 16, |x, y| {
+        image::Rgb([(x * 16) as u8, (y * 16) as u8, ((x + y) * 8) as u8])
+    })
+    .save(&color)?;
+    for (input, sampling) in [(&gray, "400"), (&color, "444")] {
+        let name = format!("lossy-{sampling}.avif");
+        let output = dir.path().join(&name);
+        let path = run_encoder(
+            &dir,
+            "avifenc",
+            &[
+                "-s",
+                "8",
+                "-q",
+                "50",
+                "-y",
+                sampling,
+                utf8(input)?,
+                utf8(&output)?,
+            ],
+            &name,
+        )?;
+        assert_eq!(
+            detect_compression(&DetectedFormat::AVIF, &path)?,
+            CompressionType::Lossy
+        );
+        let scan = scan_modern_lossy_static_candidates(dir.path(), std::slice::from_ref(&path))?;
+        assert_eq!(scan.probe_failures, []);
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.candidates[0].path, path);
     }
     Ok(())
 }

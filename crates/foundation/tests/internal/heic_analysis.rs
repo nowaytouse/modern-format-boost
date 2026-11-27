@@ -194,9 +194,25 @@ fn synthetic_isobmff_with_hvccs(payloads: &[&[u8]]) -> Vec<u8> {
 
     let mut data = Vec::new();
     push_box(&mut data, *b"ftyp", &[0, 0, 0, 0, b'h', b'e', b'i', b'c']);
+    let mut meta = vec![0; 4];
+    push_box(&mut meta, *b"pitm", &[0, 0, 0, 0, 0, 1]);
+    let mut iinf = vec![0, 0, 0, 0, 0, 1];
+    push_box(
+        &mut iinf,
+        *b"infe",
+        &[2, 0, 0, 0, 0, 1, 0, 0, b'h', b'v', b'c', b'1', 0],
+    );
+    push_box(&mut meta, *b"iinf", &iinf);
+    let mut ipco = Vec::new();
     for payload in payloads {
-        push_box(&mut data, *b"hvcC", payload);
+        push_box(&mut ipco, *b"hvcC", payload);
     }
+    let mut iprp = Vec::new();
+    push_box(&mut iprp, *b"ipco", &ipco);
+    // The first hvcC belongs to primary item 1; remaining properties are unused.
+    push_box(&mut iprp, *b"ipma", &[0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1]);
+    push_box(&mut meta, *b"iprp", &iprp);
+    push_box(&mut data, *b"meta", &meta);
     data
 }
 
@@ -276,7 +292,7 @@ fn classify_heic_compression_rext_444_without_pps_is_unknown() {
 }
 
 #[test]
-fn classify_heic_compression_requires_every_codec_configuration_to_be_lossy() {
+fn classify_heic_compression_uses_primary_codec_configuration() {
     let mut lossy_420 = vec![0u8; 20];
     lossy_420[1] = 1;
     lossy_420[16] = 1;
@@ -284,17 +300,79 @@ fn classify_heic_compression_requires_every_codec_configuration_to_be_lossy() {
     ambiguous_444[1] = 4;
     ambiguous_444[16] = 3;
 
-    let mixed = synthetic_isobmff_with_hvccs(&[&lossy_420, &ambiguous_444]);
+    let mixed = synthetic_isobmff_with_hvccs(&[&ambiguous_444, &lossy_420]);
     assert_eq!(
         classify_heic_compression(&mixed, std::path::Path::new("mixed.heic")).unwrap(),
         crate::image_detection::CompressionType::Unknown,
         "a lossy thumbnail/auxiliary hvcC must not classify an ambiguous primary item"
     );
 
+    let mut unassociated = synthetic_isobmff_with_hvcc(&lossy_420);
+    *unassociated.last_mut().unwrap() = 0;
+    assert_eq!(
+        classify_heic_compression(&unassociated, std::path::Path::new("unassociated.heic"))
+            .unwrap(),
+        crate::image_detection::CompressionType::Unknown,
+        "an unused codec property cannot establish the primary item's compression"
+    );
+
+    let mixed_primary_lossy = synthetic_isobmff_with_hvccs(&[&lossy_420, &ambiguous_444]);
+    assert_eq!(
+        classify_heic_compression(
+            &mixed_primary_lossy,
+            std::path::Path::new("primary-lossy.heic")
+        )
+        .unwrap(),
+        crate::image_detection::CompressionType::Lossy
+    );
+    let mut wrong_type = synthetic_isobmff_with_hvcc(&lossy_420);
+    let offset = wrong_type.windows(4).position(|w| w == b"hvc1").unwrap();
+    wrong_type[offset..offset + 4].copy_from_slice(b"unci");
+    assert_eq!(
+        classify_heic_compression(&wrong_type, std::path::Path::new("uncompressed.heif")).unwrap(),
+        crate::image_detection::CompressionType::Unknown
+    );
+
     let all_lossy = synthetic_isobmff_with_hvccs(&[&lossy_420, &lossy_420]);
     assert_eq!(
         classify_heic_compression(&all_lossy, std::path::Path::new("all-lossy.heic")).unwrap(),
         crate::image_detection::CompressionType::Lossy
+    );
+}
+
+#[test]
+fn generated_heic_grid_uses_coded_tile_properties() {
+    let Some(encoder) = crate::common_utils::resolve_tool_path("heif-enc") else {
+        eprintln!("Skipping HEIC grid test: heif-enc unavailable");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.png");
+    let output = dir.path().join("grid.heic");
+    image::RgbImage::from_pixel(128, 128, image::Rgb([24, 48, 96]))
+        .save(&input)
+        .unwrap();
+    let status = std::process::Command::new(encoder)
+        .args(["--cut-tiles", "64", "--no-alpha", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "heif-enc failed: {status}");
+    let data = std::fs::read(&output).unwrap();
+    read_heif_context_with_project_limits(&data).expect("valid generated grid");
+    assert_eq!(
+        classify_heic_compression(&data, &output).unwrap(),
+        crate::image_detection::CompressionType::Lossy
+    );
+    let mut mismatched = data;
+    let tile = mismatched.windows(4).position(|w| w == b"hvc1").unwrap();
+    mismatched[tile..tile + 4].copy_from_slice(b"unci");
+    assert_eq!(
+        classify_heic_compression(&mismatched, &output).unwrap(),
+        crate::image_detection::CompressionType::Unknown
     );
 }
 

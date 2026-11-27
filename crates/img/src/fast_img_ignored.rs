@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail, ensure};
+use foundation::image::modern_lossy_static::ModernRetention;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::io::{self, Write};
@@ -15,6 +16,7 @@ pub enum IgnoredReason {
     OutsideCurrentPolicyScope,
     OutsideSavedGifTask,
     ModernTierNotAdmitted,
+    Modern(ModernRetention),
 }
 
 impl IgnoredReason {
@@ -26,6 +28,10 @@ impl IgnoredReason {
             Self::StaticGif => "static_gif",
             Self::OutsideSavedGifTask => "outside_saved_gif_task",
             Self::ModernTierNotAdmitted => "modern_tier_not_admitted_for_original_delivery",
+            Self::Modern(ModernRetention::StaticNotConfirmed) => "static_image_unconfirmed",
+            Self::Modern(ModernRetention::CompressionUnproven) => "compression_unproven",
+            Self::Modern(ModernRetention::LosslessOutsidePolicy) => "lossless_outside_policy",
+            Self::Modern(ModernRetention::ProtectedContainer) => "preserve_original_container",
         }
     }
 
@@ -44,6 +50,18 @@ impl IgnoredReason {
             Self::StaticGif => "GIF has no displayed motion; use IMG",
             Self::OutsideSavedGifTask => {
                 "File retained for a new task; outside the saved GIF Photos delivery"
+            }
+            Self::Modern(ModernRetention::StaticNotConfirmed) => {
+                "A standalone still image could not be confirmed; original retained"
+            }
+            Self::Modern(ModernRetention::CompressionUnproven) => {
+                "Compression could not be proven from the coded image; original retained"
+            }
+            Self::Modern(ModernRetention::LosslessOutsidePolicy) => {
+                "Confirmed lossless original retained by the selected policy"
+            }
+            Self::Modern(ModernRetention::ProtectedContainer) => {
+                "Original container retained to preserve its embedded content"
             }
             Self::ModernTierNotAdmitted => {
                 "Modern-format source was not admitted for original-byte delivery by the current fast-img policy"
@@ -304,8 +322,12 @@ mod tests {
             ("animated.avif", IgnoredReason::AnimatedImageContainer),
             ("outside.mp4", IgnoredReason::OutsideCurrentPolicyScope),
             ("modern.jxl", IgnoredReason::ModernTierNotAdmitted),
+            (
+                "unknown.jxl",
+                IgnoredReason::Modern(super::ModernRetention::CompressionUnproven),
+            ),
         ])?;
-        assert_eq!(values.count(), 4);
+        assert_eq!(values.count(), 5);
 
         let lines = values.marker_lines("run-1", "invocation-1")?;
         assert!(
@@ -317,7 +339,7 @@ mod tests {
             .iter()
             .map(|line| serde_json::from_slice::<serde_json::Value>(&line[MARKER_PREFIX.len()..]))
             .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(decoded.len(), 4);
+        assert_eq!(decoded.len(), 5);
         assert_eq!(decoded[0]["reason_code"], "live_photo_pair_member");
         assert_eq!(decoded[1]["reason_code"], "animated_image_container");
         assert_eq!(decoded[2]["reason_code"], "outside_current_policy_scope");
@@ -325,9 +347,10 @@ mod tests {
             decoded[3]["reason_code"],
             "modern_tier_not_admitted_for_original_delivery"
         );
+        assert_eq!(decoded[4]["reason_code"], "compression_unproven");
         for (index, marker) in decoded.iter().enumerate() {
             assert_eq!(marker["ordinal"], index + 1);
-            assert_eq!(marker["total"], 4);
+            assert_eq!(marker["total"], 5);
             assert_eq!(marker["pipeline"], "img");
             assert_eq!(marker["schema_version"], 1);
         }

@@ -5626,6 +5626,8 @@ fn scan_fast_img_sources_with_policy(
         .map(|(path, reason)| (path.clone(), reason.as_str()))
         .collect::<BTreeMap<_, _>>();
     let mut observed_probe_paths = BTreeSet::new();
+    let mut unproven_by_format = BTreeMap::<&str, usize>::new();
+    let mut corrected_extensions = 0usize;
     let preparation = foundation::progress::FileStageProgress::new(
         candidate_count as u64,
         foundation::progress::FileProgressStage::FastImgSourcePreparation,
@@ -5672,7 +5674,8 @@ fn scan_fast_img_sources_with_policy(
             continue;
         }
         if identity.extension_mismatch {
-            tracing::warn!(
+            corrected_extensions += 1;
+            tracing::debug!(
                 target: "format_identity",
                 path = %path.display(),
                 content_family = ?identity.family,
@@ -5723,6 +5726,18 @@ fn scan_fast_img_sources_with_policy(
             || modern_lossy_scan.lossless_sources.contains_key(path)
         {
             source_files.push(source);
+        } else if let Some(&reason) = modern_lossy_scan.retained.get(path) {
+            if reason
+                == foundation::image::modern_lossy_static::ModernRetention::CompressionUnproven
+            {
+                *unproven_by_format
+                    .entry(identity.family.canonical_extension().unwrap_or("unknown"))
+                    .or_default() += 1;
+            }
+            ignored_candidates.push((
+                path.to_path_buf(),
+                fast_img_ignored::IgnoredReason::Modern(reason),
+            ));
         } else if fast_img_tier2_source_format(strategy, identity.family)
             || modern_probe_failure_paths.contains_key(path)
         {
@@ -5739,6 +5754,16 @@ fn scan_fast_img_sources_with_policy(
     }
     preparation.set(candidate_count as u64);
     preparation.finish();
+    if corrected_extensions != 0 {
+        println!(
+            "[FASTIMG ] routed by file content despite a different filename extension: count={corrected_extensions}"
+        );
+    }
+    for (format, count) in unproven_by_format {
+        println!(
+            "[FASTIMG ] retained originals with unproven compression: format={format} count={count}"
+        );
+    }
     let classified_count = source_files
         .len()
         .checked_add(modern_lossy_scan.candidates.len())

@@ -60,8 +60,8 @@ pub fn extract_hevc_bit_depths(hvcc_data: &[u8]) -> Result<(u8, u8)> {
 /// Evidence ladder (positive proof only):
 /// 1. **hvcC `chroma_format_idc` 4:2:0 / 4:2:2** → `Lossy` (subsampling
 ///    discards chroma information).
-/// 2. Multiple hvcC records → `Lossy` only when every record independently
-///    proves 4:2:0/4:2:2; mixed primary/auxiliary evidence stays `Unknown`.
+/// 2. Only an hvcC property associated with the primary item supplies evidence;
+///    an absent or ambiguous association stays `Unknown`.
 /// 3. **RExt/SCC + monochrome/4:4:4 + PPS
 ///    `transquant_bypass_enabled_flag == 0`** →
 ///    `Lossy` (quantization bypass disabled: every CU is quantized).
@@ -97,31 +97,11 @@ pub fn classify_heic_compression(
         )
     );
 
-    if hvcc_boxes.len() > 1 {
-        // HEIF may carry independent primary, thumbnail and auxiliary codec
-        // configurations. Only admit the container when every hvcC record has
-        // direct chroma-subsampling proof; otherwise the primary item's
-        // compression semantics are not established without resolving ipma.
-        for hvcc_data in &hvcc_boxes {
-            if hvcc_data.len() < 20 {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "HEIC: hvcC box is {} bytes (minimum 20 required); cannot determine compression — {}",
-                    hvcc_data.len(),
-                    path.display()
-                )));
-            }
-            extract_hevc_bit_depths(hvcc_data)?;
-            let chroma_format_idc = hvcc_data[16] & 0x03;
-            if chroma_format_idc != crate::constants::HEIC_CHROMA_420
-                && chroma_format_idc != crate::constants::HEIC_CHROMA_422
-            {
-                return Ok(CompressionType::Unknown);
-            }
-        }
-        return Ok(CompressionType::Lossy);
+    let hvcc_data = super::image_formats::heif_items::primary_codec_property(data, *b"hvcC");
+    if !hvcc_boxes.is_empty() && hvcc_data.is_none() {
+        // An unassociated thumbnail or unused property cannot establish the primary codec.
+        return Ok(CompressionType::Unknown);
     }
-
-    let hvcc_data = hvcc_boxes.first().copied();
 
     if let Some(hvcc_data) = hvcc_data {
         crate::log_debug!(

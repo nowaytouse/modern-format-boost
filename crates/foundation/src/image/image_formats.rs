@@ -840,11 +840,8 @@ pub mod gif {
     }
 }
 
-pub mod avif {
-    use crate::common_utils::find_all_box_data_recursive;
-    use crate::unified_error::{ImgQualityError, Result};
-    use std::fs;
-    use std::path::Path;
+pub(super) mod heif_items {
+    use std::collections::{HashMap, HashSet};
 
     fn child_boxes(mut data: &[u8]) -> impl Iterator<Item = ([u8; 4], &[u8])> {
         std::iter::from_fn(move || {
@@ -871,118 +868,191 @@ pub mod avif {
         }
     }
 
-    fn primary_property_indexes(mut ipma: &[u8], primary_id: u32) -> Option<Vec<u16>> {
-        let header = ipma.split_off(..4)?;
-        let [version @ (0 | 1), 0, 0, flags @ (0 | 1)] = *header else {
+    fn primary_id(meta: &[u8]) -> Option<u32> {
+        let mut pitm = unique_child(meta, *b"pitm")?;
+        let [version @ (0 | 1), 0, 0, 0] = *pitm.split_off(..4)? else {
+            return None;
+        };
+        let id = read_item_id(&mut pitm, version == 1)?;
+        (id != 0 && pitm.is_empty()).then_some(id)
+    }
+
+    // Item payloads after the type include the name and optional MIME type.
+    type ItemTable<'a> = HashMap<u32, ([u8; 4], &'a [u8])>;
+
+    fn item_table(meta: &[u8]) -> Option<ItemTable<'_>> {
+        let mut table = unique_child(meta, *b"iinf")?;
+        let [version @ (0 | 1), 0, 0, 0] = *table.split_off(..4)? else {
+            return None;
+        };
+        let count = read_item_id(&mut table, version == 1)?;
+        if count > 4096 {
+            return None;
+        }
+        let mut items = HashMap::new();
+        for _ in 0..count {
+            let (tag, mut item, next) = crate::common_utils::parse_isobmff_box(table, 0)?;
+            table = table.get(next..)?;
+            if tag != *b"infe" {
+                return None;
+            }
+            let [version @ (2 | 3), 0, 0, 0 | 1] = *item.split_off(..4)? else {
+                return None;
+            };
+            let id = read_item_id(&mut item, version == 3)?;
+            if id == 0 || item.split_off(..2)? != [0; 2] {
+                return None;
+            }
+            let kind = item.split_off(..4)?.try_into().ok()?;
+            if items.insert(id, (kind, item)).is_some() {
+                return None;
+            }
+        }
+        table.is_empty().then_some(items)
+    }
+
+    fn hevc_image_items(meta: &[u8], primary: u32) -> Option<HashSet<u32>> {
+        let types = item_table(meta)?;
+        match &types.get(&primary)?.0 {
+            b"hvc1" => return Some(HashSet::from([primary])),
+            b"grid" => {}
+            _ => return None,
+        }
+        let mut iref = unique_child(meta, *b"iref")?;
+        let [version @ (0 | 1), 0, 0, 0] = *iref.split_off(..4)? else {
+            return None;
+        };
+        let mut tiles = None;
+        while !iref.is_empty() {
+            let (kind, mut reference, next) = crate::common_utils::parse_isobmff_box(iref, 0)?;
+            iref = iref.get(next..)?;
+            if kind != *b"dimg" {
+                continue;
+            }
+            let from = read_item_id(&mut reference, version == 1)?;
+            let count = usize::from(u16::from_be_bytes(
+                reference.split_off(..2)?.try_into().ok()?,
+            ));
+            if count == 0 || count > 4096 {
+                return None;
+            }
+            let mut ids = HashSet::new();
+            for _ in 0..count {
+                if !ids.insert(read_item_id(&mut reference, version == 1)?) {
+                    return None;
+                }
+            }
+            if !reference.is_empty() {
+                return None;
+            }
+            if from == primary && tiles.replace(ids).is_some() {
+                return None;
+            }
+        }
+        let tiles = tiles?;
+        if tiles
+            .iter()
+            .any(|id| types.get(id).map(|(kind, _)| *kind) != Some(*b"hvc1"))
+        {
+            return None;
+        }
+        Some(tiles)
+    }
+
+    // Require exactly one matching association for each contributing item.
+    // Extra configurations belonging to thumbnails do not affect the verdict.
+    pub(in crate::image) fn primary_codec_property(data: &[u8], codec: [u8; 4]) -> Option<&[u8]> {
+        let meta = unique_child(data, *b"meta")?.strip_prefix(&[0; 4])?;
+        let primary = primary_id(meta)?;
+        let mut wanted = if codec == *b"hvcC" {
+            hevc_image_items(meta, primary)?
+        } else {
+            HashSet::from([primary])
+        };
+        let properties = unique_child(meta, *b"iprp")?;
+        let mut ipco = unique_child(properties, *b"ipco")?;
+        let mut records = Vec::new();
+        while !ipco.is_empty() {
+            let (tag, data, next) = crate::common_utils::parse_isobmff_box(ipco, 0)?;
+            ipco = ipco.get(next..)?;
+            if records.len() == 0x7fff {
+                return None;
+            }
+            records.push((tag == codec).then_some(data));
+        }
+        let mut ipma = unique_child(properties, *b"ipma")?;
+        let [version @ (0 | 1), 0, 0, flags @ (0 | 1)] = *ipma.split_off(..4)? else {
             return None;
         };
         let rows = u32::from_be_bytes(ipma.split_off(..4)?.try_into().ok()?);
-        let mut primary = None;
+        if rows > 4096 {
+            return None;
+        }
+        let mut common = None;
+        let mut seen = HashSet::new();
         for _ in 0..rows {
-            let item_id = read_item_id(&mut ipma, version == 1)?;
+            let id = read_item_id(&mut ipma, version == 1)?;
             let count = usize::from(*ipma.split_off(..1)?.first()?);
-            let entries = ipma.split_off(..count * (usize::from(flags) + 1))?;
-            if item_id != primary_id {
+            let width = usize::from(flags) + 1;
+            let entries = ipma.split_off(..count * width)?;
+            if !seen.insert(id) {
+                return None;
+            }
+            if !wanted.remove(&id) {
                 continue;
             }
-            if primary.is_some() {
-                return None;
-            }
-
-            let indexes = if flags == 1 {
-                entries
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|entry| u16::from_be_bytes(*entry) & 0x7fff)
-                    .collect()
-            } else {
-                entries
-                    .iter()
-                    .map(|entry| u16::from(*entry & 0x7f))
-                    .collect()
-            };
-            primary = Some(indexes);
-        }
-        if !ipma.is_empty() {
-            return None;
-        }
-        primary
-    }
-
-    fn primary_av1c(data: &[u8]) -> Option<&[u8]> {
-        let meta = unique_child(data, *b"meta")?.strip_prefix(&[0, 0, 0, 0])?;
-        let mut pitm = unique_child(meta, *b"pitm")?;
-        let header = pitm.split_off(..4)?;
-        let [version @ (0 | 1), 0, 0, 0] = *header else {
-            return None;
-        };
-        let primary = read_item_id(&mut pitm, version == 1)?;
-        if primary == 0 || !pitm.is_empty() {
-            return None;
-        }
-        let properties = unique_child(meta, *b"iprp")?;
-        let indexes = primary_property_indexes(unique_child(properties, *b"ipma")?, primary)?;
-        let property_container = unique_child(properties, *b"ipco")?;
-        let mut selected = None;
-        let mut count = 0;
-        for (kind, payload) in child_boxes(property_container) {
-            count += 1;
-            if kind == *b"av1C"
-                && u16::try_from(count).is_ok_and(|index| indexes.contains(&index))
-                && selected.replace(payload).is_some()
-            {
-                return None;
-            }
-        }
-        if indexes.iter().any(|&index| usize::from(index) > count) {
-            return None;
-        }
-        selected
-    }
-
-    /// Every image-bearing item must be one of the planes we can inspect and
-    /// preserve. Derived grids, hidden gain maps and additional image items
-    /// can be absent from the list of top-level libheif image handles.
-    pub(crate) fn only_coded_planes(data: &[u8], plane_ids: &[u32]) -> bool {
-        fn coded_ids(data: &[u8]) -> Option<Vec<u32>> {
-            let meta = unique_child(data, *b"meta")?.strip_prefix(&[0; 4])?;
-            let mut table = unique_child(meta, *b"iinf")?;
-            let header = table.split_off(..4)?;
-            let [version @ (0 | 1), 0, 0, 0] = *header else {
-                return None;
-            };
-            let count = read_item_id(&mut table, version == 1)?;
-            let mut ids = Vec::new();
-            for _ in 0..count {
-                let (kind, mut item, consumed) = crate::common_utils::parse_isobmff_box(table, 0)?;
-                table = table.get(consumed..)?;
-                if kind != *b"infe" {
-                    return None;
-                }
-                let header = item.split_off(..4)?;
-                let [version @ (2 | 3), 0, 0, 0 | 1] = *header else {
-                    return None;
-                };
-                let id = read_item_id(&mut item, version == 3)?;
-                if item.split_off(..2)? != [0; 2] {
-                    return None;
-                }
-                match item.split_off(..4)? {
-                    b"av01" => ids.push(id),
-                    b"Exif" => {}
-                    b"mime"
-                        if item.split(|byte| *byte == 0).nth(1) == Some(b"application/rdf+xml") => {
-                    }
+            let mut item_codec = None;
+            for entry in entries.chunks_exact(width) {
+                let index = match *entry {
+                    [n] => usize::from(n & 0x7f),
+                    [hi, lo] => usize::from(u16::from_be_bytes([hi, lo]) & 0x7fff),
                     _ => return None,
+                };
+                if index != 0
+                    && records.get(index - 1)?.is_some()
+                    && item_codec.replace(index).is_some()
+                {
+                    return None;
                 }
             }
-            table.is_empty().then_some(ids)
+            let index = item_codec?;
+            if common.replace(index).is_some_and(|prior| prior != index) {
+                return None;
+            }
         }
-        coded_ids(data).is_some_and(|ids| {
-            ids.len() == plane_ids.len() && plane_ids.iter().all(|id| ids.contains(id))
-        })
+        if !wanted.is_empty() || !ipma.is_empty() {
+            return None;
+        }
+        records.get(common? - 1).copied().flatten()
     }
+
+    /// Exclude hidden or derived image items that libheif can omit from its handles.
+    pub(in crate::image) fn only_coded_planes(data: &[u8], plane_ids: &[u32]) -> bool {
+        let Some(items) = unique_child(data, *b"meta")
+            .and_then(|m| m.strip_prefix(&[0; 4]))
+            .and_then(item_table)
+        else {
+            return false;
+        };
+        let mut count = 0;
+        for (id, (kind, payload)) in items {
+            match &kind {
+                b"av01" if plane_ids.contains(&id) => count += 1,
+                b"Exif" => {}
+                b"mime"
+                    if payload.split(|byte| *byte == 0).nth(1) == Some(b"application/rdf+xml") => {}
+                _ => return false,
+            }
+        }
+        count == plane_ids.len()
+    }
+}
+
+pub mod avif {
+    use crate::common_utils::find_all_box_data_recursive;
+    use crate::unified_error::{ImgQualityError, Result};
+    use std::fs;
+    use std::path::Path;
 
     /// Classify primary AVIF compression from its associated codec property.
     ///
@@ -1014,7 +1084,7 @@ pub mod avif {
         }
 
         // AV1 signals x=y=1 for monochrome too, with no chroma plane to subsample.
-        let Some(primary) = primary_av1c(data) else {
+        let Some(primary) = super::heif_items::primary_codec_property(data, *b"av1C") else {
             return Ok(CompressionType::Unknown);
         };
         Ok(match primary[2] & 0x1c {

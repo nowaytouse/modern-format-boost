@@ -23,6 +23,19 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Modern still-image detection (2026-11-27)
+
+- Fast IMG and image inspection now read AV1 frame quantization when an AVIF
+  container alone cannot establish its compression. This covers verified
+  monochrome and 4:4:4 stills, including separately inspected alpha planes.
+- HEIC inspection uses the primary image's codec configuration or the shared
+  configuration of its referenced grid tiles. An unrelated thumbnail supplies
+  no evidence about the primary image. WebP inspection checks for one
+  unambiguous image payload before admitting the file.
+- Fast IMG records why each original was retained and counts unproven
+  compression by detected format. Recognized filename-extension mismatches
+  are summarized once per scan.
+
 ### Fast VID GIF originals (2026-11-27)
 
 - Fast VID now imports verified GIF87a and GIF89a originals into Apple Photos

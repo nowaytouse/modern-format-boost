@@ -1500,7 +1500,7 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
 
         DetectedFormat::HEIC | DetectedFormat::HEIF => detect_heic_compression(path),
 
-        DetectedFormat::AVIF => detect_avif_compression(path),
+        DetectedFormat::AVIF => detect_avif_compression(path, false),
 
         DetectedFormat::JXL => detect_jxl_compression(path),
 
@@ -3702,13 +3702,8 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                 }
             };
         }
-        DetectedFormat::HEIC | DetectedFormat::HEIF => {
-            let comp = detect_heic_compression(path)?;
-            precision.is_lossless_deterministic = comp == CompressionType::Lossless;
-        }
-        DetectedFormat::AVIF => {
-            let comp = detect_avif_compression(path)?;
-            precision.is_lossless_deterministic = comp == CompressionType::Lossless;
+        DetectedFormat::HEIC | DetectedFormat::HEIF | DetectedFormat::AVIF => {
+            precision.is_lossless_deterministic = compression == CompressionType::Lossless;
         }
         _ => {}
     }
@@ -4281,15 +4276,44 @@ fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
 }
 
 /// Detect AVIF compression from positive codec evidence.
-fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
-    crate::common_utils::validate_file_size_limit(
-        path,
-        crate::constants::IMAGE_ANALYSIS_FILE_SIZE_LIMIT,
-    )
-    .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
-
-    let data = std::fs::read(path)?;
-    crate::image_formats::avif::classify_compression(&data, path)
+pub(super) fn detect_avif_compression(
+    path: &Path,
+    validated_static: bool,
+) -> Result<CompressionType> {
+    let data = super::modern_lossy_static::read_static_probe_input(path)?;
+    let header = crate::image_formats::avif::classify_compression(&data, path)?;
+    // A metadata-only buffer can describe chroma, but contains no frame to inspect.
+    if header != CompressionType::Unknown
+        || ![*b"mdat", *b"idat"]
+            .into_iter()
+            .any(|kind| crate::common_utils::find_any_box_recursive(&data, kind))
+        || crate::common_utils::resolve_tool_path(crate::constants::TOOL_AVIFDEC).is_none()
+        || crate::common_utils::resolve_tool_path(crate::constants::TOOL_FFMPEG).is_none()
+    {
+        return Ok(header);
+    }
+    if !validated_static {
+        if !super::modern_lossy_static::confirmed_static_only(path, &DetectedFormat::AVIF)? {
+            return Ok(CompressionType::Unknown);
+        }
+        super::format_detect::validate_format_forensic(
+            path,
+            super::format_detect::FormatKind::Avif,
+        )?;
+    }
+    let codec = super::avif_lossless::proven_static_compression(path, &data)?;
+    // The delivery scan already rehashes admitted sources. Bind a standalone
+    // verdict to the bytes the external frame probes were asked to inspect too.
+    if !validated_static
+        && codec != CompressionType::Unknown
+        && crate::common_utils::blake3_hex(&data)
+            != crate::common_utils::calculate_blake3_hash(path)?
+    {
+        return Err(ImgQualityError::AnalysisError(
+            "AVIF changed during compression inspection".into(),
+        ));
+    }
+    Ok(codec)
 }
 
 /// Detect HEIC/HEIF compression from positive codec evidence.

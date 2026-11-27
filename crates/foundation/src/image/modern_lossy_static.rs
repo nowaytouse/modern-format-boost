@@ -61,6 +61,7 @@ pub fn probe_modern_lossy_static(path: &Path) -> Result<Option<ModernLossyStatic
         false,
         &mut crate::live_photo::LivePhotoScan::default(),
     )?
+    .admitted()
     .map(|(_, candidate)| candidate))
 }
 
@@ -82,7 +83,32 @@ pub fn probe_fast_img_lossless_static(path: &Path) -> Result<bool> {
         true,
         &mut crate::live_photo::LivePhotoScan::default(),
     )?
+    .admitted()
     .is_some_and(|(codec, _)| codec == CompressionType::Lossless))
+}
+
+/// Why a modern input was retained after a completed source inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModernRetention {
+    StaticNotConfirmed,
+    CompressionUnproven,
+    LosslessOutsidePolicy,
+    ProtectedContainer,
+}
+
+enum StaticProbe {
+    OutsideScope,
+    Retained(ModernRetention),
+    Admitted(CompressionType, ModernLossyStaticCandidate),
+}
+
+impl StaticProbe {
+    fn admitted(self) -> Option<(CompressionType, ModernLossyStaticCandidate)> {
+        match self {
+            Self::Admitted(codec, source) => Some((codec, source)),
+            Self::OutsideScope | Self::Retained(_) => None,
+        }
+    }
 }
 
 fn probe_static(
@@ -90,9 +116,9 @@ fn probe_static(
     format: FormatKind,
     include_lossless: bool,
     live_photos: &mut crate::live_photo::LivePhotoScan,
-) -> Result<Option<(CompressionType, ModernLossyStaticCandidate)>> {
+) -> Result<StaticProbe> {
     if !(is_modern_static_image_format(format) || include_lossless && format == FormatKind::Png) {
-        return Ok(None);
+        return Ok(StaticProbe::OutsideScope);
     }
     if live_photos.is_live(path)? {
         tracing::info!(
@@ -100,7 +126,7 @@ fn probe_static(
             path = %path.display(),
             "retaining Live Photo asset outside standalone tier-2 import"
         );
-        return Ok(None);
+        return Ok(StaticProbe::OutsideScope);
     }
 
     // Bind every classification decision to the exact bytes later offered to
@@ -121,7 +147,7 @@ fn probe_static(
 
     let compression = if format == FormatKind::Png {
         if super::png_validation::parse_apng_animation(&read_static_probe_input(path)?)?.is_some() {
-            return Ok(None);
+            return Ok(StaticProbe::Retained(ModernRetention::StaticNotConfirmed));
         }
         if !crate::image::png_validation::is_true_png(path)? {
             return Err(ImgQualityError::AnalysisError(
@@ -136,25 +162,16 @@ fn probe_static(
     } else {
         let webp = if format == FormatKind::WebP {
             let Some(codec) = probe_static_webp_compression(path)? else {
-                return Ok(None);
+                return Ok(StaticProbe::Retained(ModernRetention::StaticNotConfirmed));
             };
             Some(codec)
         } else {
             if !confirmed_static_only(path, &detected)? {
-                return Ok(None);
+                return Ok(StaticProbe::Retained(ModernRetention::StaticNotConfirmed));
             }
             None
         };
-        let codec = detect_modern_compression_authoritative(path, format, &detected, webp)?;
-        if include_lossless
-            && format == FormatKind::Avif
-            && codec == CompressionType::Unknown
-            && crate::image::avif_lossless::proven_static_lossless(path)?
-        {
-            CompressionType::Lossless
-        } else {
-            codec
-        }
+        detect_modern_compression_authoritative(path, format, &detected, webp)?
     };
     match compression {
         CompressionType::Lossy if format != FormatKind::Png => {}
@@ -164,7 +181,15 @@ fn probe_static(
                     format,
                     FormatKind::Png | FormatKind::WebP | FormatKind::Avif
                 ) => {}
-        _ => return Ok(None),
+        CompressionType::Unknown => {
+            return Ok(StaticProbe::Retained(ModernRetention::CompressionUnproven));
+        }
+        CompressionType::Lossless => {
+            return Ok(StaticProbe::Retained(
+                ModernRetention::LosslessOutsidePolicy,
+            ));
+        }
+        _ => return Ok(StaticProbe::OutsideScope),
     }
 
     if compression == CompressionType::Lossless
@@ -172,7 +197,7 @@ fn probe_static(
     {
         tracing::info!(target: "modern_lossy_static", path = %path.display(), reason,
             "retaining original container outside lossless pixel encoding");
-        return Ok(None);
+        return Ok(StaticProbe::Retained(ModernRetention::ProtectedContainer));
     }
 
     let after_blake3 = crate::common_utils::calculate_blake3_hash(path).map_err(|err| {
@@ -194,7 +219,7 @@ fn probe_static(
         .and_then(|name| name.to_str())
         .unwrap_or("")
         .to_string();
-    Ok(Some((
+    Ok(StaticProbe::Admitted(
         compression,
         ModernLossyStaticCandidate {
             path: path.to_path_buf(),
@@ -202,7 +227,7 @@ fn probe_static(
             format,
             blake3: after_blake3,
         },
-    )))
+    ))
 }
 
 /// Result of a tier-2 scan: admitted candidates plus per-file probe failures.
@@ -216,9 +241,11 @@ pub struct ModernLossyStaticScan {
     /// Positive source evidence for the separate d=0 encoder, keyed by actual path.
     pub lossless_sources: BTreeMap<PathBuf, String>,
     pub probe_failures: Vec<(PathBuf, String)>,
+    pub retained: BTreeMap<PathBuf, ModernRetention>,
 }
 
 impl ModernLossyStaticScan {
+    /// Whether there are any files to process or probe failures to report.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.candidates.is_empty()
@@ -270,7 +297,7 @@ fn scan_static_sources(
         // Inspection counts every completed probe, including skips and failures.
         progress.set((index + 1) as u64);
         match result {
-            Ok(Some((compression, candidate))) => {
+            Ok(StaticProbe::Admitted(compression, candidate)) => {
                 let rel_path = crate::pipeline::verification::fast_img_relative_key(
                     path,
                     src_root,
@@ -292,7 +319,10 @@ fn scan_static_sources(
                     });
                 }
             }
-            Ok(None) => {}
+            Ok(StaticProbe::Retained(reason)) => {
+                scan.retained.insert(path.clone(), reason);
+            }
+            Ok(StaticProbe::OutsideScope) => {}
             Err(err) => {
                 tracing::warn!(
                     target: "modern_lossy_static",
@@ -311,7 +341,7 @@ fn scan_static_sources(
     Ok(scan)
 }
 
-fn confirmed_static_only(path: &Path, detected: &DetectedFormat) -> Result<bool> {
+pub(super) fn confirmed_static_only(path: &Path, detected: &DetectedFormat) -> Result<bool> {
     use crate::image_detection::{animatable_format_confirmed_static_only, detect_animation};
 
     let (is_animated, frame_count, _) = detect_animation(path, detected)?;
@@ -370,17 +400,18 @@ fn probe_static_webp_compression(path: &Path) -> Result<Option<CompressionType>>
             path.display()
         )));
     }
-    let compression = match features.format() {
-        Some(::webp::BitstreamFormat::Lossy) => CompressionType::Lossy,
-        Some(::webp::BitstreamFormat::Lossless) => CompressionType::Lossless,
-        Some(::webp::BitstreamFormat::Undefined) | None => {
-            tracing::debug!(
-                target: "modern_lossy_static",
-                path = %path.display(),
-                "retaining WebP without positive static codec evidence"
-            );
-            return Ok(None);
-        }
+    if !matches!(
+        features.format(),
+        Some(::webp::BitstreamFormat::Lossy | ::webp::BitstreamFormat::Lossless)
+    ) {
+        return Ok(Some(CompressionType::Unknown));
+    }
+    // A native decoder can ignore a second, conflicting image chunk. Require one
+    // top-level VP8/VP8L payload consistent with libwebp, as in normal IMG.
+    let compression = if crate::image_formats::webp::is_lossless_from_bytes(&data)? {
+        CompressionType::Lossless
+    } else {
+        CompressionType::Lossy
     };
     // Header features establish codec semantics, not complete pixel validity.
     let decoded = crate::image_detection::open_image_with_limits(path).map_err(|error| {
@@ -438,6 +469,9 @@ fn detect_modern_compression_authoritative(
         forensic_validator_available.then(|| validate_format_forensic(path, format)),
     )?;
 
+    if format == FormatKind::Avif {
+        return super::image_detection::detect_avif_compression(path, true);
+    }
     if format == FormatKind::WebP {
         return webp_compression.ok_or_else(|| {
             ImgQualityError::AnalysisError(format!(
@@ -543,6 +577,16 @@ mod tests {
         assert_eq!(scan.candidates[0].path, lossy_path);
         assert_eq!(scan.lossless_sources.len(), 1);
         assert!(scan.lossless_sources.contains_key(&lossless_path));
+
+        let mut conflicting = lossless.clone();
+        conflicting.extend_from_slice(&lossy[12..]);
+        let riff_size = u32::try_from(conflicting.len() - 8).expect("synthetic RIFF length");
+        conflicting[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        let conflicting_path = directory.path().join("two-images.webp");
+        std::fs::write(&conflicting_path, &conflicting)?;
+        let conflict = scan_fast_img_static_candidates(directory.path(), &[conflicting_path])?;
+        assert_eq!(conflict.probe_failures.len(), 1);
+        assert!(conflict.candidates.is_empty() && conflict.lossless_sources.is_empty());
 
         assert_eq!(&lossy[12..16], b"VP8 ");
         let payload_len = usize::try_from(u32::from_le_bytes(
