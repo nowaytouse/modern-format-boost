@@ -103,7 +103,7 @@ struct Args {
     #[arg(long)]
     archive: bool,
 
-    /// Import Fast IMG output or original Fast VID GIFs into Photos. Local Fast VID keeps GIFs in place.
+    /// Import Fast IMG output or Fast VID originals into Photos. Local Fast VID keeps originals in place.
     #[arg(long = "shortest-path")]
     shortest_path: bool,
 
@@ -254,7 +254,7 @@ struct Args {
     #[arg(long, value_enum)]
     img_error_mode: Option<BatchErrorMode>,
 
-    /// Standard video batch policy; not applicable to Fast Video/GIF.
+    /// Standard video batch policy; not applicable to Fast VID originals.
     #[arg(long, value_enum)]
     vid_error_mode: Option<BatchErrorMode>,
 
@@ -707,13 +707,13 @@ impl Args {
         self.mode == LaunchMode::FastImg || (self.mode == LaunchMode::FastVid && self.shortest_path)
     }
 
-    fn keeps_gifs_in_place(&self) -> bool {
+    fn keeps_vid_originals_in_place(&self) -> bool {
         self.mode == LaunchMode::FastVid && !self.shortest_path
     }
 
     fn delivery_strategy(&self) -> Option<&str> {
         if self.mode == LaunchMode::FastVid {
-            Some("gif")
+            Some(self.strategy.as_deref().unwrap_or("gif"))
         } else {
             self.strategy.as_deref()
         }
@@ -724,32 +724,32 @@ fn validate_media_options(args: &Args) -> Result<()> {
     if args.mode == LaunchMode::FastVid {
         anyhow::ensure!(
             args.inputs.len() == 1,
-            "Fast VID requires one GIF file or input folder"
+            "Fast VID requires one original file or input folder"
         );
         anyhow::ensure!(
-            args.strategy.is_none()
+            matches!(args.strategy.as_deref(), None | Some("gif" | "hevc-mov"))
                 && !args.archive
                 && !args.in_place
                 && !args.force
                 && !args.images_only
                 && !args.ultimate
                 && !args.watch,
-            "Fast VID handles original GIFs and does not accept conversion, watch or in-place switches"
+            "Fast VID requires a GIF or HEVC MOV strategy and does not accept conversion, watch or in-place switches"
         );
         anyhow::ensure!(
-            !args.keeps_gifs_in_place()
+            !args.keeps_vid_originals_in_place()
                 || (args.output.is_none()
                     && !args.retry
                     && !args.resume
                     && !args.retry_failed
                     && !args.recover_photos_cleanup),
-            "local GIF inspection retains originals in place; output and recovery options require --shortest-path"
+            "local original inspection retains originals in place; output and recovery options require --shortest-path"
         );
     }
     if args.mode == LaunchMode::FastImg {
         anyhow::ensure!(
             matches!(args.strategy.as_deref(), None | Some("jxl" | "avif")),
-            "Fast IMG requires JXL or AVIF; GIF originals use Fast VID"
+            "Fast IMG requires JXL or AVIF; GIF and HEVC MOV originals use Fast VID"
         );
     }
     if args.recover_photos_cleanup {
@@ -757,7 +757,10 @@ fn validate_media_options(args: &Args) -> Result<()> {
             args.uses_checkpoint()
                 && args.shortest_path
                 && args.inputs.len() == 1
-                && matches!(args.delivery_strategy(), Some("jxl" | "avif" | "gif")),
+                && matches!(
+                    args.delivery_strategy(),
+                    Some("jxl" | "avif" | "gif" | "hevc-mov")
+                ),
             "Photos cleanup recovery requires one saved source and its Photos delivery strategy"
         );
     }
@@ -987,7 +990,7 @@ fn run_scheduled_workers(
                 // Local GIF counts are emitted only after every file and the input directory
                 // have been rechecked. A crash or early return has no complete terminal counts.
                 let completed_gif_inspection = !dry_run
-                    && args.keeps_gifs_in_place()
+                    && args.keeps_vid_originals_in_place()
                     && pipeline == "IMG"
                     && child_counts_complete
                     && stats.succeeded == 0
@@ -2222,7 +2225,7 @@ fn fast_img_cleanup_recovery_for_run(
     args: &Args,
 ) -> Result<Option<foundation::pipeline::verification::WorkingCopyMarker>> {
     if args.recover_photos_cleanup {
-        let ([source], Some(output), Some(strategy @ ("jxl" | "avif" | "gif"))) = (
+        let ([source], Some(output), Some(strategy @ ("jxl" | "avif" | "gif" | "hevc-mov"))) = (
             args.inputs.as_slice(),
             args.output.as_deref(),
             args.delivery_strategy(),
@@ -2823,22 +2826,26 @@ fn plan_cli_invocations(
             LaunchMode::Videos => {
                 commands.push(rust_run_command(project_root, "vid", args, input)?)
             }
-            LaunchMode::FastVid if args.keeps_gifs_in_place() => {
+            LaunchMode::FastVid if args.keeps_vid_originals_in_place() => {
                 let mut command = dev_bin_command(
                     project_root,
                     "img",
                     vec![
                         "fast-img".into(),
                         "--strategy".into(),
-                        "gif".into(),
+                        args.delivery_strategy().unwrap_or("gif").into(),
                         "--recursive".into(),
                     ],
                 )?;
                 push_img_policy_args(&mut command.args, args)?;
-                let input = std::path::absolute(input).context("resolve local GIF selection")?;
+                let input =
+                    std::path::absolute(input).context("resolve local original selection")?;
                 command.args.extend([
                     "--".into(),
-                    input.to_str().context("GIF input is not UTF-8")?.into(),
+                    input
+                        .to_str()
+                        .context("original input is not UTF-8")?
+                        .into(),
                 ]);
                 commands.push(command);
             }
@@ -2935,7 +2942,7 @@ const fn mode_label(mode: &LaunchMode) -> &'static str {
         LaunchMode::Videos => "Videos/Animated",
         LaunchMode::FastImg => "Fast Image",
         LaunchMode::RestoreJpeg => "Restore Original JPEG",
-        LaunchMode::FastVid => "Fast Video · GIF originals",
+        LaunchMode::FastVid => "Fast Video · originals",
         LaunchMode::Collect => "Collect Recovery Originals",
         LaunchMode::Compare => "Compare Backup",
         LaunchMode::MergeXmp => "Merge XMP",
@@ -3089,7 +3096,7 @@ fn run_with_history(
                 output: args.output.clone(),
                 backup: args.backup.clone(),
                 mode: if args.mode == LaunchMode::FastVid {
-                    "fast-vid-gif".to_owned()
+                    format!("fast-vid-{}", args.delivery_strategy().unwrap_or("gif"))
                 } else {
                     args.mode
                         .to_possible_value()
@@ -3222,7 +3229,7 @@ fn run_drag_drop_inner(
     } else if !args.dry_run
         && !args.inputs.is_empty()
         && !args.uses_checkpoint()
-        && !args.keeps_gifs_in_place()
+        && !args.keeps_vid_originals_in_place()
     {
         check_system_resources(&args.inputs[0], minimum_free_disk_bytes(0)?)?;
     }
@@ -3950,9 +3957,9 @@ fn execute_menu_selection(
                     None,
                     false,
                     false,
-                    dev::infra::drag_drop::choose_gif_photos_import()?,
+                    dev::infra::drag_drop::choose_gif_photos_import(strategy)?,
                     filter,
-                    None,
+                    Some(strategy.to_owned()),
                     settings,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
@@ -4168,7 +4175,12 @@ fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
     let mut opt_sub = 0usize;
     let mut workspace_sub = 0usize;
     let mut maint_sub = 0usize;
-    let mut strategy = "jxl".to_string(); // Default strategy
+    let mut strategy = if filter == ProcessingFilter::VideosOnly {
+        "gif"
+    } else {
+        "jxl"
+    }
+    .to_string();
     let fastmode_count = if matches!(
         filter,
         ProcessingFilter::ImagesOnly | ProcessingFilter::VideosOnly
@@ -4223,14 +4235,21 @@ fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
 
         // Show strategy hint when Fast Mode is selected
         if selected == 0
-            && filter == ProcessingFilter::ImagesOnly
+            && matches!(
+                filter,
+                ProcessingFilter::ImagesOnly | ProcessingFilter::VideosOnly
+            )
             && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2
         {
             let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
             let dim = if colors_enabled() { "\x1b[2m" } else { "" };
             println!(
                 "\n   {cyan}Current Strategy: {}{reset}",
-                if strategy == "avif" {
+                if strategy == "hevc-mov" {
+                    "HEVC MOV"
+                } else if strategy == "gif" {
+                    "GIF (Default)"
+                } else if strategy == "avif" {
                     "AVIF (Meme Mode/表情包模式)"
                 } else {
                     "JXL (Default)"
@@ -4256,10 +4275,17 @@ fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
             NavKey::Char('s') | NavKey::Char('S') | NavKey::Char(' ') => {
                 // Toggle strategy when Fast Mode is selected
                 if selected == 0
-                    && filter == ProcessingFilter::ImagesOnly
+                    && matches!(
+                        filter,
+                        ProcessingFilter::ImagesOnly | ProcessingFilter::VideosOnly
+                    )
                     && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2
                 {
-                    strategy = if strategy == "jxl" {
+                    strategy = if strategy == "gif" {
+                        "hevc-mov".to_string()
+                    } else if strategy == "hevc-mov" {
+                        "gif".to_string()
+                    } else if strategy == "jxl" {
                         "avif".to_string()
                     } else {
                         "jxl".to_string()
@@ -4303,8 +4329,15 @@ fn optimization_menu_labels(
     match filter {
         ProcessingFilter::VideosOnly => match sub {
             0 => (
-                "Mode: Fast Video · GIF Originals [Tab to Switch]".to_owned(),
-                "Check animated GIF originals in place, or choose to import them into Photos. Use IMG for static images.",
+                format!(
+                    "Mode: Fast Video · {} Originals [Tab to Switch]",
+                    if strategy == "hevc-mov" {
+                        "HEVC MOV"
+                    } else {
+                        "GIF"
+                    }
+                ),
+                "Verify originals in place, or choose to import them into Photos.",
             ),
             1 => (
                 "Mode: In-Place Optimization [Tab to Switch]".to_string(),
@@ -4568,7 +4601,7 @@ fn inspect_fast_img_retry_plan(args: &Args) -> Result<serde_json::Value> {
     input.to_str().context("Fast IMG input path is not UTF-8")?;
     let strategy = args.delivery_strategy().unwrap_or("jxl");
     anyhow::ensure!(
-        matches!(strategy, "jxl" | "avif" | "gif"),
+        matches!(strategy, "jxl" | "avif" | "gif" | "hevc-mov"),
         "unsupported Fast IMG strategy"
     );
     let metadata = match fs::symlink_metadata(input) {
@@ -4886,7 +4919,7 @@ fn migrate_fast_img_state(args: &Args) -> Result<serde_json::Value> {
     anyhow::ensure!(
         matches!(
             args.delivery_strategy().unwrap_or("jxl"),
-            "jxl" | "avif" | "gif"
+            "jxl" | "avif" | "gif" | "hevc-mov"
         ),
         "unsupported Fast IMG strategy"
     );
@@ -4945,8 +4978,8 @@ fn main() -> Result<std::process::ExitCode> {
         #[cfg(unix)]
         isolate_preflight_process_group()?;
         anyhow::ensure!(
-            !args.keeps_gifs_in_place(),
-            "local GIF inspection has no checkpoint plan; use --dry-run to inspect the GIF sources"
+            !args.keeps_vid_originals_in_place(),
+            "local original inspection has no checkpoint plan; use --dry-run to inspect the selected sources"
         );
         if args.uses_checkpoint() {
             if args.shortest_path {
@@ -5502,6 +5535,30 @@ mod tests {
             assert!(inspect_fast_img_retry_plan(&args).is_err());
         }
         assert!(source.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn fast_vid_routes_mov_for_local_and_photos() -> Result<()> {
+        let input = tempfile::tempdir()?;
+        for photos in [false, true] {
+            let mut args =
+                Args::try_parse_from(["mfb", "--mode", "fast-vid", "--strategy", "hevc-mov"])?;
+            args.inputs.push(input.path().to_path_buf());
+            args.shortest_path = photos;
+            validate_media_options(&args)?;
+            let commands = plan_cli_invocations(&args, Path::new("/repo"), None)?;
+            assert!(
+                commands[0]
+                    .args
+                    .windows(2)
+                    .any(|p| p == ["--strategy", "hevc-mov"])
+            );
+            assert_eq!(
+                commands[0].args.iter().any(|p| p == "--shortest-path"),
+                photos
+            );
+        }
         Ok(())
     }
 

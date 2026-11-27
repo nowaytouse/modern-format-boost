@@ -30,6 +30,14 @@ private struct ImportResource: Codable {
         let file = URL(fileURLWithPath: path)
         let gifFile = file.pathExtension.lowercased() == "gif"
         let gifName = (originalFilename as NSString).pathExtension.lowercased() == "gif"
+        let movFile = file.pathExtension.lowercased() == "mov"
+        let movName = (originalFilename as NSString).pathExtension.lowercased() == "mov"
+        if movFile || movName {
+            guard movFile && movName, kind == "video" || kind == "pairedVideo" else {
+                throw failure("MOV resource name and Photos resource type must agree")
+            }
+            options.uniformTypeIdentifier = UTType.quickTimeMovie.identifier
+        }
         if gifFile || gifName {
             guard gifFile && gifName, kind == "photo" || kind == "alternatePhoto",
                   let image = CGImageSourceCreateWithURL(file as CFURL, nil),
@@ -257,6 +265,19 @@ private func testGIFResource() throws {
     guard (try? gif.creationOptions()) == nil else { throw failure("GIF type assigned to invalid data") }
 }
 
+private func testMOVResource() throws {
+    let movie = ImportResource(path: "/synthetic/clip.mov", kind: "video", originalFilename: "clip.mov", blake3: "")
+    let options = try movie.creationOptions()
+    guard try movie.photoType == .video, options.uniformTypeIdentifier == "com.apple.quicktime-movie" else {
+        throw failure("MOV was not prepared as a QuickTime video")
+    }
+    let wrongKind = ImportResource(path: movie.path, kind: "photo", originalFilename: "clip.mov", blake3: "")
+    let wrongName = ImportResource(path: movie.path, kind: "video", originalFilename: "clip.mp4", blake3: "")
+    guard (try? wrongKind.creationOptions()) == nil, (try? wrongName.creationOptions()) == nil else {
+        throw failure("MOV accepted a mismatched resource type or name")
+    }
+}
+
 private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
     guard let assets = request.assets, !assets.isEmpty, assets.count <= 1000,
           Set(assets.map(\.entryID)).count == assets.count,
@@ -361,6 +382,7 @@ private struct PhotosImportHelper {
             do {
                 try testAlbumTargets()
                 try testGIFResource()
+                try testMOVResource()
             }
             catch { fputs("\(error.localizedDescription)\n", stderr); Darwin.exit(1) }
             return

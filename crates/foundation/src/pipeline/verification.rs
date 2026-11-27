@@ -50,7 +50,7 @@ pub struct LibraryAssetRecord {
     /// Adjacent XMP BLAKE3 proven inside the Photos-delivered original.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xmp_sidecar_blake3: Option<String>,
-    /// Source quarantine xattr digest bound to the byte-identical Photos GIF original.
+    /// Source quarantine digest for a byte-identical Fast VID original (historical field name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gif_source_quarantine_blake3: Option<String>,
     /// Distinct quarantine xattr digest observed on that Photos original, if Photos replaced it.
@@ -72,24 +72,27 @@ impl LibraryAssetRecord {
             }
     }
 
-    pub(crate) fn validate_gif_quarantine_binding(&self, original_gif: bool) -> Result<(), String> {
+    pub(crate) fn validate_original_quarantine_binding(
+        &self,
+        fast_vid_original: bool,
+    ) -> Result<(), String> {
         if let Some(photos) = &self.gif_photos_quarantine_blake3 {
-            validate_submission_blake3("Photos GIF quarantine", photos)?;
+            validate_submission_blake3("Photos original quarantine", photos)?;
             if self
                 .gif_source_quarantine_blake3
                 .as_ref()
                 .is_none_or(|source| source == photos)
             {
                 return Err(
-                    "a replaced Photos GIF quarantine requires distinct source and Photos digests"
+                    "a replaced Photos quarantine requires distinct source and Photos digests"
                         .into(),
                 );
             }
         }
         if let Some(digest) = &self.gif_source_quarantine_blake3 {
-            validate_submission_blake3("GIF source quarantine", digest)?;
-            validate_submission_blake3("GIF source", &self.blake3)?;
-            if !original_gif
+            validate_submission_blake3("original source quarantine", digest)?;
+            validate_submission_blake3("original source", &self.blake3)?;
+            if !fast_vid_original
                 || self.quarantined
                 || self.xmp_sidecar_blake3.is_some()
                 || self
@@ -102,7 +105,7 @@ impl LibraryAssetRecord {
                     .is_some_and(|hash| hash != &self.blake3)
             {
                 return Err(
-                    "GIF quarantine evidence requires an exact original GIF Photos receipt".into(),
+                    "quarantine evidence requires an exact original Fast VID Photos receipt".into(),
                 );
             }
         }
@@ -4362,8 +4365,9 @@ pub struct FastImgProcessingContract {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "strategy", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum FastImgEncodingParameters {
-    /// Deliver the original GIF resource without running an encoder.
+    /// Deliver an original resource without running an encoder.
     Gif,
+    HevcMov,
     Jxl {
         jpeg_effort: u8,
         jpeg_effort_search: crate::runtime_config::JpegEffortSearch,
@@ -4439,6 +4443,9 @@ impl FastImgProcessingContract {
         }
         match &self.encoding {
             FastImgEncodingParameters::Gif if strategy == "gif" => Ok(()),
+            FastImgEncodingParameters::HevcMov if strategy == "hevc-mov" && self.schema == 2 => {
+                Ok(())
+            }
             FastImgEncodingParameters::Jxl {
                 jpeg_effort,
                 pixel_effort_ceiling,
@@ -5129,7 +5136,7 @@ impl WorkingCopyMarker {
     pub fn validate_library_asset_receipts_unique(&self) -> Result<(), String> {
         let mut primary_paths = BTreeSet::new();
         for asset in &self.photos_imported_assets {
-            asset.validate_gif_quarantine_binding(false)?;
+            asset.validate_original_quarantine_binding(false)?;
             if !primary_paths.insert(asset.rel_path.as_str()) {
                 return Err(format!(
                     "fast-img marker has duplicate primary Photos receipt path {}",
@@ -5140,7 +5147,10 @@ impl WorkingCopyMarker {
 
         let mut tier2_paths = BTreeSet::new();
         for asset in &self.tier2_imported_assets {
-            asset.validate_gif_quarantine_binding(self.strategy == "gif")?;
+            asset.validate_original_quarantine_binding(
+                crate::delivery_codec_strategy::FastVidOriginal::from_strategy(&self.strategy)
+                    .is_some(),
+            )?;
             if !tier2_paths.insert(asset.rel_path.as_str()) {
                 return Err(format!(
                     "fast-img marker has duplicate tier-2 Photos receipt path {}",

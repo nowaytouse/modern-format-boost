@@ -44,7 +44,10 @@ fn asset_digest(marker: &WorkingCopyMarker, asset: &LibraryAssetRecord) -> Resul
         .filter(|value| !value.trim().is_empty())
         .context("Tier-2 cleanup receipt has no Photos UUID")?;
     asset
-        .validate_gif_quarantine_binding(marker.strategy == "gif")
+        .validate_original_quarantine_binding(
+            crate::delivery_codec_strategy::FastVidOriginal::from_strategy(&marker.strategy)
+                .is_some(),
+        )
         .map_err(anyhow::Error::msg)?;
     let hash = tier2_library_hash(asset)?;
     ensure!(
@@ -69,7 +72,11 @@ fn asset_digest(marker: &WorkingCopyMarker, asset: &LibraryAssetRecord) -> Resul
     // attribute digest only when the receipt actually carries new evidence.
     let bytes = match &asset.gif_source_quarantine_blake3 {
         Some(digest) => canonical_bytes(&(
-            "gif-source-quarantine-v1",
+            if marker.strategy == "hevc-mov" {
+                "hevc-mov-source-quarantine-v1"
+            } else {
+                "gif-source-quarantine-v1"
+            },
             identity,
             digest,
             &asset.gif_photos_quarantine_blake3,
@@ -806,7 +813,7 @@ mod tests {
         asset.gif_photos_quarantine_blake3 = asset.gif_source_quarantine_blake3.clone();
         assert!(asset_digest(&marker, &asset).is_err());
         asset.gif_photos_quarantine_blake3 = None;
-        assert!(asset.validate_gif_quarantine_binding(false).is_err());
+        assert!(asset.validate_original_quarantine_binding(false).is_err());
         asset.xmp_sidecar_blake3 = Some(asset.blake3.clone());
         assert!(asset_digest(&marker, &asset).is_err());
         asset.xmp_sidecar_blake3 = None;

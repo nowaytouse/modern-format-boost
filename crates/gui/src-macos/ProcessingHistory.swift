@@ -21,10 +21,11 @@ private struct HistoryContext: Decodable, Equatable {
     let output: String?
     let backup: String?
     let mode: String
-    var checkpointedMedia: Bool { mode == "fast-img" || (mode == "fast-vid-gif" && shortest_path && !in_place) }
+    var checkpointedMedia: Bool { mode == "fast-img" || (["fast-vid-gif", "fast-vid-hevc-mov"].contains(mode) && shortest_path && !in_place) }
 
     func matches(strategy: String) -> Bool {
         if mode == "fast-vid-gif" { return checkpointedMedia && strategy == "gif" }
+        if mode == "fast-vid-hevc-mov" { return checkpointedMedia && strategy == "hevc-mov" }
         return mode == "fast-img" && ["jxl", "avif"].contains(strategy)
     }
 
@@ -296,7 +297,7 @@ struct FastImgFailedRetryAvailable: Decodable, Equatable {
         let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
         let value = try decoder.decode(Self.self, from: data)
         guard value.schemaVersion == 1, value.failedCount > 0, hash(value.parentTaskKey),
-              path(value.sourceDirectory), path(value.parentWorkingCopy), ["jxl", "avif", "gif"].contains(value.strategy),
+              path(value.sourceDirectory), path(value.parentWorkingCopy), ["jxl", "avif", "gif", "hevc-mov"].contains(value.strategy),
               value.existingChildWorkingCopy.map(path) ?? !value.existingChildComplete,
               value.existingChildWorkingCopy != value.parentWorkingCopy
         else { throw HostError(message: localized("retry.invalid")) }
@@ -450,7 +451,7 @@ struct FastImgRetryReference: Decodable, Equatable {
         guard value.schemaVersion == 1, validHistoryIdentity(value.runId),
               FastImgFailedRetryAvailable.hash(value.parentTaskKey), FastImgFailedRetryAvailable.hash(value.requestKey),
               [value.sourceDirectory, value.parentWorkingCopy, value.childWorkingCopy].allSatisfy(FastImgFailedRetryAvailable.path),
-              value.parentWorkingCopy != value.childWorkingCopy, ["jxl", "avif", "gif"].contains(value.strategy),
+              value.parentWorkingCopy != value.childWorkingCopy, ["jxl", "avif", "gif", "hevc-mov"].contains(value.strategy),
               value.deliveryIntent.libraryPath.map(FastImgFailedRetryAvailable.path) ?? true,
               value.deliveryIntent.kind != "photos" || value.deliveryIntent.namingPolicy?.isEmpty == false,
                !extended || value.inputPath.map(FastImgFailedRetryAvailable.path) == true,
@@ -1259,7 +1260,7 @@ private struct HistorySourceSet: Decodable, Hashable {
 
     func matches(_ context: HistoryContext) -> Bool {
         schema_version == 1 && context.run_id.map(validHistoryIdentity) == true
-            && (context.checkpointedMedia || ["auto", "images", "videos", "fast-vid-gif"].contains(context.mode)) && context.dry_run != true
+            && (context.checkpointedMedia || ["auto", "images", "videos", "fast-vid-gif", "fast-vid-hevc-mov"].contains(context.mode)) && context.dry_run != true
             && context.retry != true && context.inputs.count == 1
             && source_root.hasPrefix("/") && !source_root.contains("\0")
             && context.inputs.first.map {
@@ -1576,10 +1577,10 @@ private struct HistoryEntry {
         else { return nil }
         return count
     }
-    var localGIFInspectionWithFileErrors: Bool {
+    var localOriginalInspectionWithFileErrors: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure,
               !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid, !fastDeliveryInvalid, !outputCleanupInvalid,
-              let context, context.mode == "fast-vid-gif", !context.shortest_path, !context.in_place,
+              let context, ["fast-vid-gif", "fast-vid-hevc-mov"].contains(context.mode), !context.shortest_path, !context.in_place,
               !context.dry_run, context.output == nil, context.inputs.count == 1,
               fastDeliveries.isEmpty, outputCleanups.isEmpty, verification == nil, inputVerifications.isEmpty,
               finished?.outcome == "failed", finished?.completed_with_file_errors == true,
@@ -1588,7 +1589,7 @@ private struct HistoryEntry {
               let failed = summary.img.failed, failed > 0,
               invocations.count == 1, let invocation = invocations.first, invocation.pipeline == "img",
               let run = context.run_id, invocation.run_id == run,
-              invocation.arguments.starts(with: ["fast-img", "--strategy", "gif"]),
+              invocation.arguments.starts(with: ["fast-img", "--strategy", context.mode == "fast-vid-gif" ? "gif" : "hevc-mov"]),
               !invocation.arguments.dropLast(2).contains("--shortest-path"),
               invocation.arguments.suffix(2).elementsEqual(["--", context.inputs[0]]),
               let exited = workerExecutions[invocation.invocation_id]?.last,
@@ -1720,7 +1721,7 @@ private struct HistoryEntry {
         if confirmedPhotosQuarantine != nil { return "result.final_photos_quarantine_title" }
         if deliveryIsDeferred { return "result.delivery_deferred" }
         if hasPartialSuccess || hasMixedDeliveryFacts { return "history.status.partial" }
-        if retainedOnlySourceCount != nil || localGIFInspectionWithFileErrors { return "history.status.file_failures" }
+        if retainedOnlySourceCount != nil || localOriginalInspectionWithFileErrors { return "history.status.file_failures" }
         if finished?.outcome == "failed", context?.shortest_path == true,
            !fastDeliveryInvalid, fastDeliveries.contains(where: { $0.finalPhotosQuarantineCount != nil }) {
             return "result.final_photos_quarantine_review"
@@ -1770,7 +1771,7 @@ private struct HistoryEntry {
         if cleanupRecovery != nil || cleanupRecoveryInvalid { return .systemOrange }
         if hasVerificationFailure { return .systemRed }
         if deliveryIsDeferred || confirmedPhotosQuarantine != nil || independentVerificationUnavailable != nil { return .systemOrange }
-        if hasPartialSuccess || hasMixedDeliveryFacts || retainedOnlySourceCount != nil || localGIFInspectionWithFileErrors { return .systemOrange }
+        if hasPartialSuccess || hasMixedDeliveryFacts || retainedOnlySourceCount != nil || localOriginalInspectionWithFileErrors { return .systemOrange }
         if finished?.outcome == "failed" || hasFailures { return .systemRed }
         return needsAttention ? .systemOrange : .labelColor
     }

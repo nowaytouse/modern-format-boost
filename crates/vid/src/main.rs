@@ -122,16 +122,19 @@ enum Commands {
     )]
     DbHealth,
 
-    /// Verify animated GIF originals in place or deliver them to Apple Photos with --shortest-path. Use IMG for static images.
+    /// Verify GIF or HEVC MOV originals in place or deliver them to Apple Photos with --shortest-path.
     #[command(name = "fast-vid")]
     FastVid(FastVidArgs),
 }
 
 #[derive(clap::Args)]
 struct FastVidArgs {
-    /// GIF file or directory to scan recursively; identity is checked from content.
+    /// Original file or directory to scan recursively; identity is checked from content.
     #[arg(value_name = "INPUT")]
     input: PathBuf,
+    /// Original media strategy; defaults to GIF.
+    #[arg(long, value_enum, default_value = "gif")]
+    strategy: FastVidStrategy,
     /// Import into Apple Photos and verify delivery before cleaning up originals.
     #[arg(long)]
     shortest_path: bool,
@@ -148,6 +151,12 @@ struct FastVidArgs {
     retry_failed_parent: Option<PathBuf>,
     #[command(flatten)]
     photos: foundation::runtime_config::photos_args::PhotosArgs,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum FastVidStrategy {
+    Gif,
+    HevcMov,
 }
 
 #[derive(clap::Args)]
@@ -258,18 +267,25 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
 fn fast_vid_worker(cli: &Cli, args: &FastVidArgs) -> anyhow::Result<std::process::Command> {
     anyhow::ensure!(
         cli.codec.is_none() && cli.force_ms_ssim_long.is_none(),
-        "Video encoding options do not apply to original GIF import"
+        "Video encoding options do not apply to original media import"
     );
     for (name, _) in &cli.tools.tools {
         anyhow::ensure!(
             name == "osxphotos",
-            "Original GIF import supports only the osxphotos tool override (received {name})"
+            "Original media import supports only the osxphotos tool override (received {name})"
         );
     }
     let worker =
         std::env::current_exe()?.with_file_name(format!("img{}", std::env::consts::EXE_SUFFIX));
     let mut command = std::process::Command::new(worker);
-    command.args(["fast-img", "--strategy", "gif"]);
+    command.args([
+        "fast-img",
+        "--strategy",
+        match args.strategy {
+            FastVidStrategy::Gif => "gif",
+            FastVidStrategy::HevcMov => "hevc-mov",
+        },
+    ]);
     if args.shortest_path {
         command.arg("--shortest-path");
     }
@@ -1006,6 +1022,20 @@ mod cli_tests {
             fast_vid_worker(&cli, args)?.get_args().collect::<Vec<_>>(),
             ["fast-img", "--strategy", "gif", "--", "selected"]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fast_vid_forwards_hevc_mov_strategy() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from(["vid", "fast-vid", "--strategy", "hevc-mov", "selected"])?;
+        let Commands::FastVid(args) = &cli.command else {
+            anyhow::bail!("expected Fast VID")
+        };
+        assert_eq!(
+            fast_vid_worker(&cli, args)?.get_args().collect::<Vec<_>>(),
+            ["fast-img", "--strategy", "hevc-mov", "--", "selected"]
+        );
+        assert!(Cli::try_parse_from(["vid", "fast-vid", "--strategy", "av1", "selected"]).is_err());
         Ok(())
     }
 

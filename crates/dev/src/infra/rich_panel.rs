@@ -610,7 +610,7 @@ impl std::fmt::Display for CompletedWithFileFailures {
             ),
             Self::LocalGifInspection(failed) => write!(
                 formatter,
-                "local GIF inspection finished; {failed} file(s) could not be verified and were kept in place"
+                "local original inspection finished; {failed} file(s) could not be verified and were kept in place"
             ),
         }
     }

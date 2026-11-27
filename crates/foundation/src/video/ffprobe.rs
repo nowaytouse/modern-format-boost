@@ -541,6 +541,141 @@ pub fn probe_single_frame_video_still(
     Ok(SingleFrameVideoStillProbe::Eligible(Box::new(probe)))
 }
 
+/// Identify a QuickTime-branded MOV whose non-cover video streams are all HEVC.
+/// Audio and other non-video streams are allowed; filenames are not consulted.
+///
+/// # Errors
+/// Returns an error when a claimed QuickTime file cannot be read or probed reliably.
+pub fn is_hevc_quicktime_mov(path: &Path) -> Result<bool, FFprobeError> {
+    validate_probe_target(path)?;
+    let mut file = std::fs::File::open(path)?;
+    match crate::format_detect::quicktime_brand(&mut file)? {
+        None => return Ok(false),
+        Some(false) => {
+            return Err(FFprobeError::ParseError(
+                "invalid QuickTime ftyp box".into(),
+            ));
+        }
+        Some(true) => {}
+    }
+    if !is_ffprobe_available() {
+        return Err(FFprobeError::ToolNotFound(
+            crate::infra::static_logs::messages::MSG_PROBE_TOOL_MISSING.to_string(),
+        ));
+    }
+
+    let mut command = crate::ffmpeg_builder::FfprobeBuilder::new();
+    command
+        .input(path)
+        .loglevel("error")
+        .print_format("json")
+        .show_streams()
+        .show_format();
+    let output = run_ffprobe_command(&mut command.build(), path, "QuickTime stream inventory")?;
+    if !output.status.success() || !output.stderr.trim().is_empty() {
+        return Err(FFprobeError::ExecutionFailed(contextual_ffprobe_error(
+            path,
+            "QuickTime stream inventory",
+            output.stderr.trim(),
+        )));
+    }
+    let json: serde_json::Value = serde_json::from_str(&output.stdout)
+        .map_err(|error| FFprobeError::ParseError(error.to_string()))?;
+    let format = json["format"]["format_name"]
+        .as_str()
+        .ok_or_else(|| FFprobeError::ParseError("missing container format".into()))?;
+    if !format.split(',').any(|name| name == "mov") {
+        return Ok(false);
+    }
+    let streams = json
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| FFprobeError::ParseError("missing stream inventory".into()))?;
+    Ok(has_only_hevc_video(streams))
+}
+
+fn has_only_hevc_video(streams: &[serde_json::Value]) -> bool {
+    if streams
+        .iter()
+        .any(|stream| stream["codec_type"].as_str().is_none())
+    {
+        return false;
+    }
+    let videos: Vec<_> = streams
+        .iter()
+        .filter(|stream| stream["codec_type"].as_str() == Some("video"))
+        .collect();
+    if videos
+        .iter()
+        .any(|stream| !matches!(stream["disposition"]["attached_pic"].as_u64(), Some(0 | 1)))
+    {
+        return false;
+    }
+    let videos: Vec<_> = videos
+        .into_iter()
+        .filter(|stream| stream["disposition"]["attached_pic"].as_u64() == Some(0))
+        .collect();
+    !videos.is_empty()
+        && videos.iter().all(|video| {
+            video["codec_name"].as_str() == Some("hevc")
+                && video["width"].as_u64().is_some_and(|n| n > 0)
+                && video["height"].as_u64().is_some_and(|n| n > 0)
+        })
+}
+
+/// Fully decode the video and verify its declared sample count before destructive use.
+///
+/// # Errors
+/// Returns an error if decoding fails or completeness cannot be established.
+pub fn validate_hevc_quicktime_mov(path: &Path) -> Result<bool, FFprobeError> {
+    if !is_hevc_quicktime_mov(path)? {
+        return Ok(false);
+    }
+    let mut command = crate::ffmpeg_builder::FfprobeBuilder::new();
+    command
+        .input(path)
+        .loglevel("error")
+        .print_format("json")
+        .select_streams_custom("V")
+        .show_streams()
+        .count_frames()
+        .arg("-err_detect")
+        .arg("explode");
+    let context = format!("full QuickTime video decode for {}", path.display());
+    let output = crate::process_runner::ManagedProcess::spawn(&mut command.build())
+        .and_then(|process| process.wait_timeout(Duration::from_secs(3600), &context))
+        .map_err(|error| FFprobeError::ExecutionFailed(format!("{context}: {error}")))?;
+    if !output.status.success() || !output.stderr.trim().is_empty() {
+        return Err(FFprobeError::ExecutionFailed(contextual_ffprobe_error(
+            path,
+            "full QuickTime video decode",
+            output.stderr.trim(),
+        )));
+    }
+    let json: serde_json::Value = serde_json::from_str(&output.stdout)
+        .map_err(|error| FFprobeError::ParseError(error.to_string()))?;
+    let streams = json["streams"]
+        .as_array()
+        .ok_or_else(|| FFprobeError::ParseError("missing decoded stream inventory".into()))?;
+    if streams.is_empty() {
+        return Err(FFprobeError::ParseError(
+            "expected decoded video streams".into(),
+        ));
+    }
+    let mut dynamic = false;
+    for stream in streams {
+        let declared = parse_u64_string_field(&stream["nb_frames"]);
+        let decoded = parse_u64_string_field(&stream["nb_read_frames"]);
+        if !matches!((declared, decoded), (Some(a), Some(b)) if a > 0 && a == b) {
+            return Err(FFprobeError::ParseError(format!(
+                "video completeness could not be verified: declared {declared:?}, decoded {decoded:?}"
+            )));
+        }
+        dynamic |= decoded.is_some_and(|count| count >= 2);
+    }
+    Ok(dynamic)
+}
+
 /// Parses a string field from JSON as u64.
 ///
 /// # Arguments
@@ -1886,6 +2021,178 @@ mod single_frame_video_still_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quicktime_stream_inventory_distinguishes_cover_and_mixed_video() {
+        let video = serde_json::json!({"codec_type":"video", "codec_name":"hevc", "width":32, "height":32, "disposition":{"attached_pic":0}});
+        let cover = serde_json::json!({"codec_type":"video", "codec_name":"mjpeg", "disposition":{"attached_pic":1}});
+        let other = serde_json::json!({"codec_type":"video", "codec_name":"h264", "disposition":{"attached_pic":0}});
+        assert!(super::has_only_hevc_video(&[cover.clone(), video.clone()]));
+        assert!(!super::has_only_hevc_video(&[cover]));
+        assert!(super::has_only_hevc_video(&[video.clone(), video.clone()]));
+        assert!(!super::has_only_hevc_video(&[video, other]));
+    }
+    #[test]
+    fn quicktime_hevc_admission_uses_content_and_reports_corruption() {
+        use super::{is_hevc_quicktime_mov, validate_hevc_quicktime_mov};
+        use std::process::Command;
+
+        if !super::is_ffprobe_available()
+            || Command::new("ffmpeg").arg("-version").output().is_err()
+        {
+            eprintln!("ffmpeg/ffprobe unavailable; synthetic media test skipped");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let make = |name: &str, codec: &str, format: &str| {
+            let path = dir.path().join(name);
+            let output = Command::new("ffmpeg")
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=size=32x32:rate=2",
+                    "-t",
+                    "1",
+                    "-c:v",
+                    codec,
+                    "-threads",
+                    "1",
+                    "-f",
+                    format,
+                    "-y",
+                ])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            path
+        };
+        let mov = make("video.data", "libx265", "mov");
+        assert!(is_hevc_quicktime_mov(&mov).unwrap());
+        assert!(validate_hevc_quicktime_mov(&mov).unwrap());
+        let mut padded = std::fs::read(&mov).unwrap();
+        let stco = padded
+            .windows(4)
+            .position(|bytes| bytes == b"stco")
+            .unwrap();
+        let entries = u32::from_be_bytes(padded[stco + 8..stco + 12].try_into().unwrap()) as usize;
+        for entry in padded[stco + 12..stco + 12 + entries * 4].chunks_exact_mut(4) {
+            let offset = u32::from_be_bytes(entry.try_into().unwrap());
+            entry.copy_from_slice(&(offset + 8).to_be_bytes());
+        }
+        let padded_mov = dir.path().join("padded.mov");
+        let mut data = b"\0\0\0\x08wide".to_vec();
+        data.extend_from_slice(&padded);
+        std::fs::write(&padded_mov, data).unwrap();
+        assert_eq!(
+            crate::format_detect::detect_true_format(&padded_mov).unwrap(),
+            crate::format_detect::FormatKind::Mov
+        );
+        assert!(validate_hevc_quicktime_mov(&padded_mov).unwrap());
+        let single = dir.path().join("single.mov");
+        let output = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&mov)
+            .args(["-frames:v", "1", "-c:v", "libx265", "-threads", "1", "-y"])
+            .arg(&single)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!validate_hevc_quicktime_mov(&single).unwrap());
+        let empty = dir.path().join("empty.mov");
+        std::fs::write(&empty, []).unwrap();
+        assert!(!validate_hevc_quicktime_mov(&empty).unwrap());
+        let h264 = make("h264.mov", "libx264", "mov");
+        assert!(!is_hevc_quicktime_mov(&h264).unwrap());
+        let mp4 = make("misnamed.mov", "libx265", "mp4");
+        assert!(!is_hevc_quicktime_mov(&mp4).unwrap());
+        let mixed = dir.path().join("mixed.mov");
+        let multi = dir.path().join("multi.mov");
+        let output = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&mov)
+            .args(["-map", "0:v", "-map", "0:v", "-c", "copy", "-y"])
+            .arg(&multi)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(validate_hevc_quicktime_mov(&multi).unwrap());
+        let output = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&mov)
+            .arg("-i")
+            .arg(&h264)
+            .args(["-map", "0:v", "-map", "1:v", "-c", "copy", "-y"])
+            .arg(&mixed)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!is_hevc_quicktime_mov(&mixed).unwrap());
+        let with_audio = dir.path().join("audio.mov");
+        let output = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&mov)
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=8000:cl=mono",
+                "-t",
+                "1",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-y",
+            ])
+            .arg(&with_audio)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(is_hevc_quicktime_mov(&with_audio).unwrap());
+        let faststart = dir.path().join("faststart.mov");
+        let output = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&mov)
+            .args(["-c", "copy", "-movflags", "+faststart", "-y"])
+            .arg(&faststart)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut bytes = std::fs::read(&faststart).unwrap();
+        bytes.truncate(bytes.len() - 64);
+        std::fs::write(&faststart, bytes).unwrap();
+        assert!(validate_hevc_quicktime_mov(&faststart).is_err());
+        let broken = dir.path().join("broken.mov");
+        std::fs::write(&broken, b"\0\0\0\x14ftypqt  \0\0\0\0").unwrap();
+        assert!(is_hevc_quicktime_mov(&broken).is_err());
+    }
     use super::*;
 
     #[test]

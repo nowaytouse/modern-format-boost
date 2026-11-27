@@ -6,7 +6,7 @@ pub mod fast_img_ignored;
 mod fast_img_publication;
 mod fast_img_publication_replay;
 mod fast_img_result;
-mod fast_vid_gif;
+mod fast_vid_original;
 mod resume_admission;
 mod runtime_cli;
 
@@ -25,7 +25,7 @@ use foundation::batch::AdmittedImageFile;
 use foundation::batch::fast_img_scope::FastImgInputScope;
 use foundation::batch::history_source_set::{HISTORY_SOURCE_SET_PREFIX, HistorySourceSet};
 use foundation::common_utils::calculate_blake3_hash;
-use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
+use foundation::delivery_codec_strategy::{FastVidOriginal, resolve_cli_img_static_delivery};
 use foundation::fast_img::{
     FinalJxlVerificationTimings, IntegrityResult, PhotosImportCandidate,
     apply_library_assets_to_marker, apply_tier2_library_assets_to_marker,
@@ -132,15 +132,15 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
         allow_expert_options,
         ..
     } = command
-        && strategy == "gif"
+        && FastVidOriginal::from_strategy(strategy).is_some()
     {
         anyhow::ensure!(
             *shortest_path || (output.is_none() && !retry && !retry_failed && !delete_source),
-            "Local GIF verification retains files in place. Output, retry and cleanup options require --shortest-path for Photos delivery."
+            "Local Fast VID verification retains files in place. Output, retry and cleanup options require --shortest-path for Photos delivery."
         );
         anyhow::ensure!(
             !archive && !allow_expert_options,
-            "Fast VID GIF originals do not take encoder options"
+            "Fast VID originals do not take encoder options"
         );
     }
     if matches!(
@@ -636,7 +636,7 @@ fn select_img_startup_tools(command: &Commands) -> anyhow::Result<Option<ImgTool
                         .flatten()
                 }
             };
-            if strategy == "gif" {
+            if FastVidOriginal::from_strategy(strategy).is_some() {
                 // Only the optional XMP delivery needs a metadata tool, resolved when used.
                 return Ok(None);
             }
@@ -746,7 +746,7 @@ fn main_inner() -> anyhow::Result<()> {
     }
     let resolved = cli.policy.resolve(legacy_expert)?;
     if let Some(mut options) = FastImgRunOptions::for_command(&cli.command) {
-        if options.is_local_gif() {
+        if options.local_vid_original().is_some() {
             // This route only reads media. Skip delivery locks, tools, and persistent task state.
             resolved.emit_history_marker_if_session("img")?;
             foundation::infra::runtime_config::install(resolved.config)?;
@@ -4061,8 +4061,8 @@ struct FastImgRunOptions<'a> {
 }
 
 impl<'a> FastImgRunOptions<'a> {
-    fn is_local_gif(self) -> bool {
-        self.strategy == "gif" && !self.shortest_path.0
+    fn local_vid_original(self) -> Option<FastVidOriginal> {
+        FastVidOriginal::from_strategy(self.strategy).filter(|_| !self.shortest_path.0)
     }
 
     fn for_command(command: &'a Commands) -> Option<Self> {
@@ -4109,8 +4109,8 @@ fn validate_fast_img_startup_photos_location(
     options: FastImgRunOptions<'_>,
     launcher_planned: bool,
 ) -> anyhow::Result<()> {
-    if options.strategy == "gif" {
-        fast_vid_gif::validate_selection(options.input)?;
+    if FastVidOriginal::from_strategy(options.strategy).is_some() {
+        fast_vid_original::validate_selection(options.input)?;
     }
     if !options.shortest_path.0 {
         return Ok(());
@@ -4201,10 +4201,11 @@ fn fast_img_processing_contract(
             allow_expert_options,
         },
         "gif" => FastImgEncodingParameters::Gif,
+        "hevc-mov" => FastImgEncodingParameters::HevcMov,
         _ => anyhow::bail!("unsupported fast-img strategy for processing contract: {strategy}"),
     };
     let contract = FastImgProcessingContract {
-        schema: if matches!(strategy, "jxl" | "gif") {
+        schema: if matches!(strategy, "jxl" | "gif" | "hevc-mov") {
             2
         } else {
             1
@@ -4870,7 +4871,9 @@ fn run_fast_img_failed_retry(options: FastImgRunOptions<'_>) -> anyhow::Result<(
                 );
                 return Ok(());
             }
-            let tools = if options.strategy == "gif" || img_tool_snapshot_disabled() {
+            let tools = if FastVidOriginal::from_strategy(options.strategy).is_some()
+                || img_tool_snapshot_disabled()
+            {
                 None
             } else {
                 let active = foundation::common_utils::active_tool_snapshot()
@@ -5001,16 +5004,17 @@ fn fast_img_validate_processing_contract(
     saved
         .validate(&marker.strategy)
         .map_err(anyhow::Error::msg)?;
-    if marker.strategy == "gif" {
+    if FastVidOriginal::from_strategy(&marker.strategy).is_some() {
         anyhow::ensure!(
             fast_img_marker_has_empty_primary_inventory(marker),
-            "GIF original task contains unexpected encoded delivery records"
+            "Fast VID original task contains unexpected encoded delivery records"
         );
     }
     let current_strategy = match &current.encoding {
         FastImgEncodingParameters::Jxl { .. } => "jxl",
         FastImgEncodingParameters::Avif { .. } => "avif",
         FastImgEncodingParameters::Gif => "gif",
+        FastImgEncodingParameters::HevcMov => "hevc-mov",
     };
     current
         .validate(current_strategy)
@@ -5546,8 +5550,8 @@ fn scan_fast_img_sources_with_policy(
         Vec<foundation::image::format_identity::FormatIdentity>,
     >,
 ) -> anyhow::Result<FastImgSourceInventory> {
-    if strategy == "gif" {
-        return fast_vid_gif::scan_originals(observed, src_dir, None);
+    if let Some(original) = FastVidOriginal::from_strategy(strategy) {
+        return fast_vid_original::scan_originals(original, observed, src_dir, None);
     }
     if strategy == "avif" {
         println!(
@@ -6228,8 +6232,8 @@ fn run_fast_img_with_format_resolver(
     >,
 ) -> anyhow::Result<()> {
     foundation::batch_control::checkpoint()?;
-    if options.is_local_gif() {
-        return fast_vid_gif::verify_local(options);
+    if let Some(original) = options.local_vid_original() {
+        return fast_vid_original::verify_local(options, original);
     }
     validate_fast_img_options(&options);
     if let Some((parent, child)) = fast_img_missing_source_retry_selection(options)? {
@@ -6258,6 +6262,7 @@ fn run_fast_img_with_format_resolver(
     } = options;
     let output_format_name = match strategy {
         "gif" => "GIF",
+        "hevc-mov" => "HEVC MOV",
         "avif" => "AVIF",
         _ => "JXL",
     };
@@ -6431,30 +6436,32 @@ fn run_fast_img_with_format_resolver(
             marker.processing_contract.as_ref()
         })
         .is_some_and(FastImgProcessingContract::admits_lossless_pixels);
-    let saved_gif_scope = if strategy == "gif"
+    let original_mode = FastVidOriginal::from_strategy(strategy);
+    let saved_original_scope = if original_mode.is_some()
         && retry_requested
         && remove_selected_root
         && failed_retry_context.is_none()
     {
         existing_marker
             .as_ref()
-            .map(fast_vid_gif::pending_receipt_scope)
+            .map(fast_vid_original::pending_receipt_scope)
             .transpose()?
             .flatten()
     } else {
         None
     };
-    let mut inventory = if let Some(saved) = &saved_gif_scope {
-        fast_vid_gif::scan_originals(&candidates, &src_dir, Some(saved))?
-    } else {
-        scan_fast_img_sources_with_policy(
-            &candidates,
-            &src_dir,
-            strategy,
-            admitted_pixels,
-            resolve_formats,
-        )?
-    };
+    let mut inventory =
+        if let (Some(original), Some(saved)) = (original_mode, &saved_original_scope) {
+            fast_vid_original::scan_originals(original, &candidates, &src_dir, Some(saved))?
+        } else {
+            scan_fast_img_sources_with_policy(
+                &candidates,
+                &src_dir,
+                strategy,
+                admitted_pixels,
+                resolve_formats,
+            )?
+        };
     if let (Some(context), Some(marker), Some(observed)) = (
         &failed_retry_context,
         &existing_marker,
@@ -6463,7 +6470,7 @@ fn run_fast_img_with_format_resolver(
         fast_img_validate_failed_retry_routes(marker, context, observed, &inventory)?;
     }
     let admission_plan = if failed_retry_context.is_none()
-        && (!dry_run.0 || saved_gif_scope.is_some())
+        && (!dry_run.0 || saved_original_scope.is_some())
         && existing_marker
             .as_ref()
             .is_none_or(foundation::verification::WorkingCopyMarker::has_admission_plan)
@@ -6480,8 +6487,8 @@ fn run_fast_img_with_format_resolver(
         witness.verify_unchanged().context(
             "Fast IMG input scope changed during worker media inspection; sources retained. Review the input and start again.",
         )?;
-        if strategy == "gif" {
-            fast_vid_gif::validate_selection(input)?;
+        if original_mode.is_some() {
+            fast_vid_original::validate_selection(input)?;
         }
     }
     if let Some(plan) = &admission_plan {
@@ -6668,7 +6675,7 @@ fn run_fast_img_with_format_resolver(
             );
         }
         if dry_run.0 {
-            if strategy != "gif" {
+            if original_mode.is_none() {
                 println!(
                     "[DRY-RUN ] would evaluate {planned_encode_count} static images from {} for {output_format_name} output {}",
                     src_dir.display(),
@@ -7032,6 +7039,11 @@ fn fast_img_delete_notice_message(
     src_dir: &Path,
     strategy: &str,
 ) -> String {
+    if strategy == "hevc-mov" {
+        return format!(
+            "[NOTICE  ] Fast VID will deliver {modern_lossy_count} HEVC MOV original(s) to Apple Photos without transcoding. Cleanup requires fresh verification of the original bytes."
+        );
+    }
     if strategy == "gif" {
         return format!(
             "[NOTICE  ] Fast VID will deliver {modern_lossy_count} GIF original(s) to Apple Photos, merging eligible XMP sidecars before import. Cleanup requires fresh verification of the delivered bytes."
@@ -10063,10 +10075,10 @@ fn img_tool_snapshot_disabled() -> bool {
 fn fast_img_saved_tool_snapshot(
     marker: &WorkingCopyMarker,
 ) -> anyhow::Result<Option<(&Path, &str)>> {
-    if marker.strategy == "gif" {
+    if FastVidOriginal::from_strategy(&marker.strategy).is_some() {
         anyhow::ensure!(
             marker.tool_snapshot_manifest.is_none() && marker.tool_snapshot_identity.is_none(),
-            "GIF original delivery has an unexpected saved encoder snapshot"
+            "Fast VID original delivery has an unexpected saved encoder snapshot"
         );
         return Ok(None);
     }
@@ -13457,10 +13469,10 @@ fn fast_img_run_encode_wave(
 
 fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::Result<()> {
     runtime_cli::check_tool_runtime_after_failure()?;
-    if context.strategy == "gif" {
+    if FastVidOriginal::from_strategy(context.strategy).is_some() {
         anyhow::ensure!(
             context.source_jpegs.is_empty() && context.current_source_hashes.is_empty(),
-            "GIF original delivery unexpectedly contains encoder jobs"
+            "Fast VID original delivery unexpectedly contains encoder jobs"
         );
         fast_img_commit_transcode_complete(context.marker, context.strategy);
         return Ok(write_marker_atomic(context.marker)?);
@@ -13772,10 +13784,10 @@ fn fast_img_deliver_modern_lossy_static_tier(
         import_error_count: 0,
         photos_library_path: marker.photos_library_path.clone(),
     };
-    let mode = if marker.strategy == "gif" {
-        foundation::fast_img::Tier2CleanupMode::AnimatedGif
-    } else {
-        foundation::fast_img::Tier2CleanupMode::Original
+    let mode = match FastVidOriginal::from_strategy(&marker.strategy) {
+        Some(FastVidOriginal::AnimatedGif) => foundation::fast_img::Tier2CleanupMode::AnimatedGif,
+        Some(FastVidOriginal::HevcMov) => foundation::fast_img::Tier2CleanupMode::HevcMov,
+        None => foundation::fast_img::Tier2CleanupMode::Original,
     };
     let (deleted, already_deleted) = if complete_library_handle.imported_assets.is_empty() {
         Ok((0, 0))
@@ -14617,9 +14629,10 @@ fn fast_img_run_verification_and_delivery_pipeline(
         "fast-img deleted verified source files after fresh final Gate 2"
     );
 
-    if strategy == "gif" {
+    if let Some(original) = FastVidOriginal::from_strategy(strategy) {
+        let label = original.label();
         println!(
-            "[DONE    ] GIF originals in Photos: {} verified · source cleanup: {tier2_deleted} removed, {tier2_already_deleted} previously removed",
+            "[DONE    ] {label} originals in Photos: {} verified · source cleanup: {tier2_deleted} removed, {tier2_already_deleted} previously removed",
             marker.tier2_imported_assets.len()
         );
         return Ok(());
@@ -16508,7 +16521,8 @@ mod fast_img_hardening_tests {
         std::fs::create_dir(&output)?;
         let mut marker =
             WorkingCopyMarker::new(source.clone(), output, 0).with_strategy("gif".into());
-        let plan = super::fast_vid_gif::scan_originals(
+        let plan = super::fast_vid_original::scan_originals(
+            super::FastVidOriginal::AnimatedGif,
             &FastImgInputScope::observe(&first, true)?.candidates,
             &source,
             None,
@@ -16569,7 +16583,8 @@ mod fast_img_hardening_tests {
             std::fs::write(source.join(name), &animated)?;
         }
         let scan = |scope: Option<&foundation::fast_img_store::FastImgAdmissionPlan>| {
-            super::fast_vid_gif::scan_originals(
+            super::fast_vid_original::scan_originals(
+                super::FastVidOriginal::AnimatedGif,
                 &FastImgInputScope::observe(&source, true)?.candidates,
                 &source,
                 scope,
@@ -16596,7 +16611,7 @@ mod fast_img_hardening_tests {
         super::write_marker_atomic(&marker)?;
         let marker = super::read_marker(&marker.working_copy)?;
         let saved =
-            super::fast_vid_gif::pending_receipt_scope(&marker)?.context("saved GIF plan")?;
+            super::fast_vid_original::pending_receipt_scope(&marker)?.context("saved GIF plan")?;
         let legacy = &animated;
         for index in 0..25 {
             std::fs::write(source.join(format!("legacy-{index}.gif")), legacy)?;
@@ -16638,7 +16653,7 @@ mod fast_img_hardening_tests {
 
         let mut invalid_receipt = marker.clone();
         invalid_receipt.tier2_imported_assets[0].blake3 = "0".repeat(64);
-        assert!(super::fast_vid_gif::pending_receipt_scope(&invalid_receipt).is_err());
+        assert!(super::fast_vid_original::pending_receipt_scope(&invalid_receipt).is_err());
         std::fs::write(source.join("unbound-broken.gif"), b"GIF89a")?;
         let mixed = scan(Some(&saved))?;
         assert_eq!(

@@ -36,6 +36,15 @@ areas of change are:
   compression by detected format. Recognized filename-extension mismatches
   are summarized once per scan.
 
+### Fast VID HEVC MOV originals (2026-11-27)
+
+- Choose HEVC MOV in Fast VID to check existing movies locally or deliver their
+  original bytes to Apple Photos. The worker checks the QuickTime container and
+  the HEVC video stream even when the source filename has the wrong extension.
+- Photos receives a movie resource with a MOV filename. Source cleanup requires
+  fresh verification of the managed original. Live Photo pairs and movies with
+  an external XMP or AAE companion stay together at the source.
+
 ### Fast VID GIF originals (2026-11-27)
 
 - Fast VID now imports verified GIF87a and GIF89a originals into Apple Photos

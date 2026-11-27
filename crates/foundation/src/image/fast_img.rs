@@ -1484,13 +1484,26 @@ fn refresh_tier2_quarantine_receipts_with(
             )
             .map_err(ImgQualityError::AnalysisError)?;
             let source = marker.src_dir.join(relative);
-            let mark_proof = if marker.strategy == "gif"
+            let mark_proof = if matches!(marker.strategy.as_str(), "gif" | "hevc-mov")
                 && asset.xmp_sidecar_blake3.is_none()
                 && asset
                     .library_blake3
                     .as_ref()
                     .is_none_or(|hash| hash == &asset.blake3)
             {
+                if marker.strategy == "hevc-mov" {
+                    if !crate::ffprobe::is_hevc_quicktime_mov(&source)
+                        .map_err(std::io::Error::other)?
+                    {
+                        return Err(ImgQualityError::AnalysisError(
+                            "Expected HEVC MOV source during quarantine refresh".into(),
+                        ));
+                    }
+                } else if !crate::media_meta_utils::is_verified_gif(&source)? {
+                    return Err(ImgQualityError::AnalysisError(
+                        "Expected GIF source during quarantine refresh".into(),
+                    ));
+                }
                 verified_marked_gif_delivery(&source, &probe.path, library, &asset.blake3)?
             } else {
                 None
@@ -1564,13 +1577,17 @@ fn reverify_modern_lossy_static_photos_custody_excluding(
     library_handle: &LibraryHandle,
     deletion_targets: &BTreeSet<PathBuf>,
 ) -> Result<()> {
-    reverify_tier2_photos_custody_excluding(library_handle, deletion_targets, false)
+    reverify_tier2_photos_custody_excluding(
+        library_handle,
+        deletion_targets,
+        Tier2CleanupMode::Original,
+    )
 }
 
 fn reverify_tier2_photos_custody_excluding(
     library_handle: &LibraryHandle,
     deletion_targets: &BTreeSet<PathBuf>,
-    require_animated_gif: bool,
+    mode: Tier2CleanupMode,
 ) -> Result<()> {
     use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState, LogPhase};
     crate::ui::progress::emit_log_phase(LogPhase::Verification);
@@ -1584,7 +1601,7 @@ fn reverify_tier2_photos_custody_excluding(
         }
     };
     reverify_modern_lossy_static_photos_custody_with(
-        require_animated_gif,
+        mode,
         library_handle,
         &mut |uuids| {
             let probes = query_selected_photos_asset_probes(uuids, selected.as_deref())?;
@@ -1700,7 +1717,7 @@ pub(crate) fn check_absent_tier2_source_xmp(source: &Path) -> Result<()> {
 }
 
 fn reverify_modern_lossy_static_photos_custody_with(
-    require_animated_gif: bool,
+    mode: Tier2CleanupMode,
     library_handle: &LibraryHandle,
     query_assets: &mut impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     is_quarantined: &mut impl FnMut(&LibraryAssetRecord, &Path) -> Result<bool>,
@@ -1809,7 +1826,7 @@ fn reverify_modern_lossy_static_photos_custody_with(
                 )));
             }
             let expected_library_blake3 = crate::fast_img_store::tier2_library_hash(asset)?;
-            if require_animated_gif {
+            if matches!(mode, Tier2CleanupMode::AnimatedGif) {
                 verify_animated_gif_source(&probe.path, expected_library_blake3).map_err(
                     |error| {
                         ImgQualityError::AnalysisError(format!(
@@ -1819,6 +1836,14 @@ fn reverify_modern_lossy_static_photos_custody_with(
                     },
                 )?;
             } else {
+                if matches!(mode, Tier2CleanupMode::HevcMov) {
+                    require_hevc_mov(&probe.path).map_err(|error| {
+                        ImgQualityError::AnalysisError(format!(
+                            "MOV Photos original is not verified HEVC for {}: {error}",
+                            asset.rel_path
+                        ))
+                    })?;
+                }
                 let library_blake3 = crate::common_utils::calculate_blake3_hash(&probe.path)
                     .map_err(|err| {
                         ImgQualityError::AnalysisError(format!(
@@ -1986,7 +2011,7 @@ fn preflight_modern_lossy_static_source_deletion(
 
 fn verify_tier2_source_quarantine(source: &Path, receipt: &LibraryAssetRecord) -> Result<()> {
     receipt
-        .validate_gif_quarantine_binding(true)
+        .validate_original_quarantine_binding(true)
         .map_err(ImgQualityError::AnalysisError)?;
     if let Some(expected) = &receipt.gif_source_quarantine_blake3 {
         #[cfg(target_os = "macos")]
@@ -2078,6 +2103,8 @@ pub enum Tier2CleanupMode {
     Original,
     /// Require the hash-bound Photos original to be an animated GIF.
     AnimatedGif,
+    /// Require the hash-bound Photos original to be an HEVC QuickTime movie.
+    HevcMov,
 }
 
 /// Clean up verified originals using the selected custody policy and optional journal.
@@ -2093,13 +2120,7 @@ pub fn delete_verified_tier2_sources(
         library_handle,
         removed_files,
         observer,
-        |handle, targets| {
-            reverify_tier2_photos_custody_excluding(
-                handle,
-                targets,
-                matches!(mode, Tier2CleanupMode::AnimatedGif),
-            )
-        },
+        |handle, targets| reverify_tier2_photos_custody_excluding(handle, targets, mode),
     )
 }
 
@@ -3494,21 +3515,29 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     let mut metadata_failures = 0usize;
     let mut failures = FailedSourceLog::new();
     let mut seen = BTreeSet::new();
-    let gif_originals = checkpoint
-        .as_deref()
-        .is_some_and(|marker| marker.strategy == "gif");
+    let original_format = checkpoint.as_deref().and_then(|marker| {
+        crate::delivery_codec_strategy::FastVidOriginal::from_strategy(&marker.strategy)
+    });
+    let gif_originals = matches!(
+        original_format,
+        Some(crate::delivery_codec_strategy::FastVidOriginal::AnimatedGif)
+    );
+    let mov_originals = matches!(
+        original_format,
+        Some(crate::delivery_codec_strategy::FastVidOriginal::HevcMov)
+    );
     let previous = previous_tier2_preparation_submissions(checkpoint.as_deref());
     let admissions = checkpoint
         .as_deref()
         .map(crate::fast_img_store::read_admission_plan)
         .transpose()?
         .flatten();
-    let gif_names = if gif_originals
-        && checkpoint
+    let gif_names = if let Some(original) = original_format.filter(|_| {
+        checkpoint
             .as_deref()
             .and_then(|marker| marker.processing_contract.as_ref())
             .is_some_and(|contract| contract.schema == 2)
-    {
+    }) {
         // Use the complete saved inventory so that removing a sibling cannot rename a pending import.
         let sources = admissions.as_ref().map_or_else(
             || {
@@ -3519,7 +3548,13 @@ fn import_modern_lossy_static_tier_with_checkpoint(
             },
             |plan| plan.keys().map(String::as_str).collect(),
         );
-        corrected_gif_import_names(src_dir, sources)?
+        corrected_original_import_names(
+            src_dir,
+            sources,
+            original.format().canonical_extension().ok_or_else(|| {
+                ImgQualityError::AnalysisError("Original format lacks a canonical extension".into())
+            })?,
+        )?
     } else {
         BTreeMap::new()
     };
@@ -3592,9 +3627,21 @@ fn import_modern_lossy_static_tier_with_checkpoint(
             Ok(observed)
         });
         let gif_name = gif_names.get(&candidate.rel_path).map(String::as_str);
-        if gif_originals && !matches!(traced_xmp, Ok(Some(_))) {
-            let transport = traced_xmp
-                .and_then(|_| gif_original_transport(&candidate, staging.path(), index, gif_name));
+        if mov_originals || (gif_originals && !matches!(traced_xmp, Ok(Some(_)))) {
+            let transport = traced_xmp.and_then(|xmp| {
+                if mov_originals && xmp.is_some() {
+                    return Err(std::io::Error::other(
+                        "MOV with XMP cannot be imported byte-exactly",
+                    ));
+                }
+                original_transport(
+                    &candidate,
+                    staging.path(),
+                    index,
+                    gif_name,
+                    if mov_originals { "mov" } else { "gif" },
+                )
+            });
             match transport {
                 Ok(path) => {
                     candidate.path = path;
@@ -3606,17 +3653,21 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                         "img",
                         &candidate.path,
                         &error.to_string(),
-                        Some("gif_original_preparation_failed"),
+                        Some(if mov_originals {
+                            "mov_original_preparation_failed"
+                        } else {
+                            "gif_original_preparation_failed"
+                        }),
                         FileFailurePhase::MetadataPreparation,
                     );
                     record_tier2_preparation_failure(
                         &mut failures,
                         previous.as_ref(),
                         &candidate,
-                        "GIF original could not be prepared for byte-exact import",
+                        "Original could not be prepared for byte-exact import",
                     );
                     println!(
-                        "[FAIL    ]   {}: GIF original retained: {}",
+                        "[FAIL    ]   {}: original retained: {}",
                         candidate.rel_path.escape_debug(),
                         error.to_string().escape_debug()
                     );
@@ -5880,16 +5931,17 @@ where
     Ok(())
 }
 
-fn corrected_gif_import_names(
+fn corrected_original_import_names(
     root: &Path,
     mut sources: Vec<&str>,
+    extension: &str,
 ) -> std::io::Result<BTreeMap<String, String>> {
-    // Reserve existing GIF names first, then allocate corrected names in a stable order.
+    // Reserve existing names first, then allocate corrected names in a stable order.
     sources.sort_unstable_by_key(|rel| {
         (
             !Path::new(rel)
                 .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("gif")),
+                .is_some_and(|ext| ext.eq_ignore_ascii_case(extension)),
             *rel,
         )
     });
@@ -5900,13 +5952,13 @@ fn corrected_gif_import_names(
         let basename = path
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| std::io::Error::other("GIF source has no filename"))?;
+            .ok_or_else(|| std::io::Error::other("Original source has no filename"))?;
         let names = used
             .entry(photos_import_album_name(root, rel).to_lowercase())
             .or_default();
         if path
             .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
         {
             names.insert(basename.to_lowercase());
             continue;
@@ -5914,23 +5966,23 @@ fn corrected_gif_import_names(
         let stem = path
             .file_stem()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| std::io::Error::other("GIF source has no filename stem"))?;
+            .ok_or_else(|| std::io::Error::other("Original source has no filename stem"))?;
         let mut name = if Path::new(stem)
             .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
         {
             stem.to_owned()
         } else {
-            format!("{stem}.gif")
+            format!("{stem}.{extension}")
         };
         if name.len() > 255 || !names.insert(name.to_lowercase()) {
             let digest = blake3::hash(rel.as_bytes()).to_hex();
-            name = format!("{digest}.gif");
+            name = format!("{digest}.{extension}");
             for suffix in 2.. {
                 if names.insert(name.clone()) {
                     break;
                 }
-                name = format!("{digest}-{suffix}.gif");
+                name = format!("{digest}-{suffix}.{extension}");
             }
         }
         corrected.insert(rel.to_owned(), name);
@@ -5991,13 +6043,22 @@ fn require_animated_gif(staged: &Path) -> std::io::Result<()> {
     }
 }
 
-fn gif_original_transport(
+fn require_hevc_mov(path: &Path) -> std::io::Result<()> {
+    if crate::ffprobe::validate_hevc_quicktime_mov(path).map_err(std::io::Error::other)? {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("expected an HEVC QuickTime movie"))
+    }
+}
+
+fn original_transport(
     candidate: &PhotosImportCandidate,
     staging: &Path,
     index: usize,
     corrected_name: Option<&str>,
+    extension: &str,
 ) -> std::io::Result<PathBuf> {
-    // Photos can read later in the batch. Even a correctly named GIF needs a private,
+    // Photos can read later in the batch. Even a correctly named original needs a private,
     // hash-checked copy so a replacement at the source cannot enter the import.
     let parent = staging.join(index.to_string());
     #[cfg(unix)]
@@ -6007,7 +6068,23 @@ fn gif_original_transport(
     }
     #[cfg(not(unix))]
     std::fs::create_dir(&parent)?;
-    let staged = parent.join(gif_transport_name(candidate, corrected_name)?);
+    let staged = parent.join(if extension == "gif" {
+        gif_transport_name(candidate, corrected_name)?
+    } else if let Some(name) = corrected_name {
+        name.into()
+    } else if candidate
+        .path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mov"))
+    {
+        candidate
+            .path
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("MOV source has no filename"))?
+            .to_os_string()
+    } else {
+        format!("{}.mov", candidate.blake3).into()
+    });
     #[cfg(target_os = "macos")]
     observe_file_quarantine(&candidate.path, |_, _, source_mark| {
         use crate::metadata::quarantine::{read_quarantine, verify_quarantine_file_identity};
@@ -6034,7 +6111,11 @@ fn gif_original_transport(
     .map_err(std::io::Error::other)?;
     #[cfg(not(target_os = "macos"))]
     copy_photos_transport(&candidate.path, &staged, &candidate.blake3)?;
-    require_animated_gif(&staged)?;
+    if extension == "gif" {
+        require_animated_gif(&staged)?;
+    } else {
+        require_hevc_mov(&staged)?;
+    }
     Ok(staged)
 }
 
@@ -9460,7 +9541,7 @@ pub(super) fn tier2_custody_quarantined(
     bound_library: Option<&Path>,
 ) -> Result<bool> {
     asset
-        .validate_gif_quarantine_binding(true)
+        .validate_original_quarantine_binding(true)
         .map_err(ImgQualityError::AnalysisError)?;
     if let Some(mark_hash) = asset.gif_source_quarantine_blake3.as_deref() {
         #[cfg(target_os = "macos")]
@@ -9598,7 +9679,16 @@ fn verified_marked_gif_delivery(
         let Some(mark) = mark.filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
-        if !crate::media_meta_utils::verify_gif_reader(&mut *file)? {
+        let verified = match original.extension().and_then(|ext| ext.to_str()) {
+            Some(ext) if ext.eq_ignore_ascii_case("gif") => {
+                crate::media_meta_utils::verify_gif_reader(&mut *file)?
+            }
+            Some(ext) if ext.eq_ignore_ascii_case("mov") => {
+                crate::ffprobe::is_hevc_quicktime_mov(source).map_err(std::io::Error::other)?
+            }
+            _ => false,
+        };
+        if !verified {
             return Ok(None);
         }
         file.rewind()?;
@@ -9778,6 +9868,9 @@ fn verified_managed_quarantine<T>(
                     } else if format == super::format_detect::FormatKind::Gif {
                         file.rewind()?;
                         crate::media_meta_utils::verify_gif_reader(&mut *file)?
+                    } else if format == super::format_detect::FormatKind::Mov {
+                        crate::ffprobe::is_hevc_quicktime_mov(path)
+                            .map_err(std::io::Error::other)?
                     } else {
                         matches!(kind, ManagedOriginalKind::Tier2Original)
                             && super::modern_lossy_static::is_modern_static_image_format(format)
@@ -10723,7 +10816,11 @@ mod tests {
                 ..Default::default()
             };
             reverify_modern_lossy_static_photos_custody_with(
-                gif_only,
+                if gif_only {
+                    Tier2CleanupMode::AnimatedGif
+                } else {
+                    Tier2CleanupMode::Original
+                },
                 &handle,
                 &mut |_| Ok(vec![probe.clone()]),
                 &mut |_, _| Ok(false),
@@ -10773,15 +10870,20 @@ mod tests {
             album_name: "Synthetic".into(),
             blake3: crate::common_utils::calculate_blake3_hash(&source)?,
         };
-        let names = corrected_gif_import_names(dir.path(), vec![&candidate.rel_path])?;
-        let transport =
-            gif_original_transport(&candidate, staging.path(), 0, Some(&names["animation.mp4"]))?;
+        let names = corrected_original_import_names(dir.path(), vec![&candidate.rel_path], "gif")?;
+        let transport = original_transport(
+            &candidate,
+            staging.path(),
+            0,
+            Some(&names["animation.mp4"]),
+            "gif",
+        )?;
         assert_eq!(transport.file_name().unwrap(), "animation.gif");
-        let legacy = gif_original_transport(&candidate, staging.path(), 2, None)?;
+        let legacy = original_transport(&candidate, staging.path(), 2, None, "gif")?;
         assert_eq!(legacy.file_name().unwrap(), "animation.mp4.gif");
         assert_eq!(std::fs::read(&source)?, std::fs::read(&transport)?);
         candidate.path = transport.clone();
-        let named_copy = gif_original_transport(&candidate, staging.path(), 1, None)?;
+        let named_copy = original_transport(&candidate, staging.path(), 1, None, "gif")?;
         assert_ne!(named_copy, transport);
         assert_eq!(named_copy.file_name(), transport.file_name());
         assert_eq!(std::fs::read(&named_copy)?, std::fs::read(&transport)?);
@@ -10836,6 +10938,126 @@ mod tests {
     }
 
     #[test]
+    fn mov_transport_keeps_original_bytes_and_rejects_drift() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let source = dir.path().join("clip.jpg");
+        let generated = std::process::Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=32x32:rate=2",
+                "-t",
+                "1",
+                "-c:v",
+                "libx265",
+                "-threads",
+                "1",
+                "-f",
+                "mov",
+                "-y",
+            ])
+            .arg(&source)
+            .output();
+        let Ok(generated) = generated else {
+            eprintln!("ffmpeg unavailable; synthetic MOV test skipped");
+            return Ok(());
+        };
+        assert!(
+            generated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let candidate = PhotosImportCandidate {
+            rel_path: "clip.jpg".into(),
+            path: source.clone(),
+            album_name: "Synthetic".into(),
+            blake3: crate::common_utils::calculate_blake3_hash(&source)?,
+        };
+        let names = corrected_original_import_names(dir.path(), vec![&candidate.rel_path], "mov")?;
+        let staging = tempfile::tempdir()?;
+        let output = original_transport(
+            &candidate,
+            staging.path(),
+            0,
+            Some(&names["clip.jpg"]),
+            "mov",
+        )?;
+        assert_eq!(output.file_name().unwrap(), "clip.mov");
+        assert_eq!(std::fs::read(&source)?, std::fs::read(&output)?);
+        let probe = FastImgLibraryAssetProbe {
+            uuid: "UUID".into(),
+            path: output.clone(),
+            ismissing: false,
+            iscloudasset: false,
+            incloud: Some(false),
+        };
+        let verify = |hash: &str| {
+            let handle = LibraryHandle {
+                imported_assets: vec![LibraryAssetRecord {
+                    rel_path: "clip.jpg".into(),
+                    blake3: hash.into(),
+                    photos_uuid: Some("UUID".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            reverify_modern_lossy_static_photos_custody_with(
+                Tier2CleanupMode::HevcMov,
+                &handle,
+                &mut |_| Ok(vec![probe.clone()]),
+                &mut |_, _| Ok(false),
+                &mut |_, _, _, _| {},
+            )
+        };
+        verify(&candidate.blake3)?;
+        assert!(verify(blake3::hash(b"different").to_hex().as_str()).is_err());
+        #[cfg(target_os = "macos")]
+        {
+            let library = dir.path().join("Synthetic.photoslibrary");
+            let originals = library.join("originals/00");
+            std::fs::create_dir_all(&originals)?;
+            let managed = originals.join("clip.mov");
+            std::fs::copy(&source, &managed)?;
+            let mark = b"0081;61ee20ff;SyntheticMOV;";
+            xattr::set(&source, "com.apple.quarantine", mark)?;
+            xattr::set(&managed, "com.apple.quarantine", mark)?;
+            let library = library.canonicalize()?;
+            let managed = managed.canonicalize()?;
+            assert!(
+                verified_marked_gif_delivery(&source, &managed, &library, &candidate.blake3)?
+                    .is_some()
+            );
+            xattr::set(&managed, "com.apple.quarantine", b"different")?;
+            assert!(
+                verified_marked_gif_delivery(&source, &managed, &library, &candidate.blake3)?
+                    .is_none()
+            );
+        }
+        std::fs::write(&source, b"changed")?;
+        assert!(
+            original_transport(&candidate, staging.path(), 1, Some("clip.mov"), "mov").is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn corrected_mov_names_preserve_existing_and_disambiguate() -> anyhow::Result<()> {
+        let names = corrected_original_import_names(
+            Path::new("/synthetic"),
+            vec!["a/clip.MOV", "a/clip.jpg", "b/clip.jpg", "b/unnamed"],
+            "mov",
+        )?;
+        assert!(!names.contains_key("a/clip.MOV"));
+        assert_ne!(names["a/clip.jpg"].to_lowercase(), "clip.mov");
+        assert_eq!(names["b/clip.jpg"], "clip.mov");
+        assert_eq!(names["b/unnamed"], "unnamed.mov");
+        Ok(())
+    }
+
+    #[test]
     fn corrected_gif_names_preserve_existing_names_and_disambiguate_stems() -> anyhow::Result<()> {
         let long = format!("{}.x", "a".repeat(253));
         let mut files = vec![
@@ -10847,7 +11069,7 @@ mod tests {
             "a/no-extension",
             &long,
         ];
-        let names = corrected_gif_import_names(Path::new("/synthetic"), files.clone())?;
+        let names = corrected_original_import_names(Path::new("/synthetic"), files.clone(), "gif")?;
         assert!(!names.contains_key("a/CLIP.GIF"));
         assert_ne!(names["a/clip.mp4"], names["a/clip.mov"]);
         assert_ne!(names["a/clip.mp4"].to_lowercase(), "clip.gif");
@@ -10857,7 +11079,7 @@ mod tests {
         assert!(names[&long].len() <= 255);
         files.reverse();
         assert_eq!(
-            corrected_gif_import_names(Path::new("/synthetic"), files)?,
+            corrected_original_import_names(Path::new("/synthetic"), files, "gif")?,
             names
         );
         Ok(())
@@ -10887,7 +11109,7 @@ mod tests {
         };
         let staging = tempfile::tempdir()?;
         let transport =
-            gif_original_transport(&candidate, staging.path(), 0, Some("untitled.gif"))?;
+            original_transport(&candidate, staging.path(), 0, Some("untitled.gif"), "gif")?;
         assert_eq!(std::fs::read(&transport)?, bytes);
         assert_eq!(
             xattr::get(&source, ATTRIBUTE)?.as_deref(),
@@ -12160,7 +12382,7 @@ mod tests {
         probes: &[FastImgLibraryAssetProbe],
     ) -> Result<()> {
         reverify_modern_lossy_static_photos_custody_with(
-            false,
+            Tier2CleanupMode::Original,
             handle,
             &mut |ids| {
                 let found: Vec<_> = probes
@@ -12434,7 +12656,7 @@ mod tests {
         };
         let reverify = |receipt: &LibraryAssetRecord, library: Option<&Path>| {
             reverify_modern_lossy_static_photos_custody_with(
-                false,
+                Tier2CleanupMode::Original,
                 &LibraryHandle {
                     imported_assets: vec![receipt.clone()],
                     photos_library_path: library.map(Path::to_owned),
@@ -12652,7 +12874,7 @@ mod tests {
                 None,
                 |batch, targets| {
                     reverify_modern_lossy_static_photos_custody_with(
-                        false,
+                        Tier2CleanupMode::Original,
                         batch,
                         &mut |ids| {
                             assert_eq!(ids, ["UUID-A"]);
@@ -12989,7 +13211,7 @@ mod tests {
             }
             let mut events = Vec::new();
             let result = reverify_modern_lossy_static_photos_custody_with(
-                false,
+                Tier2CleanupMode::Original,
                 &LibraryHandle {
                     imported_assets: assets,
                     ..Default::default()
@@ -13087,7 +13309,7 @@ mod tests {
             let mut calls = 0;
             let mut events = Vec::new();
             let result = reverify_modern_lossy_static_photos_custody_with(
-                false,
+                Tier2CleanupMode::Original,
                 &LibraryHandle {
                     imported_assets: assets.to_vec(),
                     ..Default::default()
@@ -13130,7 +13352,7 @@ mod tests {
         }
         let mut events = Vec::new();
         reverify_modern_lossy_static_photos_custody_with(
-            false,
+            Tier2CleanupMode::Original,
             &LibraryHandle::default(),
             &mut |_| panic!("empty inventory must not query Photos"),
             &mut |_, _| panic!("empty inventory must not read quarantine state"),

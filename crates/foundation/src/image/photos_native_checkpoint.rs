@@ -1642,6 +1642,29 @@ mod tests {
     }
 
     #[test]
+    fn quicktime_transport_is_submitted_as_video() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("corrected.mov");
+        let entry = PhotosImportPendingEntry {
+            source_rel: "misnamed.jpg".into(),
+            rel_path: "misnamed.jpg".into(),
+            path,
+            album_name: "Test".into(),
+            blake3_entry: super::super::Blake3Entry::default(),
+        };
+        for prefix in [b"".as_slice(), b"\x00\x00\x00\x08wide".as_slice()] {
+            std::fs::write(
+                &entry.path,
+                [prefix, b"\x00\x00\x00\x10ftypqt  \x00\x00\x00\x00"].concat(),
+            )?;
+            let resource = resource(&entry)?;
+            assert_eq!(resource["kind"], "video");
+            assert_eq!(resource["originalFilename"], "corrected.mov");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn originals_reuse_exact_receipts_and_reject_changed_delivery() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let path = root.path().join("original.avif");

@@ -208,6 +208,7 @@ pub(crate) enum Commands {
             clap::builder::PossibleValue::new("jxl"),
             clap::builder::PossibleValue::new("avif"),
             clap::builder::PossibleValue::new("gif").hide(true),
+            clap::builder::PossibleValue::new("hevc-mov").hide(true),
         ], default_value = "jxl")]
         strategy: String,
 

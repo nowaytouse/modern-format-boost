@@ -115,7 +115,41 @@ pub fn resolve_cli_img_static_delivery(
     ImgStaticDelivery::parse_cli_label(label).map_err(anyhow::Error::msg)
 }
 
-/// Parse a fast workflow strategy (`"jxl"`, `"avif"` or original `"gif"`) into the
+/// Original resources handled by Fast VID without encoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FastVidOriginal {
+    AnimatedGif,
+    HevcMov,
+}
+
+impl FastVidOriginal {
+    #[must_use]
+    pub fn from_strategy(strategy: &str) -> Option<Self> {
+        match strategy {
+            "gif" => Some(Self::AnimatedGif),
+            "hevc-mov" => Some(Self::HevcMov),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::AnimatedGif => "GIF",
+            Self::HevcMov => "HEVC MOV",
+        }
+    }
+
+    #[must_use]
+    pub const fn format(self) -> crate::image::format_detect::FormatKind {
+        match self {
+            Self::AnimatedGif => crate::image::format_detect::FormatKind::Gif,
+            Self::HevcMov => crate::image::format_detect::FormatKind::Mov,
+        }
+    }
+}
+
+/// Parse a fast workflow strategy into the
 /// corresponding [`crate::image::format_detect::FormatKind`].
 ///
 /// Returns `None` for unknown / empty strategy strings so callers can fall
@@ -125,8 +159,7 @@ pub fn strategy_to_format_kind(strategy: &str) -> Option<crate::image::format_de
     match strategy.trim().to_ascii_lowercase().as_str() {
         "jxl" | "hevc" | "h265" | "x265" => Some(crate::image::format_detect::FormatKind::Jxl),
         "avif" | "av1" | "av01" => Some(crate::image::format_detect::FormatKind::Avif),
-        "gif" => Some(crate::image::format_detect::FormatKind::Gif),
-        _ => None,
+        original => FastVidOriginal::from_strategy(original).map(FastVidOriginal::format),
     }
 }
 

@@ -12,6 +12,7 @@ use dev::media::scope::{
     load_rust_outcomes_from_logs, load_session_routing, true_format_matches_processing_mode,
 };
 use foundation::common_utils::calculate_blake3_hash;
+use foundation::delivery_codec_strategy::FastVidOriginal;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -161,8 +162,8 @@ struct Args {
     #[arg(
         long = "strategy",
         default_value = "jxl",
-        value_parser = ["jxl", "avif", "gif"],
-        help = "Delivery strategy: jxl, avif, or gif (original GIFs in Apple Photos)."
+        value_parser = ["jxl", "avif", "gif", "hevc-mov"],
+        help = "Delivery strategy: jxl, avif, gif, or hevc-mov."
     )]
     strategy: String,
 }
@@ -543,8 +544,8 @@ fn verified_fast_img_aae_outputs(
         WorkingCopyMarker, validate_no_symlink_components, verify_regular_file_blake3,
     };
 
-    // GIF originals have no encoded work-copy media. Any local AAE is unowned.
-    if strategy == "gif" {
+    // Fast VID originals have no encoded work-copy media. Any local AAE is unowned.
+    if FastVidOriginal::from_strategy(strategy).is_some() {
         return Ok((HashSet::new(), false, Vec::new()));
     }
 
@@ -729,9 +730,9 @@ fn run_fast_img_delivery_check_with(
     )
 }
 
-/// GIFs are delivered as originals. Bind every Photos receipt or retained failure to
+/// Fast VID delivers originals. Bind every Photos receipt or retained failure to
 /// exactly one immutable source admission, including the smaller scope of a retry.
-fn verify_gif_original_admissions(
+fn verify_vid_original_admissions(
     marker: &foundation::pipeline::verification::WorkingCopyMarker,
     retry: Option<&foundation::fast_img_store::FailedRetryContext>,
 ) -> Result<usize> {
@@ -739,7 +740,8 @@ fn verify_gif_original_admissions(
         FailedRetryDeliveryIntent, FailedRetrySourceRoute, FastImgAdmissionRoute,
         read_admission_plan,
     };
-    use foundation::pipeline::verification::FastImgEncodingParameters;
+    let original = FastVidOriginal::from_strategy(&marker.strategy)
+        .context("unsupported Fast VID original strategy")?;
 
     anyhow::ensure!(
         marker.is_terminal()
@@ -749,11 +751,8 @@ fn verify_gif_original_admissions(
             && marker
                 .processing_contract
                 .as_ref()
-                .is_some_and(|contract| matches!(
-                    contract.encoding,
-                    FastImgEncodingParameters::Gif
-                )),
-        "GIF delivery requires a completed original-only checkpoint"
+                .is_some_and(|contract| contract.validate(&marker.strategy).is_ok()),
+        "Fast VID delivery requires a completed original-only checkpoint"
     );
 
     let outcomes: HashMap<_, _> = marker
@@ -775,7 +774,7 @@ fn verify_gif_original_admissions(
     anyhow::ensure!(
         outcomes.len() == marker.tier2_imported_assets.len() + marker.tier2_failed_sources.len()
             && (marker.tier2_imported_assets.is_empty() || marker.photos_library_path.is_some()),
-        "GIF original outcomes have conflicting or unbound receipts"
+        "Fast VID original outcomes have conflicting or unbound receipts"
     );
     let exact = if let Some(retry) = retry {
         matches!(
@@ -789,6 +788,8 @@ fn verify_gif_original_admissions(
                         src == admission.admitted_source_blake3
                             && receipt.is_none_or(|asset| {
                                 matches!(admission.aae, FailedRetrySidecar::Absent)
+                                    && (original == FastVidOriginal::AnimatedGif
+                                        || matches!(admission.xmp, FailedRetrySidecar::Absent))
                                     && asset.matches_original_xmp(match &admission.xmp {
                                         FailedRetrySidecar::Absent => None,
                                         FailedRetrySidecar::Present { blake3, .. } => Some(blake3),
@@ -797,19 +798,22 @@ fn verify_gif_original_admissions(
                     })
             })
     } else {
-        let plan = read_admission_plan(marker)?.context("missing GIF original admission plan")?;
+        let plan =
+            read_admission_plan(marker)?.context("missing Fast VID original admission plan")?;
         plan.len() == outcomes.len()
             && plan.iter().all(|(path, admission)| {
                 admission.route == FastImgAdmissionRoute::Original
                     && outcomes.get(path.as_str()).is_some_and(|&(src, receipt)| {
                         src == admission.source_blake3
-                            && receipt.is_none_or(|asset| admission.matches_gif_receipt(asset))
+                            && receipt.is_none_or(|asset| {
+                                admission.matches_fast_vid_receipt(original, asset)
+                            })
                     })
             })
     };
     anyhow::ensure!(
         exact,
-        "GIF original outcomes do not cover the exact admitted bytes"
+        "Fast VID original outcomes do not cover the exact admitted bytes"
     );
     Ok(outcomes.len())
 }
@@ -933,7 +937,7 @@ fn run_fast_img_delivery_check_for_scope(
         None
     };
 
-    let gif_admissions = if strategy == "gif" {
+    let original_admissions = if FastVidOriginal::from_strategy(strategy).is_some() {
         let marker: foundation::pipeline::verification::WorkingCopyMarker =
             serde::Deserialize::deserialize(
                 marker_opt
@@ -948,7 +952,7 @@ fn run_fast_img_delivery_check_for_scope(
             IntegrityUnavailableReason::Checkpoint
         );
         Some(
-            verify_gif_original_admissions(&marker, failed_retry.as_ref())
+            verify_vid_original_admissions(&marker, failed_retry.as_ref())
                 .context(IntegrityUnavailableReason::Checkpoint)?,
         )
     } else {
@@ -958,6 +962,11 @@ fn run_fast_img_delivery_check_for_scope(
         "jxl" => ("FAST-IMG", "JXL", "FAST_IMG_JXL_ONLY_DELIVERY"),
         "avif" => ("FAST-IMG", "AVIF", "FAST_IMG_AVIF_MEME_DELIVERY"),
         "gif" => ("FAST-VID", "GIF", "FAST_VID_GIF_ORIGINAL_DELIVERY"),
+        "hevc-mov" => (
+            "FAST-VID",
+            "HEVC MOV",
+            "FAST_VID_HEVC_MOV_ORIGINAL_DELIVERY",
+        ),
         _ => anyhow::bail!("unknown delivery strategy"),
     };
     report.push_str(&format!(
@@ -971,15 +980,15 @@ fn run_fast_img_delivery_check_for_scope(
         optimized: optimized_dir.to_string_lossy().to_string(),
         scope: processing_mode.to_string(),
         optimized_path_label: "Optimized".to_string(),
-        source_files_label: if gif_admissions.is_some() {
-            "Admitted GIF originals".to_string()
+        source_files_label: if original_admissions.is_some() {
+            format!("Admitted {ext_name} originals")
         } else if routed_child.is_some() {
             "Recorded failed-only admissions".to_string()
         } else {
             "Recorded source static images".to_string()
         },
-        optimized_files_label: if gif_admissions.is_some() {
-            "Verified GIF originals in Photos".to_string()
+        optimized_files_label: if original_admissions.is_some() {
+            format!("Verified {ext_name} originals in Photos")
         } else {
             format!("Optimized {ext_name} files")
         },
@@ -988,8 +997,8 @@ fn run_fast_img_delivery_check_for_scope(
 
     let mut source_true_jpegs = Vec::new();
     let mut source_probe_errors = Vec::new();
-    let source_files = if gif_admissions.is_some() {
-        // The original-format checks below inspect only the immutable GIF admissions.
+    let source_files = if original_admissions.is_some() {
+        // The original-format checks below inspect only the immutable original admissions.
         Vec::new()
     } else if let Some((path, present, _marker)) = &selected_source {
         present.then(|| path.to_path_buf()).into_iter().collect()
@@ -1096,7 +1105,7 @@ fn run_fast_img_delivery_check_for_scope(
             } else {
                 match foundation::image::format_detect::detect_regular_file_format(&path) {
                     Ok(format)
-                        if gif_admissions.is_none()
+                        if original_admissions.is_none()
                             && format.canonical_extension() == Some(strategy) =>
                     {
                         optimized_outputs.push(path)
@@ -1529,7 +1538,7 @@ fn run_fast_img_delivery_check_for_scope(
     }
 
     let count_matches = marker_ok
-        && (gif_admissions.is_none() || unexpected_outputs.is_empty())
+        && (original_admissions.is_none() || unexpected_outputs.is_empty())
         && expected_delivery_count == accounted_delivery_count
         && missing_recorded_outputs.is_empty()
         && unresolved_aae.is_empty()
@@ -1562,9 +1571,9 @@ fn run_fast_img_delivery_check_for_scope(
         report.push_str(&format!("  Error:                  {err}\n"));
     }
     let source_kind = "static images";
-    if let Some(count) = gif_admissions {
+    if let Some(count) = original_admissions {
         stats.source_files = count;
-        report.push_str(&format!("Admitted GIF originals:      {count}\n"));
+        report.push_str(&format!("Admitted {ext_name} originals:      {count}\n"));
     } else {
         report.push_str(&format!(
             "Recorded source {source_kind}:       {recorded_source_jpegs}\n"
@@ -1578,7 +1587,7 @@ fn run_fast_img_delivery_check_for_scope(
         "Recorded failed sources:     {}\n",
         stats.failed_sources
     ));
-    if gif_admissions.is_none() {
+    if original_admissions.is_none() {
         report.push_str(&format!(
             "Expected optimized {ext_name}s:     {expected_delivery_count}\n"
         ));
@@ -1787,7 +1796,7 @@ fn run_fast_img_delivery_check_for_scope(
         stats.tier2_verified_deleted =
             foundation::fast_img_store::verify_tier2_cleanup_completion_count(&typed)
                 .context(IntegrityUnavailableReason::Checkpoint)?;
-        if gif_admissions.is_some() {
+        if original_admissions.is_some() {
             stats.optimized_files = tier2_recorded;
             stats.matched = tier2_recorded;
             stats.verified_deleted_sources = stats.tier2_verified_deleted;
@@ -1803,7 +1812,7 @@ fn run_fast_img_delivery_check_for_scope(
             report.push_str(&format!(
                 "  - Recorded local outputs absent now: {observed_absent_outputs}. Current Photos originals cover them.\n"
             ));
-        } else if gif_admissions.is_none() {
+        } else if original_admissions.is_none() {
             report.push_str(&format!(
                 "  - All non-skipped/non-failed primary source {source_kind} were successfully deleted\n"
             ));
@@ -3219,8 +3228,8 @@ fn report_integrity_unavailable<T>(result: Result<T>, requested: bool) -> Result
 fn main() -> Result<()> {
     let args = Args::parse();
     anyhow::ensure!(
-        args.strategy != "gif" || args.fast_img_delivery,
-        "GIF originals use Photos delivery verification (--fast-img-delivery)"
+        FastVidOriginal::from_strategy(&args.strategy).is_none() || args.fast_img_delivery,
+        "Fast VID originals use Photos delivery verification (--fast-img-delivery)"
     );
     if args.fast_img_jpeg_scratch_list {
         let report = foundation::jxl_effort_policy::list_jpeg_effort_scratch()?;
@@ -4217,6 +4226,86 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
     #[test]
     #[serial]
+    fn hevc_mov_delivery_requires_original_bytes_and_proven_sidecar_absence() -> Result<()> {
+        use foundation::fast_img_store::{
+            FastImgAdmissionRoute, FastImgAdmissionSidecar, FastImgSourceAdmission,
+            initialize_with_admission,
+        };
+        use foundation::pipeline::verification::{
+            FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+            LibraryAssetRecord, WorkingCopyMarker, write_marker_atomic,
+        };
+        if isolated_marker_test() {
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let _state = marker_test_state(&root);
+        let source = root.join("source");
+        let output = root.join("working");
+        fs::create_dir(&source)?;
+        fs::create_dir(&output)?;
+        let hash = blake3::hash(b"synthetic original").to_hex().to_string();
+        let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 0)
+            .with_strategy("hevc-mov".into());
+        marker.processing_contract = Some(FastImgProcessingContract {
+            schema: 2,
+            tool_policy: foundation::runtime_config::ToolPolicy::Single,
+            fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
+            encoding: FastImgEncodingParameters::HevcMov,
+        });
+        marker.photos_library_path = Some(root.join("synthetic.photoslibrary"));
+        let mut admission = FastImgSourceAdmission {
+            source_blake3: hash.clone(),
+            route: FastImgAdmissionRoute::Original,
+            xmp: Some(FastImgAdmissionSidecar::Absent),
+            aae: Some(FastImgAdmissionSidecar::Absent),
+        };
+        initialize_with_admission(
+            &mut marker,
+            &[("clip.other".into(), admission.clone())].into(),
+        )?;
+        marker.stage = FastImgStageName::CleanupComplete;
+        let asset = LibraryAssetRecord {
+            rel_path: "clip.other".into(),
+            blake3: hash,
+            photos_uuid: Some("synthetic-movie-uuid".into()),
+            sync_status: "photos_local".into(),
+            ..Default::default()
+        };
+        marker.tier2_imported_assets.push(asset.clone());
+        write_marker_atomic(&marker)?;
+        let mut read_photos = false;
+        let stats = run_fast_img_delivery_check_with(
+            &source,
+            &output,
+            &mut String::new(),
+            "videos_only",
+            "hevc-mov",
+            |saved| {
+                read_photos = true;
+                anyhow::ensure!(
+                    saved.tier2_imported_assets.as_slice() == std::slice::from_ref(&asset)
+                );
+                Ok(())
+            },
+        )?;
+        assert!(read_photos && !stats.has_warnings);
+        assert_eq!((stats.source_files, stats.optimized_files), (1, 1));
+        assert_eq!(
+            stats.count_status_label.as_deref(),
+            Some("FAST_VID_HEVC_MOV_ORIGINAL_DELIVERY")
+        );
+        admission.xmp = None;
+        assert!(!admission.matches_fast_vid_receipt(FastVidOriginal::HevcMov, &asset));
+        marker.tier2_imported_assets[0].blake3 =
+            blake3::hash(b"another movie").to_hex().to_string();
+        assert!(verify_vid_original_admissions(&marker, None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
     fn gif_delivery_binds_original_receipts_and_retained_failures_to_the_exact_scope() -> Result<()>
     {
         use foundation::fast_img_store::{
@@ -4335,7 +4424,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         mismatched.tier2_imported_assets[0].xmp_sidecar_blake3 =
             Some(blake3::hash(b"other").to_hex().to_string());
         write_marker_atomic(&mismatched)?;
-        assert!(verify_gif_original_admissions(&mismatched, None).is_err());
+        assert!(verify_vid_original_admissions(&mismatched, None).is_err());
         let saved_receipts = std::mem::take(&mut marker.tier2_imported_assets);
         write_marker_atomic(&marker)?;
         let missing =

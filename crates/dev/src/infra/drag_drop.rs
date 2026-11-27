@@ -719,13 +719,18 @@ pub fn choose_fast_img_action(strategy: &str) -> Result<FastImgAction> {
     })
 }
 
-pub fn choose_gif_photos_import() -> Result<bool> {
-    println!("  1 - Verify animated GIF originals and keep them in place");
-    println!("  2 - Import original GIFs into Photos and clean up verified sources");
-    match read_line("Choose GIF action [1/2] (Enter = keep in place): ")?.trim() {
+pub fn choose_gif_photos_import(strategy: &str) -> Result<bool> {
+    let label = if strategy == "hevc-mov" {
+        "HEVC MOV"
+    } else {
+        "GIF"
+    };
+    println!("  1 - Verify {label} originals and keep them in place");
+    println!("  2 - Import {label} originals into Photos and clean up verified sources");
+    match read_line("Choose action [1/2] (Enter = keep in place): ")?.trim() {
         "" | "1" => Ok(false),
         "2" => Ok(true),
-        _ => bail!("choose 1 or 2 for the GIF action"),
+        _ => bail!("choose 1 or 2 for the original media action"),
     }
 }
 

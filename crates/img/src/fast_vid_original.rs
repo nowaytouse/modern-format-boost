@@ -1,4 +1,4 @@
-//! Inspect GIF originals in place or admit them to Photos custody with an exact byte hash.
+//! Inspect Fast VID originals in place or admit them to Photos with an exact byte hash.
 #![expect(
     clippy::redundant_pub_crate,
     reason = "the worker exposes these helpers only within the binary crate"
@@ -11,8 +11,8 @@ use super::{
 use anyhow::{Context, Result};
 use foundation::ModernLossyStaticCandidate;
 use foundation::batch::AdmittedImageFile;
+use foundation::delivery_codec_strategy::FastVidOriginal;
 use foundation::fast_img_store::FastImgAdmissionPlan;
-use foundation::image::format_detect::FormatKind;
 use foundation::media_meta_utils::GifMotion;
 use foundation::metadata::XmpSidecarIndex;
 use foundation::pipeline::verification::fast_img_relative_key;
@@ -24,7 +24,7 @@ pub(super) fn validate_selection(input: &Path) -> Result<()> {
     match std::fs::symlink_metadata(input) {
         Ok(metadata) => anyhow::ensure!(
             !metadata.file_type().is_symlink(),
-            "select the original GIF file or folder directly; the selection is a symbolic link"
+            "select the original file or folder directly; the selection is a symbolic link"
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
         Err(error) => return Err(error.into()),
@@ -32,10 +32,37 @@ pub(super) fn validate_selection(input: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Use the same full stream decoder for both local retention and Photos admission.
-fn inspect_gifs<'a>(
+enum OriginalProbe {
+    Eligible,
+    Ignored(IgnoredReason),
+}
+
+fn probe_original(original: FastVidOriginal, path: &Path) -> Result<OriginalProbe> {
+    match original {
+        FastVidOriginal::AnimatedGif => foundation::media_meta_utils::gif_motion(path)
+            .map(|motion| match motion {
+                GifMotion::Animated => OriginalProbe::Eligible,
+                GifMotion::Still => OriginalProbe::Ignored(IgnoredReason::StaticGif),
+                GifMotion::NotGif => {
+                    OriginalProbe::Ignored(IgnoredReason::OutsideCurrentPolicyScope)
+                }
+            })
+            .map_err(anyhow::Error::from),
+        FastVidOriginal::HevcMov => foundation::ffprobe::validate_hevc_quicktime_mov(path)
+            .map(|valid| {
+                if valid {
+                    OriginalProbe::Eligible
+                } else {
+                    OriginalProbe::Ignored(IgnoredReason::OutsideCurrentPolicyScope)
+                }
+            })
+            .map_err(anyhow::Error::from),
+    }
+}
+
+fn inspect_originals<'a>(
     observed: &'a [AdmittedImageFile],
-    mut classify: impl FnMut(&'a AdmittedImageFile, std::io::Result<GifMotion>) -> Result<()>,
+    mut classify: impl FnMut(&'a AdmittedImageFile) -> Result<()>,
 ) -> Result<()> {
     let progress = foundation::progress::FileStageProgress::new(
         observed.len() as u64,
@@ -43,24 +70,25 @@ fn inspect_gifs<'a>(
     );
     for (index, source) in observed.iter().enumerate() {
         foundation::batch_control::checkpoint()?;
-        classify(
-            source,
-            foundation::media_meta_utils::gif_motion(source.path()),
-        )?;
+        classify(source)?;
         progress.set((index + 1) as u64);
     }
     progress.finish();
     Ok(())
 }
 
-pub(super) fn verify_local(options: FastImgRunOptions<'_>) -> Result<()> {
+pub(super) fn verify_local(
+    options: FastImgRunOptions<'_>,
+    original: FastVidOriginal,
+) -> Result<()> {
+    let label = original.label();
     validate_selection(options.input)?;
     let scope = FastImgInputScope::observe(options.input, options.recursive.0)?;
     anyhow::ensure!(
         options
             .planned_scope
             .is_none_or(|expected| expected == scope.token()),
-        "GIF input selection changed after preview. Review the selection and start again."
+        "{label} input selection changed after preview. Review the selection and start again."
     );
     let root = scope.src_root.clone();
     let (observed, witness) = scope.into_scan();
@@ -68,23 +96,21 @@ pub(super) fn verify_local(options: FastImgRunOptions<'_>) -> Result<()> {
     let mut skipped = 0;
     let mut failed = 0;
     if options.dry_run.0 {
-        println!("[DRY RUN ] Verify original GIFs and keep them in place.");
+        println!("[DRY RUN ] Verify {label} originals and keep them in place.");
     }
-    inspect_gifs(&observed, |source, result| {
+    inspect_originals(&observed, |source| {
         let path = source.path();
-        let rel = fast_img_relative_key(path, &root, "GIF original").map_err(anyhow::Error::msg)?;
-        match result {
-            Ok(GifMotion::Animated) => {
+        let rel =
+            fast_img_relative_key(path, &root, "Fast VID original").map_err(anyhow::Error::msg)?;
+        match probe_original(original, path) {
+            Ok(OriginalProbe::Eligible) => {
                 skipped += 1;
                 println!(
-                    "[SKIP    ]   {}: animated GIF original retained in place",
+                    "[SKIP    ]   {}: {label} original retained in place",
                     rel.replace(char::is_control, "�")
                 );
             }
-            Ok(GifMotion::Still) => ignored.push((path.to_owned(), IgnoredReason::StaticGif)),
-            Ok(GifMotion::NotGif) => {
-                ignored.push((path.to_owned(), IgnoredReason::OutsideCurrentPolicyScope));
-            }
+            Ok(OriginalProbe::Ignored(reason)) => ignored.push((path.to_owned(), reason)),
             Err(error) => {
                 failed += 1;
                 report_failure(path, &rel, &error.to_string());
@@ -100,24 +126,26 @@ pub(super) fn verify_local(options: FastImgRunOptions<'_>) -> Result<()> {
     let expected_ignored = observed
         .len()
         .checked_sub(skipped + failed)
-        .context("overlapping GIF local verification results")?;
+        .context("overlapping Fast VID local verification results")?;
     let ignored = IgnoredInventory::new(&root, ignored, expected_ignored)?;
     ignored.emit_markers_from_environment()?;
     super::fast_img_result::print_processor_counts(0, skipped, failed, ignored.count(), 0);
     anyhow::ensure!(
         failed == 0,
-        "Local GIF verification failed for {failed} file(s); originals retained."
+        "Local {label} verification failed for {failed} file(s); originals retained."
     );
     Ok(())
 }
 
-/// A GIF task with receipts for its entire immutable plan only needs to reverify its
+/// An original-delivery task with receipts for its entire immutable plan only needs to reverify its
 /// existing Photos assets. A newer decoder may recognize additional files in the folder.
 pub(super) fn pending_receipt_scope(
     marker: &WorkingCopyMarker,
 ) -> Result<Option<FastImgAdmissionPlan>> {
-    if marker.strategy != "gif"
-        || marker.stage != FastImgStageName::CleanupComplete
+    let Some(original) = FastVidOriginal::from_strategy(&marker.strategy) else {
+        return Ok(None);
+    };
+    if marker.stage != FastImgStageName::CleanupComplete
         || !marker.tier2_in_progress
         || !marker.tier2_cleanup_journal
         || marker.photos_library_path.is_none()
@@ -140,48 +168,51 @@ pub(super) fn pending_receipt_scope(
                 .is_some_and(|uuid| !uuid.is_empty())
                 && plan
                     .get(&asset.rel_path)
-                    .is_some_and(|entry| entry.matches_gif_receipt(asset)),
-            "saved GIF Photos receipt differs from its original admission; sources retained"
+                    .is_some_and(|entry| entry.matches_fast_vid_receipt(original, asset)),
+            "saved Fast VID Photos receipt differs from its original admission; sources retained"
         );
     }
     Ok(Some(plan))
 }
 
 pub(super) fn scan_originals(
+    original: FastVidOriginal,
     observed: &[AdmittedImageFile],
     root: &Path,
     saved_scope: Option<&FastImgAdmissionPlan>,
 ) -> Result<FastImgSourceInventory> {
+    let label = original.label();
     let mut verified = Vec::new();
     let mut ignored = Vec::new();
     let mut failures = ProbeFailures::new(0);
     let mut live_photos = foundation::live_photo::LivePhotoScan::default();
     let mut deferred = 0;
-    inspect_gifs(observed, |source, result| {
+    inspect_originals(observed, |source| {
         let path = source.path();
         // Files outside the old admission can neither expand this recovery nor add new failures.
-        if let Some(saved) = saved_scope
-            && !matches!(result, Ok(GifMotion::NotGif | GifMotion::Still))
-        {
-            let rel =
-                fast_img_relative_key(path, root, "GIF original").map_err(anyhow::Error::msg)?;
+        if let Some(saved) = saved_scope {
+            let rel = fast_img_relative_key(path, root, "Fast VID original")
+                .map_err(anyhow::Error::msg)?;
             if !saved.contains_key(&rel) {
-                ignored.push((path.to_owned(), IgnoredReason::OutsideSavedGifTask));
+                ignored.push((
+                    path.to_owned(),
+                    match original {
+                        FastVidOriginal::AnimatedGif => IgnoredReason::OutsideSavedGifTask,
+                        FastVidOriginal::HevcMov => IgnoredReason::OutsideSavedMovTask,
+                    },
+                ));
                 deferred += 1;
                 return Ok(());
             }
         }
-        match result {
-            Ok(GifMotion::Still) => ignored.push((path.to_owned(), IgnoredReason::StaticGif)),
-            Ok(GifMotion::NotGif) => {
-                ignored.push((path.to_owned(), IgnoredReason::OutsideCurrentPolicyScope));
-            }
-            Ok(GifMotion::Animated) if live_photos.is_live(path)? => {
+        match probe_original(original, path) {
+            Ok(OriginalProbe::Ignored(reason)) => ignored.push((path.to_owned(), reason)),
+            Ok(OriginalProbe::Eligible) if live_photos.is_live(path)? => {
                 ignored.push((path.to_owned(), IgnoredReason::LivePhotoPairMember));
             }
-            Ok(GifMotion::Animated) => verified.push(source),
+            Ok(OriginalProbe::Eligible) => verified.push(source),
             Err(error) => {
-                let rel = fast_img_relative_key(path, root, "GIF original")
+                let rel = fast_img_relative_key(path, root, "Fast VID original")
                     .map_err(anyhow::Error::msg)?;
                 record_failure(&mut failures, source, &rel, &error.to_string());
             }
@@ -197,13 +228,18 @@ pub(super) fn scan_originals(
     for source in verified {
         foundation::batch_control::checkpoint()?;
         let path = source.path();
-        let rel = fast_img_relative_key(path, root, "GIF original").map_err(anyhow::Error::msg)?;
+        let rel =
+            fast_img_relative_key(path, root, "Fast VID original").map_err(anyhow::Error::msg)?;
         let admission = (|| -> Result<String> {
             anyhow::ensure!(
                 sidecars.find_aae(path)?.is_none(),
-                "GIF has an AAE edit companion without a Photos adjustment receipt; source and companion retained"
+                "{label} has an AAE edit companion without a Photos adjustment receipt; source and companion retained"
             );
             if let Some(xmp) = sidecars.find(path)? {
+                anyhow::ensure!(
+                    original == FastVidOriginal::AnimatedGif,
+                    "HEVC MOV has an external XMP companion; original and companion retained together"
+                );
                 foundation::metadata::validate_xmp_sidecar(&xmp)?;
             }
             Ok(source.content_blake3()?)
@@ -212,7 +248,7 @@ pub(super) fn scan_originals(
             Ok(blake3) => originals.push(ModernLossyStaticCandidate {
                 path: path.to_owned(),
                 rel_path: rel,
-                format: FormatKind::Gif,
+                format: original.format(),
                 blake3,
             }),
             Err(error) => record_failure(&mut failures, source, &rel, &error.to_string()),
@@ -226,14 +262,14 @@ pub(super) fn scan_originals(
     let expected_ignored = observed
         .len()
         .checked_sub(originals.len() + failures.total)
-        .context("overlapping GIF source classifications")?;
+        .context("overlapping Fast VID source classifications")?;
     if deferred > 0 {
         println!(
-            "[RESUME  ] {deferred} file(s) outside the saved GIF Photos task retained in place. After verified cleanup, start a new task (--no-resume) for the remaining files."
+            "[RESUME  ] {deferred} file(s) outside the saved {label} Photos task retained in place. After verified cleanup, start a new task (--no-resume) for the remaining files."
         );
     }
     println!(
-        "[FASTVID ] selected {} verified animated GIF original(s) for Apple Photos",
+        "[FASTVID ] selected {} verified {label} original(s) for Apple Photos",
         originals.len()
     );
     Ok(FastImgSourceInventory {
@@ -259,7 +295,7 @@ fn record_failure(
             failures.hashes.insert(rel.to_owned(), hash);
         }
         Err(error) => {
-            tracing::warn!(target: "fast_vid", source_rel = rel, %error, "GIF failure hash unavailable");
+            tracing::warn!(target: "fast_vid", source_rel = rel, %error, "Fast VID failure hash unavailable");
         }
     }
     report_failure(source.path(), rel, reason);
@@ -399,7 +435,7 @@ mod tests {
         let scope = foundation::batch::fast_img_scope::FastImgInputScope::observe(&selected, true)?;
         assert!(!scope.selected_is_directory);
         let (observed, witness) = scope.into_scan();
-        let inventory = scan_originals(&observed, &root, None)?;
+        let inventory = scan_originals(FastVidOriginal::AnimatedGif, &observed, &root, None)?;
         let plan = inventory.admission_plan(&root)?;
         assert_eq!(plan.keys().collect::<Vec<_>>(), ["selected"]);
         witness.verify_unchanged()?;

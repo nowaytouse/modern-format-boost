@@ -15,6 +15,7 @@ pub enum IgnoredReason {
     StaticGif,
     OutsideCurrentPolicyScope,
     OutsideSavedGifTask,
+    OutsideSavedMovTask,
     ModernTierNotAdmitted,
     Modern(ModernRetention),
 }
@@ -27,6 +28,7 @@ impl IgnoredReason {
             Self::OutsideCurrentPolicyScope => "outside_current_policy_scope",
             Self::StaticGif => "static_gif",
             Self::OutsideSavedGifTask => "outside_saved_gif_task",
+            Self::OutsideSavedMovTask => "outside_saved_mov_task",
             Self::ModernTierNotAdmitted => "modern_tier_not_admitted_for_original_delivery",
             Self::Modern(ModernRetention::StaticNotConfirmed) => "static_image_unconfirmed",
             Self::Modern(ModernRetention::CompressionUnproven) => "compression_unproven",
@@ -48,6 +50,9 @@ impl IgnoredReason {
                 "Source format is outside the selected processing strategy"
             }
             Self::StaticGif => "GIF has no displayed motion; use IMG",
+            Self::OutsideSavedMovTask => {
+                "File retained for a new task; outside the saved HEVC MOV Photos delivery"
+            }
             Self::OutsideSavedGifTask => {
                 "File retained for a new task; outside the saved GIF Photos delivery"
             }

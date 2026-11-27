@@ -98,7 +98,7 @@ pub fn resolve_failed_retry_child_for_source(
         let source = text(source)?;
         validate_locator(source)?;
         ensure!(
-            matches!(strategy, "jxl" | "avif" | "gif"),
+            matches!(strategy, "jxl" | "avif" | "gif" | "hevc-mov"),
             "Failed-only child selection requires a supported exact strategy"
         );
         let Some(conn) = open_readonly()? else {

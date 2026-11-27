@@ -110,10 +110,17 @@ pub struct FastImgSourceAdmission {
 
 impl FastImgSourceAdmission {
     #[must_use]
-    pub fn matches_gif_receipt(
+    pub fn matches_fast_vid_receipt(
         &self,
+        original: crate::delivery_codec_strategy::FastVidOriginal,
         asset: &crate::pipeline::verification::LibraryAssetRecord,
     ) -> bool {
+        if original == crate::delivery_codec_strategy::FastVidOriginal::HevcMov
+            && !(matches!(self.xmp, Some(FastImgAdmissionSidecar::Absent))
+                && matches!(self.aae, Some(FastImgAdmissionSidecar::Absent)))
+        {
+            return false;
+        }
         self.route == FastImgAdmissionRoute::Original
             && self.source_blake3 == asset.blake3
             && matches!(self.aae, None | Some(FastImgAdmissionSidecar::Absent))

@@ -1,9 +1,8 @@
 //! GAP-1: §`DetectionUniversal` — content-based format detection via magic
 //! bytes.
 //!
-//! ⛔ No existing detection code touched (D7 preserved).
-//! Reads at most 32 bytes for fixed signatures. Ambiguous `mif1`/`msf1`
-//! ISOBMFF files scan only the `ftyp` compatible-brands box.
+//! Reads a bounded prefix for fixed signatures and seeks over leading QuickTime
+//! padding atoms. Ambiguous `mif1`/`msf1` files scan the `ftyp` brands.
 
 use crate::unified_error::{ImgQualityError, Result};
 use std::path::Path;
@@ -135,6 +134,82 @@ pub fn detect_regular_file_format(path: &Path) -> Result<FormatKind> {
     detect_open_format(path, &mut crate::io_utils::open_regular_nofollow(path)?)
 }
 
+/// Returns the structural validity of a QuickTime `ftyp`, or None for other content.
+pub(crate) fn quicktime_brand(file: &mut std::fs::File) -> std::io::Result<Option<bool>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let length = file.metadata()?.len();
+    let mut offset = 0u64;
+    // shortcut: at most 16 leading padding atoms within 64 MiB, upgrade if real MOVs exceed this.
+    for _ in 0..=16 {
+        if offset > 64 * 1024 * 1024 || length.saturating_sub(offset) < 8 {
+            break;
+        }
+        file.seek(SeekFrom::Start(offset))?;
+        let mut atom = [0u8; 8];
+        file.read_exact(&mut atom)?;
+        let mut size = u64::from(u32::from_be_bytes([atom[0], atom[1], atom[2], atom[3]]));
+        let mut header_len = 8;
+        if size == 1 {
+            if length.saturating_sub(offset) < 16 {
+                break;
+            }
+            let mut extended = [0u8; 8];
+            file.read_exact(&mut extended)?;
+            size = u64::from_be_bytes(extended);
+            header_len = 16;
+        }
+        if &atom[4..] == b"ftyp" {
+            if length.saturating_sub(offset) < header_len + 4 {
+                break;
+            }
+            let mut brand = [0u8; 4];
+            file.read_exact(&mut brand)?;
+            if &brand == b"qt  " {
+                return Ok(Some(
+                    size >= header_len + 8
+                        && size <= length - offset
+                        && (size - header_len - 8) % 4 == 0,
+                ));
+            }
+            break;
+        }
+        if !matches!(&atom[4..], b"wide" | b"free" | b"skip") || size < header_len {
+            break;
+        }
+        let Some(next) = offset.checked_add(size).filter(|next| *next <= length) else {
+            break;
+        };
+        offset = next;
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+#[test]
+fn quicktime_large_and_malformed_ftyp_match_shared_detection() {
+    let mut bytes = vec![0; 4100];
+    bytes[..4].copy_from_slice(&4100u32.to_be_bytes());
+    bytes[4..12].copy_from_slice(b"ftypqt  ");
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), &bytes).unwrap();
+    assert_eq!(
+        quicktime_brand(&mut std::fs::File::open(file.path()).unwrap()).unwrap(),
+        Some(true)
+    );
+    assert_eq!(detect_true_format(file.path()).unwrap(), FormatKind::Mov);
+    bytes.push(0);
+    bytes[..4].copy_from_slice(&4101u32.to_be_bytes());
+    std::fs::write(file.path(), &bytes).unwrap();
+    assert_eq!(
+        quicktime_brand(&mut std::fs::File::open(file.path()).unwrap()).unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        detect_true_format(file.path()).unwrap(),
+        FormatKind::Unknown
+    );
+}
+
 pub(super) fn detect_open_format(path: &Path, file: &mut std::fs::File) -> Result<FormatKind> {
     use std::io::Read;
 
@@ -142,6 +217,14 @@ pub(super) fn detect_open_format(path: &Path, file: &mut std::fs::File) -> Resul
     let n = file.read(&mut buf).map_err(ImgQualityError::IoError)?;
 
     let b = &buf[..n];
+
+    if n >= 8 && matches!(&b[4..8], b"ftyp" | b"wide" | b"free" | b"skip") {
+        match quicktime_brand(file)? {
+            Some(true) => return Ok(FormatKind::Mov),
+            Some(false) => return Ok(FormatKind::Unknown),
+            None => {}
+        }
+    }
 
     // JXL naked codestream: FF 0A
     if n >= 2 && b[0] == 0xFF && b[1] == 0x0A {

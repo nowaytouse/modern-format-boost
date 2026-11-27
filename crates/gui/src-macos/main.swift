@@ -369,6 +369,7 @@ private enum OperationMode: String, CaseIterable {
     case fastImgJxl
     case fastImgAvif
     case fastVid
+    case fastVidMov
     case restoreJpeg
     case collect
     case compare
@@ -386,7 +387,7 @@ private enum OperationMode: String, CaseIterable {
         switch self {
         case .adjacent: nil
         case .fastImgJxl, .fastImgAvif: "fast-img"
-        case .fastVid: "fast-vid"
+        case .fastVid, .fastVidMov: "fast-vid"
         case .restoreJpeg: "restore-jpeg"
         case .collect: "collect"
         case .compare: "compare"
@@ -403,6 +404,7 @@ private enum OperationMode: String, CaseIterable {
         case .fastImgJxl: "jxl"
         case .fastImgAvif: "avif"
         case .fastVid: "gif"
+        case .fastVidMov: "hevc-mov"
         default: nil
         }
     }
@@ -410,12 +412,12 @@ private enum OperationMode: String, CaseIterable {
     var checkpointedMedia: Bool { strategy != nil }
 
     func usesCheckpoint(importToPhotos: Bool) -> Bool {
-        checkpointedMedia && (self != .fastVid || importToPhotos)
+        checkpointedMedia && (!isFastVid || importToPhotos)
     }
 
     func capabilities(importToPhotos: Bool) -> OperationCapabilities {
         var result = capabilities
-        if self == .fastVid && !importToPhotos {
+        if isFastVid && !importToPhotos {
             result.supportsResume = false
             result.supportsRetry = false
         }
@@ -425,6 +427,8 @@ private enum OperationMode: String, CaseIterable {
     static func forDelivery(strategy: String) -> Self? {
         allCases.first { $0.strategy == strategy }
     }
+
+    var isFastVid: Bool { self == .fastVid || self == .fastVidMov }
 
     var explicitStrategyArguments: [String] {
         guard self != .fastVid, let strategy else { return [] }
@@ -450,7 +454,7 @@ private enum OperationMode: String, CaseIterable {
                 supportsArchive: true,
                 supportsRetry: true
             )
-        case .fastVid:
+        case .fastVid, .fastVidMov:
             OperationCapabilities(fixedProcessingMode: .videosOnly, supportsShortestPath: true, supportsResume: true, supportsRetry: true)
         case .restoreJpeg:
             OperationCapabilities(fixedProcessingMode: .imagesOnly)
@@ -503,7 +507,7 @@ struct FastImgCleanupRecoveryResult: Decodable, Equatable {
         guard value.schema_version == 1, validHistoryIdentity(value.run_id),
               [value.source_path, value.output_path].allSatisfy(validFastImgCleanupPath),
               !FastImgDeliveryReceipt.samePath(value.source_path, value.output_path),
-              ["jxl", "avif", "gif"].contains(value.strategy),
+              ["jxl", "avif", "gif", "hevc-mov"].contains(value.strategy),
               FastImgFailedRetryAvailable.hash(value.checkpoint_blake3),
               ["removed", "already_absent", "residual", "failed", "verification_blocked"].contains(value.outcome),
               value.verified == (value.outcome != "verification_blocked") else {
@@ -1216,9 +1220,9 @@ private struct MediaSettings {
         return arguments
     }
 
-    func runtimeArguments(fast: Bool, inheritedOnly: Bool, avif: Bool = false, gifOriginals: Bool = false) -> [String] {
+    func runtimeArguments(fast: Bool, inheritedOnly: Bool, avif: Bool = false, fastVidOriginals: Bool = false) -> [String] {
         var arguments = MediaSetting.allCases.filter {
-            if gifOriginals { return !inheritedOnly && ($0.isShared || $0.isPhotos) }
+            if fastVidOriginals { return !inheritedOnly && ($0.isShared || $0.isPhotos) }
             return ($0.isShared || $0 == .externalToolSnapshot || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
                 && (!fast || !$0.isFastImage || $0.appliesToFast(avif: avif))
                 && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
@@ -1228,7 +1232,7 @@ private struct MediaSettings {
                 argument.hasPrefix("--img-") ? "--" + argument.dropFirst(6) : argument
             }
         }
-        if !inheritedOnly && !gifOriginals { arguments += toolArguments(fast ? .fastImage : .image) }
+        if !inheritedOnly && !fastVidOriginals { arguments += toolArguments(fast ? .fastImage : .image) }
         return arguments
     }
 
@@ -2266,7 +2270,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var avifMetadataRow: NSGridRow?
     private let developer: Bool
     private let fast: Bool
-    private let gifOriginals: Bool
+    private let fastVidOriginals: Bool
     private let avif: Bool
     private let videos: Bool
     private let privacyCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -2316,11 +2320,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var validatingLayout = false
 
     init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, avif: Bool = false,
-         videos: Bool = false, gifOriginals: Bool = false, interfaceOnly: Bool = false, applied: @escaping () -> Void) {
+         videos: Bool = false, fastVidOriginals: Bool = false, interfaceOnly: Bool = false, applied: @escaping () -> Void) {
         self.preferences = preferences
         self.applied = applied
         self.interfaceOnly = interfaceOnly
-        self.gifOriginals = gifOriginals
+        self.fastVidOriginals = fastVidOriginals
         self.developer = developer
         self.fast = fast
         self.avif = avif
@@ -2346,12 +2350,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         tabs.translatesAutoresizingMaskIntoConstraints = false
         tabs.delegate = self
         installTab("general", grid: generalSettingsGrid())
-        let mediaSections = gifOriginals ? ["photos", "performance", "cache"]
+        let mediaSections = fastVidOriginals ? ["photos", "performance", "cache"]
             : ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"]
         for section in interfaceOnly ? ["performance"] : mediaSections {
             let fields = MediaSetting.allCases.filter { field in
                 if interfaceOnly { return field == .externalToolSnapshot }
-                if field == .externalToolSnapshot { return section == "performance" && !videos && !gifOriginals }
+                if field == .externalToolSnapshot { return section == "performance" && !videos && !fastVidOriginals }
                 if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
                 if field == .performance { return section == "performance" }
                 if field.isCache { return section == "cache" }
@@ -3396,7 +3400,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         let generation = inheritedGeneration
         let settings = draft()
         let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: true)
-        let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: true, gifOriginals: gifOriginals)
+        let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: true, fastVidOriginals: fastVidOriginals)
         let videoArgs = settings.videoRuntimeArguments(inheritedOnly: true)
         let needsStandard = interfaceOnly || (!fast && !videos)
         let needsFast = !interfaceOnly
@@ -3642,7 +3646,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 requests = [("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
             } else {
                 let useFast = field.isFastImage || field.isPhotos || ((field.isShared || field == .externalToolSnapshot) && fast)
-                requests = [(gifOriginals ? "Fast VID" : (useFast ? "Fast IMG" : "IMG"), "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false, avif: avif, gifOriginals: gifOriginals))]
+                requests = [(fastVidOriginals ? "Fast VID" : (useFast ? "Fast IMG" : "IMG"), "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false, avif: avif, fastVidOriginals: fastVidOriginals))]
             }
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let result = Result {
@@ -3744,7 +3748,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             applyGeneration = UUID()
             let generation = applyGeneration
             let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: false)
-            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif, gifOriginals: gifOriginals)
+            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif, fastVidOriginals: fastVidOriginals)
             let videoArgs = settings.videoRuntimeArguments(inheritedOnly: false)
             let needsStandard = interfaceOnly || (!fast && !videos)
             let needsFast = !interfaceOnly
@@ -5080,7 +5084,7 @@ private enum ProcessorCommand {
               !(request.force || request.plain || request.inPlace) || capabilities.supportsStandardOptions
         else { throw HostError(message: localized("error.option_unavailable")) }
         if request.watch {
-            guard request.operationMode != .fastVid else { throw HostError(message: localized("error.option_unavailable")) }
+            guard !request.operationMode.isFastVid else { throw HostError(message: localized("error.option_unavailable")) }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: request.targetPath, isDirectory: &isDirectory),
                   isDirectory.boolValue
@@ -6190,7 +6194,7 @@ private struct BatchResults {
     }
 
     func localGIFsKept(_ request: ProcessorRequest?, processExit: Int32?, exitedNormally: Bool) -> Int? {
-        guard let request, request.operationMode == .fastVid, !request.shortestPath, !request.dryRun,
+        guard let request, request.operationMode.isFastVid, !request.shortestPath, !request.dryRun,
               exitedNormally, let processExit, hasCompleteCountReport, !mandatoryEvidenceConflict,
               !fastDeliveryInvalid, !outputCleanupInvalid, fastDeliveries.isEmpty, outputCleanups.isEmpty,
               totals.count == 1, let img = totals["img"], img[0] == 0, let kept = img[1], let failed = img[2],
@@ -9184,7 +9188,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         for control in [forceCheck, plainCheck, inPlaceCheck] {
             control.isHidden = !developerMode || !capabilities.supportsStandardOptions
         }
-        watchCheck.isHidden = !developerMode || selectedOperation == .fastVid
+        watchCheck.isHidden = !developerMode || selectedOperation.isFastVid
         watchCheck.isEnabled = configurationControlsEnabled && !watchCheck.isHidden
         if watchCheck.isHidden { watchCheck.state = .off }
         copyButton.isHidden = !developerMode
@@ -9238,6 +9242,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             key = "metadata.fast_jxl"
         case .fastVid:
             key = isFastImgPhotosSelection ? "metadata.fast_gif" : "metadata.fast_gif_local"
+        case .fastVidMov:
+            key = isFastImgPhotosSelection ? "metadata.fast_mov" : "metadata.fast_mov_local"
         case .adjacent, .mergeXmp:
             key = "metadata.jxl_overlay"
         case .restoreJpeg:
@@ -10637,7 +10643,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             } else if batchResults.isIncomplete
                 || (batchResults.hasUnprocessed && host.controlState != "paused")
                 || (batchResults.totals.isEmpty
-                && lastRequest.map { !$0.dryRun && [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid].contains($0.operationMode) } == true) {
+                && lastRequest.map { !$0.dryRun && [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid, .fastVidMov].contains($0.operationMode) } == true) {
                 setLocalizedStatus(batchResults.isIncomplete || batchResults.totals.isEmpty
                     ? "result.incomplete" : "result.unfinished")
                 appendLog("[WARN] \(statusLabel.stringValue)" + countSummary,
@@ -10990,7 +10996,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let value = { (number: Int?) in number.map(String.init) ?? localized("result.unknown") }
         batchOverviewDelivery.isHidden = !batchResults.hasFastDelivery
         if let skipped = localGIFsKept, skipped > 0 {
-            batchOverviewDelivery.stringValue = localized("result.gif_kept_count", String(skipped))
+            batchOverviewDelivery.stringValue = localized(lastRequest?.operationMode == .fastVidMov ? "result.mov_kept_count" : "result.gif_kept_count", String(skipped))
             batchOverviewDelivery.isHidden = false
         }
         if interrupted, let observation = workerExecution.latest, let signal = observation.signal {
@@ -11094,7 +11100,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             avif: selectedOperation == .fastImgAvif,
             videos: selectedOperation == .adjacent ? processingPopup.indexOfSelectedItem == 2
                 : !selectedOperation.checkpointedMedia,
-            gifOriginals: selectedOperation == .fastVid,
+            fastVidOriginals: selectedOperation.isFastVid,
             interfaceOnly: selectedOperation == .restoreJpeg) { [weak self] in
             guard let self else { return }
             let language = self.preferences.string(forKey: languagePreferenceKey)
@@ -11252,7 +11258,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func refreshOperationPopup() {
         let selected = selectedOperation
         let keys = [
-            "adjacent", "fast_jxl", "fast_avif", "fast_video", "restore_jpeg", "collect",
+            "adjacent", "fast_jxl", "fast_avif", "fast_video", "fast_video_mov", "restore_jpeg", "collect",
             "compare", "merge_xmp", "icloud_import", "diagnostic", "cache_clean", "database",
         ]
         operationPopup.removeAllItems()
@@ -14362,6 +14368,17 @@ private func runSelfTest() -> Int32 {
             "--videos-only", "--mode", "fast-vid", gifLocal.targetPath
         ], (try? FastImgConflictPreview.arguments(for: gifLocal)) == nil else {
             throw HostError(message: "Local GIF validation inherited a Photos or checkpoint option")
+        }
+        var movLocal = ProcessorRequest(targetPath: gifLocal.targetPath, processingMode: .both, operationMode: .fastVidMov, ultimate: false)
+        guard try ProcessorCommand.arguments(from: movLocal) == [
+            "--videos-only", "--mode", "fast-vid", "--strategy", "hevc-mov", movLocal.targetPath
+        ], !movLocal.usesCheckpoint, OperationMode.forDelivery(strategy: "hevc-mov") == .fastVidMov else {
+            throw HostError(message: "MOV original selection did not reach Fast VID")
+        }
+        movLocal.shortestPath = true
+        guard movLocal.usesCheckpoint, processingRequiresPhotosAutomation(movLocal),
+              try FastImgConflictPreview.arguments(for: movLocal).contains("hevc-mov") else {
+            throw HostError(message: "MOV Photos selection did not reach the delivery preview")
         }
         guard processingRequiresPhotosAutomation(request),
               processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .iCloudImport)),

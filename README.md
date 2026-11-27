@@ -25,6 +25,7 @@ Development currently targets **0.12.0** on the `nightly` branch.
 | **Fast IMG, AVIF** / `img fast-img --strategy avif` | Uses a separate AVIF size/quality policy. Existing AVIF is not re-encoded. | Meme/image collections whose policy permits metadata cleanup. |
 | **Videos** / `vid run` | Handles video and animation, with HEVC by default and optional AV1. | Time-based media, not static-image conversion. |
 | **Fast VID · GIF originals** / `vid fast-vid` | Checks animated GIFs by content and keeps them in place; static GIFs belong to IMG. Add `--shortest-path` to import the original bytes into Apple Photos and clean up verified sources. | Checking a GIF collection locally or importing it on macOS. Use `--dry-run` to preview. |
+| **Fast VID · HEVC MOV originals** / `vid fast-vid --strategy hevc-mov` | Verifies standalone QuickTime movies whose video tracks are HEVC. With Photos import enabled, delivers the original bytes and verifies the Photos copy before source cleanup. | Importing existing HEVC movies with their audio and embedded metadata on macOS. |
 
 MFB identifies media from its contents, not just its extension. Images and videos
 have separate owners: `img` does not silently hand an unsuitable file to `vid`.
@@ -65,8 +66,8 @@ verified source cleanup is part of the workflow, not an opt-in enabled by
 2. Choose the matching image or video workflow. Open **Settings** to review its
    own quality/search choices, tool configuration and Photos preferences.
 3. Use **Preview** to see which files qualify. Fast IMG and Fast VID both offer
-   **Import into Photos**. Clear it in Fast VID to check GIFs in place. Select
-   it to import original GIFs and allow cleanup after verification.
+   **Import into Photos**. Clear it in Fast VID to check the selected originals in place. Select
+   it to import them and allow cleanup after verification.
 4. Review the final summary. **Processing History** provides recorded counts,
    paths, verification results, cleanup details and diagnostics without hunting
    through log folders.
